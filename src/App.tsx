@@ -7,14 +7,30 @@ function GamePlaceholder() {
 
   if (!state) return null;
 
+  const phase = state.phase;
+  const phaseLabel =
+    phase.kind === 'errands'
+      ? `errands · turn ${phase.activePlayerIndex + 1}`
+      : phase.kind === 'resolution'
+        ? `resolution · room ${phase.pendingRoomIndex + 1}/${state.rooms.length}`
+        : phase.kind === 'complete'
+          ? `complete · archmage: ${phase.archmage ?? 'none'}`
+          : phase.kind;
+  const roundLabel =
+    phase.kind === 'round-setup' ||
+    phase.kind === 'errands' ||
+    phase.kind === 'resolution' ||
+    phase.kind === 'mid-game-scoring'
+      ? `Round ${phase.round} / 5`
+      : 'Round —';
+
   return (
     <div className="min-h-full p-8 max-w-5xl mx-auto">
       <header className="flex items-center justify-between mb-6">
         <div>
           <h1 className="text-2xl font-semibold">Game in progress</h1>
           <p className="text-slate-400 text-sm">
-            Round {state.round} / {state.totalRounds} · phase: {state.phase} · seed:{' '}
-            {state.rngSeed}
+            {roundLabel} · phase: {phaseLabel} · seed: {state.rngSeed}
           </p>
         </div>
         <button
@@ -41,7 +57,7 @@ function GamePlaceholder() {
             >
               <div className="font-medium">{p.name}</div>
               <div className="text-xs text-slate-500">
-                {p.id} · color: {p.color} · initiative: {p.initiative}
+                {p.id} · color: {p.color} · initiative: {p.initiativeOrder}
               </div>
             </li>
           ))}
@@ -51,14 +67,18 @@ function GamePlaceholder() {
       <section className="mb-6">
         <h2 className="text-lg font-medium mb-2">Tower (rooms)</h2>
         <ul className="grid grid-cols-2 gap-2">
-          {state.board.rooms.map((room) => (
+          {state.rooms.map((room) => (
             <li
               key={room.id}
               className="p-3 rounded border border-slate-700 bg-slate-900"
             >
-              <div className="font-medium">{room.name}</div>
+              <div className="font-medium">
+                {room.name} <span className="text-xs text-slate-500">side {room.side}</span>
+              </div>
               <div className="text-xs text-slate-500">
                 pack: {room.sourcePackId} · {room.actionSpaces.length} action spaces
+                {room.isUniversityCentral && ' · University Central'}
+                {room.isInstantRoom && ' · instant'}
               </div>
             </li>
           ))}
@@ -66,11 +86,12 @@ function GamePlaceholder() {
       </section>
 
       <section>
-        <h2 className="text-lg font-medium mb-2">Councils</h2>
+        <h2 className="text-lg font-medium mb-2">Consortium voters</h2>
         <ul className="space-y-1 text-sm">
-          {state.councils.map((c) => (
-            <li key={c.id} className="text-slate-300">
-              {c.name} <span className="text-slate-500">— {c.scoringCriterion}</span>
+          {state.voters.map((v) => (
+            <li key={v.id} className="text-slate-300">
+              {v.revealed ? v.name : '[face-down voter]'}{' '}
+              <span className="text-slate-500">— {v.criterion}</span>
             </li>
           ))}
         </ul>

@@ -1,18 +1,21 @@
 import type { ContentPack } from '../types';
 
 // Era of Ascension expansion.
-// EXPANSION: campaign-style content + alternate councils. Alternate councils
-// likely use custom scoring criteria (CouncilTile.customScoringEffectId).
-// TODO: campaign metadata, alternate councils, expansion mages/spells.
+// EXPANSION: campaign-style content + alternate voters. Alternate voters likely
+// use custom scoring criteria (`ConsortiumVoter.customScoringEffectId`).
+// TODO: campaign metadata, alternate voters, expansion mages/spells.
 
 export const ascensionPack: ContentPack = {
   id: 'ascension',
   name: 'Era of Ascension',
-  description: 'Campaign-style content and alternate councils.',
+  description: 'Campaign-style content and alternate voters.',
   mages: [],
-  familiars: [],
+  candidates: [],
   rooms: [],
   spells: [],
-  treasures: [],
-  councils: [],
+  legendarySpells: [],
+  vaultCards: [],
+  supporters: [],
+  voters: [],
+  bellTowerCards: [],
 };

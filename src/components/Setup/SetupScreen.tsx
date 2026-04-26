@@ -71,7 +71,7 @@ export function SetupScreen() {
                     )}
                     <p className="text-xs text-slate-500 mt-1">
                       {pack.mages.length} mages · {pack.rooms.length} rooms ·{' '}
-                      {pack.spells.length} spells · {pack.councils.length} councils
+                      {pack.spells.length} spells · {pack.voters.length} voters
                     </p>
                   </div>
                 </label>

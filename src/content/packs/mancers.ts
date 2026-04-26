@@ -1,16 +1,19 @@
 import type { ContentPack } from '../types';
 
 // Mancers of the University expansion.
-// TODO: mages, additional rooms, spells, treasures, familiars.
+// TODO: candidates, mages, additional rooms, spells, supporters, vault cards.
 
 export const mancersPack: ContentPack = {
   id: 'mancers',
   name: 'Mancers of the University',
-  description: 'Additional mages, spells, treasures, and rooms.',
+  description: 'Additional candidates, mages, spells, supporters, and rooms.',
   mages: [],
-  familiars: [],
+  candidates: [],
   rooms: [],
   spells: [],
-  treasures: [],
-  councils: [],
+  legendarySpells: [],
+  vaultCards: [],
+  supporters: [],
+  voters: [],
+  bellTowerCards: [],
 };

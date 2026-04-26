@@ -1,270 +1,515 @@
 // All shared game types live here.
 //
-// Convention: every content-bearing entity carries a `sourcePackId` so the UI
-// can badge expansion content and the engine can validate referenced content
-// against the active pack list.
+// Vocabulary follows the Argent: The Consortium rulebook (no placeholder
+// terms from other games). Every content-bearing entity carries a
+// `sourcePackId` so the UI can badge expansion content and the engine can
+// validate references against the active pack list.
 
-// ---------- Identifiers ----------
+// ============================================================================
+// Identifiers
+// ============================================================================
 
 export type PackId = string;
+export type ContentPackId = PackId;
 export type PlayerId = string;
-export type MageId = string;
-export type FamiliarId = string;
+export type CandidateId = string;
+export type MageCardId = string;
+export type OwnedMageId = string;
 export type RoomId = string;
 export type ActionSpaceId = string;
 export type SpellCardId = string;
-export type TreasureCardId = string;
-export type CouncilTileId = string;
+export type VaultCardId = string;
+export type SupporterCardId = string;
+export type ConsortiumVoterId = string;
+export type BellTowerCardId = string;
 export type EffectId = string;
 export type AbilityId = string;
+export type ActionLogId = string;
 
-// ---------- Resources ----------
+// ============================================================================
+// Departments & Mage colors
+// ============================================================================
 
-export type VisColor = 'red' | 'blue' | 'green' | 'yellow' | 'purple';
+export type Department =
+  | 'sorcery' // Red
+  | 'mysticism' // Grey
+  | 'natural-magick' // Green
+  | 'planar-studies' // Purple
+  | 'divinity' // Blue
+  | 'students'; // Off-white / neutral candidates
 
-export const VIS_COLORS: readonly VisColor[] = ['red', 'blue', 'green', 'yellow', 'purple'];
+export const DEPARTMENTS: readonly Department[] = [
+  'sorcery',
+  'mysticism',
+  'natural-magick',
+  'planar-studies',
+  'divinity',
+  'students',
+];
 
-export type VisSupply = Record<VisColor, number>;
+/**
+ * Mage piece colors. Each maps 1:1 to a Department except `off-white`, which
+ * is neutral. Ability summary by color (per rulebook):
+ *  - red:       Ars Magna — wound a Mage and take its slot
+ *  - blue:      immune to rival spells
+ *  - green:     cannot be wounded
+ *  - purple:    place as a fast action
+ *  - grey:      may place after casting a spell
+ *  - off-white: no department ability
+ */
+export type MageColor = 'red' | 'grey' | 'green' | 'purple' | 'blue' | 'off-white';
 
+export const MAGE_COLORS: readonly MageColor[] = [
+  'red',
+  'grey',
+  'green',
+  'purple',
+  'blue',
+  'off-white',
+];
+
+// ============================================================================
+// Resources
+// ============================================================================
+
+/**
+ * Storable resources sitting in a player's office.
+ *
+ * Notes:
+ *  - INT/WIS placed onto a Spell to research it live on the OwnedSpell, NOT here.
+ *  - Research is a transient "use it or lose it" effect — never stored here.
+ *  - Mana / Influence / IP have a board cap (Influence Track is a stack); the
+ *    cap is enforced by effect logic, not by the type.
+ */
 export interface ResourceBundle {
-  vis: VisSupply;
   gold: number;
-  // EXPANSION: Mancers / Ascension introduce additional resource tracks.
-  mana?: number;
-  reputation?: number;
+  mana: number;
+  influence: number;
+  intelligence: number;
+  wisdom: number;
+  marks: number;
+  meritBadges: number;
+  meritBadgesSpent: number;
 }
 
-// ---------- Players ----------
+// ============================================================================
+// Player & player-side instances
+// ============================================================================
 
-export type PlayerColor = 'white' | 'black' | 'red' | 'blue' | 'green' | 'purple';
+/**
+ * Slot color for a player's pieces (Mana discs, IP marker, etc.). Independent
+ * of MageColor — these are arbitrary identity colors so 6 players can be
+ * distinguished, not in-game departments.
+ */
+export type PlayerColor = 'red' | 'blue' | 'green' | 'yellow' | 'purple' | 'orange';
+
+export const PLAYER_COLORS: readonly PlayerColor[] = [
+  'red',
+  'blue',
+  'green',
+  'yellow',
+  'purple',
+  'orange',
+];
+
+/** A Mage instance owned by a player (distinct from the Mage card definition). */
+export interface OwnedMage {
+  id: OwnedMageId;
+  cardId: MageCardId;
+  color: MageColor;
+  location: MageLocation;
+  isShadowing: boolean;
+  isWounded: boolean;
+}
+
+export type MageLocation =
+  | { kind: 'office'; playerId: PlayerId }
+  | { kind: 'action-space'; spaceId: ActionSpaceId }
+  | { kind: 'infirmary'; slot?: number }
+  | { kind: 'banished' };
+
+/**
+ * A Spell instance owned by a player. Research tokens (INT for level 1, WIS
+ * for level 2 / level 3) flip booleans here. The card definition stays in the
+ * content pack.
+ */
+export interface OwnedSpell {
+  cardId: SpellCardId;
+  intPlaced: boolean;
+  wisPlacedLevel2: boolean;
+  wisPlacedLevel3: boolean;
+  exhausted: boolean;
+}
+
+/**
+ * A Vault card sitting in a player's office. Treasures track exhaustion;
+ * consumables don't (they're discarded after use).
+ *
+ * NOTE: this is a wrapper around the content-pack VaultCard definition, so the
+ * card's static data lives once in content and the instance only carries
+ * mutable state. The prompt's `vaultCards: VaultCard[]` shape was ambiguous
+ * about where exhaustion lives — wrapping it here mirrors how OwnedSpell
+ * relates to SpellCard.
+ */
+export interface OwnedVaultCard {
+  cardId: VaultCardId;
+  exhausted: boolean;
+}
+
+export type DiscardEntry =
+  | { kind: 'supporter'; cardId: SupporterCardId }
+  | { kind: 'consumable'; cardId: VaultCardId }
+  /** Face-down "secret" supporters — opponents may not peek. */
+  | { kind: 'secret-supporter'; cardId: SupporterCardId };
 
 export interface Player {
   id: PlayerId;
   name: string;
   color: PlayerColor;
+  candidateId: CandidateId;
   /**
-   * Mage ids the player controls. Typically 1 in base game; some expansion
-   * content (and certain Saturday Knight Special rules) can grant more.
+   * The candidate's starting Spell. Never lost, never counted toward
+   * "Most Spells" type voters per rulebook.
    */
-  mages: MageId[];
-  familiars: FamiliarId[];
+  candidateStartingSpellId: SpellCardId;
   resources: ResourceBundle;
-  spells: SpellCardId[];
-  treasures: TreasureCardId[];
-  /**
-   * Influence is conceptually a token resource but is tracked as a top-level
-   * field per the design spec (used heavily for council manipulation).
-   */
-  influence: number;
-  /** Position on the initiative track; lower = earlier. */
-  initiative: number;
+  mages: OwnedMage[];
+  ownedSpells: OwnedSpell[];
+  vaultCards: OwnedVaultCard[];
+  /** Supporter cards in the player's office (not yet used). */
+  supporters: SupporterCardId[];
+  /** Used Supporters and Consumables. Counts for end-game scoring. */
+  personalDiscard: DiscardEntry[];
+  /** Bell Tower offerings claimed during the current round. */
+  bellTowerCards: BellTowerCardId[];
+  initiativeOrder: number;
 }
 
-// ---------- Mages, Familiars, Workers ----------
+// ============================================================================
+// Content cards (definitions in content packs; stable across the game)
+// ============================================================================
+
+export type SpellTiming = 'action' | 'fast-action' | 'reaction';
+
+export interface SpellLevel {
+  level: 1 | 2 | 3;
+  title: string;
+  manaCost: number;
+  effectId: EffectId;
+  timing: SpellTiming;
+}
+
+export interface SpellCard {
+  id: SpellCardId;
+  name: string;
+  sourcePackId: PackId;
+  department: Department;
+  /** Exactly three levels per rulebook. */
+  levels: [SpellLevel, SpellLevel, SpellLevel];
+}
+
+export type VaultCardType = 'treasure' | 'consumable';
+
+export interface VaultCard {
+  id: VaultCardId;
+  name: string;
+  sourcePackId: PackId;
+  type: VaultCardType;
+  goldCost: number;
+  effectId: EffectId;
+  timing?: 'reaction' | 'fast-action';
+}
+
+export interface SupporterCard {
+  id: SupporterCardId;
+  name: string;
+  sourcePackId: PackId;
+  department: Department;
+  effectId: EffectId;
+  timing?: 'fast-action' | 'reaction';
+}
 
 export interface MageAbility {
   id: AbilityId;
   name: string;
   description: string;
-  /** Optional registered effect that runs when the ability is triggered. */
   effectId?: EffectId;
-  // TODO: model trigger timing — passive, on-place, end-of-round, on-cast, etc.
 }
 
+/**
+ * Definition of a Mage type (e.g., "Red Sorcery Mage"). Owned instances are
+ * `OwnedMage`. The two A/B power slots correspond to the rulebook's
+ * room-side toggling — a Mage exposes different abilities depending on which
+ * side of the room it's placed in.
+ */
 export interface Mage {
-  id: MageId;
+  id: MageCardId;
   name: string;
   sourcePackId: PackId;
-  abilities: MageAbility[];
+  color: MageColor;
+  /** Null only for off-white neutral mages. */
+  department: Department | null;
+  aPowerEffectId?: EffectId;
+  bPowerEffectId?: EffectId;
+  /** Free-form ability description shown in the UI. */
+  description?: string;
+  abilities?: MageAbility[];
   portrait?: string;
 }
 
-export interface Familiar {
-  id: FamiliarId;
+/**
+ * A candidate sheet — the role a player picks at setup. Determines starting
+ * resources, Mage distribution, and starting Spell.
+ */
+export interface Candidate {
+  id: CandidateId;
   name: string;
+  title: string;
   sourcePackId: PackId;
-  abilities: MageAbility[];
+  department: Department;
+  starterSpellId: SpellCardId;
+  /**
+   * Color of the bonus Mages this candidate starts with (typically two of the
+   * department color). Students candidates get an extra Merit Badge instead.
+   */
+  startingMageColor: MageColor;
+  /** Free-form ability description. */
+  description?: string;
 }
 
-export type WorkerType = 'mage' | 'familiar';
+// ============================================================================
+// Rooms & action spaces
+// ============================================================================
 
-export interface Worker {
-  owner: PlayerId;
-  type: WorkerType;
-  /** `null` while in the player's supply. */
-  location: ActionSpaceId | null;
-  /** Set when type === 'mage'. */
-  mageId?: MageId;
-  /** Set when type === 'familiar'. */
-  familiarId?: FamiliarId;
+export type ActionSpaceSlotType =
+  | 'regular'
+  | 'merit'
+  | 'shadow'
+  | 'shadow-merit'
+  | 'wound';
+
+export interface ActionSpaceCost {
+  meritBadges?: number;
+  gold?: number;
+  mana?: number;
 }
 
-// ---------- Rooms & Action Spaces ----------
-
-export interface ActionSpaceRestriction {
-  // TODO: enumerate restriction kinds — mage-only, familiar-only, vis-color,
-  // requires-spell-of-color, only-once-per-round, etc.
-  kind: string;
-  data?: unknown;
+export interface WorkerOccupancy {
+  mageId: OwnedMageId;
+  ownerId: PlayerId;
+  /** True if this is a shadow / shadow-merit slot occupant. */
+  isShadowing: boolean;
 }
 
 export interface ActionSpace {
   id: ActionSpaceId;
   roomId: RoomId;
-  /** 1 = exclusive; >1 = multi-occupant with escalating join cost. */
-  capacity: number;
-  occupants: Worker[];
-  /**
-   * Base cost to occupy the space. Escalating cost for multi-occupant spaces
-   * is computed by the engine from `capacity` and current occupancy.
-   */
-  joinCost?: ResourceBundle;
-  /** ID of the registered effect that fires when this space is activated. */
+  /** Top-to-bottom order within room (0 = topmost). */
+  index: number;
+  slotType: ActionSpaceSlotType;
+  occupant: WorkerOccupancy | null;
   effectId: EffectId;
-  restrictions?: ActionSpaceRestriction[];
+  costToActivate?: ActionSpaceCost;
 }
 
 export interface Room {
   id: RoomId;
   name: string;
   sourcePackId: PackId;
+  /** Council Chamber, Library, Infirmary — always in every game. */
+  isUniversityCentral: boolean;
+  side: 'A' | 'B';
+  /** Errands resolve at placement, not in Resolution Phase. */
+  isInstantRoom: boolean;
+  /** True for Infirmary — Mages cannot be placed there directly. */
+  cannotBePlacedInDirectly: boolean;
+  /** True for Infirmary — never lockable. */
+  cannotBeLocked: boolean;
   actionSpaces: ActionSpace[];
-  /** Optional effect that resolves at the end of each round. */
-  roundEndEffectId?: EffectId;
+  /** Optional setup-phase effect (e.g., Astronomy Tower B marker reset). */
+  setupEffectId?: EffectId;
 }
 
-// ---------- Cards ----------
-
-export type SpellType = 'instant' | 'ongoing';
-
-export interface SpellCard {
-  id: SpellCardId;
-  name: string;
-  sourcePackId: PackId;
-  /** Vis required to cast. Partial — only colors that cost anything are listed. */
-  visCost: Partial<VisSupply>;
-  type: SpellType;
-  effectId: EffectId;
-}
-
-export interface TreasureCard {
-  id: TreasureCardId;
-  name: string;
-  sourcePackId: PackId;
-  cost: ResourceBundle;
-  effectId: EffectId;
-}
-
-// ---------- Councils ----------
+// ============================================================================
+// Voters (Consortium board) & Bell Tower
+// ============================================================================
 
 /**
- * Built-in scoring criteria. Expansion content may need new criteria; in that
- * case set `customScoringEffectId` on the council tile and the scoring engine
- * will route to the registered effect.
+ * Built-in scoring criteria. Expansion content can declare `'custom'` and
+ * provide a `customScoringEffectId` that returns the per-player score.
  */
 export type ScoringCriterion =
-  | 'most-gold'
-  | 'most-spells'
-  | 'most-treasures'
+  | 'most-supporters'
   | 'most-influence'
-  | 'most-vis'
-  | 'most-vis-red'
-  | 'most-vis-blue'
-  | 'most-vis-green'
-  | 'most-vis-yellow'
-  | 'most-vis-purple'
-  | 'most-familiars'
-  | 'most-mages-on-board'
-  | 'fewest-spells'
-  | 'highest-initiative'
+  | 'second-most-supporters'
+  | 'second-most-influence'
+  | 'most-mana'
+  | 'most-gold'
+  | 'most-marks'
+  | 'most-intelligence'
+  | 'most-wisdom'
+  | 'most-research'
+  | 'most-treasures'
+  | 'most-consumables'
+  | 'most-diversity'
+  | 'most-sorcery'
+  | 'most-mysticism'
+  | 'most-natural-magick'
+  | 'most-planar-studies'
+  | 'most-divinity'
   | 'custom';
 
-export interface CouncilTile {
-  id: CouncilTileId;
+export interface ConsortiumVoter {
+  id: ConsortiumVoterId;
   name: string;
   sourcePackId: PackId;
-  scoringCriterion: ScoringCriterion;
-  /** Used when `scoringCriterion === 'custom'`. EXPANSION hook. */
-  customScoringEffectId?: EffectId;
-  /** Hidden until end-game reveal. */
+  criterion: ScoringCriterion;
+  /** Vote count printed on the tile. TODO: real values from card images. */
   votes: number;
+  /** True from setup if the voter is one of the always-face-up pair. */
+  isAlwaysFaceUp: boolean;
   revealed: boolean;
+  /** Used when `criterion === 'custom'`. */
+  customScoringEffectId?: EffectId;
 }
 
-// ---------- Game state ----------
+export interface VoterMark {
+  voterId: ConsortiumVoterId;
+  playerId: PlayerId;
+}
+
+export interface BellTowerCard {
+  id: BellTowerCardId;
+  name: string;
+  sourcePackId: PackId;
+  effectId: EffectId;
+  /** Card is included only when the game has at least this many players. */
+  minPlayers: 2 | 3 | 4 | 5;
+}
+
+// ============================================================================
+// Phase machine
+// ============================================================================
+
+export type RoundNumber = 1 | 2 | 3 | 4 | 5;
 
 export type GamePhase =
-  | 'setup'
-  | 'refresh'
-  | 'action'
-  | 'resolution'
-  | 'mid-scoring'
-  | 'final-scoring'
-  | 'complete';
+  | { kind: 'setup' }
+  | { kind: 'round-setup'; round: RoundNumber }
+  | { kind: 'errands'; round: RoundNumber; activePlayerIndex: number }
+  | {
+      kind: 'resolution';
+      round: RoundNumber;
+      pendingRoomIndex: number;
+      pendingSpaceIndex: number;
+    }
+  | { kind: 'mid-game-scoring'; round: RoundNumber }
+  | { kind: 'final-scoring' }
+  | { kind: 'complete'; archmage: PlayerId | null };
 
-export interface InitiativeTrack {
-  /** Player ids in current turn order. */
-  order: PlayerId[];
-  /** Players who have passed in the current action phase. */
-  passed: PlayerId[];
+// ============================================================================
+// RNG
+// ============================================================================
+
+/**
+ * Serializable RNG state. Carries the seed (for diagnostics / replay reset)
+ * plus the current mulberry32 counter. Engine code threads this through state
+ * rather than using a closure so games can be saved / restored mid-flight.
+ */
+export interface RngState {
+  seed: number;
+  counter: number;
 }
 
-export interface BoardState {
+// ============================================================================
+// Action log
+// ============================================================================
+
+export interface ActionLogEntry {
+  id: ActionLogId;
+  round: RoundNumber | 0;
+  phaseKind: GamePhase['kind'];
+  message: string;
+  // TODO: structured payload for replay.
+}
+
+// ============================================================================
+// GameState
+// ============================================================================
+
+export interface GameState {
+  players: Player[];
+  firstPlayerIndex: number;
+  activePackIds: PackId[];
+  rngSeed: number;
+  rng: RngState;
+
+  /** Rooms in row-major board order. */
   rooms: Room[];
+
+  /** All voters in play this game (12 in base: 2 face-up + 10 face-down). */
+  voters: ConsortiumVoter[];
+  voterMarks: VoterMark[];
+
+  spellDeck: SpellCardId[];
+  spellTableau: SpellCardId[];
+  vaultDeck: VaultCardId[];
+  vaultTableau: VaultCardId[];
+  supporterDeck: SupporterCardId[];
+  supporterTableau: SupporterCardId[];
+  /** Legendary spells are not shuffled into the regular spell deck. */
+  legendarySpells: SpellCardId[];
+
+  bellTower: {
+    available: BellTowerCard[];
+    taken: { cardId: BellTowerCardId; takenBy: PlayerId }[];
+  };
+
+  archmagesApprenticeOwner: PlayerId | null;
+  roomLocks: { roomId: RoomId }[];
+
+  phase: GamePhase;
+  pendingResolution: PendingResolution | null;
+
+  actionLog: ActionLogEntry[];
 }
+
+// ============================================================================
+// Game configuration / actions
+// ============================================================================
 
 export interface GameConfig {
   activePackIds: PackId[];
   playerNames: string[];
   rngSeed: number;
-  /** Defaults to 5 if omitted. */
-  totalRounds?: number;
 }
-
-export interface GameState {
-  players: Player[];
-  board: BoardState;
-  councils: CouncilTile[];
-  initiativeTrack: InitiativeTrack;
-  round: number;
-  totalRounds: number;
-  phase: GamePhase;
-  /** Index into `initiativeTrack.order` of whose turn it is. */
-  activePlayerIndex: number;
-  /** Card-id draw decks (top of deck = end of array). */
-  spellDeck: SpellCardId[];
-  treasureDeck: TreasureCardId[];
-  /** Visible market rows. */
-  spellMarket: SpellCardId[];
-  treasureMarket: TreasureCardId[];
-  activePackIds: PackId[];
-  rngSeed: number;
-  // TODO: action log, pending effect resolution stack, choice prompts.
-}
-
-// ---------- Actions ----------
 
 export interface PlaceWorkerAction {
   type: 'PLACE_WORKER';
   playerId: PlayerId;
-  workerType: WorkerType;
-  mageId?: MageId;
-  familiarId?: FamiliarId;
+  mageId: OwnedMageId;
   actionSpaceId: ActionSpaceId;
+  isShadowing?: boolean;
 }
 
 export interface CastSpellAction {
   type: 'CAST_SPELL';
   playerId: PlayerId;
   spellCardId: SpellCardId;
-  visPaid: Partial<VisSupply>;
+  level: 1 | 2 | 3;
   choices?: unknown;
 }
 
-export interface BuyTreasureAction {
-  type: 'BUY_TREASURE';
+export interface BuyVaultCardAction {
+  type: 'BUY_VAULT_CARD';
   playerId: PlayerId;
-  treasureCardId: TreasureCardId;
+  vaultCardId: VaultCardId;
+}
+
+export interface RecruitSupporterAction {
+  type: 'RECRUIT_SUPPORTER';
+  playerId: PlayerId;
+  supporterCardId: SupporterCardId;
 }
 
 export interface PassTurnAction {
@@ -276,9 +521,15 @@ export interface UseAbilityAction {
   type: 'USE_ABILITY';
   playerId: PlayerId;
   abilityId: AbilityId;
-  /** Optional id of the card/mage/treasure that owns the ability. */
   sourceCardId?: string;
   choices?: unknown;
+}
+
+export interface ResolvePendingAction {
+  type: 'RESOLVE_PENDING';
+  playerId: PlayerId;
+  /** Player's answer to the current pending resolution prompt. */
+  answer: unknown;
 }
 
 export interface AdvancePhaseAction {
@@ -288,26 +539,28 @@ export interface AdvancePhaseAction {
 export type GameAction =
   | PlaceWorkerAction
   | CastSpellAction
-  | BuyTreasureAction
+  | BuyVaultCardAction
+  | RecruitSupporterAction
   | PassTurnAction
   | UseAbilityAction
+  | ResolvePendingAction
   | AdvancePhaseAction;
 
-// ---------- Effect surface ----------
+// ============================================================================
+// Effect surface
+// ============================================================================
 
 export interface EffectContext {
   state: GameState;
   playerId: PlayerId;
-  /** ID of the card/room/ability that triggered this effect, if any. */
   sourceCardId?: string;
-  /** Player-supplied choices (e.g., target picks, vis color picks). */
   choices?: unknown;
 }
 
-/**
- * Effects return a partial diff. The engine merges it into the next state.
- *
- * TODO: decide on patch semantics — shallow merge today; switch to immer or
- * a typed diff format once nested updates become common.
- */
 export type GameStatePatch = Partial<GameState>;
+
+/**
+ * Pending player input that pauses the engine. The full shape is designed in
+ * `docs/effect-resolution.md` and will be implemented in a follow-up prompt.
+ */
+export type PendingResolution = unknown;
