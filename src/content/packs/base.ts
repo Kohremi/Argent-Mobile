@@ -1,14 +1,17 @@
 import type { ContentPack } from '../types';
 import type {
+  ActionSpace,
   BellTowerCard,
   Candidate,
   ConsortiumVoter,
-  Mage,
-  Room,
-  SpellCard,
-  ScoringCriterion,
   Department,
+  Mage,
   MageColor,
+  Room,
+  ScoringCriterion,
+  SpellCard,
+  SupporterCard,
+  VaultCard,
 } from '../../game/types';
 
 const PACK_ID = 'base';
@@ -16,10 +19,6 @@ const PACK_ID = 'base';
 // ============================================================================
 // Mages — 6 by color + the Archmage's Apprentice
 // ============================================================================
-//
-// Per rulebook, each Mage color has a department-flavored ability. Effect IDs
-// reference unimplemented effects (TODO). Off-white mages have no department
-// ability.
 
 const mages: Mage[] = [
   {
@@ -39,7 +38,7 @@ const mages: Mage[] = [
     sourcePackId: PACK_ID,
     color: 'grey',
     department: 'mysticism',
-    description: 'May place after casting a spell.',
+    description: 'May place after casting a spell (and after reactions resolve).',
     aPowerEffectId: 'base.mage.mysticism.a',
     bPowerEffectId: 'base.mage.mysticism.b',
   },
@@ -81,7 +80,6 @@ const mages: Mage[] = [
     department: null,
     description: 'No department ability.',
   },
-  // Special: gained only via the Archmage's Study room.
   {
     id: 'base.mage.archmages-apprentice',
     name: "Archmage's Apprentice",
@@ -94,11 +92,11 @@ const mages: Mage[] = [
 ];
 
 // ============================================================================
-// Spells — 5 placeholders, real names TBD from the spell deck images
+// Spells
 // ============================================================================
 //
-// TODO: replace placeholder names/levels with real Argent spell cards once we
-// have them sourced from card images. Effect IDs are unregistered.
+// Burn (Sorcery, L1–L3) is wired up as the Vertical Slice 2 spell. The other
+// four are placeholders pending real names from card images.
 
 function placeholderSpell(args: {
   id: string;
@@ -136,33 +134,94 @@ function placeholderSpell(args: {
   };
 }
 
+const burnSpell: SpellCard = {
+  id: 'base.spell.burn',
+  name: 'Burn',
+  sourcePackId: PACK_ID,
+  department: 'sorcery',
+  levels: [
+    {
+      level: 1,
+      title: 'Burn',
+      manaCost: 1,
+      effectId: 'base.spell.burn.l1',
+      timing: 'action',
+    },
+    {
+      level: 2,
+      title: 'Conflagration',
+      manaCost: 2,
+      effectId: 'base.spell.burn.l2',
+      timing: 'action',
+    },
+    {
+      level: 3,
+      title: 'Inferno',
+      manaCost: 4,
+      effectId: 'base.spell.burn.l3',
+      timing: 'action',
+    },
+  ],
+};
+
 const spells: SpellCard[] = [
-  placeholderSpell({ id: 'base.spell.placeholder.1', name: 'Placeholder Spell 1', department: 'sorcery' }),
-  placeholderSpell({ id: 'base.spell.placeholder.2', name: 'Placeholder Spell 2', department: 'mysticism' }),
-  placeholderSpell({ id: 'base.spell.placeholder.3', name: 'Placeholder Spell 3', department: 'natural-magick' }),
-  placeholderSpell({ id: 'base.spell.placeholder.4', name: 'Placeholder Spell 4', department: 'divinity' }),
-  placeholderSpell({ id: 'base.spell.placeholder.5', name: 'Placeholder Spell 5', department: 'planar-studies' }),
+  burnSpell,
+  placeholderSpell({
+    id: 'base.spell.placeholder.2',
+    name: 'Placeholder Spell 2',
+    department: 'mysticism',
+  }),
+  placeholderSpell({
+    id: 'base.spell.placeholder.3',
+    name: 'Placeholder Spell 3',
+    department: 'natural-magick',
+  }),
+  placeholderSpell({
+    id: 'base.spell.placeholder.4',
+    name: 'Placeholder Spell 4',
+    department: 'divinity',
+  }),
+  placeholderSpell({
+    id: 'base.spell.placeholder.5',
+    name: 'Placeholder Spell 5',
+    department: 'planar-studies',
+  }),
 ];
 
 // ============================================================================
-// Candidates
+// Vault cards — Phase Steppers wired up; rest deferred
 // ============================================================================
-//
-// NOTE: The prompt directed us to put all 12 candidates here, but per the real
-// rulebook only 6 candidates ship with the base game; the other 6 belong to
-// Mancers. Flagged in Open Questions — the planner should confirm where each
-// candidate actually belongs and we'll relocate later.
-//
-// Each candidate's `starterSpellId` cycles through the 5 placeholder spells
-// (TODO: each candidate has a unique starting spell in the real game).
+
+const phaseSteppers: VaultCard = {
+  id: 'base.vault.phase-steppers',
+  name: 'Phase Steppers',
+  sourcePackId: PACK_ID,
+  type: 'consumable',
+  goldCost: 3,
+  effectId: 'base.vault.phase-steppers.react',
+  timing: 'reaction',
+};
+
+const vaultCards: VaultCard[] = [phaseSteppers];
+
+// ============================================================================
+// Supporters — TODO
+// ============================================================================
+
+const supporters: SupporterCard[] = [];
+
+// ============================================================================
+// Candidates — base game keeps 6 (per rulebook); other 6 live in Mancers
+// ============================================================================
 
 function candidate(args: {
   id: string;
   name: string;
   title: string;
   department: Department;
-  starterSpellIndex: 0 | 1 | 2 | 3 | 4;
-  startingMageColor: MageColor;
+  starterSpellId: string;
+  startingMageColor: MageColor | 'neutral';
+  startingExtraMeritBadge: boolean;
 }): Candidate {
   return {
     id: args.id,
@@ -170,32 +229,124 @@ function candidate(args: {
     title: args.title,
     sourcePackId: PACK_ID,
     department: args.department,
-    starterSpellId: spells[args.starterSpellIndex]!.id,
+    starterSpellId: args.starterSpellId,
     startingMageColor: args.startingMageColor,
+    startingExtraMeritBadge: args.startingExtraMeritBadge,
   };
 }
 
 const candidates: Candidate[] = [
-  candidate({ id: 'base.candidate.larimore-burman', name: 'Larimore Burman', title: 'Sorcery', department: 'sorcery', starterSpellIndex: 0, startingMageColor: 'red' }),
-  candidate({ id: 'base.candidate.exhufern-le-marigras', name: 'Exhufern Le Marigras', title: 'Natural Magick', department: 'natural-magick', starterSpellIndex: 2, startingMageColor: 'green' }),
-  candidate({ id: 'base.candidate.rikhi-kanhamme', name: 'Rikhi Kanhamme', title: 'Sorcery — Applied', department: 'sorcery', starterSpellIndex: 0, startingMageColor: 'red' }),
-  candidate({ id: 'base.candidate.mannheim-wildern', name: 'Mannheim Wildern', title: 'Natural Magick — Development', department: 'natural-magick', starterSpellIndex: 2, startingMageColor: 'green' }),
-  candidate({ id: 'base.candidate.rheye-cal', name: 'Rheye Cal', title: 'Divinity', department: 'divinity', starterSpellIndex: 3, startingMageColor: 'blue' }),
-  candidate({ id: 'base.candidate.byron-krane', name: 'Byron Krane', title: 'Mysticism', department: 'mysticism', starterSpellIndex: 1, startingMageColor: 'grey' }),
-  candidate({ id: 'base.candidate.monad-riverime', name: 'Monad Riverime', title: 'Auditor — Students', department: 'students', starterSpellIndex: 0, startingMageColor: 'off-white' }),
-  candidate({ id: 'base.candidate.jesca-renetton', name: 'Jesca Renetton', title: 'Curriculum — Students', department: 'students', starterSpellIndex: 1, startingMageColor: 'off-white' }),
-  candidate({ id: 'base.candidate.lavanina', name: 'Lavanina', title: 'Planar Studies', department: 'planar-studies', starterSpellIndex: 4, startingMageColor: 'purple' }),
-  candidate({ id: 'base.candidate.jion-erjon', name: 'Jion Erjon', title: 'Divinity — Honor Court', department: 'divinity', starterSpellIndex: 3, startingMageColor: 'blue' }),
-  candidate({ id: 'base.candidate.xal-ezra', name: 'Xal Ezra', title: 'Planar Studies — Senior Researcher', department: 'planar-studies', starterSpellIndex: 4, startingMageColor: 'purple' }),
-  candidate({ id: 'base.candidate.trias-blackwind', name: 'Trias Blackwind', title: 'Students — Body President', department: 'students', starterSpellIndex: 2, startingMageColor: 'off-white' }),
+  candidate({
+    id: 'base.candidate.larimore-burman',
+    name: 'Larimore Burman',
+    title: 'Sorcery',
+    department: 'sorcery',
+    starterSpellId: 'base.spell.burn',
+    startingMageColor: 'red',
+    startingExtraMeritBadge: false,
+  }),
+  candidate({
+    id: 'base.candidate.exhufern-le-marigras',
+    name: 'Exhufern Le Marigras',
+    title: 'Natural Magick',
+    department: 'natural-magick',
+    starterSpellId: 'base.spell.placeholder.3',
+    startingMageColor: 'green',
+    startingExtraMeritBadge: false,
+  }),
+  candidate({
+    id: 'base.candidate.rheye-cal',
+    name: 'Rheye Cal',
+    title: 'Divinity',
+    department: 'divinity',
+    starterSpellId: 'base.spell.placeholder.4',
+    startingMageColor: 'blue',
+    startingExtraMeritBadge: false,
+  }),
+  candidate({
+    id: 'base.candidate.byron-krane',
+    name: 'Byron Krane',
+    title: 'Mysticism',
+    department: 'mysticism',
+    starterSpellId: 'base.spell.placeholder.2',
+    startingMageColor: 'grey',
+    startingExtraMeritBadge: false,
+  }),
+  candidate({
+    id: 'base.candidate.lavanina',
+    name: 'Lavanina',
+    title: 'Planar Studies',
+    department: 'planar-studies',
+    starterSpellId: 'base.spell.placeholder.5',
+    startingMageColor: 'purple',
+    startingExtraMeritBadge: false,
+  }),
+  candidate({
+    id: 'base.candidate.trias-blackwind',
+    name: 'Trias Blackwind',
+    title: 'Students — Body President',
+    department: 'students',
+    // Students-department candidates start with neutral mages + 1 extra
+    // Merit Badge instead of department-color bonus mages.
+    starterSpellId: 'base.spell.placeholder.2',
+    startingMageColor: 'neutral',
+    startingExtraMeritBadge: true,
+  }),
 ];
 
 // ============================================================================
 // Rooms — 15 physical rooms × 2 sides = 30 Room records
 // ============================================================================
 //
-// Action spaces are stubbed (empty arrays). Setup picks one side per physical
-// room when assembling the play set.
+// Library side A is wired up with slot 1 ("Gain 1 INT OR 1 WIS OR 1 Research")
+// for Vertical Slice 1; everything else stays stubbed (empty action spaces).
+
+function regularSlot(args: {
+  id: string;
+  roomId: string;
+  index: number;
+  effectId: string;
+}): ActionSpace {
+  return {
+    id: args.id,
+    roomId: args.roomId,
+    index: args.index,
+    slotType: 'regular',
+    occupant: null,
+    effectId: args.effectId,
+  };
+}
+
+const libraryASlot1: ActionSpace = regularSlot({
+  id: 'base.room.library.a.slot-1',
+  roomId: 'base.room.library.a',
+  index: 0,
+  effectId: 'base.room.library-a.slot-1',
+});
+
+const libraryA: Room = {
+  id: 'base.room.library.a',
+  name: 'Library',
+  sourcePackId: PACK_ID,
+  isUniversityCentral: true,
+  side: 'A',
+  isInstantRoom: false,
+  cannotBePlacedInDirectly: false,
+  cannotBeLocked: false,
+  actionSpaces: [libraryASlot1],
+};
+
+const libraryB: Room = {
+  id: 'base.room.library.b',
+  name: 'Library',
+  sourcePackId: PACK_ID,
+  isUniversityCentral: true,
+  side: 'B',
+  isInstantRoom: false,
+  cannotBePlacedInDirectly: false,
+  cannotBeLocked: false,
+  actionSpaces: [],
+};
 
 interface RoomPairOpts {
   baseId: string;
@@ -243,8 +394,13 @@ function roomPair(opts: RoomPairOpts): Room[] {
 
 const rooms: Room[] = [
   // University Central — always present.
-  ...roomPair({ baseId: 'base.room.council-chamber', name: 'Council Chamber', isUniversityCentral: true }),
-  ...roomPair({ baseId: 'base.room.library', name: 'Library', isUniversityCentral: true }),
+  ...roomPair({
+    baseId: 'base.room.council-chamber',
+    name: 'Council Chamber',
+    isUniversityCentral: true,
+  }),
+  libraryA,
+  libraryB,
   ...roomPair({
     baseId: 'base.room.infirmary',
     name: 'Infirmary',
@@ -265,16 +421,16 @@ const rooms: Room[] = [
   ...roomPair({ baseId: 'base.room.adventuring', name: 'Adventuring' }),
   ...roomPair({ baseId: 'base.room.astronomy-tower', name: 'Astronomy Tower' }),
   ...roomPair({ baseId: 'base.room.great-hall', name: 'Great Hall' }),
-  ...roomPair({ baseId: 'base.room.archmages-study', name: "Archmage's Study" }),
+  ...roomPair({
+    baseId: 'base.room.archmages-study',
+    name: "Archmage's Study",
+  }),
   ...roomPair({ baseId: 'base.room.dormitory', name: 'Dormitory' }),
 ];
 
 // ============================================================================
 // Voters — 2 always-face-up + 16 in the face-down pool = 18 total
 // ============================================================================
-//
-// TODO: real vote counts from the voter cards (rulebook specifies each tile's
-// printed value). Stubbed at 1 vote per voter for now.
 
 function voter(args: {
   id: string;
@@ -288,43 +444,94 @@ function voter(args: {
     name: args.name,
     sourcePackId: PACK_ID,
     criterion: args.criterion,
-    votes: args.votes ?? 1, // TODO: real values
+    votes: args.votes ?? 1,
     isAlwaysFaceUp: args.isAlwaysFaceUp ?? false,
     revealed: args.isAlwaysFaceUp ?? false,
   };
 }
 
 const voters: ConsortiumVoter[] = [
-  // Always face-up.
-  voter({ id: 'base.voter.most-supporters', name: 'Most Supporters', criterion: 'most-supporters', isAlwaysFaceUp: true }),
-  voter({ id: 'base.voter.most-influence', name: 'Most Influence', criterion: 'most-influence', isAlwaysFaceUp: true }),
-
-  // Face-down pool of 16.
+  voter({
+    id: 'base.voter.most-supporters',
+    name: 'Most Supporters',
+    criterion: 'most-supporters',
+    isAlwaysFaceUp: true,
+  }),
+  voter({
+    id: 'base.voter.most-influence',
+    name: 'Most Influence',
+    criterion: 'most-influence',
+    isAlwaysFaceUp: true,
+  }),
   voter({ id: 'base.voter.most-mana', name: 'Most Mana', criterion: 'most-mana' }),
   voter({ id: 'base.voter.most-gold', name: 'Most Gold', criterion: 'most-gold' }),
   voter({ id: 'base.voter.most-marks', name: 'Most Marks', criterion: 'most-marks' }),
-  voter({ id: 'base.voter.most-intelligence', name: 'Most Intelligence', criterion: 'most-intelligence' }),
+  voter({
+    id: 'base.voter.most-intelligence',
+    name: 'Most Intelligence',
+    criterion: 'most-intelligence',
+  }),
   voter({ id: 'base.voter.most-wisdom', name: 'Most Wisdom', criterion: 'most-wisdom' }),
-  voter({ id: 'base.voter.most-research', name: 'Most Research', criterion: 'most-research' }),
-  voter({ id: 'base.voter.most-treasures', name: 'Most Treasures', criterion: 'most-treasures' }),
-  voter({ id: 'base.voter.most-consumables', name: 'Most Consumables', criterion: 'most-consumables' }),
-  voter({ id: 'base.voter.most-diversity', name: 'Most Diversity', criterion: 'most-diversity' }),
-  voter({ id: 'base.voter.most-sorcery', name: 'Most Sorcery', criterion: 'most-sorcery' }),
-  voter({ id: 'base.voter.most-mysticism', name: 'Most Mysticism', criterion: 'most-mysticism' }),
-  voter({ id: 'base.voter.most-natural-magick', name: 'Most Natural Magick', criterion: 'most-natural-magick' }),
-  voter({ id: 'base.voter.most-planar-studies', name: 'Most Planar Studies', criterion: 'most-planar-studies' }),
-  voter({ id: 'base.voter.most-divinity', name: 'Most Divinity', criterion: 'most-divinity' }),
-  voter({ id: 'base.voter.second-most-influence', name: '2nd Most Influence', criterion: 'second-most-influence' }),
-  voter({ id: 'base.voter.second-most-supporters', name: '2nd Most Supporters', criterion: 'second-most-supporters' }),
+  voter({
+    id: 'base.voter.most-research',
+    name: 'Most Research',
+    criterion: 'most-research',
+  }),
+  voter({
+    id: 'base.voter.most-treasures',
+    name: 'Most Treasures',
+    criterion: 'most-treasures',
+  }),
+  voter({
+    id: 'base.voter.most-consumables',
+    name: 'Most Consumables',
+    criterion: 'most-consumables',
+  }),
+  voter({
+    id: 'base.voter.most-diversity',
+    name: 'Most Diversity',
+    criterion: 'most-diversity',
+  }),
+  voter({
+    id: 'base.voter.most-sorcery',
+    name: 'Most Sorcery',
+    criterion: 'most-sorcery',
+  }),
+  voter({
+    id: 'base.voter.most-mysticism',
+    name: 'Most Mysticism',
+    criterion: 'most-mysticism',
+  }),
+  voter({
+    id: 'base.voter.most-natural-magick',
+    name: 'Most Natural Magick',
+    criterion: 'most-natural-magick',
+  }),
+  voter({
+    id: 'base.voter.most-planar-studies',
+    name: 'Most Planar Studies',
+    criterion: 'most-planar-studies',
+  }),
+  voter({
+    id: 'base.voter.most-divinity',
+    name: 'Most Divinity',
+    criterion: 'most-divinity',
+  }),
+  voter({
+    id: 'base.voter.second-most-influence',
+    name: '2nd Most Influence',
+    criterion: 'second-most-influence',
+  }),
+  voter({
+    id: 'base.voter.second-most-supporters',
+    name: '2nd Most Supporters',
+    criterion: 'second-most-supporters',
+  }),
 ];
 
 // ============================================================================
-// Bell Tower — 5 offerings with player-count thresholds
+// Bell Tower — 5 placeholder offerings with player-count thresholds
 // ============================================================================
-//
-// minPlayers thresholds [2, 2, 3, 4, 5] mean 2 cards are always present, with
-// additional cards activating at 3p, 4p, and 5p. Real card names TBD (rulebook
-// references "Popularity" at minimum); placeholders for now.
 
 const bellTowerCards: BellTowerCard[] = [
   {
@@ -377,8 +584,8 @@ export const baseGamePack: ContentPack = {
   rooms,
   spells,
   legendarySpells: [],
-  vaultCards: [],
-  supporters: [],
+  vaultCards,
+  supporters,
   voters,
   bellTowerCards,
 };

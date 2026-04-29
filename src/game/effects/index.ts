@@ -1,46 +1,23 @@
-import type { EffectContext, EffectId, GameStatePatch } from '../types';
+// Re-exports the effect registry, then triggers per-pack effect registration
+// via side-effect imports.
+//
+// The registry implementation lives in `./registry` to avoid an ESM circular
+// dependency: pack files import `registerEffect` and call it at module load
+// time, so the binding must be fully initialized before the side-effect
+// imports below run. Splitting the registry into its own file accomplishes
+// that — `./registry` evaluates fully before this module's side-effect
+// imports begin.
 
-export type Effect = (ctx: EffectContext) => GameStatePatch;
+export {
+  registerEffect,
+  getEffect,
+  hasEffect,
+  listEffectIds,
+  _resetEffectRegistry,
+} from './registry';
+export type { Effect } from './registry';
 
-const registry = new Map<EffectId, Effect>();
-
-export function registerEffect(id: EffectId, fn: Effect): void {
-  if (registry.has(id)) {
-    throw new Error(`Effect "${id}" is already registered`);
-  }
-  registry.set(id, fn);
-}
-
-export function getEffect(id: EffectId): Effect {
-  const fn = registry.get(id);
-  if (!fn) throw new Error(`Effect "${id}" is not registered`);
-  return fn;
-}
-
-export function hasEffect(id: EffectId): boolean {
-  return registry.has(id);
-}
-
-export function listEffectIds(): EffectId[] {
-  return Array.from(registry.keys());
-}
-
-/**
- * Test-only helper to clear the registry between tests. Avoid in production.
- */
-export function _resetEffectRegistry(): void {
-  registry.clear();
-}
-
-// Side-effect imports: each pack file calls `registerEffect` at module load.
-// Note: pack effect files import from this module, so the imports below run
-// AFTER `registerEffect` is defined — and since current pack files don't
-// register anything yet (they're stubs), there's no init-time access to the
-// `registry` const. Once real registrations land, watch for the cycle: if a
-// pack file calls `registerEffect` at top level, ensure the registry is
-// initialized first (it is, because const declarations precede these imports
-// in source order — but if you ever extract registry to a file, do it cleanly
-// rather than relying on this ordering).
+// Side-effect imports — each pack file calls `registerEffect` at module load.
 import './base';
 import './mancers';
 import './knights';

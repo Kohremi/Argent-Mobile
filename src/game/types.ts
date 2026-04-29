@@ -25,6 +25,8 @@ export type BellTowerCardId = string;
 export type EffectId = string;
 export type AbilityId = string;
 export type ActionLogId = string;
+export type ResolutionId = string;
+export type ReactionWindowId = string;
 
 // ============================================================================
 // Departments & Mage colors
@@ -144,12 +146,6 @@ export interface OwnedSpell {
 /**
  * A Vault card sitting in a player's office. Treasures track exhaustion;
  * consumables don't (they're discarded after use).
- *
- * NOTE: this is a wrapper around the content-pack VaultCard definition, so the
- * card's static data lives once in content and the instance only carries
- * mutable state. The prompt's `vaultCards: VaultCard[]` shape was ambiguous
- * about where exhaustion lives — wrapping it here mirrors how OwnedSpell
- * relates to SpellCard.
  */
 export interface OwnedVaultCard {
   cardId: VaultCardId;
@@ -183,6 +179,13 @@ export interface Player {
   /** Bell Tower offerings claimed during the current round. */
   bellTowerCards: BellTowerCardId[];
   initiativeOrder: number;
+  /**
+   * Sequence number from `state.nextSequenceId` recorded when this player's
+   * `resources.influence` last changed. Lower = reached the value earlier; used
+   * as the secondary tiebreaker during voter resolution per rulebook (the
+   * Influence Track stack: bottom disc placed first wins ties).
+   */
+  influenceArrivalSeq: number;
 }
 
 // ============================================================================
@@ -236,12 +239,6 @@ export interface MageAbility {
   effectId?: EffectId;
 }
 
-/**
- * Definition of a Mage type (e.g., "Red Sorcery Mage"). Owned instances are
- * `OwnedMage`. The two A/B power slots correspond to the rulebook's
- * room-side toggling — a Mage exposes different abilities depending on which
- * side of the room it's placed in.
- */
 export interface Mage {
   id: MageCardId;
   name: string;
@@ -251,7 +248,6 @@ export interface Mage {
   department: Department | null;
   aPowerEffectId?: EffectId;
   bPowerEffectId?: EffectId;
-  /** Free-form ability description shown in the UI. */
   description?: string;
   abilities?: MageAbility[];
   portrait?: string;
@@ -259,7 +255,11 @@ export interface Mage {
 
 /**
  * A candidate sheet — the role a player picks at setup. Determines starting
- * resources, Mage distribution, and starting Spell.
+ * Mage allocation and starting Spell.
+ *
+ * `startingMageColor` is `'neutral'` for Students-department candidates per
+ * rulebook (they get neutral mages, not a department-colored bonus pair).
+ * Students candidates also get one extra Merit Badge (`startingExtraMeritBadge`).
  */
 export interface Candidate {
   id: CandidateId;
@@ -268,12 +268,8 @@ export interface Candidate {
   sourcePackId: PackId;
   department: Department;
   starterSpellId: SpellCardId;
-  /**
-   * Color of the bonus Mages this candidate starts with (typically two of the
-   * department color). Students candidates get an extra Merit Badge instead.
-   */
-  startingMageColor: MageColor;
-  /** Free-form ability description. */
+  startingMageColor: MageColor | 'neutral';
+  startingExtraMeritBadge: boolean;
   description?: string;
 }
 
@@ -316,17 +312,12 @@ export interface Room {
   id: RoomId;
   name: string;
   sourcePackId: PackId;
-  /** Council Chamber, Library, Infirmary — always in every game. */
   isUniversityCentral: boolean;
   side: 'A' | 'B';
-  /** Errands resolve at placement, not in Resolution Phase. */
   isInstantRoom: boolean;
-  /** True for Infirmary — Mages cannot be placed there directly. */
   cannotBePlacedInDirectly: boolean;
-  /** True for Infirmary — never lockable. */
   cannotBeLocked: boolean;
   actionSpaces: ActionSpace[];
-  /** Optional setup-phase effect (e.g., Astronomy Tower B marker reset). */
   setupEffectId?: EffectId;
 }
 
@@ -334,10 +325,6 @@ export interface Room {
 // Voters (Consortium board) & Bell Tower
 // ============================================================================
 
-/**
- * Built-in scoring criteria. Expansion content can declare `'custom'` and
- * provide a `customScoringEffectId` that returns the per-player score.
- */
 export type ScoringCriterion =
   | 'most-supporters'
   | 'most-influence'
@@ -364,12 +351,9 @@ export interface ConsortiumVoter {
   name: string;
   sourcePackId: PackId;
   criterion: ScoringCriterion;
-  /** Vote count printed on the tile. TODO: real values from card images. */
   votes: number;
-  /** True from setup if the voter is one of the always-face-up pair. */
   isAlwaysFaceUp: boolean;
   revealed: boolean;
-  /** Used when `criterion === 'custom'`. */
   customScoringEffectId?: EffectId;
 }
 
@@ -383,7 +367,6 @@ export interface BellTowerCard {
   name: string;
   sourcePackId: PackId;
   effectId: EffectId;
-  /** Card is included only when the game has at least this many players. */
   minPlayers: 2 | 3 | 4 | 5;
 }
 
@@ -411,11 +394,6 @@ export type GamePhase =
 // RNG
 // ============================================================================
 
-/**
- * Serializable RNG state. Carries the seed (for diagnostics / replay reset)
- * plus the current mulberry32 counter. Engine code threads this through state
- * rather than using a closure so games can be saved / restored mid-flight.
- */
 export interface RngState {
   seed: number;
   counter: number;
@@ -430,8 +408,194 @@ export interface ActionLogEntry {
   round: RoundNumber | 0;
   phaseKind: GamePhase['kind'];
   message: string;
-  // TODO: structured payload for replay.
 }
+
+// ============================================================================
+// Serializable values (constraint for effect context payloads)
+// ============================================================================
+
+export type SerializableValue =
+  | string
+  | number
+  | boolean
+  | null
+  | SerializableValue[]
+  | { [key: string]: SerializableValue | undefined };
+
+export type SerializableContext = { [key: string]: SerializableValue | undefined };
+
+// ============================================================================
+// Effect resolution: prompts, answers, sources, continuations
+// ============================================================================
+
+export interface ChoiceOption {
+  id: string;
+  label: string;
+  payload: SerializableValue;
+  available?: boolean;
+  unavailableReason?: string;
+}
+
+export interface ReactionOption {
+  /** Where the reaction comes from (vault card, supporter, etc.). */
+  sourceKind: 'vault-card' | 'supporter' | 'spell' | 'mage-power';
+  /** Card / spell / mage id that owns the reaction. */
+  sourceId: string;
+  /** Effect id to invoke if the player chooses this reaction. */
+  effectId: EffectId;
+  label: string;
+}
+
+export type PendingPrompt =
+  | { kind: 'choose-from-options'; options: ChoiceOption[] }
+  | { kind: 'choose-target-mage'; eligibleMageIds: OwnedMageId[] }
+  | { kind: 'choose-target-action-space'; eligibleSpaceIds: ActionSpaceId[] }
+  | { kind: 'choose-vault-card'; eligibleCardIds: VaultCardId[] }
+  | { kind: 'choose-supporter-card'; eligibleCardIds: SupporterCardId[] }
+  | {
+      kind: 'choose-spell-level';
+      spellId: SpellCardId;
+      availableLevels: (1 | 2 | 3)[];
+    }
+  | { kind: 'choose-deck'; eligibleDecks: ('spell' | 'vault' | 'supporter')[] }
+  | { kind: 'choose-voter'; eligibleVoterIds: ConsortiumVoterId[] }
+  | {
+      kind: 'reaction-window';
+      /** Trigger event embedded directly so the prompt is self-describing. */
+      triggerEvent: ReactionTriggerEvent;
+      /** Reactions the responder may play; empty list = pass-only window. */
+      reactionOptions: ReactionOption[];
+      canPass: true;
+    }
+  | { kind: 'confirm'; message: string };
+
+export type ResolutionAnswer =
+  | { kind: 'option-chosen'; optionId: string; payload: SerializableValue }
+  | { kind: 'mage-chosen'; mageId: OwnedMageId }
+  | { kind: 'space-chosen'; spaceId: ActionSpaceId }
+  | { kind: 'card-chosen'; cardId: string }
+  | { kind: 'level-chosen'; level: 1 | 2 | 3 }
+  | { kind: 'deck-chosen'; deck: 'spell' | 'vault' | 'supporter' }
+  | { kind: 'voter-chosen'; voterId: ConsortiumVoterId }
+  | {
+      kind: 'reaction-played';
+      effectId: EffectId;
+      reactionContext: SerializableContext;
+    }
+  | { kind: 'reaction-passed' }
+  | { kind: 'confirmed' };
+
+export interface ResumeContinuation {
+  effectId: EffectId;
+  context: SerializableContext;
+}
+
+export interface ResolutionSource {
+  kind:
+    | 'spell'
+    | 'vault-card'
+    | 'supporter'
+    | 'room-action'
+    | 'mage-power'
+    | 'bell-tower'
+    | 'system';
+  /** Id of the originating card / room / mage / etc. */
+  id: string;
+  triggeringPlayerId: PlayerId;
+  description: string;
+}
+
+export interface PendingResolution {
+  id: ResolutionId;
+  responderId: PlayerId;
+  prompt: PendingPrompt;
+  resume: ResumeContinuation;
+  source: ResolutionSource;
+  /** Set when this prompt is part of an open reaction window. */
+  reactionWindowId?: ReactionWindowId;
+}
+
+/** Engine input (effects don't generate IDs; the engine does). */
+export type PendingResolutionInput = Omit<PendingResolution, 'id'>;
+
+export type ReactionTriggerEvent =
+  | {
+      kind: 'mage-wounded';
+      mageId: OwnedMageId;
+      ownerId: PlayerId;
+      byPlayerId: PlayerId;
+      originalSpaceId: ActionSpaceId | null;
+    }
+  | {
+      kind: 'mage-banished';
+      mageId: OwnedMageId;
+      ownerId: PlayerId;
+      byPlayerId: PlayerId;
+      originalSpaceId: ActionSpaceId | null;
+    }
+  | {
+      kind: 'mage-moved';
+      mageId: OwnedMageId;
+      ownerId: PlayerId;
+      fromSpaceId: ActionSpaceId;
+      toSpaceId: ActionSpaceId;
+      byPlayerId: PlayerId;
+    }
+  | {
+      kind: 'spell-cast';
+      spellId: SpellCardId;
+      level: 1 | 2 | 3;
+      byPlayerId: PlayerId;
+    };
+
+export interface ReactionWindow {
+  id: ReactionWindowId;
+  triggerEvent: ReactionTriggerEvent;
+  /** Players still owed a reaction prompt, in turn order from the trigger. */
+  pendingResponderIds: PlayerId[];
+  /** Players who've already used their one reaction this window. */
+  reactedPlayerIds: PlayerId[];
+  /** Effect to invoke after the window closes (queue empty). */
+  afterResume: ResumeContinuation;
+  /** Source of the original reactable action — for logs / UI. */
+  source: ResolutionSource;
+}
+
+export type ReactionWindowInput = Omit<ReactionWindow, 'id'>;
+
+// ============================================================================
+// Effect context & result
+// ============================================================================
+
+export interface EffectContext {
+  state: GameState;
+  source: ResolutionSource;
+  triggeringPlayerId: PlayerId;
+  /** Present when this is a resume call from a PendingResolution. */
+  resumeContext?: SerializableContext;
+  resumeAnswer?: ResolutionAnswer;
+  /**
+   * False inside reaction effect resolution per rulebook ("reactions cannot
+   * themselves be reacted to"). Effects MAY check this; the engine ALSO
+   * suppresses reaction windows when applying a reaction effect's result.
+   */
+  allowReactions: boolean;
+}
+
+export type GameStatePatch = Partial<GameState>;
+
+export type EffectResult =
+  | { kind: 'done'; patch: GameStatePatch }
+  | {
+      kind: 'pause';
+      patch?: GameStatePatch;
+      pending: PendingResolutionInput;
+    }
+  | {
+      kind: 'open-reaction';
+      patch?: GameStatePatch;
+      window: ReactionWindowInput;
+    };
 
 // ============================================================================
 // GameState
@@ -444,10 +608,8 @@ export interface GameState {
   rngSeed: number;
   rng: RngState;
 
-  /** Rooms in row-major board order. */
   rooms: Room[];
 
-  /** All voters in play this game (12 in base: 2 face-up + 10 face-down). */
   voters: ConsortiumVoter[];
   voterMarks: VoterMark[];
 
@@ -457,7 +619,6 @@ export interface GameState {
   vaultTableau: VaultCardId[];
   supporterDeck: SupporterCardId[];
   supporterTableau: SupporterCardId[];
-  /** Legendary spells are not shuffled into the regular spell deck. */
   legendarySpells: SpellCardId[];
 
   bellTower: {
@@ -469,7 +630,21 @@ export interface GameState {
   roomLocks: { roomId: RoomId }[];
 
   phase: GamePhase;
-  pendingResolution: PendingResolution | null;
+
+  /**
+   * LIFO stack of outstanding player-input prompts. Top of stack = currently
+   * active prompt; the engine refuses ADVANCE_PHASE while any prompt is open.
+   */
+  pendingResolutionStack: PendingResolution[];
+  /** Open reaction windows. Each window owns a queue of responder prompts. */
+  activeReactionWindows: ReactionWindow[];
+
+  /**
+   * Single monotonic counter used for every deterministic id the engine
+   * needs (resolution ids, reaction window ids, action log ids) AND for
+   * recording `Player.influenceArrivalSeq` whenever influence changes.
+   */
+  nextSequenceId: number;
 
   actionLog: ActionLogEntry[];
 }
@@ -497,7 +672,7 @@ export interface CastSpellAction {
   playerId: PlayerId;
   spellCardId: SpellCardId;
   level: 1 | 2 | 3;
-  choices?: unknown;
+  choices?: SerializableContext;
 }
 
 export interface BuyVaultCardAction {
@@ -522,14 +697,18 @@ export interface UseAbilityAction {
   playerId: PlayerId;
   abilityId: AbilityId;
   sourceCardId?: string;
-  choices?: unknown;
+  choices?: SerializableContext;
 }
 
 export interface ResolvePendingAction {
   type: 'RESOLVE_PENDING';
+  resolutionId: ResolutionId;
+  answer: ResolutionAnswer;
+}
+
+export interface EndErrandsTurnAction {
+  type: 'END_ERRANDS_TURN';
   playerId: PlayerId;
-  /** Player's answer to the current pending resolution prompt. */
-  answer: unknown;
 }
 
 export interface AdvancePhaseAction {
@@ -544,23 +723,5 @@ export type GameAction =
   | PassTurnAction
   | UseAbilityAction
   | ResolvePendingAction
+  | EndErrandsTurnAction
   | AdvancePhaseAction;
-
-// ============================================================================
-// Effect surface
-// ============================================================================
-
-export interface EffectContext {
-  state: GameState;
-  playerId: PlayerId;
-  sourceCardId?: string;
-  choices?: unknown;
-}
-
-export type GameStatePatch = Partial<GameState>;
-
-/**
- * Pending player input that pauses the engine. The full shape is designed in
- * `docs/effect-resolution.md` and will be implemented in a follow-up prompt.
- */
-export type PendingResolution = unknown;

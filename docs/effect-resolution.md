@@ -181,41 +181,82 @@ function applyEffectResult(state: GameState, result: EffectResult): GameState {
 
 ## 3. Reaction window model
 
-A reaction window is a queue of "ask player X to react or pass" prompts,
-ordered clockwise from the active player. The original effect's outcome is
-held in a "reactable" pending resolution at the bottom of the stack until
-the queue drains.
+### Rulebook-resolved rules (p.11)
+
+These are no longer open questions:
+
+- **Reactions trigger *after* the action resolves**, not before. There is no
+  counter-spell / cancellation in base Argent. Reactions respond to
+  *consequences*, so the engine applies the action's patch first and only
+  then opens the reaction window. (Effects that need cancellable behavior
+  for some future expansion can model it via compensating patches in the
+  reaction effect, but base content does not need rollback.)
+- **Each player may react at most once per specific action.** Tracked on
+  the `ReactionWindow` via `reactedPlayerIds`. Once a player reacts, they
+  are skipped if the window asks for them again.
+- **Reactions occur in turn order starting from the triggering player.**
+  Build the responder queue clockwise from the current player; the
+  triggering player themselves is excluded.
+- **Reactions cannot be reacted to.** The engine sets
+  `EffectContext.allowReactions = false` while resolving a reaction
+  effect, and refuses to open a new reaction window during that
+  resolution.
+- **The Mysticism Mage's "place after spell" ability triggers *after*
+  reactions resolve.** Implement as the `afterResume` continuation on the
+  reaction window — when the queue drains, the engine invokes
+  `afterResume`, which is the post-reaction effect (e.g.,
+  `base.spell.burn.l1.complete` runs the Mysticism follow-up if the
+  caster's Mage is grey).
+
+### Mechanics
+
+A reaction window is a queue of "ask player X to react or pass" prompts.
+The original effect's `patch` is applied *before* the window opens. The
+window owns a `pendingResponderIds` queue and an `afterResume`
+continuation invoked when the queue drains.
 
 ```
-stack (top)
-  reaction-window prompt for player B  ← current responder
-  ...
-  original spell effect (reactable, already resolved its target pick)
-stack (bottom)
+state.activeReactionWindows.top  ← current open window (LIFO)
+  pendingResponderIds: [B, C, D]
+  reactedPlayerIds: []
+  afterResume: { effectId: 'base.spell.burn.l1.complete', context: {} }
+
+state.pendingResolutionStack.top
+  reaction-window prompt for B  ← current responder
 ```
 
-When player B answers `pass`, pop and ask player C. When all non-active
-players have passed, pop the queue marker and let the original effect's
-final patch apply. If a player answers `react`:
+Cycle:
+1. Engine pops B's prompt; B answers `reaction-passed` or `reaction-played`.
+2. On `reaction-passed`: drop B from `pendingResponderIds`, push the next
+   responder's prompt (C). If queue empty, pop the window and invoke
+   `afterResume`.
+3. On `reaction-played`: invoke the reaction effect with
+   `allowReactions = false`; apply its patch; mark B in
+   `reactedPlayerIds`; drop B from `pendingResponderIds`; push C's
+   prompt or invoke `afterResume`.
 
-1. Push the reaction's effect onto the stack (which may itself open a
-   reaction window — fully recursive).
-2. Once it resolves, return to the queue and ask the next player.
-
-Concrete pattern: `result.openReactionWindow` describes which players to
-poll and what reactable sources count (e.g., "any reaction-timing
-Supporter, any L1 Spell with reaction timing"). The engine fans this out
-into one PendingResolution per non-active player and pushes them in
-reverse turn order so the next player to ask is on top.
+Reactions cannot themselves be reacted to, so a reaction effect's
+`open-reaction` result is rejected (or simply ignored) by the engine
+while `allowReactions === false`.
 
 ```ts
 export interface ReactionWindow {
-  reactableEffectId: EffectId;
+  id: ReactionWindowId;
+  triggerEvent: ReactionTriggerEvent;
+  pendingResponderIds: PlayerId[];   // queue, drained in turn order
+  reactedPlayerIds: PlayerId[];      // each player reacts at most once
+  afterResume: ResumeContinuation;   // runs when queue drains
   source: ResolutionSource;
-  /** Ordered list of player ids to poll; first listed gets first chance. */
-  pollOrder: PlayerId[];
 }
 ```
+
+### Future-proofing for expansions
+
+Some expansion content (Mancers? Knights?) may introduce true cancellation
+or pre-resolution interrupts. The current engine doesn't support that, but
+the design leaves room: a future "interrupt window" type would open
+*before* the action's patch applies, with a similar queue model. We won't
+add it until expansion content actually requires it.
 
 ## 4. Refined Effect signature
 
@@ -347,13 +388,11 @@ choose-card prompt + apply patch).
 
 ## 6. Open questions / risks
 
-1. **Rollback / negation.** Argent's reactions usually *replace* or *cancel*
-   an incoming effect (e.g., Counter-spell stops a spell from resolving).
-   Modeling this as compensating patches is workable but fragile if the
-   patch has already been applied speculatively. Cleanest: an effect that
-   opens a reaction window must split into "compute outcome" and "commit
-   outcome", with the reaction window between them. Reactions modify a
-   shared `pendingOutcome` blob; commit reads it. Worth prototyping.
+1. ~~**Rollback / negation.**~~ **Resolved.** Base Argent reactions trigger
+   *after* the action resolves and respond to consequences, not the action
+   itself. No rollback needed; the engine applies the patch then opens the
+   reaction window. Future expansion content with true cancellation can
+   add an "interrupt window" type without breaking the existing design.
 
 2. **Continuation serialization vs. ergonomics.** Data continuations
    (effectId + context) are serializable but force every branch to be its
@@ -378,15 +417,14 @@ choose-card prompt + apply patch).
    auto-resolve. Effects can opt in by returning the patch directly when
    they detect a single forced choice.
 
-6. **Reaction limits.** Per-player-per-window reaction limits (rulebook
-   confirmation needed). Track via a counter on `ReactionWindow` or on
-   `Player` for the duration of the window?
+6. ~~**Reaction limits.**~~ **Resolved (rulebook p.11).** One reaction per
+   player per action. Tracked on `ReactionWindow.reactedPlayerIds`.
 
 7. **Replay log fidelity.** With data continuations, replaying =
    re-dispatching the original action sequence (`PLACE_WORKER`,
    `RESOLVE_PENDING`, …). Prompt IDs must be deterministic so the replay
-   can match answers to prompts. Likely solution: derive prompt IDs from
-   `(rngSeed, actionIndex)` rather than a runtime counter.
+   can match answers to prompts. Solution: IDs derive from
+   `state.nextSequenceId`, which is part of the deterministic state.
 
 8. **Undo.** Out of scope for hot-seat play, but worth noting that an
    action log + deterministic engine gets us most of the way there for free.

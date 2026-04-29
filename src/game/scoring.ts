@@ -7,12 +7,12 @@ import type {
 } from './types';
 
 /**
- * Returns the player's score for a given criterion. Most criteria look at
- * resources or card counts; some (Most Diversity, departmental control) need
- * card metadata that's still stubbed.
+ * Returns the player's score for a given criterion.
  *
- * Used at end-game scoring; `most-research` is always 0 because Research is
- * transient (not stored).
+ * `most-research` is always 0 because Research is transient (not stored).
+ *
+ * `second-most-*` criteria return 0 here — second-place ranking is computed
+ * across players in `computeVoterWinner`, not by per-player scoring.
  */
 export function scorePlayerForCriterion(
   _state: GameState,
@@ -52,7 +52,6 @@ export function scorePlayerForCriterion(
       return 0;
     case 'second-most-influence':
     case 'second-most-supporters':
-      // TODO: implement second-place ranking (computed across players)
       return 0;
     case 'custom':
       // TODO: invoke voter.customScoringEffectId via the effect registry
@@ -68,9 +67,7 @@ function countSupporters(player: Player): number {
 }
 
 function countTreasures(player: Player): number {
-  // TODO: filter by VaultCardType === 'treasure'. Without card definitions
-  // available here, every owned vault card counts as 1 — fix when card lookup
-  // is wired in.
+  // TODO: filter by VaultCardType === 'treasure' (requires card lookup).
   return player.vaultCards.length;
 }
 
@@ -78,12 +75,67 @@ function countConsumables(player: Player): number {
   return player.personalDiscard.filter((d) => d.kind === 'consumable').length;
 }
 
+function countMarksOnVoter(
+  state: GameState,
+  voterId: string,
+  playerId: PlayerId,
+): number {
+  return state.voterMarks.filter(
+    (m) => m.voterId === voterId && m.playerId === playerId,
+  ).length;
+}
+
 /**
- * Determines which player wins a given voter's vote, or null if the voter
- * goes unawarded (everyone tied at 0, or tied through tiebreakers).
- *
- * Tiebreakers per rulebook: most marks placed on this voter, then lowest
- * Influence Track position. Tiebreakers are TODO.
+ * Resolves a multi-way tie at the per-voter level. Per rulebook:
+ *   1. Most marks placed on this voter wins.
+ *   2. Lowest IP arrival sequence wins (placed on the IP track first).
+ *   3. Still tied → no winner (no votes awarded for this voter).
+ */
+function breakVoterTie(
+  state: GameState,
+  voter: ConsortiumVoter,
+  candidates: Player[],
+): PlayerId | null {
+  // Tiebreaker 1: marks on this voter.
+  let bestMarks = -1;
+  let marksLeaders: Player[] = [];
+  for (const p of candidates) {
+    const marks = countMarksOnVoter(state, voter.id, p.id);
+    if (marks > bestMarks) {
+      bestMarks = marks;
+      marksLeaders = [p];
+    } else if (marks === bestMarks) {
+      marksLeaders.push(p);
+    }
+  }
+  if (marksLeaders.length === 1) return marksLeaders[0]!.id;
+
+  // Tiebreaker 2: lowest influenceArrivalSeq (placed on IP first).
+  // 0 means the player has never increased their IP — treat as no-arrival
+  // and disqualify from this tiebreaker.
+  const withArrival = marksLeaders.filter((p) => p.influenceArrivalSeq > 0);
+  if (withArrival.length === 1) return withArrival[0]!.id;
+  if (withArrival.length === 0) return null;
+
+  let bestSeq = Infinity;
+  let seqLeaders: Player[] = [];
+  for (const p of withArrival) {
+    if (p.influenceArrivalSeq < bestSeq) {
+      bestSeq = p.influenceArrivalSeq;
+      seqLeaders = [p];
+    } else if (p.influenceArrivalSeq === bestSeq) {
+      seqLeaders.push(p);
+    }
+  }
+  if (seqLeaders.length === 1) return seqLeaders[0]!.id;
+
+  // Still tied: no winner.
+  return null;
+}
+
+/**
+ * Determines which player wins a given voter's vote, or null if no one
+ * scored above 0 or the tiebreakers exhaust without a winner.
  */
 export function computeVoterWinner(
   state: GameState,
@@ -92,7 +144,7 @@ export function computeVoterWinner(
   if (state.players.length === 0) return null;
 
   const scored = state.players.map((p) => ({
-    playerId: p.id,
+    player: p,
     score: scorePlayerForCriterion(state, p, voter.criterion),
   }));
 
@@ -102,11 +154,10 @@ export function computeVoterWinner(
   }
   if (max <= 0) return null;
 
-  const tied = scored.filter((s) => s.score === max);
-  if (tied.length === 1) return tied[0]?.playerId ?? null;
+  const tied = scored.filter((s) => s.score === max).map((s) => s.player);
+  if (tied.length === 1) return tied[0]!.id;
 
-  // TODO: tiebreaker — marks on this voter, then IP track position.
-  return null;
+  return breakVoterTie(state, voter, tied);
 }
 
 export interface FinalScoringResult {
@@ -114,6 +165,10 @@ export interface FinalScoringResult {
   archmage: PlayerId | null;
 }
 
+/**
+ * Sums voter awards per player and applies the game-end tiebreaker (per
+ * rulebook: total Influence). If still tied, returns null archmage.
+ */
 export function computeFinalScoring(state: GameState): FinalScoringResult {
   const votesPerPlayer: Record<PlayerId, number> = {};
   for (const p of state.players) votesPerPlayer[p.id] = 0;
@@ -125,24 +180,38 @@ export function computeFinalScoring(state: GameState): FinalScoringResult {
     }
   }
 
-  let archmage: PlayerId | null = null;
+  // Find max-votes leaders.
   let maxVotes = 0;
-  let tiedAtMax = false;
-  for (const [playerId, votes] of Object.entries(votesPerPlayer)) {
-    if (votes > maxVotes) {
-      maxVotes = votes;
-      archmage = playerId;
-      tiedAtMax = false;
-    } else if (votes === maxVotes && votes > 0) {
-      tiedAtMax = true;
+  for (const v of Object.values(votesPerPlayer)) {
+    if (v > maxVotes) maxVotes = v;
+  }
+  if (maxVotes === 0) return { votesPerPlayer, archmage: null };
+
+  const voteLeaders = state.players.filter(
+    (p) => votesPerPlayer[p.id] === maxVotes,
+  );
+  if (voteLeaders.length === 1) {
+    return { votesPerPlayer, archmage: voteLeaders[0]!.id };
+  }
+
+  // Game-end tiebreaker: total influence.
+  let bestInfluence = -1;
+  let influenceLeaders: Player[] = [];
+  for (const p of voteLeaders) {
+    if (p.resources.influence > bestInfluence) {
+      bestInfluence = p.resources.influence;
+      influenceLeaders = [p];
+    } else if (p.resources.influence === bestInfluence) {
+      influenceLeaders.push(p);
     }
   }
-  if (tiedAtMax || maxVotes === 0) archmage = null;
+  if (influenceLeaders.length === 1) {
+    return { votesPerPlayer, archmage: influenceLeaders[0]!.id };
+  }
 
-  return { votesPerPlayer, archmage };
+  return { votesPerPlayer, archmage: null };
 }
 
-/** Mid-game scoring hook — base game has none. Reserved for expansions. */
 export function resolveMidGameScoring(state: GameState): GameState {
   return state;
 }
