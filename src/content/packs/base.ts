@@ -202,7 +202,32 @@ const phaseSteppers: VaultCard = {
   timing: 'reaction',
 };
 
-const vaultCards: VaultCard[] = [phaseSteppers];
+// Two placeholder Treasures so the Vault tableau has cards a player can
+// actually buy. Effect IDs are unregistered (treasures are passive in real
+// Argent; their effect-on-use behavior comes later).
+const placeholderTreasure1: VaultCard = {
+  id: 'base.vault.placeholder-treasure-1',
+  name: 'Placeholder Treasure 1',
+  sourcePackId: PACK_ID,
+  type: 'treasure',
+  goldCost: 2,
+  effectId: 'base.vault.placeholder-treasure-1',
+};
+
+const placeholderTreasure2: VaultCard = {
+  id: 'base.vault.placeholder-treasure-2',
+  name: 'Placeholder Treasure 2',
+  sourcePackId: PACK_ID,
+  type: 'treasure',
+  goldCost: 4,
+  effectId: 'base.vault.placeholder-treasure-2',
+};
+
+const vaultCards: VaultCard[] = [
+  phaseSteppers,
+  placeholderTreasure1,
+  placeholderTreasure2,
+];
 
 // ============================================================================
 // Supporters — TODO
@@ -348,6 +373,63 @@ const libraryB: Room = {
   actionSpaces: [],
 };
 
+// Vault A — Treasure-buy room. Three slots, all using the same buy effect.
+// Slot 2 is a Merit slot (placement costs 1 Merit Badge); slots 1 and 3 are
+// regular. Real Argent has slot priority bonuses (1st pick / 2nd pick / etc.)
+// — those are TODO; for now all three slots present the same buy prompt.
+
+const vaultASlot1: ActionSpace = {
+  id: 'base.room.vault.a.slot-1',
+  roomId: 'base.room.vault.a',
+  index: 0,
+  slotType: 'regular',
+  occupant: null,
+  effectId: 'base.room.vault-a.buy',
+};
+
+const vaultASlot2: ActionSpace = {
+  id: 'base.room.vault.a.slot-2',
+  roomId: 'base.room.vault.a',
+  index: 1,
+  slotType: 'merit',
+  occupant: null,
+  effectId: 'base.room.vault-a.buy',
+  costToActivate: { meritBadges: 1 },
+};
+
+const vaultASlot3: ActionSpace = {
+  id: 'base.room.vault.a.slot-3',
+  roomId: 'base.room.vault.a',
+  index: 2,
+  slotType: 'regular',
+  occupant: null,
+  effectId: 'base.room.vault-a.buy',
+};
+
+const vaultA: Room = {
+  id: 'base.room.vault.a',
+  name: 'Vault',
+  sourcePackId: PACK_ID,
+  isUniversityCentral: false,
+  side: 'A',
+  isInstantRoom: false,
+  cannotBePlacedInDirectly: false,
+  cannotBeLocked: false,
+  actionSpaces: [vaultASlot1, vaultASlot2, vaultASlot3],
+};
+
+const vaultB: Room = {
+  id: 'base.room.vault.b',
+  name: 'Vault',
+  sourcePackId: PACK_ID,
+  isUniversityCentral: false,
+  side: 'B',
+  isInstantRoom: false,
+  cannotBePlacedInDirectly: false,
+  cannotBeLocked: false,
+  actionSpaces: [],
+};
+
 interface RoomPairOpts {
   baseId: string;
   name: string;
@@ -415,7 +497,8 @@ const rooms: Room[] = [
   ...roomPair({ baseId: 'base.room.courtyard', name: 'Courtyard' }),
   ...roomPair({ baseId: 'base.room.catacombs', name: 'Catacombs' }),
   ...roomPair({ baseId: 'base.room.guilds', name: 'Guilds' }),
-  ...roomPair({ baseId: 'base.room.vault', name: 'Vault' }),
+  vaultA,
+  vaultB,
   ...roomPair({ baseId: 'base.room.chapel', name: 'Chapel' }),
   ...roomPair({ baseId: 'base.room.student-stores', name: 'Student Stores' }),
   ...roomPair({ baseId: 'base.room.adventuring', name: 'Adventuring' }),

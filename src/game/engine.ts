@@ -9,12 +9,14 @@ import { buildInitialState } from './setup';
 import { getEffect, hasEffect } from './effects/index';
 import type { Effect } from './effects/index';
 import {
+  applyVaultPurchase,
   buildReactionOptionsFor,
   describeSpaceSource,
 } from './effects/helpers';
 import type {
   BellTowerCard,
   BellTowerCardId,
+  BuyVaultCardAction,
   CastSpellAction,
   ConsortiumVoter,
   EffectContext,
@@ -27,6 +29,7 @@ import type {
   PendingResolution,
   PendingResolutionInput,
   PlaceWorkerAction,
+  Player,
   ReactionWindow,
   ReactionWindowId,
   ResolutionAnswer,
@@ -36,6 +39,7 @@ import type {
   Room,
   RoundNumber,
   SerializableContext,
+  UseAbilityAction,
 } from './types';
 
 // Side-effect import: triggers effect registration.
@@ -54,9 +58,11 @@ export function applyAction(state: GameState, action: GameAction): GameState {
     case 'CAST_SPELL':
       return handleCastSpell(state, action);
     case 'BUY_VAULT_CARD':
+      return handleBuyVaultCard(state, action);
+    case 'USE_ABILITY':
+      return handleUseAbility(state, action);
     case 'RECRUIT_SUPPORTER':
     case 'PASS_TURN':
-    case 'USE_ABILITY':
       throw new Error(
         `applyAction: action "${action.type}" not yet implemented (phase=${state.phase.kind})`,
       );
@@ -421,10 +427,21 @@ function handlePlaceWorker(state: GameState, action: PlaceWorkerAction): GameSta
   if (space.occupant) {
     throw new Error(`PLACE_WORKER: space ${space.id} already occupied`);
   }
-  if (space.slotType !== 'regular') {
-    // TODO: implement merit / shadow / wound slot placement rules.
+  if (space.slotType === 'shadow' || space.slotType === 'shadow-merit') {
+    // TODO: shadow placement requires choosing which occupied slot to copy.
     throw new Error(
-      `PLACE_WORKER: slot type "${space.slotType}" not yet supported (TODO)`,
+      `PLACE_WORKER: slot type "${space.slotType}" not yet supported`,
+    );
+  }
+  if (space.slotType === 'wound') {
+    throw new Error(`PLACE_WORKER: slot type "wound" not yet supported`);
+  }
+
+  const meritCost =
+    space.slotType === 'merit' ? (space.costToActivate?.meritBadges ?? 0) : 0;
+  if (meritCost > 0 && player.resources.meritBadges < meritCost) {
+    throw new Error(
+      `PLACE_WORKER: insufficient Merit Badges (need ${meritCost}, have ${player.resources.meritBadges})`,
     );
   }
 
@@ -450,24 +467,90 @@ function handlePlaceWorker(state: GameState, action: PlaceWorkerAction): GameSta
           ),
         },
   );
-  const updatedPlayers = state.players.map((p) =>
-    p.id !== action.playerId
-      ? p
-      : {
-          ...p,
-          mages: p.mages.map((m) =>
-            m.id !== action.mageId
-              ? m
-              : {
-                  ...m,
-                  location: { kind: 'action-space' as const, spaceId: space.id },
-                  isShadowing: false,
-                },
-          ),
+  const updatedPlayers = state.players.map((p): Player => {
+    if (p.id !== action.playerId) return p;
+    const next: Player = {
+      ...p,
+      mages: p.mages.map((m) =>
+        m.id !== action.mageId
+          ? m
+          : {
+              ...m,
+              location: { kind: 'action-space' as const, spaceId: space.id },
+              isShadowing: false,
+            },
+      ),
+    };
+    if (meritCost > 0) {
+      return {
+        ...next,
+        resources: {
+          ...next.resources,
+          meritBadges: next.resources.meritBadges - meritCost,
+          meritBadgesSpent: next.resources.meritBadgesSpent + meritCost,
         },
-  );
+      };
+    }
+    return next;
+  });
 
   return { ...state, rooms: updatedRooms, players: updatedPlayers };
+}
+
+function handleBuyVaultCard(
+  state: GameState,
+  action: BuyVaultCardAction,
+): GameState {
+  if (state.phase.kind !== 'errands') {
+    throw new Error('BUY_VAULT_CARD: only valid during errands phase');
+  }
+  if (state.pendingResolutionStack.length > 0) {
+    throw new Error('BUY_VAULT_CARD: resolve pending prompt first');
+  }
+  const activePlayerId = state.players[state.phase.activePlayerIndex]?.id;
+  if (activePlayerId !== action.playerId) {
+    throw new Error(
+      `BUY_VAULT_CARD: not your turn (active=${activePlayerId}, you=${action.playerId})`,
+    );
+  }
+  const patch = applyVaultPurchase(state, action.playerId, action.vaultCardId);
+  return { ...state, ...patch };
+}
+
+function handleUseAbility(
+  state: GameState,
+  action: UseAbilityAction,
+): GameState {
+  if (state.phase.kind !== 'errands') {
+    throw new Error('USE_ABILITY: only valid during errands phase');
+  }
+  if (state.pendingResolutionStack.length > 0) {
+    throw new Error('USE_ABILITY: resolve pending prompt first');
+  }
+  const activePlayerId = state.players[state.phase.activePlayerIndex]?.id;
+  if (activePlayerId !== action.playerId) {
+    throw new Error(
+      `USE_ABILITY: not your turn (active=${activePlayerId}, you=${action.playerId})`,
+    );
+  }
+  if (!hasEffect(action.abilityId)) {
+    throw new Error(`USE_ABILITY: unknown ability "${action.abilityId}"`);
+  }
+  const sourceId = action.sourceCardId ?? action.abilityId;
+  const source: ResolutionSource = {
+    kind: 'mage-power',
+    id: sourceId,
+    triggeringPlayerId: action.playerId,
+    description: `Ability ${action.abilityId}`,
+  };
+  const ctx: EffectContext = {
+    state,
+    source,
+    triggeringPlayerId: action.playerId,
+    allowReactions: true,
+  };
+  const result = getEffect(action.abilityId)(ctx);
+  return applyEffectResult(state, result, ctx);
 }
 
 function handleCastSpell(state: GameState, action: CastSpellAction): GameState {

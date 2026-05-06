@@ -3,15 +3,21 @@
 
 import { registerEffect } from './registry';
 import {
+  affordableVaultCards,
+  applyVaultPurchase,
+  buildArsMagnaTargets,
   buildBurnTargets,
   buildReactionQueue,
+  findActionSpace,
   gainResourcePatch,
   woundMage,
 } from './helpers';
 import type {
+  ActionSpaceId,
   EffectContext,
   EffectResult,
   GameState,
+  OwnedMageId,
   PendingResolutionInput,
   Player,
   ReactionTriggerEvent,
@@ -255,3 +261,203 @@ function applyPhaseSteppers(
 
   return { players, rooms };
 }
+
+// ============================================================================
+// Vault A — buy a card from the tableau
+// ============================================================================
+
+registerEffect('base.room.vault-a.buy', (ctx: EffectContext): EffectResult => {
+  if (!ctx.resumeAnswer) {
+    const eligibleCardIds = affordableVaultCards(ctx.state, ctx.triggeringPlayerId);
+    if (eligibleCardIds.length === 0) {
+      // Nothing affordable — slot resolves with no purchase.
+      return { kind: 'done', patch: {} };
+    }
+    return {
+      kind: 'pause',
+      pending: {
+        responderId: ctx.triggeringPlayerId,
+        prompt: { kind: 'choose-vault-card', eligibleCardIds },
+        resume: { effectId: 'base.room.vault-a.buy', context: {} },
+        source: ctx.source,
+      },
+    };
+  }
+  if (ctx.resumeAnswer.kind !== 'card-chosen') {
+    throw new Error(
+      `base.room.vault-a.buy expected card-chosen, got ${ctx.resumeAnswer.kind}`,
+    );
+  }
+  return {
+    kind: 'done',
+    patch: applyVaultPurchase(
+      ctx.state,
+      ctx.triggeringPlayerId,
+      ctx.resumeAnswer.cardId,
+    ),
+  };
+});
+
+// ============================================================================
+// Sorcery Mage — Ars Magna (fast action: spend 1 Mana, wound a Mage, take its slot)
+// ============================================================================
+
+registerEffect('base.mage.sorcery.ars-magna', (ctx: EffectContext): EffectResult => {
+  const sourceMageId = ctx.source.id;
+  const player = ctx.state.players.find((p) => p.id === ctx.triggeringPlayerId);
+  if (!player) throw new Error('Ars Magna: caster not found');
+
+  if (!ctx.resumeAnswer) {
+    // First call — validate, spend mana, prompt for target.
+    const redMage = player.mages.find((m) => m.id === sourceMageId);
+    if (!redMage) {
+      throw new Error(`Ars Magna: source mage ${sourceMageId} not owned`);
+    }
+    if (redMage.color !== 'red') {
+      throw new Error('Ars Magna: source mage must be red (Sorcery)');
+    }
+    if (redMage.location.kind !== 'office') {
+      throw new Error(
+        `Ars Magna: red mage must be in office (location=${redMage.location.kind})`,
+      );
+    }
+    if (redMage.isWounded) {
+      throw new Error('Ars Magna: red mage is wounded; heal first');
+    }
+    if (player.resources.mana < 1) {
+      throw new Error('Ars Magna: requires 1 Mana');
+    }
+
+    const eligibleMageIds = buildArsMagnaTargets(ctx.state, ctx.triggeringPlayerId);
+    if (eligibleMageIds.length === 0) {
+      throw new Error('Ars Magna: no legal targets');
+    }
+
+    return {
+      kind: 'pause',
+      patch: {
+        players: ctx.state.players.map((p) =>
+          p.id !== ctx.triggeringPlayerId
+            ? p
+            : {
+                ...p,
+                resources: { ...p.resources, mana: p.resources.mana - 1 },
+              },
+        ),
+      },
+      pending: {
+        responderId: ctx.triggeringPlayerId,
+        prompt: { kind: 'choose-target-mage', eligibleMageIds },
+        resume: {
+          effectId: 'base.mage.sorcery.ars-magna',
+          context: { step: 'wound', sourceMageId },
+        },
+        source: ctx.source,
+      },
+    };
+  }
+
+  const step = ctx.resumeContext?.['step'];
+  if (step !== 'wound') {
+    throw new Error(`Ars Magna: unexpected resume step ${String(step)}`);
+  }
+  if (ctx.resumeAnswer.kind !== 'mage-chosen') {
+    throw new Error(
+      `Ars Magna wound expected mage-chosen, got ${ctx.resumeAnswer.kind}`,
+    );
+  }
+
+  const sourceMageIdRaw = ctx.resumeContext?.['sourceMageId'];
+  if (typeof sourceMageIdRaw !== 'string') {
+    throw new Error('Ars Magna: missing sourceMageId in resumeContext');
+  }
+  const wounded = woundMage(
+    ctx.state,
+    ctx.resumeAnswer.mageId,
+    ctx.triggeringPlayerId,
+  );
+  const triggerEvent = wounded.triggerEvent;
+  if (triggerEvent.kind !== 'mage-wounded') {
+    throw new Error('Ars Magna: woundMage produced unexpected event kind');
+  }
+  const targetSpaceId = triggerEvent.originalSpaceId;
+  if (!targetSpaceId) {
+    // Target wasn't on a space — shouldn't happen given target filter.
+    return { kind: 'done', patch: wounded.patch };
+  }
+
+  return {
+    kind: 'open-reaction',
+    patch: wounded.patch,
+    window: {
+      triggerEvent,
+      pendingResponderIds: buildReactionQueue(ctx.state, ctx.triggeringPlayerId),
+      reactedPlayerIds: [],
+      afterResume: {
+        effectId: 'base.mage.sorcery.ars-magna.complete',
+        context: { sourceMageId: sourceMageIdRaw, targetSpaceId },
+      },
+      source: ctx.source,
+    },
+  };
+});
+
+/**
+ * After-reaction continuation for Ars Magna. If the targeted slot is now
+ * empty, the caster's red Mage takes it. If a reaction (Phase Steppers)
+ * re-occupied the slot via shadowing, the red Mage stays in office and the
+ * Mana already spent is forfeit — Ars Magna doesn't refund.
+ */
+registerEffect('base.mage.sorcery.ars-magna.complete', (ctx: EffectContext): EffectResult => {
+  const sourceMageIdRaw = ctx.resumeContext?.['sourceMageId'];
+  const targetSpaceIdRaw = ctx.resumeContext?.['targetSpaceId'];
+  if (typeof sourceMageIdRaw !== 'string' || typeof targetSpaceIdRaw !== 'string') {
+    throw new Error('Ars Magna complete: missing context fields');
+  }
+  const sourceMageId = sourceMageIdRaw as OwnedMageId;
+  const targetSpaceId = targetSpaceIdRaw as ActionSpaceId;
+
+  const lookup = findActionSpace(ctx.state, targetSpaceId);
+  if (!lookup) {
+    return { kind: 'done', patch: {} };
+  }
+  if (lookup.space.occupant !== null) {
+    // Slot reclaimed by a reaction (e.g., Phase Steppers shadow). Red Mage
+    // doesn't move; the Mana already paid is gone.
+    return { kind: 'done', patch: {} };
+  }
+
+  const rooms = ctx.state.rooms.map((r) => ({
+    ...r,
+    actionSpaces: r.actionSpaces.map((s) =>
+      s.id !== targetSpaceId
+        ? s
+        : {
+            ...s,
+            occupant: {
+              mageId: sourceMageId,
+              ownerId: ctx.triggeringPlayerId,
+              isShadowing: false,
+            },
+          },
+    ),
+  }));
+  const players = ctx.state.players.map((p) =>
+    p.id !== ctx.triggeringPlayerId
+      ? p
+      : {
+          ...p,
+          mages: p.mages.map((m) =>
+            m.id !== sourceMageId
+              ? m
+              : {
+                  ...m,
+                  location: { kind: 'action-space' as const, spaceId: targetSpaceId },
+                  isShadowing: false,
+                },
+          ),
+        },
+  );
+
+  return { kind: 'done', patch: { rooms, players } };
+});

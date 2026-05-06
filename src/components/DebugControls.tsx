@@ -107,6 +107,28 @@ function injectPhaseSteppers(state: GameState, playerId: PlayerId): GameState {
   };
 }
 
+function bumpResource(
+  state: GameState,
+  playerId: PlayerId,
+  key: 'gold' | 'meritBadges',
+  delta: number,
+): GameState {
+  return {
+    ...state,
+    players: state.players.map((p) =>
+      p.id !== playerId
+        ? p
+        : {
+            ...p,
+            resources: {
+              ...p.resources,
+              [key]: Math.max(0, p.resources[key] + delta),
+            },
+          },
+    ),
+  };
+}
+
 function drainBellTower(state: GameState): GameState {
   return { ...state, bellTower: { ...state.bellTower, available: [] } };
 }
@@ -119,6 +141,27 @@ function forceLibrarySide(state: GameState, side: 'A' | 'B'): GameState {
   return {
     ...state,
     rooms: state.rooms.map((r) => (r.name === 'Library' ? target : r)),
+  };
+}
+
+function forceVaultSide(state: GameState, side: 'A' | 'B'): GameState {
+  const target = baseGamePack.rooms.find(
+    (r) => r.name === 'Vault' && r.side === side,
+  );
+  if (!target) return state;
+  const idx = state.rooms.findIndex((r) => r.name === 'Vault');
+  if (idx !== -1) {
+    return {
+      ...state,
+      rooms: state.rooms.map((r, i) => (i === idx ? target : r)),
+    };
+  }
+  // Vault not in layout — replace first non-UC room.
+  const replaceIdx = state.rooms.findIndex((r) => !r.isUniversityCentral);
+  if (replaceIdx === -1) return state;
+  return {
+    ...state,
+    rooms: state.rooms.map((r, i) => (i === replaceIdx ? target : r)),
   };
 }
 
@@ -262,10 +305,16 @@ export function DebugControls() {
             Drain Bell Tower ({state.bellTower.available.length} cards)
           </DebugButton>
           <DebugButton onClick={() => patchState((s) => forceLibrarySide(s, 'A'))}>
-            Force Library side A
+            Force Library A
           </DebugButton>
           <DebugButton onClick={() => patchState((s) => forceLibrarySide(s, 'B'))}>
-            Force Library side B
+            Force Library B
+          </DebugButton>
+          <DebugButton onClick={() => patchState((s) => forceVaultSide(s, 'A'))}>
+            Force Vault A
+          </DebugButton>
+          <DebugButton onClick={() => patchState((s) => forceVaultSide(s, 'B'))}>
+            Force Vault B
           </DebugButton>
         </div>
         <p className="text-xs text-slate-500">
@@ -274,6 +323,8 @@ export function DebugControls() {
           {state.activeReactionWindows.length}
         </p>
       </section>
+
+      <TableauPanel state={state} />
 
       <details>
         <summary className="text-xs text-slate-500 cursor-pointer">
@@ -751,6 +802,10 @@ function PlayerCard({
         </button>
       )}
 
+      {canAct && (
+        <ArsMagnaControls player={player} dispatch={dispatch} />
+      )}
+
       <div className="pt-1 border-t border-slate-800 space-y-1">
         <p className="text-[10px] uppercase tracking-wide text-slate-500">
           inject (debug)
@@ -780,9 +835,105 @@ function PlayerCard({
           >
             +Phase Steppers
           </button>
+          <button
+            type="button"
+            onClick={() => patchState((s) => bumpResource(s, player.id, 'gold', 5))}
+            className="px-1.5 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-[10px]"
+          >
+            +5 gold
+          </button>
+          <button
+            type="button"
+            onClick={() => patchState((s) => bumpResource(s, player.id, 'meritBadges', 1))}
+            className="px-1.5 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-[10px]"
+          >
+            +1 MB
+          </button>
         </div>
       </div>
     </div>
+  );
+}
+
+function ArsMagnaControls({
+  player,
+  dispatch,
+}: {
+  player: Player;
+  dispatch: (action: GameAction) => void;
+}) {
+  const redMagesInOffice = player.mages.filter(
+    (m) => m.color === 'red' && m.location.kind === 'office' && !m.isWounded,
+  );
+  if (redMagesInOffice.length === 0 || player.resources.mana < 1) return null;
+  return (
+    <div className="text-xs space-y-1">
+      <p className="text-[10px] uppercase tracking-wide text-slate-500">
+        mage powers
+      </p>
+      <div className="flex flex-wrap gap-1">
+        {redMagesInOffice.map((m) => (
+          <button
+            key={m.id}
+            type="button"
+            onClick={() =>
+              dispatch({
+                type: 'USE_ABILITY',
+                playerId: player.id,
+                abilityId: 'base.mage.sorcery.ars-magna',
+                sourceCardId: m.id,
+              })
+            }
+            className="px-1.5 py-0.5 rounded bg-red-700 hover:bg-red-600 text-[10px]"
+          >
+            Ars Magna ({m.id.slice(-8)})
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function TableauPanel({ state }: { state: GameState }) {
+  return (
+    <section className="rounded border border-slate-700 bg-slate-900 p-3">
+      <h2 className="text-sm font-medium mb-2">Tableaus</h2>
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-xs text-slate-300">
+        <div>
+          <p className="font-medium text-slate-200">Spells ({state.spellTableau.length})</p>
+          <ul className="space-y-0.5">
+            {state.spellTableau.map((cid, i) => (
+              <li key={`${cid}-${i}`}>{cid}</li>
+            ))}
+            {state.spellTableau.length === 0 && (
+              <li className="text-slate-500 italic">empty</li>
+            )}
+          </ul>
+        </div>
+        <div>
+          <p className="font-medium text-slate-200">Vault ({state.vaultTableau.length})</p>
+          <ul className="space-y-0.5">
+            {state.vaultTableau.map((cid, i) => (
+              <li key={`${cid}-${i}`}>{cid}</li>
+            ))}
+            {state.vaultTableau.length === 0 && (
+              <li className="text-slate-500 italic">empty</li>
+            )}
+          </ul>
+        </div>
+        <div>
+          <p className="font-medium text-slate-200">Supporters ({state.supporterTableau.length})</p>
+          <ul className="space-y-0.5">
+            {state.supporterTableau.map((cid, i) => (
+              <li key={`${cid}-${i}`}>{cid}</li>
+            ))}
+            {state.supporterTableau.length === 0 && (
+              <li className="text-slate-500 italic">empty</li>
+            )}
+          </ul>
+        </div>
+      </div>
+    </section>
   );
 }
 

@@ -260,6 +260,53 @@ function forceLibrarySideA(state: GameState): GameState {
   };
 }
 
+/**
+ * Ensures Vault side A is in the in-play rooms. If Vault is already there
+ * (any side), it's swapped for side A; otherwise the first non-UC room is
+ * replaced with Vault A.
+ */
+function forceVaultSideA(state: GameState): GameState {
+  const vaultA = baseGamePack.rooms.find(
+    (r) => r.name === 'Vault' && r.side === 'A',
+  );
+  if (!vaultA) throw new Error('test helper: Vault A not in base pack');
+  const existingIdx = state.rooms.findIndex((r) => r.name === 'Vault');
+  if (existingIdx !== -1) {
+    return {
+      ...state,
+      rooms: state.rooms.map((r, i) => (i === existingIdx ? vaultA : r)),
+    };
+  }
+  const replaceIdx = state.rooms.findIndex((r) => !r.isUniversityCentral);
+  if (replaceIdx === -1) return state;
+  return {
+    ...state,
+    rooms: state.rooms.map((r, i) => (i === replaceIdx ? vaultA : r)),
+  };
+}
+
+function setVaultTableau(state: GameState, cardIds: string[]): GameState {
+  return { ...state, vaultTableau: cardIds };
+}
+
+function setMeritBadges(
+  state: GameState,
+  playerId: string,
+  count: number,
+): GameState {
+  return mapPlayer(state, playerId, (p) => ({
+    ...p,
+    resources: { ...p.resources, meritBadges: count },
+  }));
+}
+
+function setGold(state: GameState, playerId: string, gold: number): GameState {
+  return mapPlayer(state, playerId, (p) => ({
+    ...p,
+    resources: { ...p.resources, gold },
+  }));
+}
+
 function findRoom(state: GameState, predicate: (r: Room) => boolean): Room {
   const r = state.rooms.find(predicate);
   if (!r) throw new Error('test helper: room not found');
@@ -829,6 +876,49 @@ describe('PLACE_WORKER', () => {
     ).toThrow(/not in office/);
   });
 
+  it('rejects placement on a merit slot without enough Merit Badges', () => {
+    let s = initGame(TWO_PLAYER_CONFIG);
+    s = forceVaultSideA(s);
+    s = addMage(s, 'p1', {
+      id: 'alice-mage-1',
+      cardId: 'base.mage.divinity',
+      color: 'blue',
+    });
+    s = setMeritBadges(s, 'p1', 0);
+    s = { ...s, firstPlayerIndex: 0, phase: { kind: 'errands', round: 1, activePlayerIndex: 0 } };
+    expect(() =>
+      applyAction(s, {
+        type: 'PLACE_WORKER',
+        playerId: 'p1',
+        mageId: 'alice-mage-1',
+        actionSpaceId: 'base.room.vault.a.slot-2',
+      }),
+    ).toThrow(/insufficient Merit Badges/);
+  });
+
+  it('places on a merit slot when MB available, paying the cost', () => {
+    let s = initGame(TWO_PLAYER_CONFIG);
+    s = forceVaultSideA(s);
+    s = addMage(s, 'p1', {
+      id: 'alice-mage-1',
+      cardId: 'base.mage.divinity',
+      color: 'blue',
+    });
+    s = setMeritBadges(s, 'p1', 2);
+    s = { ...s, firstPlayerIndex: 0, phase: { kind: 'errands', round: 1, activePlayerIndex: 0 } };
+    s = applyAction(s, {
+      type: 'PLACE_WORKER',
+      playerId: 'p1',
+      mageId: 'alice-mage-1',
+      actionSpaceId: 'base.room.vault.a.slot-2',
+    });
+    const alice = s.players.find((p) => p.id === 'p1');
+    expect(alice?.resources.meritBadges).toBe(1);
+    expect(alice?.resources.meritBadgesSpent).toBe(1);
+    const vault = findRoom(s, (r) => r.name === 'Vault');
+    expect(vault.actionSpaces[1]?.occupant?.mageId).toBe('alice-mage-1');
+  });
+
   it('rejects placement directly into the Infirmary', () => {
     let s = initGame(TWO_PLAYER_CONFIG);
     s = addMage(s, 'p1', {
@@ -870,5 +960,354 @@ describe('PLACE_WORKER', () => {
         actionSpaceId: fakeSpaceId,
       }),
     ).toThrow(/cannot be placed in directly/);
+  });
+});
+
+// ============================================================================
+// Vertical Slice 3a — Vault A (buy a vault card during resolution)
+// ============================================================================
+
+describe('Vault A buy slot vertical slice', () => {
+  function setupVaultBuyTest(opts: { gold?: number } = {}): GameState {
+    let s = initGame(TWO_PLAYER_CONFIG);
+    s = forceVaultSideA(s);
+    s = addMage(s, 'p1', {
+      id: 'alice-mage-1',
+      cardId: 'base.mage.divinity',
+      color: 'blue',
+    });
+    s = placeMageOnSpace(s, 'p1', 'alice-mage-1', 'base.room.vault.a.slot-1');
+    s = setGold(s, 'p1', opts.gold ?? 5);
+    s = setVaultTableau(s, [
+      'base.vault.placeholder-treasure-1', // 2g
+      'base.vault.placeholder-treasure-2', // 4g
+      'base.vault.phase-steppers',         // 3g
+    ]);
+    s = { ...s, bellTower: { ...s.bellTower, available: [] } };
+    return s;
+  }
+
+  it('resolution surfaces choose-vault-card with affordable cards', () => {
+    let s = setupVaultBuyTest({ gold: 3 });
+    s = applyAction(s, { type: 'ADVANCE_PHASE' }); // round-setup → errands
+    s = applyAction(s, { type: 'ADVANCE_PHASE' }); // errands → resolution
+    s = applyAction(s, { type: 'ADVANCE_PHASE' }); // pump → vault buy → pause
+    expect(s.phase.kind).toBe('resolution');
+    const top = topPending(s);
+    expect(top.prompt.kind).toBe('choose-vault-card');
+    if (top.prompt.kind === 'choose-vault-card') {
+      // 2g and 3g are affordable; 4g is not.
+      expect(top.prompt.eligibleCardIds.sort()).toEqual([
+        'base.vault.phase-steppers',
+        'base.vault.placeholder-treasure-1',
+      ]);
+    }
+  });
+
+  it('resolving with a vault card moves it to the player and deducts gold', () => {
+    let s = setupVaultBuyTest({ gold: 5 });
+    s = applyAction(s, { type: 'ADVANCE_PHASE' });
+    s = applyAction(s, { type: 'ADVANCE_PHASE' });
+    s = applyAction(s, { type: 'ADVANCE_PHASE' });
+    const top = topPending(s);
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: top.id,
+      answer: { kind: 'card-chosen', cardId: 'base.vault.placeholder-treasure-2' },
+    });
+    const alice = s.players.find((p) => p.id === 'p1');
+    expect(alice?.resources.gold).toBe(1); // 5 - 4
+    expect(alice?.vaultCards).toEqual([
+      { cardId: 'base.vault.placeholder-treasure-2', exhausted: false },
+    ]);
+    expect(s.vaultTableau).not.toContain('base.vault.placeholder-treasure-2');
+    expect(s.pendingResolutionStack).toHaveLength(0);
+  });
+
+  it('vault slot resolves with no purchase if nothing is affordable', () => {
+    let s = setupVaultBuyTest({ gold: 0 });
+    s = applyAction(s, { type: 'ADVANCE_PHASE' });
+    s = applyAction(s, { type: 'ADVANCE_PHASE' });
+    s = applyAction(s, { type: 'ADVANCE_PHASE' });
+    // No prompt produced; mage just returns to office.
+    expect(s.pendingResolutionStack).toHaveLength(0);
+    const aliceMage = findMageById(s, 'alice-mage-1');
+    expect(aliceMage.location).toEqual({ kind: 'office', playerId: 'p1' });
+  });
+});
+
+// ============================================================================
+// Vertical Slice 3b — BUY_VAULT_CARD action (player-driven during errands)
+// ============================================================================
+
+describe('BUY_VAULT_CARD action', () => {
+  function setupBuyAction(): GameState {
+    let s = initGame(TWO_PLAYER_CONFIG);
+    s = setGold(s, 'p1', 4);
+    s = setVaultTableau(s, [
+      'base.vault.placeholder-treasure-1',
+      'base.vault.phase-steppers',
+    ]);
+    s = { ...s, firstPlayerIndex: 0, phase: { kind: 'errands', round: 1, activePlayerIndex: 0 } };
+    return s;
+  }
+
+  it('moves card to player, deducts gold, removes from tableau', () => {
+    let s = setupBuyAction();
+    s = applyAction(s, {
+      type: 'BUY_VAULT_CARD',
+      playerId: 'p1',
+      vaultCardId: 'base.vault.placeholder-treasure-1',
+    });
+    const alice = s.players.find((p) => p.id === 'p1');
+    expect(alice?.resources.gold).toBe(2); // 4 - 2
+    expect(alice?.vaultCards).toEqual([
+      { cardId: 'base.vault.placeholder-treasure-1', exhausted: false },
+    ]);
+    expect(s.vaultTableau).toEqual(['base.vault.phase-steppers']);
+  });
+
+  it('rejects when player cannot afford', () => {
+    let s = setupBuyAction();
+    s = setGold(s, 'p1', 1);
+    expect(() =>
+      applyAction(s, {
+        type: 'BUY_VAULT_CARD',
+        playerId: 'p1',
+        vaultCardId: 'base.vault.placeholder-treasure-1', // costs 2
+      }),
+    ).toThrow(/insufficient gold/);
+  });
+
+  it('rejects when card is not in the tableau', () => {
+    let s = setupBuyAction();
+    expect(() =>
+      applyAction(s, {
+        type: 'BUY_VAULT_CARD',
+        playerId: 'p1',
+        vaultCardId: 'base.vault.placeholder-treasure-2', // not in tableau
+      }),
+    ).toThrow(/not in vault tableau/);
+  });
+});
+
+// ============================================================================
+// Vertical Slice 3c — Sorcery Mage Ars Magna
+// ============================================================================
+
+describe('Ars Magna (Sorcery Mage power)', () => {
+  function setupArsMagnaTest(opts: {
+    bobColor?: MageColor;
+    bobOnSpace?: string;
+    bobHasPhaseSteppers?: boolean;
+    aliceMana?: number;
+  } = {}): GameState {
+    const bobColor: MageColor = opts.bobColor ?? 'red';
+    const bobSpace = opts.bobOnSpace ?? 'base.room.vault.a.slot-3';
+    let s = initGame(TWO_PLAYER_CONFIG);
+    s = forceVaultSideA(s);
+
+    // Alice — caster.
+    s = addMage(s, 'p1', {
+      id: 'alice-red',
+      cardId: 'base.mage.sorcery',
+      color: 'red',
+    });
+    s = mapPlayer(s, 'p1', (p) => ({
+      ...p,
+      resources: { ...p.resources, mana: opts.aliceMana ?? 5 },
+    }));
+
+    // Bob — target.
+    s = addMage(s, 'p2', {
+      id: 'bob-mage',
+      cardId: `base.mage.${bobColor === 'off-white' ? 'neutral' : bobColor}`,
+      color: bobColor,
+    });
+    s = placeMageOnSpace(s, 'p2', 'bob-mage', bobSpace);
+
+    if (opts.bobHasPhaseSteppers) {
+      s = addVaultCard(s, 'p2', 'base.vault.phase-steppers');
+    }
+
+    s = { ...s, firstPlayerIndex: 0, phase: { kind: 'errands', round: 1, activePlayerIndex: 0 } };
+    return s;
+  }
+
+  it('with no eligible targets, rejects the ability', () => {
+    // Bob's only mage is green → no legal targets.
+    const s = setupArsMagnaTest({ bobColor: 'green' });
+    expect(() =>
+      applyAction(s, {
+        type: 'USE_ABILITY',
+        playerId: 'p1',
+        abilityId: 'base.mage.sorcery.ars-magna',
+        sourceCardId: 'alice-red',
+      }),
+    ).toThrow(/no legal targets/);
+  });
+
+  it('rejects when caster has < 1 Mana', () => {
+    const s = setupArsMagnaTest({ aliceMana: 0 });
+    expect(() =>
+      applyAction(s, {
+        type: 'USE_ABILITY',
+        playerId: 'p1',
+        abilityId: 'base.mage.sorcery.ars-magna',
+        sourceCardId: 'alice-red',
+      }),
+    ).toThrow(/requires 1 Mana/);
+  });
+
+  it('opposing blue mages are filtered out as targets', () => {
+    const s = setupArsMagnaTest({ bobColor: 'blue' });
+    expect(() =>
+      applyAction(s, {
+        type: 'USE_ABILITY',
+        playerId: 'p1',
+        abilityId: 'base.mage.sorcery.ars-magna',
+        sourceCardId: 'alice-red',
+      }),
+    ).toThrow(/no legal targets/);
+  });
+
+  it('full happy path: spends 1 mana, wounds target, red mage takes the slot', () => {
+    let s = setupArsMagnaTest({ bobColor: 'red', aliceMana: 3 });
+    s = applyAction(s, {
+      type: 'USE_ABILITY',
+      playerId: 'p1',
+      abilityId: 'base.mage.sorcery.ars-magna',
+      sourceCardId: 'alice-red',
+    });
+    // After ability: mana spent, target prompt up.
+    expect(s.players.find((p) => p.id === 'p1')?.resources.mana).toBe(2);
+    let top = topPending(s);
+    expect(top.prompt.kind).toBe('choose-target-mage');
+
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: top.id,
+      answer: { kind: 'mage-chosen', mageId: 'bob-mage' },
+    });
+    // Wound applied; reaction window opens (Bob is the only responder).
+    expect(s.activeReactionWindows).toHaveLength(1);
+    top = topPending(s);
+    expect(top.prompt.kind).toBe('reaction-window');
+    expect(top.responderId).toBe('p2');
+
+    // Bob has nothing to react with — pass.
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: top.id,
+      answer: { kind: 'reaction-passed' },
+    });
+
+    // afterResume runs: red mage moves to Bob's old slot.
+    const bobMage = findMageById(s, 'bob-mage');
+    expect(bobMage.isWounded).toBe(true);
+    expect(bobMage.location.kind).toBe('infirmary');
+    const aliceRed = findMageById(s, 'alice-red');
+    expect(aliceRed.location).toEqual({
+      kind: 'action-space',
+      spaceId: 'base.room.vault.a.slot-3',
+    });
+    const vault = findRoom(s, (r) => r.name === 'Vault');
+    expect(vault.actionSpaces[2]?.occupant?.mageId).toBe('alice-red');
+  });
+
+  it('Phase Steppers reaction prevents the slot takeover', () => {
+    let s = setupArsMagnaTest({ bobColor: 'red', bobHasPhaseSteppers: true });
+    s = applyAction(s, {
+      type: 'USE_ABILITY',
+      playerId: 'p1',
+      abilityId: 'base.mage.sorcery.ars-magna',
+      sourceCardId: 'alice-red',
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'mage-chosen', mageId: 'bob-mage' },
+    });
+    // Reaction window with Phase Steppers offered.
+    const reactionPrompt = topPending(s);
+    expect(reactionPrompt.prompt.kind).toBe('reaction-window');
+
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: reactionPrompt.id,
+      answer: {
+        kind: 'reaction-played',
+        effectId: 'base.vault.phase-steppers.react',
+        reactionContext: {},
+      },
+    });
+
+    // Bob's mage shadowed back to the slot.
+    const bobMage = findMageById(s, 'bob-mage');
+    expect(bobMage.isWounded).toBe(false);
+    expect(bobMage.isShadowing).toBe(true);
+    expect(bobMage.location).toEqual({
+      kind: 'action-space',
+      spaceId: 'base.room.vault.a.slot-3',
+    });
+    // Red mage stays in office; mana already spent stays gone.
+    const aliceRed = findMageById(s, 'alice-red');
+    expect(aliceRed.location).toEqual({ kind: 'office', playerId: 'p1' });
+    expect(s.players.find((p) => p.id === 'p1')?.resources.mana).toBe(4);
+    // Window closed and stack empty.
+    expect(s.activeReactionWindows).toHaveLength(0);
+    expect(s.pendingResolutionStack).toHaveLength(0);
+  });
+
+  it('Ars Magna can target a merit slot and ignores the merit cost', () => {
+    let s = initGame(TWO_PLAYER_CONFIG);
+    s = forceVaultSideA(s);
+    s = addMage(s, 'p1', {
+      id: 'alice-red',
+      cardId: 'base.mage.sorcery',
+      color: 'red',
+    });
+    s = mapPlayer(s, 'p1', (p) => ({
+      ...p,
+      resources: { ...p.resources, mana: 3, meritBadges: 0 },
+    }));
+    s = addMage(s, 'p2', {
+      id: 'bob-mage',
+      cardId: 'base.mage.sorcery',
+      color: 'red',
+    });
+    // Place Bob's mage on the merit slot directly (bypass placement cost
+    // for setup; the engine doesn't validate placements created via
+    // placeMageOnSpace test helper).
+    s = placeMageOnSpace(s, 'p2', 'bob-mage', 'base.room.vault.a.slot-2');
+    s = { ...s, firstPlayerIndex: 0, phase: { kind: 'errands', round: 1, activePlayerIndex: 0 } };
+
+    s = applyAction(s, {
+      type: 'USE_ABILITY',
+      playerId: 'p1',
+      abilityId: 'base.mage.sorcery.ars-magna',
+      sourceCardId: 'alice-red',
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'mage-chosen', mageId: 'bob-mage' },
+    });
+    // Bob has no Phase Steppers; pass.
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'reaction-passed' },
+    });
+
+    // Alice's red mage now occupies the merit slot — no MB required.
+    const aliceRed = findMageById(s, 'alice-red');
+    expect(aliceRed.location).toEqual({
+      kind: 'action-space',
+      spaceId: 'base.room.vault.a.slot-2',
+    });
+    const alice = s.players.find((p) => p.id === 'p1');
+    expect(alice?.resources.meritBadges).toBe(0);
+    expect(alice?.resources.meritBadgesSpent).toBe(0);
   });
 });

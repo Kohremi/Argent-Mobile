@@ -1,7 +1,10 @@
 // Effect-side utility helpers. Used by registered effects to produce patches
 // without having to reach into engine internals.
 
+import { getPack } from '../../content/registry';
 import type {
+  ActionSpace,
+  ActionSpaceId,
   GameState,
   GameStatePatch,
   OwnedMage,
@@ -11,6 +14,8 @@ import type {
   ReactionTriggerEvent,
   ResolutionSource,
   Room,
+  VaultCard,
+  VaultCardId,
 } from '../types';
 
 export function findPlayer(state: GameState, playerId: PlayerId): Player | null {
@@ -236,4 +241,119 @@ export function describeSpaceSource(
     triggeringPlayerId: ownerId,
     description: `${roomName} (${side}) — slot ${spaceIndex + 1}`,
   };
+}
+
+// ============================================================================
+// Vault helpers
+// ============================================================================
+
+export function lookupVaultCardDef(
+  state: GameState,
+  cardId: VaultCardId,
+): VaultCard | null {
+  for (const packId of state.activePackIds) {
+    const pack = getPack(packId);
+    if (!pack) continue;
+    const found = pack.vaultCards.find((c) => c.id === cardId);
+    if (found) return found;
+  }
+  return null;
+}
+
+export function findActionSpace(
+  state: GameState,
+  spaceId: ActionSpaceId,
+): { room: Room; space: ActionSpace } | null {
+  for (const r of state.rooms) {
+    const s = r.actionSpaces.find((sp) => sp.id === spaceId);
+    if (s) return { room: r, space: s };
+  }
+  return null;
+}
+
+/**
+ * Builds the patch to apply when a player buys a Vault card from the tableau:
+ * deduct gold, add the card to the player's vault cards, remove the card
+ * from the tableau. Throws if the player can't afford or the card is missing
+ * from the tableau.
+ *
+ * Tableau slots are NOT auto-refilled here — Argent's tableau is refreshed
+ * during round-setup, not after every purchase.
+ */
+export function applyVaultPurchase(
+  state: GameState,
+  playerId: PlayerId,
+  cardId: VaultCardId,
+): GameStatePatch {
+  const card = lookupVaultCardDef(state, cardId);
+  if (!card) throw new Error(`vault purchase: ${cardId} not in active packs`);
+  const player = findPlayer(state, playerId);
+  if (!player) throw new Error(`vault purchase: player ${playerId} not found`);
+  if (!state.vaultTableau.includes(cardId)) {
+    throw new Error(`vault purchase: ${cardId} not in vault tableau`);
+  }
+  if (player.resources.gold < card.goldCost) {
+    throw new Error(
+      `vault purchase: insufficient gold (need ${card.goldCost}, have ${player.resources.gold})`,
+    );
+  }
+
+  return {
+    players: state.players.map((p) =>
+      p.id !== playerId
+        ? p
+        : {
+            ...p,
+            resources: { ...p.resources, gold: p.resources.gold - card.goldCost },
+            vaultCards: [...p.vaultCards, { cardId, exhausted: false }],
+          },
+    ),
+    vaultTableau: state.vaultTableau.filter((c) => c !== cardId),
+  };
+}
+
+/**
+ * Returns vault tableau cards the given player can currently afford. Used to
+ * filter the `choose-vault-card` prompt at the Vault room slot.
+ */
+export function affordableVaultCards(
+  state: GameState,
+  playerId: PlayerId,
+): VaultCardId[] {
+  const player = findPlayer(state, playerId);
+  if (!player) return [];
+  const result: VaultCardId[] = [];
+  for (const cardId of state.vaultTableau) {
+    const def = lookupVaultCardDef(state, cardId);
+    if (def && def.goldCost <= player.resources.gold) result.push(cardId);
+  }
+  return result;
+}
+
+// ============================================================================
+// Ars Magna (Red Mage power) helpers
+// ============================================================================
+
+/**
+ * Eligible targets for the Sorcery Mage's Ars Magna ability. Filters per
+ * rulebook: target must be on an action space (you're taking that slot),
+ * not green (immune), not an opposing blue (Divinity immunity), not the
+ * caster's own mage, not already wounded.
+ */
+export function buildArsMagnaTargets(
+  state: GameState,
+  casterId: PlayerId,
+): OwnedMageId[] {
+  const targets: OwnedMageId[] = [];
+  for (const p of state.players) {
+    if (p.id === casterId) continue; // Can't target your own mages.
+    for (const m of p.mages) {
+      if (m.location.kind !== 'action-space') continue;
+      if (m.isWounded) continue;
+      if (m.color === 'green') continue;
+      if (m.color === 'blue') continue; // Always opposing here.
+      targets.push(m.id);
+    }
+  }
+  return targets;
 }
