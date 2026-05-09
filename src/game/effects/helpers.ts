@@ -482,6 +482,56 @@ export function applySecretSupporterDraw(
 }
 
 // ============================================================================
+// Infirmary on-wound bonus (per the room file)
+// ============================================================================
+//
+// "Gain a bonus when one of your mages is sent here by an opponent. Choose
+// one of: 2 Gold / 1 Mana / 1 IP."
+//
+// Critical timing: this bonus fires AFTER the reaction window resolves, so
+// Phase Steppers (which un-wounds) suppresses it. The check runs against the
+// post-reaction state — if the mage is no longer wounded / no longer in the
+// infirmary, no bonus.
+
+type WoundEvent = Extract<ReactionTriggerEvent, { kind: 'mage-wounded' }>;
+
+/** Whether the wounded player should be prompted for the Infirmary bonus. */
+export function checkInfirmaryBonusApplies(
+  state: GameState,
+  event: ReactionTriggerEvent,
+): event is WoundEvent {
+  if (event.kind !== 'mage-wounded') return false;
+  if (event.byPlayerId === event.ownerId) return false; // self-inflicted: no bonus
+  const lookup = findMageOwner(state, event.mageId);
+  if (!lookup) return false;
+  if (!lookup.mage.isWounded) return false;
+  if (lookup.mage.location.kind !== 'infirmary') return false;
+  return true;
+}
+
+/**
+ * Applies the chosen bonus to the recipient. Called by both the system
+ * resume effect (Burn L1's case) and inline from chained resumes that need
+ * to compose with follow-up steps (Ars Magna's case).
+ */
+export function applyInfirmaryBonusPatch(
+  state: GameState,
+  recipientId: PlayerId,
+  optionId: string,
+): GameStatePatch {
+  switch (optionId) {
+    case 'gold':
+      return gainResourcePatch(state, recipientId, 'gold', 2);
+    case 'mana':
+      return gainResourcePatch(state, recipientId, 'mana', 1);
+    case 'ip':
+      return bumpInfluencePatch(state, recipientId, 1);
+    default:
+      throw new Error(`Infirmary bonus: unknown option "${optionId}"`);
+  }
+}
+
+// ============================================================================
 // Ars Magna (Red Mage power) helpers
 // ============================================================================
 

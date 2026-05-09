@@ -5,6 +5,7 @@ import { registerEffect } from './registry';
 import {
   affordableVaultCards,
   applyGainMark,
+  applyInfirmaryBonusPatch,
   applySecretSupporterDraw,
   applySupporterDraft,
   applyVaultDraft,
@@ -13,6 +14,7 @@ import {
   buildBurnTargets,
   buildReactionQueue,
   bumpInfluencePatch,
+  checkInfirmaryBonusApplies,
   findActionSpace,
   gainResourcePatch,
   gainResourcesPatch,
@@ -20,14 +22,19 @@ import {
 } from './helpers';
 import type {
   ActionSpaceId,
+  ChoiceOption,
   EffectContext,
   EffectResult,
   GameState,
+  GameStatePatch,
   OwnedMageId,
   PendingResolutionInput,
   Player,
+  PlayerId,
   ReactionTriggerEvent,
   ResolutionSource,
+  ResumeContinuation,
+  SerializableContext,
 } from '../types';
 
 const PHASE_STEPPERS_ID = 'base.vault.phase-steppers';
@@ -271,20 +278,33 @@ registerEffect('base.spell.burn.l1', (ctx: EffectContext): EffectResult => {
       triggerEvent: wounded.triggerEvent,
       pendingResponderIds: buildReactionQueue(ctx.state, ctx.triggeringPlayerId),
       reactedPlayerIds: [],
-      afterResume: { effectId: 'base.spell.burn.l1.complete', context: {} },
+      afterResume: {
+        effectId: 'base.spell.burn.l1.complete',
+        context: { triggerEvent: triggerEventToContext(wounded.triggerEvent) },
+      },
       source: ctx.source,
     },
   };
 });
 
 /**
- * Post-reaction follow-up for Burn L1. If the caster's Mage is grey
- * (Mysticism), the rulebook grants a free placement here. Stub for now
- * — Mysticism placement bonus is deferred.
+ * Post-reaction follow-up for Burn L1.
+ *
+ * 1. If the wound stuck and was inflicted by an opponent, the wounded
+ *    player picks an Infirmary bonus (2 Gold / 1 Mana / 1 IP). Phase
+ *    Steppers reverting the wound suppresses this — `checkInfirmaryBonusApplies`
+ *    looks at the post-reaction state.
+ * 2. TODO: Mysticism Mage placement bonus when caster is grey.
  */
-registerEffect('base.spell.burn.l1.complete', (_ctx) => {
-  // TODO: Mysticism mage placement bonus (rulebook p.11 — fires after
-  // reactions resolve).
+registerEffect('base.spell.burn.l1.complete', (ctx) => {
+  const event = readTriggerEvent(ctx);
+  if (event && checkInfirmaryBonusApplies(ctx.state, event)) {
+    return {
+      kind: 'pause',
+      pending: bonusPromptFor(event, ctx.triggeringPlayerId),
+    };
+  }
+  // TODO: Mysticism placement follow-up.
   return { kind: 'done', patch: {} };
 });
 
@@ -620,6 +640,81 @@ registerEffect('base.room.courtyard-a.slot-3', (ctx) => ({
 }));
 
 // ============================================================================
+// Infirmary on-wound bonus — used by every wound source via afterResume
+// ============================================================================
+//
+// Pattern: each wound source's open-reaction passes the trigger event into
+// its afterResume's context. The source's "complete" effect calls
+// `checkInfirmaryBonusApplies(state, event)` and, if true, pauses with
+// `bonusPromptFor(...)`. Sources with no follow-up steps (Burn L1) use the
+// shared system resume; sources that need to chain more work (Ars Magna)
+// supply a custom resume that handles the bonus inline.
+
+const INFIRMARY_BONUS_OPTIONS: ChoiceOption[] = [
+  { id: 'gold', label: 'Gain 2 Gold', payload: {} },
+  { id: 'mana', label: 'Gain 1 Mana', payload: {} },
+  { id: 'ip', label: 'Gain 1 IP', payload: {} },
+];
+
+function readTriggerEvent(ctx: EffectContext): ReactionTriggerEvent | null {
+  const raw = ctx.resumeContext?.['triggerEvent'];
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  return raw as unknown as ReactionTriggerEvent;
+}
+
+/** Casts a trigger event to a SerializableContext for storage in resume context. */
+function triggerEventToContext(event: ReactionTriggerEvent): SerializableContext {
+  return event as unknown as SerializableContext;
+}
+
+function bonusPromptFor(
+  event: ReactionTriggerEvent,
+  casterId: PlayerId,
+  customResume?: ResumeContinuation,
+): PendingResolutionInput {
+  if (event.kind !== 'mage-wounded') {
+    throw new Error('bonusPromptFor: only mage-wounded events trigger the bonus');
+  }
+  return {
+    responderId: event.ownerId,
+    prompt: {
+      kind: 'choose-from-options',
+      options: INFIRMARY_BONUS_OPTIONS,
+    },
+    resume: customResume ?? {
+      effectId: 'base.system.infirmary-bonus',
+      context: { recipientPlayerId: event.ownerId },
+    },
+    source: {
+      kind: 'system',
+      id: 'base.system.infirmary-bonus',
+      triggeringPlayerId: casterId,
+      description: 'Infirmary bonus (wound by opponent)',
+    },
+  };
+}
+
+registerEffect('base.system.infirmary-bonus', (ctx) => {
+  if (ctx.resumeAnswer?.kind !== 'option-chosen') {
+    throw new Error(
+      `infirmary-bonus expected option-chosen, got ${ctx.resumeAnswer?.kind}`,
+    );
+  }
+  const recipientId = ctx.resumeContext?.['recipientPlayerId'];
+  if (typeof recipientId !== 'string') {
+    throw new Error('infirmary-bonus: missing recipientPlayerId');
+  }
+  return {
+    kind: 'done',
+    patch: applyInfirmaryBonusPatch(
+      ctx.state,
+      recipientId,
+      ctx.resumeAnswer.optionId,
+    ),
+  };
+});
+
+// ============================================================================
 // Marks — system effect used by every "gain a Mark" prompt
 // ============================================================================
 
@@ -872,7 +967,11 @@ registerEffect('base.mage.sorcery.ars-magna', (ctx: EffectContext): EffectResult
       reactedPlayerIds: [],
       afterResume: {
         effectId: 'base.mage.sorcery.ars-magna.complete',
-        context: { sourceMageId: sourceMageIdRaw, targetSpaceId },
+        context: {
+          sourceMageId: sourceMageIdRaw,
+          targetSpaceId,
+          triggerEvent: triggerEventToContext(triggerEvent),
+        },
       },
       source: ctx.source,
     },
@@ -880,10 +979,18 @@ registerEffect('base.mage.sorcery.ars-magna', (ctx: EffectContext): EffectResult
 });
 
 /**
- * After-reaction continuation for Ars Magna. If the targeted slot is now
- * empty, the caster's red Mage takes it. If a reaction (Phase Steppers)
- * re-occupied the slot via shadowing, the red Mage stays in office and the
- * Mana already spent is forfeit — Ars Magna doesn't refund.
+ * After-reaction continuation for Ars Magna.
+ *
+ * Steps:
+ *   1. If the wound stuck and was inflicted by an opponent, prompt the
+ *      wounded player for the Infirmary bonus. The custom resume chains
+ *      back to this effect with `step: 'after-bonus'`, where the bonus
+ *      patch is applied inline and the red Mage move runs against the
+ *      post-bonus state.
+ *   2. Otherwise (or after the bonus), if the targeted slot is now empty,
+ *      the caster's red Mage takes it. If a reaction (Phase Steppers)
+ *      re-occupied the slot, the red Mage stays in office and the Mana
+ *      paid up front is forfeit.
  */
 registerEffect('base.mage.sorcery.ars-magna.complete', (ctx: EffectContext): EffectResult => {
   const sourceMageIdRaw = ctx.resumeContext?.['sourceMageId'];
@@ -894,47 +1001,103 @@ registerEffect('base.mage.sorcery.ars-magna.complete', (ctx: EffectContext): Eff
   const sourceMageId = sourceMageIdRaw as OwnedMageId;
   const targetSpaceId = targetSpaceIdRaw as ActionSpaceId;
 
-  const lookup = findActionSpace(ctx.state, targetSpaceId);
-  if (!lookup) {
-    return { kind: 'done', patch: {} };
-  }
-  if (lookup.space.occupant !== null) {
-    // Slot reclaimed by a reaction (e.g., Phase Steppers shadow). Red Mage
-    // doesn't move; the Mana already paid is gone.
-    return { kind: 'done', patch: {} };
+  // Resume from bonus prompt — apply the chosen bonus, then move the Mage.
+  if (ctx.resumeContext?.['step'] === 'after-bonus') {
+    if (ctx.resumeAnswer?.kind !== 'option-chosen') {
+      throw new Error('ars-magna.complete after-bonus expected option-chosen');
+    }
+    const recipientId = ctx.resumeContext['recipientPlayerId'];
+    const casterId = ctx.resumeContext['casterPlayerId'];
+    if (typeof recipientId !== 'string' || typeof casterId !== 'string') {
+      throw new Error('ars-magna.complete after-bonus: missing context fields');
+    }
+    const bonusPatch = applyInfirmaryBonusPatch(
+      ctx.state,
+      recipientId,
+      ctx.resumeAnswer.optionId,
+    );
+    const afterBonus: GameState = { ...ctx.state, ...bonusPatch };
+    return {
+      kind: 'done',
+      patch: moveRedMagePatch(afterBonus, sourceMageId, targetSpaceId, casterId),
+    };
   }
 
-  const rooms = ctx.state.rooms.map((r) => ({
-    ...r,
-    actionSpaces: r.actionSpaces.map((s) =>
-      s.id !== targetSpaceId
-        ? s
-        : {
-            ...s,
-            occupant: {
-              mageId: sourceMageId,
-              ownerId: ctx.triggeringPlayerId,
-              isShadowing: false,
+  // First call from afterResume.
+  const event = readTriggerEvent(ctx);
+  if (event && checkInfirmaryBonusApplies(ctx.state, event)) {
+    return {
+      kind: 'pause',
+      pending: bonusPromptFor(event, ctx.triggeringPlayerId, {
+        effectId: 'base.mage.sorcery.ars-magna.complete',
+        context: {
+          step: 'after-bonus',
+          recipientPlayerId: event.ownerId,
+          casterPlayerId: ctx.triggeringPlayerId,
+          sourceMageId,
+          targetSpaceId,
+        },
+      }),
+    };
+  }
+
+  return {
+    kind: 'done',
+    patch: moveRedMagePatch(
+      ctx.state,
+      sourceMageId,
+      targetSpaceId,
+      ctx.triggeringPlayerId,
+    ),
+  };
+});
+
+/**
+ * Patch that moves the caster's red Mage onto the targeted slot, if the
+ * slot is empty. Returns an empty patch if the slot was reclaimed (e.g.,
+ * Phase Steppers shadow).
+ */
+function moveRedMagePatch(
+  state: GameState,
+  sourceMageId: OwnedMageId,
+  targetSpaceId: ActionSpaceId,
+  casterId: PlayerId,
+): GameStatePatch {
+  const lookup = findActionSpace(state, targetSpaceId);
+  if (!lookup) return {};
+  if (lookup.space.occupant !== null) return {};
+
+  return {
+    rooms: state.rooms.map((r) => ({
+      ...r,
+      actionSpaces: r.actionSpaces.map((s) =>
+        s.id !== targetSpaceId
+          ? s
+          : {
+              ...s,
+              occupant: {
+                mageId: sourceMageId,
+                ownerId: casterId,
+                isShadowing: false,
+              },
             },
+      ),
+    })),
+    players: state.players.map((p) =>
+      p.id !== casterId
+        ? p
+        : {
+            ...p,
+            mages: p.mages.map((m) =>
+              m.id !== sourceMageId
+                ? m
+                : {
+                    ...m,
+                    location: { kind: 'action-space' as const, spaceId: targetSpaceId },
+                    isShadowing: false,
+                  },
+            ),
           },
     ),
-  }));
-  const players = ctx.state.players.map((p) =>
-    p.id !== ctx.triggeringPlayerId
-      ? p
-      : {
-          ...p,
-          mages: p.mages.map((m) =>
-            m.id !== sourceMageId
-              ? m
-              : {
-                  ...m,
-                  location: { kind: 'action-space' as const, spaceId: targetSpaceId },
-                  isShadowing: false,
-                },
-          ),
-        },
-  );
-
-  return { kind: 'done', patch: { rooms, players } };
-});
+  };
+}

@@ -728,7 +728,7 @@ describe('Burn L1 + Phase Steppers vertical slice', () => {
     expect(reactionPrompt.responderId).toBe('p2');
   });
 
-  it('passing the reaction leaves the wound and closes the window', () => {
+  it('passing the reaction leaves the wound and prompts for the Infirmary bonus', () => {
     let s = setupBurnTest();
     s = applyAction(s, {
       type: 'CAST_SPELL',
@@ -741,17 +741,34 @@ describe('Burn L1 + Phase Steppers vertical slice', () => {
       resolutionId: topPending(s).id,
       answer: { kind: 'mage-chosen', mageId: 'bob-mage-1' },
     });
-    const reactionId = topPending(s).id;
     s = applyAction(s, {
       type: 'RESOLVE_PENDING',
-      resolutionId: reactionId,
+      resolutionId: topPending(s).id,
       answer: { kind: 'reaction-passed' },
     });
+    // Reaction window closed; Bob now picks the Infirmary bonus.
     expect(s.activeReactionWindows).toHaveLength(0);
+    const bonusPrompt = topPending(s);
+    expect(bonusPrompt.responderId).toBe('p2');
+    expect(bonusPrompt.prompt.kind).toBe('choose-from-options');
+    if (bonusPrompt.prompt.kind === 'choose-from-options') {
+      expect(bonusPrompt.prompt.options.map((o) => o.id).sort()).toEqual([
+        'gold',
+        'ip',
+        'mana',
+      ]);
+    }
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: bonusPrompt.id,
+      answer: { kind: 'option-chosen', optionId: 'gold', payload: {} },
+    });
     expect(s.pendingResolutionStack).toHaveLength(0);
     const bobMage = findMageById(s, 'bob-mage-1');
     expect(bobMage.isWounded).toBe(true);
     expect(bobMage.location.kind).toBe('infirmary');
+    // Bonus applied to Bob (the wounded player).
+    expect(s.players.find((p) => p.id === 'p2')?.resources.gold).toBe(2);
   });
 
   it('Phase Steppers reverses the wound and discards the card', () => {
@@ -1255,7 +1272,7 @@ describe('Ars Magna (Sorcery Mage power)', () => {
     ).toThrow(/no legal targets/);
   });
 
-  it('full happy path: spends 1 mana, wounds target, red mage takes the slot', () => {
+  it('full happy path: spends 1 mana, wounds target, Infirmary bonus, red mage takes the slot', () => {
     let s = setupArsMagnaTest({ bobColor: 'red', aliceMana: 3 });
     s = applyAction(s, {
       type: 'USE_ABILITY',
@@ -1286,7 +1303,18 @@ describe('Ars Magna (Sorcery Mage power)', () => {
       answer: { kind: 'reaction-passed' },
     });
 
-    // afterResume runs: red mage moves to Bob's old slot.
+    // Infirmary bonus prompt now active for Bob (wounded by an opponent).
+    const bonusPrompt = topPending(s);
+    expect(bonusPrompt.prompt.kind).toBe('choose-from-options');
+    expect(bonusPrompt.responderId).toBe('p2');
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: bonusPrompt.id,
+      answer: { kind: 'option-chosen', optionId: 'mana', payload: {} },
+    });
+    // Bonus applied; afterResume continues into the slot takeover.
+    expect(s.players.find((p) => p.id === 'p2')?.resources.mana).toBe(1);
+
     const bobMage = findMageById(s, 'bob-mage');
     expect(bobMage.isWounded).toBe(true);
     expect(bobMage.location.kind).toBe('infirmary');
@@ -1382,6 +1410,12 @@ describe('Ars Magna (Sorcery Mage power)', () => {
       type: 'RESOLVE_PENDING',
       resolutionId: topPending(s).id,
       answer: { kind: 'reaction-passed' },
+    });
+    // Bob picks an Infirmary bonus.
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'option-chosen', optionId: 'gold', payload: {} },
     });
 
     // Alice's red mage now occupies the merit slot — no MB required.
@@ -1811,6 +1845,144 @@ describe('Round-setup clears roundPlacements', () => {
 // ============================================================================
 // Catacombs A
 // ============================================================================
+
+describe('Infirmary on-wound bonus', () => {
+  function setupBurnTargetTest(opts: { bobHasPhaseSteppers?: boolean } = {}): GameState {
+    let s = initGame(TWO_PLAYER_CONFIG);
+    s = forceLibrarySideA(s);
+    s = addMage(s, 'p1', {
+      id: 'alice-mage-1',
+      cardId: 'base.mage.divinity',
+      color: 'blue',
+    });
+    s = mapPlayer(s, 'p1', (p) => ({
+      ...p,
+      resources: { ...p.resources, mana: 5 },
+    }));
+    s = addOwnedSpell(s, 'p1', 'base.spell.burn');
+    s = addMage(s, 'p2', {
+      id: 'bob-mage-1',
+      cardId: 'base.mage.sorcery',
+      color: 'red',
+    });
+    s = placeMageOnSpace(s, 'p2', 'bob-mage-1', 'base.room.library.a.slot-4');
+    if (opts.bobHasPhaseSteppers) {
+      s = addVaultCard(s, 'p2', 'base.vault.phase-steppers');
+    }
+    s = { ...s, firstPlayerIndex: 0, phase: { kind: 'errands', round: 1, activePlayerIndex: 0 } };
+    return s;
+  }
+
+  it('does NOT prompt for the bonus when Phase Steppers reverts the wound', () => {
+    let s = setupBurnTargetTest({ bobHasPhaseSteppers: true });
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.burn',
+      level: 1,
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'mage-chosen', mageId: 'bob-mage-1' },
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: {
+        kind: 'reaction-played',
+        effectId: 'base.vault.phase-steppers.react',
+        reactionContext: {},
+      },
+    });
+    expect(s.activeReactionWindows).toHaveLength(0);
+    // No bonus prompt — the mage was un-wounded by Phase Steppers.
+    expect(s.pendingResolutionStack).toHaveLength(0);
+    // Bonus did not fire — Bob's gold/mana/IP unchanged.
+    const bob = s.players.find((p) => p.id === 'p2');
+    expect(bob?.resources.gold).toBe(0);
+    expect(bob?.resources.mana).toBe(0);
+    expect(bob?.resources.influence).toBe(0);
+  });
+
+  it('does NOT prompt for the bonus on self-inflicted wounds', () => {
+    // Alice casts Burn on her own mage. By rule, Burn allows self-targeting
+    // (Divinity immunity is to RIVALS only). After the wound resolves, no
+    // Infirmary bonus because byPlayerId === ownerId.
+    let s = initGame(TWO_PLAYER_CONFIG);
+    s = forceLibrarySideA(s);
+    s = addMage(s, 'p1', {
+      id: 'alice-caster',
+      cardId: 'base.mage.divinity',
+      color: 'blue',
+    });
+    s = addMage(s, 'p1', {
+      id: 'alice-target',
+      cardId: 'base.mage.sorcery',
+      color: 'red',
+    });
+    s = placeMageOnSpace(s, 'p1', 'alice-target', 'base.room.library.a.slot-4');
+    s = addOwnedSpell(s, 'p1', 'base.spell.burn');
+    s = mapPlayer(s, 'p1', (p) => ({
+      ...p,
+      resources: { ...p.resources, mana: 5 },
+    }));
+    s = { ...s, firstPlayerIndex: 0, phase: { kind: 'errands', round: 1, activePlayerIndex: 0 } };
+
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.burn',
+      level: 1,
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'mage-chosen', mageId: 'alice-target' },
+    });
+    // Reaction window — Bob gets a prompt even though he's not the owner;
+    // any player may react. Pass.
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'reaction-passed' },
+    });
+    // No bonus — self-inflicted wound.
+    expect(s.pendingResolutionStack).toHaveLength(0);
+    const alice = s.players.find((p) => p.id === 'p1');
+    expect(alice?.resources.gold).toBe(0);
+    expect(alice?.resources.mana).toBe(4); // 5 - 1 from cast
+    expect(alice?.resources.influence).toBe(0);
+  });
+
+  it('IP bonus path bumps influence and influenceArrivalSeq', () => {
+    let s = setupBurnTargetTest();
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.burn',
+      level: 1,
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'mage-chosen', mageId: 'bob-mage-1' },
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'reaction-passed' },
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'option-chosen', optionId: 'ip', payload: {} },
+    });
+    const bob = s.players.find((p) => p.id === 'p2');
+    expect(bob?.resources.influence).toBe(1);
+    expect(bob?.influenceArrivalSeq).toBeGreaterThan(0);
+  });
+});
 
 describe('Catacombs A', () => {
   it('slot 2 grants 2 IP and bumps influenceArrivalSeq', () => {
