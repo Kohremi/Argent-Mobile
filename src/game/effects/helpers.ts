@@ -5,9 +5,12 @@ import { getPack } from '../../content/registry';
 import type {
   ActionSpace,
   ActionSpaceId,
+  Candidate,
+  CandidateId,
   ConsortiumVoterId,
   GameState,
   GameStatePatch,
+  MageColor,
   OwnedMage,
   OwnedMageId,
   Player,
@@ -529,6 +532,115 @@ export function applyInfirmaryBonusPatch(
     default:
       throw new Error(`Infirmary bonus: unknown option "${optionId}"`);
   }
+}
+
+// ============================================================================
+// Candidate / Mage allocation helpers
+// ============================================================================
+
+/** Maps each Mage piece color to the Mage *card* id in the base pack. */
+export const MAGE_CARD_BY_COLOR: Record<MageColor, string> = {
+  red: 'base.mage.sorcery',
+  grey: 'base.mage.mysticism',
+  green: 'base.mage.natural-magick',
+  purple: 'base.mage.planar-studies',
+  blue: 'base.mage.divinity',
+  'off-white': 'base.mage.neutral',
+};
+
+export function lookupCandidate(
+  state: GameState,
+  candidateId: CandidateId,
+): Candidate | null {
+  for (const packId of state.activePackIds) {
+    const pack = getPack(packId);
+    if (!pack) continue;
+    const found = pack.candidates.find((c) => c.id === candidateId);
+    if (found) return found;
+  }
+  return null;
+}
+
+/**
+ * Builds a new GameState that applies the candidate's starting allocation
+ * to the given player:
+ *   - 2 Mages of the leader's color (or 2 neutral for Students leaders).
+ *   - N additional neutral Mages so the player ends with 5 total (3 in normal
+ *     play, 5 in 2p variant — bringing 2p totals to 7 mages per player per
+ *     rulebook).
+ *   - The candidate's unique starter Spell as a fully-researched OwnedSpell
+ *     (intPlaced: true, exhausted: false).
+ *   - +1 Merit Badge if `startingExtraMeritBadge` is set.
+ *
+ * Mints fresh OwnedMage ids from `state.nextSequenceId`, which is bumped to
+ * stay deterministic across replays.
+ */
+export function applyCandidateAllocation(
+  state: GameState,
+  playerId: PlayerId,
+  candidate: Candidate,
+): GameState {
+  const playerCount = state.players.length;
+  const leaderColor: MageColor =
+    candidate.startingMageColor === 'neutral'
+      ? 'off-white'
+      : candidate.startingMageColor;
+  const leaderCardId = MAGE_CARD_BY_COLOR[leaderColor];
+  const neutralCardId = MAGE_CARD_BY_COLOR['off-white'];
+  const neutralCount = playerCount === 2 ? 5 : 3;
+
+  let seq = state.nextSequenceId;
+  const newMages: OwnedMage[] = [];
+  for (let i = 0; i < 2; i++) {
+    newMages.push({
+      id: `m-${seq++}`,
+      cardId: leaderCardId,
+      color: leaderColor,
+      location: { kind: 'office', playerId },
+      isShadowing: false,
+      isWounded: false,
+    });
+  }
+  for (let i = 0; i < neutralCount; i++) {
+    newMages.push({
+      id: `m-${seq++}`,
+      cardId: neutralCardId,
+      color: 'off-white',
+      location: { kind: 'office', playerId },
+      isShadowing: false,
+      isWounded: false,
+    });
+  }
+
+  return {
+    ...state,
+    nextSequenceId: seq,
+    players: state.players.map((p) =>
+      p.id !== playerId
+        ? p
+        : {
+            ...p,
+            candidateId: candidate.id,
+            candidateStartingSpellId: candidate.starterSpellId,
+            mages: newMages,
+            ownedSpells: [
+              {
+                cardId: candidate.starterSpellId,
+                intPlaced: true,
+                wisPlacedLevel2: false,
+                wisPlacedLevel3: false,
+                exhausted: false,
+              },
+            ],
+            resources: candidate.startingExtraMeritBadge
+              ? {
+                  ...p.resources,
+                  meritBadges: p.resources.meritBadges + 1,
+                }
+              : p.resources,
+          },
+    ),
+  };
 }
 
 // ============================================================================

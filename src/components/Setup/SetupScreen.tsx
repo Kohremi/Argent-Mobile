@@ -23,6 +23,7 @@ export function SetupScreen() {
       activePackIds: selectedPackIds,
       playerNames: playerNames.map((n) => n.trim()),
       rngSeed: randomSeed(),
+      useCandidateDraft: true,
     });
   };
 

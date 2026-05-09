@@ -3,6 +3,7 @@ import type {
   BellTowerCard,
   ConsortiumVoter,
   GameConfig,
+  GamePhase,
   GameState,
   Player,
   Room,
@@ -264,10 +265,17 @@ export function buildInitialState(config: GameConfig): GameState {
     bellTower: { available: bellAvailable, taken: [] },
     archmagesApprenticeOwner: null,
     roomLocks: [],
-    phase: { kind: 'round-setup', round: 1 },
+    phase: initialPhase(config, firstPlayerIndex),
     pendingResolutionStack: [],
     activeReactionWindows: [],
     nextSequenceId: 1,
     actionLog: [],
   };
+}
+
+function initialPhase(config: GameConfig, firstPlayerIndex: number): GamePhase {
+  if (config.useCandidateDraft) {
+    return { kind: 'candidate-draft', activePlayerIndex: firstPlayerIndex };
+  }
+  return { kind: 'round-setup', round: 1 };
 }

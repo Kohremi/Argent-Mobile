@@ -9,15 +9,18 @@ import { buildInitialState } from './setup';
 import { getEffect, hasEffect } from './effects/index';
 import type { Effect } from './effects/index';
 import {
+  applyCandidateAllocation,
   applyVaultPurchase,
   buildReactionOptionsFor,
   describeSpaceSource,
+  lookupCandidate,
 } from './effects/helpers';
 import type {
   BellTowerCard,
   BellTowerCardId,
   BuyVaultCardAction,
   CastSpellAction,
+  ChooseCandidateAction,
   ConsortiumVoter,
   EffectContext,
   EffectResult,
@@ -70,6 +73,8 @@ export function applyAction(state: GameState, action: GameAction): GameState {
       return handleEndErrandsTurn(state, action);
     case 'RESOLVE_PENDING':
       return handleResolvePending(state, action);
+    case 'CHOOSE_CANDIDATE':
+      return handleChooseCandidate(state, action);
     case 'ADVANCE_PHASE':
       return handleAdvancePhase(state);
     default: {
@@ -688,6 +693,68 @@ function handleCastSpell(state: GameState, action: CastSpellAction): GameState {
   return applyEffectResult(next, result, ctx);
 }
 
+function handleChooseCandidate(
+  state: GameState,
+  action: ChooseCandidateAction,
+): GameState {
+  if (state.phase.kind !== 'candidate-draft') {
+    throw new Error(
+      `CHOOSE_CANDIDATE: only valid during candidate-draft phase (current: ${state.phase.kind})`,
+    );
+  }
+  const activePlayerId = state.players[state.phase.activePlayerIndex]?.id;
+  if (activePlayerId !== action.playerId) {
+    throw new Error(
+      `CHOOSE_CANDIDATE: not your turn (active=${activePlayerId}, you=${action.playerId})`,
+    );
+  }
+  const player = state.players.find((p) => p.id === action.playerId);
+  if (!player) throw new Error(`CHOOSE_CANDIDATE: player ${action.playerId} not found`);
+  if (player.candidateId !== '') {
+    throw new Error(`CHOOSE_CANDIDATE: player ${action.playerId} already chose a candidate`);
+  }
+
+  const candidate = lookupCandidate(state, action.candidateId);
+  if (!candidate) {
+    throw new Error(
+      `CHOOSE_CANDIDATE: candidate "${action.candidateId}" not in active packs`,
+    );
+  }
+  const taken = state.players.some(
+    (p) => p.id !== action.playerId && p.candidateId === action.candidateId,
+  );
+  if (taken) {
+    throw new Error(
+      `CHOOSE_CANDIDATE: candidate "${action.candidateId}" already taken`,
+    );
+  }
+
+  const allocated = applyCandidateAllocation(state, action.playerId, candidate);
+
+  // Find the next un-chosen player in turn order; transition to round-setup
+  // when everyone has picked.
+  const nPlayers = allocated.players.length;
+  const startIdx = state.phase.activePlayerIndex;
+  let nextIdx = startIdx;
+  let allChosen = true;
+  for (let step = 1; step <= nPlayers; step++) {
+    const idx = (startIdx + step) % nPlayers;
+    if (allocated.players[idx]?.candidateId === '') {
+      nextIdx = idx;
+      allChosen = false;
+      break;
+    }
+  }
+
+  if (allChosen) {
+    return { ...allocated, phase: { kind: 'round-setup', round: 1 } };
+  }
+  return {
+    ...allocated,
+    phase: { kind: 'candidate-draft', activePlayerIndex: nextIdx },
+  };
+}
+
 function handleEndErrandsTurn(
   state: GameState,
   action: EndErrandsTurnAction,
@@ -923,6 +990,10 @@ function handleAdvancePhase(state: GameState): GameState {
   switch (state.phase.kind) {
     case 'setup':
       return { ...state, phase: { kind: 'round-setup', round: 1 } };
+    case 'candidate-draft':
+      throw new Error(
+        'ADVANCE_PHASE: candidate-draft must end via CHOOSE_CANDIDATE for each player',
+      );
     case 'round-setup':
       return processRoundSetup(state, state.phase.round);
     case 'errands':

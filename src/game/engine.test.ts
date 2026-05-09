@@ -239,6 +239,181 @@ describe('determinism', () => {
 });
 
 // ============================================================================
+// Candidate draft
+// ============================================================================
+
+describe('Candidate draft', () => {
+  const DRAFT_CONFIG_4P: GameConfig = {
+    activePackIds: ['base'],
+    playerNames: ['Alice', 'Bob', 'Cara', 'Dan'],
+    rngSeed: 42,
+    useCandidateDraft: true,
+  };
+
+  function withFirstPlayer(state: GameState, idx: number): GameState {
+    if (state.phase.kind !== 'candidate-draft') return state;
+    return {
+      ...state,
+      firstPlayerIndex: idx,
+      phase: { kind: 'candidate-draft', activePlayerIndex: idx },
+    };
+  }
+
+  it('useCandidateDraft seats the game in candidate-draft phase', () => {
+    const s = initGame(DRAFT_CONFIG_4P);
+    expect(s.phase.kind).toBe('candidate-draft');
+    if (s.phase.kind === 'candidate-draft') {
+      expect(s.phase.activePlayerIndex).toBe(s.firstPlayerIndex);
+    }
+    // No mages or starter spell yet — those come from CHOOSE_CANDIDATE.
+    expect(s.players.every((p) => p.candidateId === '')).toBe(true);
+    expect(s.players.every((p) => p.mages.length === 0)).toBe(true);
+  });
+
+  it('CHOOSE_CANDIDATE grants 2 leader mages + 3 neutral + starter spell (4p)', () => {
+    let s = initGame(DRAFT_CONFIG_4P);
+    s = withFirstPlayer(s, 0);
+    s = applyAction(s, {
+      type: 'CHOOSE_CANDIDATE',
+      playerId: 'p1',
+      candidateId: 'base.candidate.larimore-burman',
+    });
+    const alice = s.players.find((p) => p.id === 'p1');
+    expect(alice?.candidateId).toBe('base.candidate.larimore-burman');
+    expect(alice?.candidateStartingSpellId).toBe('base.spell.flash-of-light');
+    expect(alice?.mages).toHaveLength(5); // 2 red + 3 neutral
+    const reds = alice?.mages.filter((m) => m.color === 'red') ?? [];
+    const neutrals = alice?.mages.filter((m) => m.color === 'off-white') ?? [];
+    expect(reds).toHaveLength(2);
+    expect(neutrals).toHaveLength(3);
+    expect(alice?.ownedSpells).toEqual([
+      {
+        cardId: 'base.spell.flash-of-light',
+        intPlaced: true,
+        wisPlacedLevel2: false,
+        wisPlacedLevel3: false,
+        exhausted: false,
+      },
+    ]);
+  });
+
+  it('CHOOSE_CANDIDATE grants 7 mages total in 2-player games', () => {
+    let s = initGame({
+      activePackIds: ['base'],
+      playerNames: ['Alice', 'Bob'],
+      rngSeed: 7,
+      useCandidateDraft: true,
+    });
+    s = withFirstPlayer(s, 0);
+    s = applyAction(s, {
+      type: 'CHOOSE_CANDIDATE',
+      playerId: 'p1',
+      candidateId: 'base.candidate.larimore-burman',
+    });
+    const alice = s.players.find((p) => p.id === 'p1');
+    expect(alice?.mages).toHaveLength(7); // 2 red + 5 neutral
+    expect(alice?.mages.filter((m) => m.color === 'red')).toHaveLength(2);
+    expect(alice?.mages.filter((m) => m.color === 'off-white')).toHaveLength(5);
+  });
+
+  it('Trias Blackwind starts with all off-white mages and +1 MB', () => {
+    let s = initGame(DRAFT_CONFIG_4P);
+    s = withFirstPlayer(s, 0);
+    s = applyAction(s, {
+      type: 'CHOOSE_CANDIDATE',
+      playerId: 'p1',
+      candidateId: 'base.candidate.trias-blackwind',
+    });
+    const alice = s.players.find((p) => p.id === 'p1');
+    expect(alice?.mages.every((m) => m.color === 'off-white')).toBe(true);
+    expect(alice?.mages).toHaveLength(5);
+    expect(alice?.resources.meritBadges).toBe(1);
+    expect(alice?.candidateStartingSpellId).toBe('base.spell.living-image');
+  });
+
+  it('rejects picking the same candidate twice', () => {
+    let s = initGame(DRAFT_CONFIG_4P);
+    s = withFirstPlayer(s, 0);
+    s = applyAction(s, {
+      type: 'CHOOSE_CANDIDATE',
+      playerId: 'p1',
+      candidateId: 'base.candidate.larimore-burman',
+    });
+    expect(() =>
+      applyAction(s, {
+        type: 'CHOOSE_CANDIDATE',
+        playerId: 'p2',
+        candidateId: 'base.candidate.larimore-burman',
+      }),
+    ).toThrow(/already taken/);
+  });
+
+  it('rejects picking out of turn', () => {
+    let s = initGame(DRAFT_CONFIG_4P);
+    s = withFirstPlayer(s, 0);
+    expect(() =>
+      applyAction(s, {
+        type: 'CHOOSE_CANDIDATE',
+        playerId: 'p2', // not the active player
+        candidateId: 'base.candidate.byron-krane',
+      }),
+    ).toThrow(/not your turn/);
+  });
+
+  it('transitions to round-setup once every player has picked', () => {
+    let s = initGame(DRAFT_CONFIG_4P);
+    s = withFirstPlayer(s, 0);
+    const picks = [
+      { p: 'p1', c: 'base.candidate.larimore-burman' },
+      { p: 'p2', c: 'base.candidate.byron-krane' },
+      { p: 'p3', c: 'base.candidate.rheye-cal' },
+      { p: 'p4', c: 'base.candidate.exhufern-le-marigras' },
+    ];
+    for (const pick of picks) {
+      s = applyAction(s, {
+        type: 'CHOOSE_CANDIDATE',
+        playerId: pick.p,
+        candidateId: pick.c,
+      });
+    }
+    expect(s.phase).toEqual({ kind: 'round-setup', round: 1 });
+    expect(s.players.every((p) => p.candidateId !== '')).toBe(true);
+    expect(s.players.every((p) => p.mages.length === 5)).toBe(true);
+  });
+
+  it('rejects ADVANCE_PHASE during candidate-draft', () => {
+    const s = initGame(DRAFT_CONFIG_4P);
+    expect(() => applyAction(s, { type: 'ADVANCE_PHASE' })).toThrow(
+      /candidate-draft must end via CHOOSE_CANDIDATE/,
+    );
+  });
+
+  it('Xal Ezra is now in base, Lavanina is now in Mancers', () => {
+    const s = initGame(DRAFT_CONFIG_4P);
+    s; // silence unused
+    // Reach into the base pack via lookup helper indirectly: we know the
+    // candidate ids should resolve.
+    let s1 = withFirstPlayer(initGame(DRAFT_CONFIG_4P), 0);
+    s1 = applyAction(s1, {
+      type: 'CHOOSE_CANDIDATE',
+      playerId: 'p1',
+      candidateId: 'base.candidate.xal-ezra',
+    });
+    expect(s1.players[0]?.candidateStartingSpellId).toBe(
+      'base.spell.paralocation',
+    );
+    // Lavanina lives in Mancers now — base alone doesn't expose her.
+    expect(() =>
+      applyAction(withFirstPlayer(initGame(DRAFT_CONFIG_4P), 0), {
+        type: 'CHOOSE_CANDIDATE',
+        playerId: 'p1',
+        candidateId: 'base.candidate.lavanina',
+      }),
+    ).toThrow(/not in active packs/);
+  });
+});
+
+// ============================================================================
 // Test helpers for vertical slices
 // ============================================================================
 

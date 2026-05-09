@@ -7,7 +7,9 @@ import { useState } from 'react';
 import clsx from 'clsx';
 import { useGameStore } from '../store/gameStore';
 import { baseGamePack } from '../content/packs/base';
+import { listPacks } from '../content/registry';
 import type {
+  Candidate,
   GameAction,
   GameState,
   MageColor,
@@ -211,6 +213,10 @@ function describePhase(state: GameState): string {
   switch (p.kind) {
     case 'setup':
       return 'Setup';
+    case 'candidate-draft': {
+      const player = state.players[p.activePlayerIndex];
+      return `Candidate Draft (active: ${player?.name ?? '?'})`;
+    }
     case 'round-setup':
       return `Round ${p.round} — Round Setup`;
     case 'errands': {
@@ -237,6 +243,12 @@ export function DebugControls() {
   const reset = useGameStore((s) => s.reset);
 
   if (!state) return null;
+
+  // While the candidate draft is open, show only that — gameplay isn't
+  // available until every player has picked a leader.
+  if (state.phase.kind === 'candidate-draft') {
+    return <CandidateDraftScreen state={state} dispatch={dispatch} reset={reset} />;
+  }
 
   const top = state.pendingResolutionStack[state.pendingResolutionStack.length - 1];
   const responderId = top?.responderId;
@@ -934,6 +946,140 @@ function TableauPanel({ state }: { state: GameState }) {
         </div>
       </div>
     </section>
+  );
+}
+
+function collectAvailableCandidates(state: GameState): Candidate[] {
+  const out: Candidate[] = [];
+  for (const pack of listPacks()) {
+    if (!state.activePackIds.includes(pack.id)) continue;
+    out.push(...pack.candidates);
+  }
+  return out;
+}
+
+function CandidateDraftScreen({
+  state,
+  dispatch,
+  reset,
+}: {
+  state: GameState;
+  dispatch: (action: GameAction) => void;
+  reset: () => void;
+}) {
+  if (state.phase.kind !== 'candidate-draft') return null;
+  const activeIdx = state.phase.activePlayerIndex;
+  const activePlayer = state.players[activeIdx];
+  const candidates = collectAvailableCandidates(state);
+  const taken = new Map<string, string>();
+  for (const p of state.players) {
+    if (p.candidateId) taken.set(p.candidateId, p.name);
+  }
+
+  return (
+    <div className="min-h-full p-6 max-w-5xl mx-auto space-y-5">
+      <header className="flex items-center justify-between flex-wrap gap-3">
+        <div>
+          <h1 className="text-2xl font-semibold">Argent — candidate draft</h1>
+          <p className="text-slate-400 text-sm">
+            {activePlayer?.name ?? '?'} is choosing a faction leader.
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={reset}
+          className="px-3 py-1.5 rounded bg-slate-800 hover:bg-slate-700 text-sm"
+        >
+          Back to setup
+        </button>
+      </header>
+
+      <section>
+        <h2 className="text-lg font-medium mb-2">Players</h2>
+        <ul className="grid grid-cols-1 md:grid-cols-2 gap-2 text-sm">
+          {state.players.map((p, i) => (
+            <li
+              key={p.id}
+              className={clsx(
+                'p-2 rounded border',
+                i === activeIdx
+                  ? 'border-amber-400/60 bg-amber-400/5'
+                  : 'border-slate-700 bg-slate-900',
+              )}
+            >
+              <div className="flex items-center justify-between">
+                <span className="font-medium">{p.name}</span>
+                {i === activeIdx && (
+                  <span className="text-xs px-2 py-0.5 rounded bg-amber-500 text-slate-950">
+                    choosing
+                  </span>
+                )}
+              </div>
+              <div className="text-xs text-slate-500">
+                {p.candidateId
+                  ? `picked: ${p.candidateId.split('.').pop()}`
+                  : 'no pick yet'}
+              </div>
+            </li>
+          ))}
+        </ul>
+      </section>
+
+      <section>
+        <h2 className="text-lg font-medium mb-2">Candidates</h2>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+          {candidates.map((c) => {
+            const takenBy = taken.get(c.id);
+            const disabled = takenBy !== undefined || !activePlayer;
+            return (
+              <div
+                key={c.id}
+                className={clsx(
+                  'p-3 rounded border space-y-1',
+                  takenBy
+                    ? 'border-slate-800 bg-slate-900/40 opacity-60'
+                    : 'border-slate-700 bg-slate-900',
+                )}
+              >
+                <div className="flex items-center justify-between">
+                  <h3 className="font-medium">{c.name}</h3>
+                  <span className="text-xs text-slate-500">{c.title}</span>
+                </div>
+                <p className="text-xs text-slate-400">
+                  Department: {c.department} · Mage color:{' '}
+                  {c.startingMageColor}
+                  {c.startingExtraMeritBadge ? ' · +1 MB' : ''}
+                </p>
+                <p className="text-xs text-slate-500">
+                  Starter spell: {c.starterSpellId}
+                </p>
+                {takenBy ? (
+                  <p className="text-xs text-amber-300/70">
+                    chosen by {takenBy}
+                  </p>
+                ) : (
+                  <button
+                    type="button"
+                    disabled={disabled}
+                    onClick={() => {
+                      if (!activePlayer) return;
+                      dispatch({
+                        type: 'CHOOSE_CANDIDATE',
+                        playerId: activePlayer.id,
+                        candidateId: c.id,
+                      });
+                    }}
+                    className="px-2.5 py-1 rounded bg-amber-500 text-slate-950 text-sm hover:bg-amber-400 disabled:opacity-40 disabled:cursor-not-allowed"
+                  >
+                    Pick (as {activePlayer?.name})
+                  </button>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </section>
+    </div>
   );
 }
 

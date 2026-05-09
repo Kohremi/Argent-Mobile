@@ -78,9 +78,9 @@ const candidates: Candidate[] = [
     startingExtraMeritBadge: false,
   }),
   candidate({
-    id: 'mancers.candidate.xal-ezra',
-    name: 'Xal Ezra',
-    title: 'Planar Studies — Senior Researcher',
+    id: 'mancers.candidate.lavanina',
+    name: 'Lavanina',
+    title: 'Planar Studies',
     department: 'planar-studies',
     starterSpellId: 'base.spell.placeholder.5',
     startingMageColor: 'purple',

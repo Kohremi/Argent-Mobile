@@ -164,6 +164,117 @@ const burnSpell: SpellCard = {
   ],
 };
 
+// ============================================================================
+// Faction Leader spells — held in `legendarySpells`, never shuffled into the
+// regular spell deck. Each leader's player owns their unique spell at game
+// start; opponents can't acquire it through normal play.
+//
+// Per the room file, the L1 effect is the "real" spell (use once per round —
+// enforced by the OwnedSpell.exhausted flag, refreshed at round-setup).
+// L2/L3 are stub upgrades; effects unregistered.
+// ============================================================================
+
+function leaderSpell(args: {
+  id: string;
+  name: string;
+  department: Department;
+  l1ManaCost: number;
+  l1Timing: 'action' | 'fast-action';
+}): SpellCard {
+  return {
+    id: args.id,
+    name: args.name,
+    sourcePackId: PACK_ID,
+    department: args.department,
+    levels: [
+      {
+        level: 1,
+        title: args.name,
+        manaCost: args.l1ManaCost,
+        effectId: `${args.id}.l1`,
+        timing: args.l1Timing,
+      },
+      {
+        level: 2,
+        title: `${args.name} II`,
+        manaCost: args.l1ManaCost + 1,
+        effectId: `${args.id}.l2`,
+        timing: args.l1Timing,
+      },
+      {
+        level: 3,
+        title: `${args.name} III`,
+        manaCost: args.l1ManaCost + 2,
+        effectId: `${args.id}.l3`,
+        timing: args.l1Timing,
+      },
+    ],
+  };
+}
+
+/** Larimore Burman — 1 Mana, fast action: banish a Mage. */
+const flashOfLight: SpellCard = leaderSpell({
+  id: 'base.spell.flash-of-light',
+  name: 'Flash of Light',
+  department: 'sorcery',
+  l1ManaCost: 1,
+  l1Timing: 'fast-action',
+});
+
+/** Trias Blackwind — 1 Mana, action: place a neutral mage from supply. */
+const livingImage: SpellCard = leaderSpell({
+  id: 'base.spell.living-image',
+  name: 'Living Image',
+  department: 'students',
+  l1ManaCost: 1,
+  l1Timing: 'action',
+});
+
+/** Byron Krane — Free, action: gain 2 mana. */
+const trance: SpellCard = leaderSpell({
+  id: 'base.spell.trance',
+  name: 'Trance',
+  department: 'mysticism',
+  l1ManaCost: 0,
+  l1Timing: 'action',
+});
+
+/** Exhufern Le Marigras — 1 Mana, action: move opponent's mage in same room. */
+const strengthOfEarth: SpellCard = leaderSpell({
+  id: 'base.spell.strength-of-earth',
+  name: 'Strength of Earth',
+  department: 'natural-magick',
+  l1ManaCost: 1,
+  l1Timing: 'action',
+});
+
+/** Rheye Cal — 1 Mana, fast action: move a Mage from infirmary to a slot. */
+const bless: SpellCard = leaderSpell({
+  id: 'base.spell.bless',
+  name: 'Bless',
+  department: 'divinity',
+  l1ManaCost: 1,
+  l1Timing: 'fast-action',
+});
+
+/** Xal Ezra — 1 Mana, action: shadow an opponent's mage. */
+const paralocation: SpellCard = leaderSpell({
+  id: 'base.spell.paralocation',
+  name: 'Paralocation',
+  department: 'planar-studies',
+  l1ManaCost: 1,
+  l1Timing: 'action',
+});
+
+const legendarySpells: SpellCard[] = [
+  flashOfLight,
+  livingImage,
+  trance,
+  strengthOfEarth,
+  bless,
+  paralocation,
+];
+
 const spells: SpellCard[] = [
   burnSpell,
   placeholderSpell({
@@ -292,13 +403,16 @@ function candidate(args: {
   };
 }
 
+// Each candidate is a faction leader. At game start they receive 2 Mages of
+// their faction's color and their unique starter spell (held in
+// `legendarySpells`).
 const candidates: Candidate[] = [
   candidate({
     id: 'base.candidate.larimore-burman',
     name: 'Larimore Burman',
     title: 'Sorcery',
     department: 'sorcery',
-    starterSpellId: 'base.spell.burn',
+    starterSpellId: 'base.spell.flash-of-light',
     startingMageColor: 'red',
     startingExtraMeritBadge: false,
   }),
@@ -307,7 +421,7 @@ const candidates: Candidate[] = [
     name: 'Exhufern Le Marigras',
     title: 'Natural Magick',
     department: 'natural-magick',
-    starterSpellId: 'base.spell.placeholder.3',
+    starterSpellId: 'base.spell.strength-of-earth',
     startingMageColor: 'green',
     startingExtraMeritBadge: false,
   }),
@@ -316,7 +430,7 @@ const candidates: Candidate[] = [
     name: 'Rheye Cal',
     title: 'Divinity',
     department: 'divinity',
-    starterSpellId: 'base.spell.placeholder.4',
+    starterSpellId: 'base.spell.bless',
     startingMageColor: 'blue',
     startingExtraMeritBadge: false,
   }),
@@ -325,16 +439,16 @@ const candidates: Candidate[] = [
     name: 'Byron Krane',
     title: 'Mysticism',
     department: 'mysticism',
-    starterSpellId: 'base.spell.placeholder.2',
+    starterSpellId: 'base.spell.trance',
     startingMageColor: 'grey',
     startingExtraMeritBadge: false,
   }),
   candidate({
-    id: 'base.candidate.lavanina',
-    name: 'Lavanina',
+    id: 'base.candidate.xal-ezra',
+    name: 'Xal Ezra',
     title: 'Planar Studies',
     department: 'planar-studies',
-    starterSpellId: 'base.spell.placeholder.5',
+    starterSpellId: 'base.spell.paralocation',
     startingMageColor: 'purple',
     startingExtraMeritBadge: false,
   }),
@@ -343,10 +457,10 @@ const candidates: Candidate[] = [
     name: 'Trias Blackwind',
     title: 'Students — Body President',
     department: 'students',
-    // Students-department candidates start with neutral mages + 1 extra
-    // Merit Badge instead of department-color bonus mages.
-    starterSpellId: 'base.spell.placeholder.2',
+    starterSpellId: 'base.spell.living-image',
     startingMageColor: 'neutral',
+    // Students leaders receive an extra Merit Badge per the earlier
+    // rulebook reading. Easy to flip if the room file revises this later.
     startingExtraMeritBadge: true,
   }),
 ];
@@ -988,7 +1102,7 @@ export const baseGamePack: ContentPack = {
   candidates,
   rooms,
   spells,
-  legendarySpells: [],
+  legendarySpells,
   vaultCards,
   supporters,
   voters,

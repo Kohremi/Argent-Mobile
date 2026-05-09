@@ -391,6 +391,7 @@ export type RoundNumber = 1 | 2 | 3 | 4 | 5;
 
 export type GamePhase =
   | { kind: 'setup' }
+  | { kind: 'candidate-draft'; activePlayerIndex: number }
   | { kind: 'round-setup'; round: RoundNumber }
   | { kind: 'errands'; round: RoundNumber; activePlayerIndex: number }
   | {
@@ -670,6 +671,13 @@ export interface GameConfig {
   activePackIds: PackId[];
   playerNames: string[];
   rngSeed: number;
+  /**
+   * If true, `initGame` produces a `candidate-draft` phase before round-setup;
+   * each player must dispatch CHOOSE_CANDIDATE to pick a faction leader before
+   * the game proper begins. Default false (existing test-friendly behavior:
+   * players are seated with empty candidate state).
+   */
+  useCandidateDraft?: boolean;
 }
 
 export interface PlaceWorkerAction {
@@ -719,6 +727,12 @@ export interface ResolvePendingAction {
   answer: ResolutionAnswer;
 }
 
+export interface ChooseCandidateAction {
+  type: 'CHOOSE_CANDIDATE';
+  playerId: PlayerId;
+  candidateId: CandidateId;
+}
+
 export interface EndErrandsTurnAction {
   type: 'END_ERRANDS_TURN';
   playerId: PlayerId;
@@ -736,5 +750,6 @@ export type GameAction =
   | PassTurnAction
   | UseAbilityAction
   | ResolvePendingAction
+  | ChooseCandidateAction
   | EndErrandsTurnAction
   | AdvancePhaseAction;
