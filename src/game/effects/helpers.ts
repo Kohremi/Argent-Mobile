@@ -57,6 +57,43 @@ export function gainResourcePatch(
 }
 
 /**
+ * Builds a patch that applies multiple resource gains to a single player in
+ * one pass. Convenient for slot effects that grant several resources at once
+ * (e.g., Training Fields slot 1 — Gain 1 INT AND Gain 1 WIS).
+ */
+export function gainResourcesPatch(
+  state: GameState,
+  playerId: PlayerId,
+  gains: Partial<{
+    gold: number;
+    mana: number;
+    intelligence: number;
+    wisdom: number;
+    marks: number;
+    meritBadges: number;
+  }>,
+): GameStatePatch {
+  return {
+    players: state.players.map((p) =>
+      p.id !== playerId
+        ? p
+        : {
+            ...p,
+            resources: {
+              ...p.resources,
+              gold: p.resources.gold + (gains.gold ?? 0),
+              mana: p.resources.mana + (gains.mana ?? 0),
+              intelligence: p.resources.intelligence + (gains.intelligence ?? 0),
+              wisdom: p.resources.wisdom + (gains.wisdom ?? 0),
+              marks: p.resources.marks + (gains.marks ?? 0),
+              meritBadges: p.resources.meritBadges + (gains.meritBadges ?? 0),
+            },
+          },
+    ),
+  };
+}
+
+/**
  * Builds a patch that increases a player's influence and updates their
  * `influenceArrivalSeq` to the next sequence value (so they "arrive" at the
  * new IP last, losing tiebreakers to anyone already there).

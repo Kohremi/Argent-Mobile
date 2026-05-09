@@ -289,6 +289,32 @@ function setVaultTableau(state: GameState, cardIds: string[]): GameState {
   return { ...state, vaultTableau: cardIds };
 }
 
+function forceRoomSide(
+  state: GameState,
+  roomName: string,
+  side: 'A' | 'B',
+): GameState {
+  const target = baseGamePack.rooms.find(
+    (r) => r.name === roomName && r.side === side,
+  );
+  if (!target) {
+    throw new Error(`test helper: ${roomName} side ${side} not in base pack`);
+  }
+  const existingIdx = state.rooms.findIndex((r) => r.name === roomName);
+  if (existingIdx !== -1) {
+    return {
+      ...state,
+      rooms: state.rooms.map((r, i) => (i === existingIdx ? target : r)),
+    };
+  }
+  const replaceIdx = state.rooms.findIndex((r) => !r.isUniversityCentral);
+  if (replaceIdx === -1) return state;
+  return {
+    ...state,
+    rooms: state.rooms.map((r, i) => (i === replaceIdx ? target : r)),
+  };
+}
+
 function setMeritBadges(
   state: GameState,
   playerId: string,
@@ -423,10 +449,10 @@ function findMageById(state: GameState, mageId: string): OwnedMage {
 }
 
 // ============================================================================
-// Vertical Slice 1 — Library A slot 1 (OR-choice)
+// Vertical Slice 1 — Library A slot 4 (OR-choice: INT / WIS / Research)
 // ============================================================================
 
-describe('Library A slot 1 vertical slice', () => {
+describe('Library A slot 4 vertical slice', () => {
   function setupLibraryTest(): GameState {
     let s = initGame(TWO_PLAYER_CONFIG);
     s = forceLibrarySideA(s);
@@ -435,10 +461,10 @@ describe('Library A slot 1 vertical slice', () => {
       cardId: 'base.mage.divinity',
       color: 'blue',
     });
-    // Place Alice's mage on Library A slot 1 directly. Skipping PLACE_WORKER
+    // Place Alice's mage on Library A slot 4 directly. Skipping PLACE_WORKER
     // here keeps this test focused on the resolution-phase path; PLACE_WORKER
     // is exercised in its own test below.
-    s = placeMageOnSpace(s, 'p1', 'alice-mage-1', 'base.room.library.a.slot-1');
+    s = placeMageOnSpace(s, 'p1', 'alice-mage-1', 'base.room.library.a.slot-4');
     // Drain the bell tower so errands ends as soon as we advance.
     s = { ...s, bellTower: { ...s.bellTower, available: [] } };
     return s;
@@ -456,8 +482,8 @@ describe('Library A slot 1 vertical slice', () => {
     const s = setupLibraryTest();
     const library = findRoom(s, (r) => r.name === 'Library');
     expect(library.side).toBe('A');
-    expect(library.actionSpaces).toHaveLength(1);
-    expect(library.actionSpaces[0]?.occupant?.ownerId).toBe('p1');
+    expect(library.actionSpaces).toHaveLength(4);
+    expect(library.actionSpaces[3]?.occupant?.ownerId).toBe('p1');
   });
 
   it('resolution surfaces the 3-way choice prompt', () => {
@@ -494,7 +520,7 @@ describe('Library A slot 1 vertical slice', () => {
     // Pointer advanced past the Library slot.
     if (s.phase.kind === 'resolution') {
       const room = findRoom(s, (r) => r.name === 'Library');
-      const slot = room.actionSpaces[0];
+      const slot = room.actionSpaces[3];
       expect(slot?.occupant).toBeNull();
     }
   });
@@ -841,15 +867,15 @@ describe('PLACE_WORKER', () => {
       type: 'PLACE_WORKER',
       playerId: 'p1',
       mageId: 'alice-mage-1',
-      actionSpaceId: 'base.room.library.a.slot-1',
+      actionSpaceId: 'base.room.library.a.slot-4',
     });
     const aliceMage = findMageById(s, 'alice-mage-1');
     expect(aliceMage.location).toEqual({
       kind: 'action-space',
-      spaceId: 'base.room.library.a.slot-1',
+      spaceId: 'base.room.library.a.slot-4',
     });
     const lib = findRoom(s, (r) => r.name === 'Library');
-    expect(lib.actionSpaces[0]?.occupant).toEqual({
+    expect(lib.actionSpaces[3]?.occupant).toEqual({
       mageId: 'alice-mage-1',
       ownerId: 'p1',
       isShadowing: false,
@@ -1367,5 +1393,306 @@ describe('Ars Magna (Sorcery Mage power)', () => {
     const alice = s.players.find((p) => p.id === 'p1');
     expect(alice?.resources.meritBadges).toBe(0);
     expect(alice?.resources.meritBadgesSpent).toBe(0);
+  });
+});
+
+// ============================================================================
+// Library A slots 1 / 2 / 3
+// ============================================================================
+
+function setupRoomSlotTest(
+  roomName: string,
+  side: 'A' | 'B',
+  spaceId: string,
+): GameState {
+  let s = initGame(TWO_PLAYER_CONFIG);
+  s = forceRoomSide(s, roomName, side);
+  s = addMage(s, 'p1', {
+    id: 'alice-mage-1',
+    cardId: 'base.mage.divinity',
+    color: 'blue',
+  });
+  s = placeMageOnSpace(s, 'p1', 'alice-mage-1', spaceId);
+  s = { ...s, bellTower: { ...s.bellTower, available: [] } };
+  return s;
+}
+
+function driveToResolution(state: GameState): GameState {
+  let s = state;
+  s = applyAction(s, { type: 'ADVANCE_PHASE' }); // round-setup → errands
+  s = applyAction(s, { type: 'ADVANCE_PHASE' }); // errands → resolution
+  s = applyAction(s, { type: 'ADVANCE_PHASE' }); // pump → effect
+  return s;
+}
+
+describe('Library A slot 1 (merit, 1 MB): WIS + Vault Draft', () => {
+  it('opens choose-vault-card and grants WIS + drafted card', () => {
+    let s = setupRoomSlotTest('Library', 'A', 'base.room.library.a.slot-1');
+    s = setVaultTableau(s, ['base.vault.placeholder-treasure-1']);
+    s = driveToResolution(s);
+    const top = topPending(s);
+    expect(top.prompt.kind).toBe('choose-vault-card');
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: top.id,
+      answer: { kind: 'card-chosen', cardId: 'base.vault.placeholder-treasure-1' },
+    });
+    const alice = s.players.find((p) => p.id === 'p1');
+    expect(alice?.resources.wisdom).toBe(1);
+    expect(alice?.vaultCards).toEqual([
+      { cardId: 'base.vault.placeholder-treasure-1', exhausted: false },
+    ]);
+  });
+
+  it('still grants WIS when the vault tableau is empty', () => {
+    let s = setupRoomSlotTest('Library', 'A', 'base.room.library.a.slot-1');
+    s = setVaultTableau(s, []);
+    s = driveToResolution(s);
+    expect(s.pendingResolutionStack).toHaveLength(0);
+    expect(s.players.find((p) => p.id === 'p1')?.resources.wisdom).toBe(1);
+  });
+});
+
+describe('Library A slot 2 (merit, 1 MB): INT + Research', () => {
+  it('grants INT immediately and prompts for Research spend', () => {
+    let s = setupRoomSlotTest('Library', 'A', 'base.room.library.a.slot-2');
+    s = driveToResolution(s);
+    const alice = s.players.find((p) => p.id === 'p1');
+    expect(alice?.resources.intelligence).toBe(1);
+    const top = topPending(s);
+    expect(top.prompt.kind).toBe('choose-from-options');
+    if (top.prompt.kind === 'choose-from-options') {
+      expect(top.prompt.options.map((o) => o.id).sort()).toEqual([
+        'discard',
+        'spend',
+      ]);
+    }
+  });
+});
+
+describe('Library A slot 3 (regular): Buy + Research', () => {
+  it('prompts to buy or skip, then spawns Research', () => {
+    let s = setupRoomSlotTest('Library', 'A', 'base.room.library.a.slot-3');
+    s = setVaultTableau(s, ['base.vault.placeholder-treasure-1']); // 2g
+    s = setGold(s, 'p1', 2);
+    s = driveToResolution(s);
+    const buyPrompt = topPending(s);
+    expect(buyPrompt.prompt.kind).toBe('choose-from-options');
+    if (buyPrompt.prompt.kind === 'choose-from-options') {
+      const optionIds = buyPrompt.prompt.options.map((o) => o.id).sort();
+      expect(optionIds).toEqual([
+        'base.vault.placeholder-treasure-1',
+        'skip',
+      ]);
+    }
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: buyPrompt.id,
+      answer: {
+        kind: 'option-chosen',
+        optionId: 'base.vault.placeholder-treasure-1',
+        payload: {},
+      },
+    });
+    // Buy applied; research prompt now on top.
+    const alice = s.players.find((p) => p.id === 'p1');
+    expect(alice?.resources.gold).toBe(0);
+    expect(alice?.vaultCards).toHaveLength(1);
+    const researchPrompt = topPending(s);
+    expect(researchPrompt.prompt.kind).toBe('choose-from-options');
+  });
+
+  it('skips straight to Research when nothing is affordable', () => {
+    let s = setupRoomSlotTest('Library', 'A', 'base.room.library.a.slot-3');
+    s = setVaultTableau(s, []);
+    s = driveToResolution(s);
+    const top = topPending(s);
+    expect(top.prompt.kind).toBe('choose-from-options');
+    if (top.prompt.kind === 'choose-from-options') {
+      expect(top.prompt.options.map((o) => o.id).sort()).toEqual([
+        'discard',
+        'spend',
+      ]);
+    }
+  });
+});
+
+// ============================================================================
+// Training Fields A
+// ============================================================================
+
+describe('Training Fields A', () => {
+  it('slot 1 grants 1 INT and 1 WIS with no prompt', () => {
+    let s = setupRoomSlotTest(
+      'Training Fields',
+      'A',
+      'base.room.training-fields.a.slot-1',
+    );
+    s = driveToResolution(s);
+    expect(s.pendingResolutionStack).toHaveLength(0);
+    const alice = s.players.find((p) => p.id === 'p1');
+    expect(alice?.resources.intelligence).toBe(1);
+    expect(alice?.resources.wisdom).toBe(1);
+  });
+
+  it('slot 2 grants 1 INT', () => {
+    let s = setupRoomSlotTest(
+      'Training Fields',
+      'A',
+      'base.room.training-fields.a.slot-2',
+    );
+    s = driveToResolution(s);
+    expect(s.players.find((p) => p.id === 'p1')?.resources.intelligence).toBe(1);
+  });
+
+  it('slot 3 grants 1 WIS', () => {
+    let s = setupRoomSlotTest(
+      'Training Fields',
+      'A',
+      'base.room.training-fields.a.slot-3',
+    );
+    s = driveToResolution(s);
+    expect(s.players.find((p) => p.id === 'p1')?.resources.wisdom).toBe(1);
+  });
+});
+
+// ============================================================================
+// Guilds A — instant room. Effects resolve at PLACE_WORKER, not in resolution.
+// ============================================================================
+
+describe('Guilds A (instant room)', () => {
+  function setupGuildsPlacement(): GameState {
+    let s = initGame(TWO_PLAYER_CONFIG);
+    s = forceRoomSide(s, 'Guilds', 'A');
+    s = addMage(s, 'p1', {
+      id: 'alice-mage-1',
+      cardId: 'base.mage.divinity',
+      color: 'blue',
+    });
+    s = setMeritBadges(s, 'p1', 1);
+    s = { ...s, firstPlayerIndex: 0, phase: { kind: 'errands', round: 1, activePlayerIndex: 0 } };
+    return s;
+  }
+
+  it('slot 2 placement opens an OR prompt immediately at PLACE_WORKER', () => {
+    let s = setupGuildsPlacement();
+    s = applyAction(s, {
+      type: 'PLACE_WORKER',
+      playerId: 'p1',
+      mageId: 'alice-mage-1',
+      actionSpaceId: 'base.room.guilds.a.slot-2',
+    });
+    expect(s.phase.kind).toBe('errands'); // still in errands
+    const top = topPending(s);
+    expect(top.prompt.kind).toBe('choose-from-options');
+    if (top.prompt.kind === 'choose-from-options') {
+      expect(top.prompt.options.map((o) => o.label).sort()).toEqual([
+        'Gain 2 Mana',
+        'Gain 4 Gold',
+      ]);
+    }
+    // Mage seated on the slot.
+    const guilds = findRoom(s, (r) => r.name === 'Guilds');
+    expect(guilds.actionSpaces[1]?.occupant?.mageId).toBe('alice-mage-1');
+  });
+
+  it('picking gold grants the slot amount', () => {
+    let s = setupGuildsPlacement();
+    s = applyAction(s, {
+      type: 'PLACE_WORKER',
+      playerId: 'p1',
+      mageId: 'alice-mage-1',
+      actionSpaceId: 'base.room.guilds.a.slot-2',
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'option-chosen', optionId: 'gold', payload: {} },
+    });
+    expect(s.players.find((p) => p.id === 'p1')?.resources.gold).toBe(4);
+    expect(s.players.find((p) => p.id === 'p1')?.resources.mana).toBe(0);
+  });
+
+  it('picking mana grants the slot amount', () => {
+    let s = setupGuildsPlacement();
+    s = applyAction(s, {
+      type: 'PLACE_WORKER',
+      playerId: 'p1',
+      mageId: 'alice-mage-1',
+      actionSpaceId: 'base.room.guilds.a.slot-3',
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'option-chosen', optionId: 'mana', payload: {} },
+    });
+    expect(s.players.find((p) => p.id === 'p1')?.resources.gold).toBe(0);
+    expect(s.players.find((p) => p.id === 'p1')?.resources.mana).toBe(1);
+  });
+
+  it('mage stays on the slot until resolution returns it', () => {
+    let s = setupGuildsPlacement();
+    s = applyAction(s, {
+      type: 'PLACE_WORKER',
+      playerId: 'p1',
+      mageId: 'alice-mage-1',
+      actionSpaceId: 'base.room.guilds.a.slot-3',
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'option-chosen', optionId: 'gold', payload: {} },
+    });
+    // Mage still on slot through errands.
+    let guilds = findRoom(s, (r) => r.name === 'Guilds');
+    expect(guilds.actionSpaces[2]?.occupant?.mageId).toBe('alice-mage-1');
+    // Drain bell tower and run resolution — pump returns the mage.
+    s = { ...s, bellTower: { ...s.bellTower, available: [] } };
+    s = applyAction(s, { type: 'ADVANCE_PHASE' }); // errands → resolution
+    s = applyAction(s, { type: 'ADVANCE_PHASE' }); // pump
+    guilds = findRoom(s, (r) => r.name === 'Guilds');
+    expect(guilds.actionSpaces[2]?.occupant).toBeNull();
+    const aliceMage = findMageById(s, 'alice-mage-1');
+    expect(aliceMage.location).toEqual({ kind: 'office', playerId: 'p1' });
+  });
+});
+
+// ============================================================================
+// Courtyard A — Mana scaling with WIS
+// ============================================================================
+
+describe('Courtyard A', () => {
+  it('slot 1 grants WIS + 2 Mana (with WIS = 3 → 5 mana)', () => {
+    let s = setupRoomSlotTest(
+      'Courtyard',
+      'A',
+      'base.room.courtyard.a.slot-1',
+    );
+    s = mapPlayer(s, 'p1', (p) => ({
+      ...p,
+      resources: { ...p.resources, wisdom: 3 },
+    }));
+    s = driveToResolution(s);
+    expect(s.players.find((p) => p.id === 'p1')?.resources.mana).toBe(5);
+  });
+
+  it('slot 2 grants WIS Mana (with WIS = 0 → 0)', () => {
+    let s = setupRoomSlotTest(
+      'Courtyard',
+      'A',
+      'base.room.courtyard.a.slot-2',
+    );
+    s = driveToResolution(s);
+    expect(s.players.find((p) => p.id === 'p1')?.resources.mana).toBe(0);
+  });
+
+  it('slot 3 grants 3 Mana flat', () => {
+    let s = setupRoomSlotTest(
+      'Courtyard',
+      'A',
+      'base.room.courtyard.a.slot-3',
+    );
+    s = driveToResolution(s);
+    expect(s.players.find((p) => p.id === 'p1')?.resources.mana).toBe(3);
   });
 });

@@ -260,8 +260,25 @@ function pumpResolutionPhase(state: GameState): GameState {
       };
       return curr;
     }
-    if (room.isInstantRoom || room.cannotBePlacedInDirectly) {
+    if (room.cannotBePlacedInDirectly) {
+      // Infirmary — wounded mages live on `OwnedMage.location.kind = 'infirmary'`,
+      // not on action spaces, so the resolution pump has nothing to do here.
       curr = advanceResolutionPointer(curr, true);
+      continue;
+    }
+    if (room.isInstantRoom) {
+      // The slot's effect ran at PLACE_WORKER time. The pump's only job for
+      // instant rooms is to return the mage to its owner's office.
+      if (phase.pendingSpaceIndex >= room.actionSpaces.length) {
+        curr = advanceResolutionPointer(curr, true);
+        continue;
+      }
+      const space = room.actionSpaces[phase.pendingSpaceIndex];
+      if (!space || !space.occupant) {
+        curr = advanceResolutionPointer(curr, false);
+        continue;
+      }
+      curr = completeCurrentSpaceResolution(curr);
       continue;
     }
     if (phase.pendingSpaceIndex >= room.actionSpaces.length) {
@@ -494,7 +511,35 @@ function handlePlaceWorker(state: GameState, action: PlaceWorkerAction): GameSta
     return next;
   });
 
-  return { ...state, rooms: updatedRooms, players: updatedPlayers };
+  const placed: GameState = {
+    ...state,
+    rooms: updatedRooms,
+    players: updatedPlayers,
+  };
+
+  // Instant rooms (Guilds, etc.) resolve their slot effect at PLACE_WORKER
+  // time, not in the resolution phase. The mage stays on the slot through
+  // errands and gets returned by the resolution pump (which skips the
+  // effect for instant rooms).
+  if (room.isInstantRoom && hasEffect(space.effectId)) {
+    const source = describeSpaceSource(
+      space.id,
+      room.name,
+      room.side,
+      space.index,
+      action.playerId,
+    );
+    const ctx: EffectContext = {
+      state: placed,
+      source,
+      triggeringPlayerId: action.playerId,
+      allowReactions: true,
+    };
+    const result = getEffect(space.effectId)(ctx);
+    return applyEffectResult(placed, result, ctx);
+  }
+
+  return placed;
 }
 
 function handleBuyVaultCard(

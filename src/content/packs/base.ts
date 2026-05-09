@@ -342,11 +342,44 @@ function regularSlot(args: {
   };
 }
 
-const libraryASlot1: ActionSpace = regularSlot({
+// Library Side A — per the room file:
+//   Slot 1 (merit, 1 MB): Gain 1 WIS AND Draft a Vault Card
+//   Slot 2 (merit, 1 MB): Gain 1 INT AND gain 1 Research
+//   Slot 3 (regular):     Gain a Buy AND gain 1 Research
+//   Slot 4 (regular):     Choose 1 of: 1 INT / 1 WIS / 1 Research
+
+const librarySlot1: ActionSpace = {
   id: 'base.room.library.a.slot-1',
   roomId: 'base.room.library.a',
   index: 0,
+  slotType: 'merit',
+  occupant: null,
   effectId: 'base.room.library-a.slot-1',
+  costToActivate: { meritBadges: 1 },
+};
+
+const librarySlot2: ActionSpace = {
+  id: 'base.room.library.a.slot-2',
+  roomId: 'base.room.library.a',
+  index: 1,
+  slotType: 'merit',
+  occupant: null,
+  effectId: 'base.room.library-a.slot-2',
+  costToActivate: { meritBadges: 1 },
+};
+
+const librarySlot3: ActionSpace = regularSlot({
+  id: 'base.room.library.a.slot-3',
+  roomId: 'base.room.library.a',
+  index: 2,
+  effectId: 'base.room.library-a.slot-3',
+});
+
+const librarySlot4: ActionSpace = regularSlot({
+  id: 'base.room.library.a.slot-4',
+  roomId: 'base.room.library.a',
+  index: 3,
+  effectId: 'base.room.library-a.slot-4',
 });
 
 const libraryA: Room = {
@@ -358,7 +391,7 @@ const libraryA: Room = {
   isInstantRoom: false,
   cannotBePlacedInDirectly: false,
   cannotBeLocked: false,
-  actionSpaces: [libraryASlot1],
+  actionSpaces: [librarySlot1, librarySlot2, librarySlot3, librarySlot4],
 };
 
 const libraryB: Room = {
@@ -366,6 +399,159 @@ const libraryB: Room = {
   name: 'Library',
   sourcePackId: PACK_ID,
   isUniversityCentral: true,
+  side: 'B',
+  isInstantRoom: false,
+  cannotBePlacedInDirectly: false,
+  cannotBeLocked: false,
+  actionSpaces: [],
+};
+
+// Training Fields Side A:
+//   Slot 1 (merit, 1 MB): Gain 1 INT AND Gain 1 WIS
+//   Slot 2 (regular):     Gain 1 INT
+//   Slot 3 (regular):     Gain 1 WIS
+
+const trainingFieldsA: Room = {
+  id: 'base.room.training-fields.a',
+  name: 'Training Fields',
+  sourcePackId: PACK_ID,
+  isUniversityCentral: false,
+  side: 'A',
+  isInstantRoom: false,
+  cannotBePlacedInDirectly: false,
+  cannotBeLocked: false,
+  actionSpaces: [
+    {
+      id: 'base.room.training-fields.a.slot-1',
+      roomId: 'base.room.training-fields.a',
+      index: 0,
+      slotType: 'merit',
+      occupant: null,
+      effectId: 'base.room.training-fields-a.slot-1',
+      costToActivate: { meritBadges: 1 },
+    },
+    regularSlot({
+      id: 'base.room.training-fields.a.slot-2',
+      roomId: 'base.room.training-fields.a',
+      index: 1,
+      effectId: 'base.room.training-fields-a.slot-2',
+    }),
+    regularSlot({
+      id: 'base.room.training-fields.a.slot-3',
+      roomId: 'base.room.training-fields.a',
+      index: 2,
+      effectId: 'base.room.training-fields-a.slot-3',
+    }),
+  ],
+};
+
+const trainingFieldsB: Room = {
+  id: 'base.room.training-fields.b',
+  name: 'Training Fields',
+  sourcePackId: PACK_ID,
+  isUniversityCentral: false,
+  side: 'B',
+  isInstantRoom: false,
+  cannotBePlacedInDirectly: false,
+  cannotBeLocked: false,
+  actionSpaces: [],
+};
+
+// Guilds Side A — INSTANT room (effects resolve at placement, not resolution):
+//   Slot 1 (merit, 1 MB): Immediately gain either 6 Gold OR 3 Mana
+//   Slot 2 (regular):     Immediately gain either 4 Gold OR 2 Mana
+//   Slot 3 (regular):     Immediately gain either 2 Gold OR 1 Mana
+
+const guildsA: Room = {
+  id: 'base.room.guilds.a',
+  name: 'Guilds',
+  sourcePackId: PACK_ID,
+  isUniversityCentral: false,
+  side: 'A',
+  isInstantRoom: true,
+  cannotBePlacedInDirectly: false,
+  cannotBeLocked: false,
+  actionSpaces: [
+    {
+      id: 'base.room.guilds.a.slot-1',
+      roomId: 'base.room.guilds.a',
+      index: 0,
+      slotType: 'merit',
+      occupant: null,
+      effectId: 'base.room.guilds-a.slot-1',
+      costToActivate: { meritBadges: 1 },
+    },
+    regularSlot({
+      id: 'base.room.guilds.a.slot-2',
+      roomId: 'base.room.guilds.a',
+      index: 1,
+      effectId: 'base.room.guilds-a.slot-2',
+    }),
+    regularSlot({
+      id: 'base.room.guilds.a.slot-3',
+      roomId: 'base.room.guilds.a',
+      index: 2,
+      effectId: 'base.room.guilds-a.slot-3',
+    }),
+  ],
+};
+
+const guildsB: Room = {
+  id: 'base.room.guilds.b',
+  name: 'Guilds',
+  sourcePackId: PACK_ID,
+  isUniversityCentral: false,
+  side: 'B',
+  isInstantRoom: false,
+  cannotBePlacedInDirectly: false,
+  cannotBeLocked: false,
+  actionSpaces: [],
+};
+
+// Courtyard Side A:
+//   Slot 1 (merit, 1 MB): Gain Mana equal to (your WIS + 2)
+//   Slot 2 (regular):     Gain Mana equal to your WIS
+//   Slot 3 (regular):     Gain 3 Mana
+
+const courtyardA: Room = {
+  id: 'base.room.courtyard.a',
+  name: 'Courtyard',
+  sourcePackId: PACK_ID,
+  isUniversityCentral: false,
+  side: 'A',
+  isInstantRoom: false,
+  cannotBePlacedInDirectly: false,
+  cannotBeLocked: false,
+  actionSpaces: [
+    {
+      id: 'base.room.courtyard.a.slot-1',
+      roomId: 'base.room.courtyard.a',
+      index: 0,
+      slotType: 'merit',
+      occupant: null,
+      effectId: 'base.room.courtyard-a.slot-1',
+      costToActivate: { meritBadges: 1 },
+    },
+    regularSlot({
+      id: 'base.room.courtyard.a.slot-2',
+      roomId: 'base.room.courtyard.a',
+      index: 1,
+      effectId: 'base.room.courtyard-a.slot-2',
+    }),
+    regularSlot({
+      id: 'base.room.courtyard.a.slot-3',
+      roomId: 'base.room.courtyard.a',
+      index: 2,
+      effectId: 'base.room.courtyard-a.slot-3',
+    }),
+  ],
+};
+
+const courtyardB: Room = {
+  id: 'base.room.courtyard.b',
+  name: 'Courtyard',
+  sourcePackId: PACK_ID,
+  isUniversityCentral: false,
   side: 'B',
   isInstantRoom: false,
   cannotBePlacedInDirectly: false,
@@ -493,10 +679,13 @@ const rooms: Room[] = [
   }),
 
   // Variable pool — 12 physical rooms.
-  ...roomPair({ baseId: 'base.room.training-fields', name: 'Training Fields' }),
-  ...roomPair({ baseId: 'base.room.courtyard', name: 'Courtyard' }),
+  trainingFieldsA,
+  trainingFieldsB,
+  courtyardA,
+  courtyardB,
   ...roomPair({ baseId: 'base.room.catacombs', name: 'Catacombs' }),
-  ...roomPair({ baseId: 'base.room.guilds', name: 'Guilds' }),
+  guildsA,
+  guildsB,
   vaultA,
   vaultB,
   ...roomPair({ baseId: 'base.room.chapel', name: 'Chapel' }),

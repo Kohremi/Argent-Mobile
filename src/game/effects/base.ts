@@ -3,12 +3,15 @@
 
 import { registerEffect } from './registry';
 import {
+  affordableVaultCards,
   applyVaultDraft,
+  applyVaultPurchase,
   buildArsMagnaTargets,
   buildBurnTargets,
   buildReactionQueue,
   findActionSpace,
   gainResourcePatch,
+  gainResourcesPatch,
   woundMage,
 } from './helpers';
 import type {
@@ -26,10 +29,125 @@ import type {
 const PHASE_STEPPERS_ID = 'base.vault.phase-steppers';
 
 // ============================================================================
-// Library A — slot 1: Gain 1 INT OR 1 WIS OR 1 Research
+// Library A — four slots per the room file
 // ============================================================================
 
+/** Slot 1 (merit, costs 1 MB): Gain 1 WIS AND Draft a Vault Card. */
 registerEffect('base.room.library-a.slot-1', (ctx: EffectContext): EffectResult => {
+  if (!ctx.resumeAnswer) {
+    if (ctx.state.vaultTableau.length === 0) {
+      // No card to draft; still gain the WIS.
+      return {
+        kind: 'done',
+        patch: gainResourcePatch(ctx.state, ctx.triggeringPlayerId, 'wisdom', 1),
+      };
+    }
+    return {
+      kind: 'pause',
+      pending: {
+        responderId: ctx.triggeringPlayerId,
+        prompt: {
+          kind: 'choose-vault-card',
+          eligibleCardIds: [...ctx.state.vaultTableau],
+        },
+        resume: { effectId: 'base.room.library-a.slot-1', context: {} },
+        source: ctx.source,
+      },
+    };
+  }
+  if (ctx.resumeAnswer.kind !== 'card-chosen') {
+    throw new Error(
+      `library-a.slot-1 expected card-chosen, got ${ctx.resumeAnswer.kind}`,
+    );
+  }
+  let working = ctx.state;
+  working = {
+    ...working,
+    ...applyVaultDraft(working, ctx.triggeringPlayerId, ctx.resumeAnswer.cardId),
+  };
+  working = {
+    ...working,
+    ...gainResourcePatch(working, ctx.triggeringPlayerId, 'wisdom', 1),
+  };
+  return {
+    kind: 'done',
+    patch: { players: working.players, vaultTableau: working.vaultTableau },
+  };
+});
+
+/** Slot 2 (merit, costs 1 MB): Gain 1 INT AND gain 1 Research. */
+registerEffect('base.room.library-a.slot-2', (ctx: EffectContext): EffectResult => {
+  if (!ctx.resumeAnswer) {
+    return {
+      kind: 'pause',
+      patch: gainResourcePatch(ctx.state, ctx.triggeringPlayerId, 'intelligence', 1),
+      pending: spawnResearchPrompt(ctx.triggeringPlayerId, ctx.source),
+    };
+  }
+  throw new Error('library-a.slot-2 should not be re-invoked (research handles its own resume)');
+});
+
+/** Slot 3 (regular): Gain a Buy AND gain 1 Research. */
+registerEffect('base.room.library-a.slot-3', (ctx: EffectContext): EffectResult => {
+  if (!ctx.resumeAnswer) {
+    const affordable = affordableVaultCards(ctx.state, ctx.triggeringPlayerId);
+    if (affordable.length === 0) {
+      // No buy possible; go straight to research.
+      return {
+        kind: 'pause',
+        pending: spawnResearchPrompt(ctx.triggeringPlayerId, ctx.source),
+      };
+    }
+    return {
+      kind: 'pause',
+      pending: {
+        responderId: ctx.triggeringPlayerId,
+        prompt: {
+          kind: 'choose-from-options',
+          options: [
+            { id: 'skip', label: 'Skip the Buy', payload: {} },
+            ...affordable.map((cid) => ({
+              id: cid,
+              label: `Buy ${cid}`,
+              payload: {},
+            })),
+          ],
+        },
+        resume: {
+          effectId: 'base.room.library-a.slot-3',
+          context: { step: 'after-buy' },
+        },
+        source: ctx.source,
+      },
+    };
+  }
+  const step = ctx.resumeContext?.['step'];
+  if (step === 'after-buy') {
+    if (ctx.resumeAnswer.kind !== 'option-chosen') {
+      throw new Error('library-a.slot-3 after-buy expected option-chosen');
+    }
+    let working = ctx.state;
+    if (ctx.resumeAnswer.optionId !== 'skip') {
+      working = {
+        ...working,
+        ...applyVaultPurchase(
+          working,
+          ctx.triggeringPlayerId,
+          ctx.resumeAnswer.optionId,
+        ),
+      };
+    }
+    return {
+      kind: 'pause',
+      patch: { players: working.players, vaultTableau: working.vaultTableau },
+      pending: spawnResearchPrompt(ctx.triggeringPlayerId, ctx.source),
+    };
+  }
+  throw new Error(`library-a.slot-3 unexpected step ${String(step)}`);
+});
+
+/** Slot 4 (regular): Gain 1 INT OR 1 WIS OR 1 Research. */
+registerEffect('base.room.library-a.slot-4', (ctx: EffectContext): EffectResult => {
   if (!ctx.resumeAnswer) {
     return {
       kind: 'pause',
@@ -43,18 +161,16 @@ registerEffect('base.room.library-a.slot-1', (ctx: EffectContext): EffectResult 
             { id: 'research', label: 'Gain 1 Research', payload: { resource: 'research' } },
           ],
         },
-        resume: { effectId: 'base.room.library-a.slot-1', context: {} },
+        resume: { effectId: 'base.room.library-a.slot-4', context: {} },
         source: ctx.source,
       },
     };
   }
-
   if (ctx.resumeAnswer.kind !== 'option-chosen') {
     throw new Error(
-      `base.room.library-a.slot-1 expected option-chosen, got ${ctx.resumeAnswer.kind}`,
+      `library-a.slot-4 expected option-chosen, got ${ctx.resumeAnswer.kind}`,
     );
   }
-
   const playerId = ctx.triggeringPlayerId;
   switch (ctx.resumeAnswer.optionId) {
     case 'int':
@@ -67,7 +183,7 @@ registerEffect('base.room.library-a.slot-1', (ctx: EffectContext): EffectResult 
         pending: spawnResearchPrompt(playerId, ctx.source),
       };
     default:
-      throw new Error(`Library slot 1 got unknown option: ${ctx.resumeAnswer.optionId}`);
+      throw new Error(`library-a.slot-4 unknown option: ${ctx.resumeAnswer.optionId}`);
   }
 });
 
@@ -388,6 +504,116 @@ registerEffect('base.room.vault-a.slot-3', (ctx: EffectContext): EffectResult =>
     patch: gainResourcePatch(ctx.state, ctx.triggeringPlayerId, 'gold', 3),
   };
 });
+
+// ============================================================================
+// Training Fields A — flat resource gains
+// ============================================================================
+
+/** Slot 1 (merit, 1 MB): Gain 1 INT AND Gain 1 WIS. */
+registerEffect('base.room.training-fields-a.slot-1', (ctx: EffectContext): EffectResult => ({
+  kind: 'done',
+  patch: gainResourcesPatch(ctx.state, ctx.triggeringPlayerId, {
+    intelligence: 1,
+    wisdom: 1,
+  }),
+}));
+
+/** Slot 2 (regular): Gain 1 INT. */
+registerEffect('base.room.training-fields-a.slot-2', (ctx: EffectContext): EffectResult => ({
+  kind: 'done',
+  patch: gainResourcePatch(ctx.state, ctx.triggeringPlayerId, 'intelligence', 1),
+}));
+
+/** Slot 3 (regular): Gain 1 WIS. */
+registerEffect('base.room.training-fields-a.slot-3', (ctx: EffectContext): EffectResult => ({
+  kind: 'done',
+  patch: gainResourcePatch(ctx.state, ctx.triggeringPlayerId, 'wisdom', 1),
+}));
+
+// ============================================================================
+// Guilds A — INSTANT room. Pick gold OR mana per slot.
+// ============================================================================
+
+function guildsOrPrompt(
+  ctx: EffectContext,
+  goldAmount: number,
+  manaAmount: number,
+  effectId: string,
+): EffectResult {
+  if (!ctx.resumeAnswer) {
+    return {
+      kind: 'pause',
+      pending: {
+        responderId: ctx.triggeringPlayerId,
+        prompt: {
+          kind: 'choose-from-options',
+          options: [
+            { id: 'gold', label: `Gain ${goldAmount} Gold`, payload: {} },
+            { id: 'mana', label: `Gain ${manaAmount} Mana`, payload: {} },
+          ],
+        },
+        resume: { effectId, context: {} },
+        source: ctx.source,
+      },
+    };
+  }
+  if (ctx.resumeAnswer.kind !== 'option-chosen') {
+    throw new Error(`${effectId} expected option-chosen`);
+  }
+  if (ctx.resumeAnswer.optionId === 'gold') {
+    return {
+      kind: 'done',
+      patch: gainResourcePatch(ctx.state, ctx.triggeringPlayerId, 'gold', goldAmount),
+    };
+  }
+  if (ctx.resumeAnswer.optionId === 'mana') {
+    return {
+      kind: 'done',
+      patch: gainResourcePatch(ctx.state, ctx.triggeringPlayerId, 'mana', manaAmount),
+    };
+  }
+  throw new Error(`${effectId} unknown option ${ctx.resumeAnswer.optionId}`);
+}
+
+registerEffect('base.room.guilds-a.slot-1', (ctx) =>
+  guildsOrPrompt(ctx, 6, 3, 'base.room.guilds-a.slot-1'),
+);
+registerEffect('base.room.guilds-a.slot-2', (ctx) =>
+  guildsOrPrompt(ctx, 4, 2, 'base.room.guilds-a.slot-2'),
+);
+registerEffect('base.room.guilds-a.slot-3', (ctx) =>
+  guildsOrPrompt(ctx, 2, 1, 'base.room.guilds-a.slot-3'),
+);
+
+// ============================================================================
+// Courtyard A — Mana scaling with WIS
+// ============================================================================
+
+function manaForCourtyard(
+  ctx: EffectContext,
+  bonus: number,
+): EffectResult {
+  const player = ctx.state.players.find((p) => p.id === ctx.triggeringPlayerId);
+  if (!player) throw new Error('courtyard: player not found');
+  const amount = player.resources.wisdom + bonus;
+  if (amount <= 0) return { kind: 'done', patch: {} };
+  return {
+    kind: 'done',
+    patch: gainResourcePatch(ctx.state, ctx.triggeringPlayerId, 'mana', amount),
+  };
+}
+
+/** Slot 1 (merit, 1 MB): Gain Mana equal to your WIS + 2. */
+registerEffect('base.room.courtyard-a.slot-1', (ctx) => manaForCourtyard(ctx, 2));
+
+/** Slot 2 (regular): Gain Mana equal to your WIS. */
+registerEffect('base.room.courtyard-a.slot-2', (ctx) => manaForCourtyard(ctx, 0));
+
+/** Slot 3 (regular): Gain 3 Mana. */
+registerEffect('base.room.courtyard-a.slot-3', (ctx) => ({
+  kind: 'done',
+  patch: gainResourcePatch(ctx.state, ctx.triggeringPlayerId, 'mana', 3),
+}));
 
 // ============================================================================
 // Sorcery Mage — Ars Magna (fast action: spend 1 Mana, wound a Mage, take its slot)
