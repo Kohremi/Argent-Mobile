@@ -1661,6 +1661,222 @@ describe('Guilds A (instant room)', () => {
 // Courtyard A — Mana scaling with WIS
 // ============================================================================
 
+// ============================================================================
+// Council Chamber A — Draft a Supporter OR Gain a Mark, capped at 1/round
+// ============================================================================
+
+describe('Council Chamber A', () => {
+  function setSupporterTableau(state: GameState, ids: string[]): GameState {
+    return { ...state, supporterTableau: ids };
+  }
+
+  it('opens an OR prompt at resolution', () => {
+    let s = setupRoomSlotTest(
+      'Council Chamber',
+      'A',
+      'base.room.council-chamber.a.slot-2',
+    );
+    s = driveToResolution(s);
+    const top = topPending(s);
+    expect(top.prompt.kind).toBe('choose-from-options');
+    if (top.prompt.kind === 'choose-from-options') {
+      expect(top.prompt.options.map((o) => o.id).sort()).toEqual(['draft', 'mark']);
+    }
+  });
+
+  it('picking Gain a Mark chains to choose-voter and records the mark', () => {
+    let s = setupRoomSlotTest(
+      'Council Chamber',
+      'A',
+      'base.room.council-chamber.a.slot-2',
+    );
+    s = driveToResolution(s);
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'option-chosen', optionId: 'mark', payload: {} },
+    });
+    const voterPrompt = topPending(s);
+    expect(voterPrompt.prompt.kind).toBe('choose-voter');
+    if (voterPrompt.prompt.kind !== 'choose-voter') return;
+    const targetVoter = voterPrompt.prompt.eligibleVoterIds[0]!;
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: voterPrompt.id,
+      answer: { kind: 'voter-chosen', voterId: targetVoter },
+    });
+    expect(s.players.find((p) => p.id === 'p1')?.resources.marks).toBe(1);
+    expect(s.voterMarks).toContainEqual({ voterId: targetVoter, playerId: 'p1' });
+  });
+
+  it('picking Draft a Supporter chains to choose-supporter-card', () => {
+    let s = setupRoomSlotTest(
+      'Council Chamber',
+      'A',
+      'base.room.council-chamber.a.slot-2',
+    );
+    s = setSupporterTableau(s, ['base.supporter.placeholder.1']);
+    s = driveToResolution(s);
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'option-chosen', optionId: 'draft', payload: {} },
+    });
+    const draftPrompt = topPending(s);
+    expect(draftPrompt.prompt.kind).toBe('choose-supporter-card');
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: draftPrompt.id,
+      answer: { kind: 'card-chosen', cardId: 'base.supporter.placeholder.1' },
+    });
+    const alice = s.players.find((p) => p.id === 'p1');
+    expect(alice?.supporters).toEqual(['base.supporter.placeholder.1']);
+    expect(s.supporterTableau).not.toContain('base.supporter.placeholder.1');
+  });
+
+  it('rejects placing a second mage in Council Chamber the same round', () => {
+    let s = initGame(TWO_PLAYER_CONFIG);
+    s = forceRoomSide(s, 'Council Chamber', 'A');
+    s = addMage(s, 'p1', {
+      id: 'alice-mage-1',
+      cardId: 'base.mage.divinity',
+      color: 'blue',
+    });
+    s = addMage(s, 'p1', {
+      id: 'alice-mage-2',
+      cardId: 'base.mage.divinity',
+      color: 'blue',
+    });
+    s = { ...s, firstPlayerIndex: 0, phase: { kind: 'errands', round: 1, activePlayerIndex: 0 } };
+    s = applyAction(s, {
+      type: 'PLACE_WORKER',
+      playerId: 'p1',
+      mageId: 'alice-mage-1',
+      actionSpaceId: 'base.room.council-chamber.a.slot-2',
+    });
+    expect(() =>
+      applyAction(s, {
+        type: 'PLACE_WORKER',
+        playerId: 'p1',
+        mageId: 'alice-mage-2',
+        actionSpaceId: 'base.room.council-chamber.a.slot-3',
+      }),
+    ).toThrow(/already placed.*Council Chamber/);
+  });
+});
+
+describe('Round-setup clears roundPlacements', () => {
+  it('lets a player place again in a once-per-round room next round', () => {
+    let s = initGame(TWO_PLAYER_CONFIG);
+    s = forceRoomSide(s, 'Council Chamber', 'A');
+    s = addMage(s, 'p1', {
+      id: 'alice-mage-1',
+      cardId: 'base.mage.divinity',
+      color: 'blue',
+    });
+    s = { ...s, firstPlayerIndex: 0, phase: { kind: 'errands', round: 1, activePlayerIndex: 0 } };
+    s = applyAction(s, {
+      type: 'PLACE_WORKER',
+      playerId: 'p1',
+      mageId: 'alice-mage-1',
+      actionSpaceId: 'base.room.council-chamber.a.slot-2',
+    });
+    expect(s.players[0]?.roundPlacements).toContain('base.room.council-chamber.a');
+
+    // Drain bell tower; drive through resolution → mid-game → round 2 setup.
+    s = { ...s, bellTower: { ...s.bellTower, available: [] } };
+    s = applyAction(s, { type: 'ADVANCE_PHASE' }); // errands → resolution
+    s = applyAction(s, { type: 'ADVANCE_PHASE' }); // resolution pump → Council slot pauses
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'option-chosen', optionId: 'mark', payload: {} },
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'voter-chosen', voterId: s.voters[0]!.id },
+    });
+    // Engine auto-pumps after the stack drains; we should now be in
+    // mid-game-scoring.
+    expect(s.phase.kind).toBe('mid-game-scoring');
+    s = applyAction(s, { type: 'ADVANCE_PHASE' }); // mid-game → round-setup round 2
+    s = applyAction(s, { type: 'ADVANCE_PHASE' }); // round-setup → errands round 2
+
+    expect(s.phase.kind).toBe('errands');
+    expect(s.players[0]?.roundPlacements).toEqual([]);
+  });
+});
+
+// ============================================================================
+// Catacombs A
+// ============================================================================
+
+describe('Catacombs A', () => {
+  it('slot 2 grants 2 IP and bumps influenceArrivalSeq', () => {
+    let s = setupRoomSlotTest(
+      'Catacombs',
+      'A',
+      'base.room.catacombs.a.slot-2',
+    );
+    s = driveToResolution(s);
+    expect(s.pendingResolutionStack).toHaveLength(0);
+    const alice = s.players.find((p) => p.id === 'p1');
+    expect(alice?.resources.influence).toBe(2);
+    expect(alice?.influenceArrivalSeq).toBeGreaterThan(0);
+  });
+
+  it('slot 3 grants 1 IP per player ahead', () => {
+    let s = setupRoomSlotTest(
+      'Catacombs',
+      'A',
+      'base.room.catacombs.a.slot-3',
+    );
+    // Alice has 0 IP; Bob has 3 IP → Alice gains 1 IP.
+    s = mapPlayer(s, 'p2', (p) => ({
+      ...p,
+      resources: { ...p.resources, influence: 3 },
+    }));
+    s = driveToResolution(s);
+    expect(s.players.find((p) => p.id === 'p1')?.resources.influence).toBe(1);
+  });
+
+  it('slot 3 grants 0 IP when no one is ahead', () => {
+    let s = setupRoomSlotTest(
+      'Catacombs',
+      'A',
+      'base.room.catacombs.a.slot-3',
+    );
+    // Both players at 0 IP; no one is strictly ahead.
+    s = driveToResolution(s);
+    expect(s.players.find((p) => p.id === 'p1')?.resources.influence).toBe(0);
+  });
+
+  it('slot 1 draws a Secret Supporter and prompts for a Mark', () => {
+    let s = setupRoomSlotTest(
+      'Catacombs',
+      'A',
+      'base.room.catacombs.a.slot-1',
+    );
+    // Force a known top of the supporter deck.
+    s = {
+      ...s,
+      supporterDeck: ['base.supporter.placeholder.1'],
+      supporterTableau: [],
+    };
+    s = driveToResolution(s);
+    // Secret Supporter went to discard.
+    const alice = s.players.find((p) => p.id === 'p1');
+    expect(alice?.personalDiscard).toEqual([
+      { kind: 'secret-supporter', cardId: 'base.supporter.placeholder.1' },
+    ]);
+    expect(s.supporterDeck).toHaveLength(0);
+    // Mark prompt now active.
+    const top = topPending(s);
+    expect(top.prompt.kind).toBe('choose-voter');
+  });
+});
+
 describe('Courtyard A', () => {
   it('slot 1 grants WIS + 2 Mana (with WIS = 3 → 5 mana)', () => {
     let s = setupRoomSlotTest(

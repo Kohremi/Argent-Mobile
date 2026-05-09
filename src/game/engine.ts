@@ -462,6 +462,18 @@ function handlePlaceWorker(state: GameState, action: PlaceWorkerAction): GameSta
     );
   }
 
+  const roomLimit = room.maxMagesPerPlayerPerRound ?? Infinity;
+  if (Number.isFinite(roomLimit)) {
+    const placedHere = player.roundPlacements.filter(
+      (rid) => rid === room.id,
+    ).length;
+    if (placedHere >= roomLimit) {
+      throw new Error(
+        `PLACE_WORKER: already placed ${placedHere} mage${placedHere === 1 ? '' : 's'} in ${room.name} this round (limit ${roomLimit})`,
+      );
+    }
+  }
+
   // TODO: Mage Power triggers (Red Ars Magna, Purple fast-action). Not in
   // this slice.
 
@@ -497,6 +509,7 @@ function handlePlaceWorker(state: GameState, action: PlaceWorkerAction): GameSta
               isShadowing: false,
             },
       ),
+      roundPlacements: [...p.roundPlacements, room.id],
     };
     if (meritCost > 0) {
       return {
@@ -953,6 +966,7 @@ function refreshPlayerCardsAndMerit(state: GameState): GameState {
       meritBadgesSpent: 0,
     },
     bellTowerCards: [],
+    roundPlacements: [],
   }));
   return { ...state, players };
 }

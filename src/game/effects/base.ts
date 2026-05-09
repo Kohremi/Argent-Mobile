@@ -4,11 +4,15 @@
 import { registerEffect } from './registry';
 import {
   affordableVaultCards,
+  applyGainMark,
+  applySecretSupporterDraw,
+  applySupporterDraft,
   applyVaultDraft,
   applyVaultPurchase,
   buildArsMagnaTargets,
   buildBurnTargets,
   buildReactionQueue,
+  bumpInfluencePatch,
   findActionSpace,
   gainResourcePatch,
   gainResourcesPatch,
@@ -614,6 +618,162 @@ registerEffect('base.room.courtyard-a.slot-3', (ctx) => ({
   kind: 'done',
   patch: gainResourcePatch(ctx.state, ctx.triggeringPlayerId, 'mana', 3),
 }));
+
+// ============================================================================
+// Marks — system effect used by every "gain a Mark" prompt
+// ============================================================================
+
+function spawnGainMarkPrompt(
+  state: GameState,
+  playerId: string,
+  source: ResolutionSource,
+): PendingResolutionInput {
+  return {
+    responderId: playerId,
+    prompt: {
+      kind: 'choose-voter',
+      eligibleVoterIds: state.voters.map((v) => v.id),
+    },
+    resume: { effectId: 'base.system.gain-mark', context: {} },
+    source,
+  };
+}
+
+registerEffect('base.system.gain-mark', (ctx) => {
+  if (ctx.resumeAnswer?.kind !== 'voter-chosen') {
+    throw new Error(
+      `gain-mark expected voter-chosen, got ${ctx.resumeAnswer?.kind}`,
+    );
+  }
+  return {
+    kind: 'done',
+    patch: applyGainMark(
+      ctx.state,
+      ctx.triggeringPlayerId,
+      ctx.resumeAnswer.voterId,
+    ),
+  };
+});
+
+// ============================================================================
+// Council Chamber A — five slots, each "Draft a supporter OR gain a Mark"
+// ============================================================================
+
+registerEffect('base.room.council-chamber-a.slot', (ctx: EffectContext): EffectResult => {
+  if (!ctx.resumeAnswer) {
+    return {
+      kind: 'pause',
+      pending: {
+        responderId: ctx.triggeringPlayerId,
+        prompt: {
+          kind: 'choose-from-options',
+          options: [
+            { id: 'draft', label: 'Draft a Supporter', payload: {} },
+            { id: 'mark', label: 'Gain a Mark', payload: {} },
+          ],
+        },
+        resume: {
+          effectId: 'base.room.council-chamber-a.slot',
+          context: { step: 'or' },
+        },
+        source: ctx.source,
+      },
+    };
+  }
+
+  const step = ctx.resumeContext?.['step'];
+  if (step === 'or') {
+    if (ctx.resumeAnswer.kind !== 'option-chosen') {
+      throw new Error('council-chamber-a.slot OR expected option-chosen');
+    }
+    if (ctx.resumeAnswer.optionId === 'draft') {
+      if (ctx.state.supporterTableau.length === 0) {
+        return { kind: 'done', patch: {} };
+      }
+      return {
+        kind: 'pause',
+        pending: {
+          responderId: ctx.triggeringPlayerId,
+          prompt: {
+            kind: 'choose-supporter-card',
+            eligibleCardIds: [...ctx.state.supporterTableau],
+          },
+          resume: {
+            effectId: 'base.room.council-chamber-a.slot',
+            context: { step: 'draft-pick' },
+          },
+          source: ctx.source,
+        },
+      };
+    }
+    if (ctx.resumeAnswer.optionId === 'mark') {
+      return {
+        kind: 'pause',
+        pending: spawnGainMarkPrompt(
+          ctx.state,
+          ctx.triggeringPlayerId,
+          ctx.source,
+        ),
+      };
+    }
+    throw new Error(
+      `council-chamber-a.slot OR unknown option ${ctx.resumeAnswer.optionId}`,
+    );
+  }
+  if (step === 'draft-pick') {
+    if (ctx.resumeAnswer.kind !== 'card-chosen') {
+      throw new Error('council-chamber-a.slot draft-pick expected card-chosen');
+    }
+    return {
+      kind: 'done',
+      patch: applySupporterDraft(
+        ctx.state,
+        ctx.triggeringPlayerId,
+        ctx.resumeAnswer.cardId,
+      ),
+    };
+  }
+  throw new Error(`council-chamber-a.slot unexpected step ${String(step)}`);
+});
+
+// ============================================================================
+// Catacombs A
+// ============================================================================
+
+/** Slot 1 (merit, 1 MB): Draw a Secret Supporter, then gain a Mark. */
+registerEffect('base.room.catacombs-a.slot-1', (ctx: EffectContext): EffectResult => {
+  if (!ctx.resumeAnswer) {
+    const drawPatch = applySecretSupporterDraw(ctx.state, ctx.triggeringPlayerId);
+    const afterDraw = { ...ctx.state, ...drawPatch };
+    return {
+      kind: 'pause',
+      patch: drawPatch,
+      pending: spawnGainMarkPrompt(afterDraw, ctx.triggeringPlayerId, ctx.source),
+    };
+  }
+  throw new Error('catacombs-a.slot-1 should not be re-invoked (mark handles its own resume)');
+});
+
+/** Slot 2 (regular): Gain 2 IP. */
+registerEffect('base.room.catacombs-a.slot-2', (ctx) => ({
+  kind: 'done',
+  patch: bumpInfluencePatch(ctx.state, ctx.triggeringPlayerId, 2),
+}));
+
+/** Slot 3 (regular): Gain 1 IP for each player with more IP than you. */
+registerEffect('base.room.catacombs-a.slot-3', (ctx) => {
+  const player = ctx.state.players.find((p) => p.id === ctx.triggeringPlayerId);
+  if (!player) throw new Error('catacombs-a.slot-3: caster not found');
+  const myIP = player.resources.influence;
+  const ahead = ctx.state.players.filter(
+    (p) => p.id !== ctx.triggeringPlayerId && p.resources.influence > myIP,
+  ).length;
+  if (ahead === 0) return { kind: 'done', patch: {} };
+  return {
+    kind: 'done',
+    patch: bumpInfluencePatch(ctx.state, ctx.triggeringPlayerId, ahead),
+  };
+});
 
 // ============================================================================
 // Sorcery Mage — Ars Magna (fast action: spend 1 Mana, wound a Mage, take its slot)

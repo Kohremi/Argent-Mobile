@@ -186,6 +186,13 @@ export interface Player {
    * Influence Track stack: bottom disc placed first wins ties).
    */
   influenceArrivalSeq: number;
+  /**
+   * Room ids this player has placed a mage in during the current round.
+   * Reset to `[]` at the start of round-setup. Read by PLACE_WORKER to
+   * enforce per-room per-round placement limits (e.g., Council Chamber's
+   * "single mage per round" rule).
+   */
+  roundPlacements: RoomId[];
 }
 
 // ============================================================================
@@ -319,6 +326,12 @@ export interface Room {
   cannotBeLocked: boolean;
   actionSpaces: ActionSpace[];
   setupEffectId?: EffectId;
+  /**
+   * Optional cap on how many mages a single player may place in this room
+   * per round (e.g., Council Chamber: 1). Counted against
+   * `Player.roundPlacements`. Unset = unlimited.
+   */
+  maxMagesPerPlayerPerRound?: number;
 }
 
 // ============================================================================

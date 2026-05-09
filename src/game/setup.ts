@@ -160,6 +160,7 @@ export function buildInitialState(config: GameConfig): GameState {
     bellTowerCards: [],
     initiativeOrder: i + 1,
     influenceArrivalSeq: 0,
+    roundPlacements: [],
   }));
 
   // ---- First player (random per rulebook) ----

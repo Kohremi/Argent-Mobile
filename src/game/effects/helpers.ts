@@ -5,6 +5,7 @@ import { getPack } from '../../content/registry';
 import type {
   ActionSpace,
   ActionSpaceId,
+  ConsortiumVoterId,
   GameState,
   GameStatePatch,
   OwnedMage,
@@ -14,6 +15,7 @@ import type {
   ReactionTriggerEvent,
   ResolutionSource,
   Room,
+  SupporterCardId,
   VaultCard,
   VaultCardId,
 } from '../types';
@@ -396,6 +398,87 @@ export function affordableVaultCards(
     if (def && def.goldCost <= player.resources.gold) result.push(cardId);
   }
   return result;
+}
+
+// ============================================================================
+// Marks, Supporters, Secret Supporters
+// ============================================================================
+
+/**
+ * Places a Mark for a player on a Voter. Records the placement in
+ * `voterMarks` and bumps the player's `marks` resource (which is what the
+ * "Most Marks" voter scores).
+ */
+export function applyGainMark(
+  state: GameState,
+  playerId: PlayerId,
+  voterId: ConsortiumVoterId,
+): GameStatePatch {
+  return {
+    voterMarks: [...state.voterMarks, { voterId, playerId }],
+    players: state.players.map((p) =>
+      p.id !== playerId
+        ? p
+        : {
+            ...p,
+            resources: { ...p.resources, marks: p.resources.marks + 1 },
+          },
+    ),
+  };
+}
+
+/**
+ * Drafts a supporter card from the tableau into a player's office. Returns a
+ * patch that moves the card and pulls it from the tableau (no payment, like
+ * vault drafts). Throws if the card isn't in the tableau.
+ */
+export function applySupporterDraft(
+  state: GameState,
+  playerId: PlayerId,
+  cardId: SupporterCardId,
+): GameStatePatch {
+  if (!state.supporterTableau.includes(cardId)) {
+    throw new Error(`supporter draft: ${cardId} not in supporter tableau`);
+  }
+  return {
+    players: state.players.map((p) =>
+      p.id !== playerId
+        ? p
+        : { ...p, supporters: [...p.supporters, cardId] },
+    ),
+    supporterTableau: state.supporterTableau.filter((c) => c !== cardId),
+  };
+}
+
+/**
+ * Draws the top card of the supporter deck into the player's personal
+ * discard as a Secret Supporter (face-down — opponents may not peek). Returns
+ * an empty patch if the deck is empty.
+ *
+ * Per rulebook: secret supporters still count toward "Most Supporters" voter
+ * scoring; `Player.personalDiscard` already includes them in `countSupporters`.
+ */
+export function applySecretSupporterDraw(
+  state: GameState,
+  playerId: PlayerId,
+): GameStatePatch {
+  if (state.supporterDeck.length === 0) return {};
+  const top = state.supporterDeck[0];
+  if (top === undefined) return {};
+  return {
+    supporterDeck: state.supporterDeck.slice(1),
+    players: state.players.map((p) =>
+      p.id !== playerId
+        ? p
+        : {
+            ...p,
+            personalDiscard: [
+              ...p.personalDiscard,
+              { kind: 'secret-supporter', cardId: top },
+            ],
+          },
+    ),
+  };
 }
 
 // ============================================================================

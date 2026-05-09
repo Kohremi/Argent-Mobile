@@ -230,10 +230,42 @@ const vaultCards: VaultCard[] = [
 ];
 
 // ============================================================================
-// Supporters — TODO
+// Supporters — placeholder set so the tableau has cards to draft.
+// Effects (when used out of office) are unregistered; real supporter
+// behavior is deferred.
 // ============================================================================
 
-const supporters: SupporterCard[] = [];
+function placeholderSupporter(args: {
+  id: string;
+  name: string;
+  department: Department;
+}): SupporterCard {
+  return {
+    id: args.id,
+    name: args.name,
+    sourcePackId: PACK_ID,
+    department: args.department,
+    effectId: args.id,
+  };
+}
+
+const supporters: SupporterCard[] = [
+  placeholderSupporter({
+    id: 'base.supporter.placeholder.1',
+    name: 'Placeholder Supporter 1',
+    department: 'sorcery',
+  }),
+  placeholderSupporter({
+    id: 'base.supporter.placeholder.2',
+    name: 'Placeholder Supporter 2',
+    department: 'mysticism',
+  }),
+  placeholderSupporter({
+    id: 'base.supporter.placeholder.3',
+    name: 'Placeholder Supporter 3',
+    department: 'natural-magick',
+  }),
+];
 
 // ============================================================================
 // Candidates — base game keeps 6 (per rulebook); other 6 live in Mancers
@@ -341,6 +373,58 @@ function regularSlot(args: {
     effectId: args.effectId,
   };
 }
+
+// Council Chamber Side A — per the room file. Each player may only place a
+// single mage in this room per round (`maxMagesPerPlayerPerRound: 1`).
+//   Slot 1 (merit, 1 MB): Draft a supporter OR gain a Mark
+//   Slots 2–5 (regular):  Draft a supporter OR gain a Mark
+
+function councilSlot(index: number, slotType: 'regular' | 'merit'): ActionSpace {
+  const id = `base.room.council-chamber.a.slot-${index}`;
+  const base: ActionSpace = {
+    id,
+    roomId: 'base.room.council-chamber.a',
+    index: index - 1,
+    slotType,
+    occupant: null,
+    effectId: 'base.room.council-chamber-a.slot',
+  };
+  if (slotType === 'merit') {
+    return { ...base, costToActivate: { meritBadges: 1 } };
+  }
+  return base;
+}
+
+const councilChamberA: Room = {
+  id: 'base.room.council-chamber.a',
+  name: 'Council Chamber',
+  sourcePackId: PACK_ID,
+  isUniversityCentral: true,
+  side: 'A',
+  isInstantRoom: false,
+  cannotBePlacedInDirectly: false,
+  cannotBeLocked: false,
+  actionSpaces: [
+    councilSlot(1, 'merit'),
+    councilSlot(2, 'regular'),
+    councilSlot(3, 'regular'),
+    councilSlot(4, 'regular'),
+    councilSlot(5, 'regular'),
+  ],
+  maxMagesPerPlayerPerRound: 1,
+};
+
+const councilChamberB: Room = {
+  id: 'base.room.council-chamber.b',
+  name: 'Council Chamber',
+  sourcePackId: PACK_ID,
+  isUniversityCentral: true,
+  side: 'B',
+  isInstantRoom: false,
+  cannotBePlacedInDirectly: false,
+  cannotBeLocked: false,
+  actionSpaces: [],
+};
 
 // Library Side A — per the room file:
 //   Slot 1 (merit, 1 MB): Gain 1 WIS AND Draft a Vault Card
@@ -508,6 +592,57 @@ const guildsB: Room = {
   actionSpaces: [],
 };
 
+// Catacombs Side A:
+//   Slot 1 (merit, 1 MB): Draw a Secret Supporter, then gain a Mark
+//   Slot 2 (regular):     Gain 2 IP
+//   Slot 3 (regular):     Gain 1 IP for each player with more IP than you
+
+const catacombsA: Room = {
+  id: 'base.room.catacombs.a',
+  name: 'Catacombs',
+  sourcePackId: PACK_ID,
+  isUniversityCentral: false,
+  side: 'A',
+  isInstantRoom: false,
+  cannotBePlacedInDirectly: false,
+  cannotBeLocked: false,
+  actionSpaces: [
+    {
+      id: 'base.room.catacombs.a.slot-1',
+      roomId: 'base.room.catacombs.a',
+      index: 0,
+      slotType: 'merit',
+      occupant: null,
+      effectId: 'base.room.catacombs-a.slot-1',
+      costToActivate: { meritBadges: 1 },
+    },
+    regularSlot({
+      id: 'base.room.catacombs.a.slot-2',
+      roomId: 'base.room.catacombs.a',
+      index: 1,
+      effectId: 'base.room.catacombs-a.slot-2',
+    }),
+    regularSlot({
+      id: 'base.room.catacombs.a.slot-3',
+      roomId: 'base.room.catacombs.a',
+      index: 2,
+      effectId: 'base.room.catacombs-a.slot-3',
+    }),
+  ],
+};
+
+const catacombsB: Room = {
+  id: 'base.room.catacombs.b',
+  name: 'Catacombs',
+  sourcePackId: PACK_ID,
+  isUniversityCentral: false,
+  side: 'B',
+  isInstantRoom: false,
+  cannotBePlacedInDirectly: false,
+  cannotBeLocked: false,
+  actionSpaces: [],
+};
+
 // Courtyard Side A:
 //   Slot 1 (merit, 1 MB): Gain Mana equal to (your WIS + 2)
 //   Slot 2 (regular):     Gain Mana equal to your WIS
@@ -662,11 +797,8 @@ function roomPair(opts: RoomPairOpts): Room[] {
 
 const rooms: Room[] = [
   // University Central — always present.
-  ...roomPair({
-    baseId: 'base.room.council-chamber',
-    name: 'Council Chamber',
-    isUniversityCentral: true,
-  }),
+  councilChamberA,
+  councilChamberB,
   libraryA,
   libraryB,
   ...roomPair({
@@ -683,7 +815,8 @@ const rooms: Room[] = [
   trainingFieldsB,
   courtyardA,
   courtyardB,
-  ...roomPair({ baseId: 'base.room.catacombs', name: 'Catacombs' }),
+  catacombsA,
+  catacombsB,
   guildsA,
   guildsB,
   vaultA,
