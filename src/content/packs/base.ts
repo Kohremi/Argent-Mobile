@@ -502,6 +502,7 @@ function councilSlot(index: number, slotType: 'regular' | 'merit'): ActionSpace 
     slotType,
     occupant: null,
     effectId: 'base.room.council-chamber-a.slot',
+    description: 'Choose to Draft a Supporter or gain a Mark.',
   };
   if (slotType === 'merit') {
     return { ...base, costToActivate: { meritBadges: 1 } };
@@ -518,6 +519,7 @@ const councilChamberA: Room = {
   isInstantRoom: false,
   cannotBePlacedInDirectly: false,
   cannotBeLocked: false,
+  description: 'Each player may only place a single mage in this room per round.',
   actionSpaces: [
     councilSlot(1, 'merit'),
     councilSlot(2, 'regular'),
@@ -554,6 +556,7 @@ const librarySlot1: ActionSpace = {
   occupant: null,
   effectId: 'base.room.library-a.slot-1',
   costToActivate: { meritBadges: 1 },
+  description: 'Gain 1 WIS AND Draft a Vault Card.',
 };
 
 const librarySlot2: ActionSpace = {
@@ -564,21 +567,28 @@ const librarySlot2: ActionSpace = {
   occupant: null,
   effectId: 'base.room.library-a.slot-2',
   costToActivate: { meritBadges: 1 },
+  description: 'Gain 1 INT and gain 1 Research.',
 };
 
-const librarySlot3: ActionSpace = regularSlot({
-  id: 'base.room.library.a.slot-3',
-  roomId: 'base.room.library.a',
-  index: 2,
-  effectId: 'base.room.library-a.slot-3',
-});
+const librarySlot3: ActionSpace = {
+  ...regularSlot({
+    id: 'base.room.library.a.slot-3',
+    roomId: 'base.room.library.a',
+    index: 2,
+    effectId: 'base.room.library-a.slot-3',
+  }),
+  description: 'Gain a Buy and gain 1 Research.',
+};
 
-const librarySlot4: ActionSpace = regularSlot({
-  id: 'base.room.library.a.slot-4',
-  roomId: 'base.room.library.a',
-  index: 3,
-  effectId: 'base.room.library-a.slot-4',
-});
+const librarySlot4: ActionSpace = {
+  ...regularSlot({
+    id: 'base.room.library.a.slot-4',
+    roomId: 'base.room.library.a',
+    index: 3,
+    effectId: 'base.room.library-a.slot-4',
+  }),
+  description: 'Choose 1: Gain 1 INT / Gain 1 WIS / Gain 1 Research.',
+};
 
 const libraryA: Room = {
   id: 'base.room.library.a',
@@ -601,6 +611,37 @@ const libraryB: Room = {
   isInstantRoom: false,
   cannotBePlacedInDirectly: false,
   cannotBeLocked: false,
+  actionSpaces: [],
+};
+
+// Infirmary — single-slot UC room. Mages can't be placed directly; wounded
+// mages move here automatically. When sent here BY AN OPPONENT, the wounded
+// player chooses 2 Gold / 1 Mana / 1 IP (handled in the wound effect chain
+// via `base.system.infirmary-bonus`).
+
+const infirmaryA: Room = {
+  id: 'base.room.infirmary.a',
+  name: 'Infirmary',
+  sourcePackId: PACK_ID,
+  isUniversityCentral: true,
+  side: 'A',
+  isInstantRoom: true,
+  cannotBePlacedInDirectly: true,
+  cannotBeLocked: true,
+  description:
+    'Wounded mages move here automatically; you cannot place directly. When sent here by an opponent, choose: gain 2 Gold, 1 Mana, or 1 IP.',
+  actionSpaces: [],
+};
+
+const infirmaryB: Room = {
+  id: 'base.room.infirmary.b',
+  name: 'Infirmary',
+  sourcePackId: PACK_ID,
+  isUniversityCentral: true,
+  side: 'B',
+  isInstantRoom: true,
+  cannotBePlacedInDirectly: true,
+  cannotBeLocked: true,
   actionSpaces: [],
 };
 
@@ -627,19 +668,26 @@ const trainingFieldsA: Room = {
       occupant: null,
       effectId: 'base.room.training-fields-a.slot-1',
       costToActivate: { meritBadges: 1 },
+      description: 'Gain 1 INT AND Gain 1 WIS.',
     },
-    regularSlot({
-      id: 'base.room.training-fields.a.slot-2',
-      roomId: 'base.room.training-fields.a',
-      index: 1,
-      effectId: 'base.room.training-fields-a.slot-2',
-    }),
-    regularSlot({
-      id: 'base.room.training-fields.a.slot-3',
-      roomId: 'base.room.training-fields.a',
-      index: 2,
-      effectId: 'base.room.training-fields-a.slot-3',
-    }),
+    {
+      ...regularSlot({
+        id: 'base.room.training-fields.a.slot-2',
+        roomId: 'base.room.training-fields.a',
+        index: 1,
+        effectId: 'base.room.training-fields-a.slot-2',
+      }),
+      description: 'Gain 1 INT.',
+    },
+    {
+      ...regularSlot({
+        id: 'base.room.training-fields.a.slot-3',
+        roomId: 'base.room.training-fields.a',
+        index: 2,
+        effectId: 'base.room.training-fields-a.slot-3',
+      }),
+      description: 'Gain 1 WIS.',
+    },
   ],
 };
 
@@ -669,6 +717,7 @@ const guildsA: Room = {
   isInstantRoom: true,
   cannotBePlacedInDirectly: false,
   cannotBeLocked: false,
+  description: 'Instant room — slot effects resolve at placement.',
   actionSpaces: [
     {
       id: 'base.room.guilds.a.slot-1',
@@ -678,19 +727,26 @@ const guildsA: Room = {
       occupant: null,
       effectId: 'base.room.guilds-a.slot-1',
       costToActivate: { meritBadges: 1 },
+      description: 'Immediately gain either 6 Gold OR 3 Mana.',
     },
-    regularSlot({
-      id: 'base.room.guilds.a.slot-2',
-      roomId: 'base.room.guilds.a',
-      index: 1,
-      effectId: 'base.room.guilds-a.slot-2',
-    }),
-    regularSlot({
-      id: 'base.room.guilds.a.slot-3',
-      roomId: 'base.room.guilds.a',
-      index: 2,
-      effectId: 'base.room.guilds-a.slot-3',
-    }),
+    {
+      ...regularSlot({
+        id: 'base.room.guilds.a.slot-2',
+        roomId: 'base.room.guilds.a',
+        index: 1,
+        effectId: 'base.room.guilds-a.slot-2',
+      }),
+      description: 'Immediately gain either 4 Gold OR 2 Mana.',
+    },
+    {
+      ...regularSlot({
+        id: 'base.room.guilds.a.slot-3',
+        roomId: 'base.room.guilds.a',
+        index: 2,
+        effectId: 'base.room.guilds-a.slot-3',
+      }),
+      description: 'Immediately gain either 2 Gold OR 1 Mana.',
+    },
   ],
 };
 
@@ -729,19 +785,26 @@ const catacombsA: Room = {
       occupant: null,
       effectId: 'base.room.catacombs-a.slot-1',
       costToActivate: { meritBadges: 1 },
+      description: 'Draw a Secret Supporter, then gain a Mark.',
     },
-    regularSlot({
-      id: 'base.room.catacombs.a.slot-2',
-      roomId: 'base.room.catacombs.a',
-      index: 1,
-      effectId: 'base.room.catacombs-a.slot-2',
-    }),
-    regularSlot({
-      id: 'base.room.catacombs.a.slot-3',
-      roomId: 'base.room.catacombs.a',
-      index: 2,
-      effectId: 'base.room.catacombs-a.slot-3',
-    }),
+    {
+      ...regularSlot({
+        id: 'base.room.catacombs.a.slot-2',
+        roomId: 'base.room.catacombs.a',
+        index: 1,
+        effectId: 'base.room.catacombs-a.slot-2',
+      }),
+      description: 'Gain 2 IP.',
+    },
+    {
+      ...regularSlot({
+        id: 'base.room.catacombs.a.slot-3',
+        roomId: 'base.room.catacombs.a',
+        index: 2,
+        effectId: 'base.room.catacombs-a.slot-3',
+      }),
+      description: 'Gain 1 IP for each player with more IP than you.',
+    },
   ],
 };
 
@@ -780,19 +843,26 @@ const courtyardA: Room = {
       occupant: null,
       effectId: 'base.room.courtyard-a.slot-1',
       costToActivate: { meritBadges: 1 },
+      description: 'Gain Mana equal to your (WIS + 2).',
     },
-    regularSlot({
-      id: 'base.room.courtyard.a.slot-2',
-      roomId: 'base.room.courtyard.a',
-      index: 1,
-      effectId: 'base.room.courtyard-a.slot-2',
-    }),
-    regularSlot({
-      id: 'base.room.courtyard.a.slot-3',
-      roomId: 'base.room.courtyard.a',
-      index: 2,
-      effectId: 'base.room.courtyard-a.slot-3',
-    }),
+    {
+      ...regularSlot({
+        id: 'base.room.courtyard.a.slot-2',
+        roomId: 'base.room.courtyard.a',
+        index: 1,
+        effectId: 'base.room.courtyard-a.slot-2',
+      }),
+      description: 'Gain Mana equal to your WIS.',
+    },
+    {
+      ...regularSlot({
+        id: 'base.room.courtyard.a.slot-3',
+        roomId: 'base.room.courtyard.a',
+        index: 2,
+        effectId: 'base.room.courtyard-a.slot-3',
+      }),
+      description: 'Gain 3 Mana.',
+    },
   ],
 };
 
@@ -821,6 +891,7 @@ const vaultASlot1: ActionSpace = {
   occupant: null,
   effectId: 'base.room.vault-a.slot-1',
   costToActivate: { meritBadges: 1 },
+  description: 'Draft a Vault Card AND Gain 4 Gold.',
 };
 
 const vaultASlot2: ActionSpace = {
@@ -830,6 +901,7 @@ const vaultASlot2: ActionSpace = {
   slotType: 'regular',
   occupant: null,
   effectId: 'base.room.vault-a.slot-2',
+  description: 'Draft a Vault Card OR Gain 5 Gold.',
 };
 
 const vaultASlot3: ActionSpace = {
@@ -839,6 +911,7 @@ const vaultASlot3: ActionSpace = {
   slotType: 'regular',
   occupant: null,
   effectId: 'base.room.vault-a.slot-3',
+  description: 'Gain 3 Gold.',
 };
 
 const vaultA: Room = {
@@ -865,49 +938,9 @@ const vaultB: Room = {
   actionSpaces: [],
 };
 
-interface RoomPairOpts {
-  baseId: string;
-  name: string;
-  isUniversityCentral?: boolean;
-  isInstantRoom?: { a?: boolean; b?: boolean };
-  cannotBePlacedInDirectly?: boolean;
-  cannotBeLocked?: boolean;
-}
-
-function roomPair(opts: RoomPairOpts): Room[] {
-  const {
-    baseId,
-    name,
-    isUniversityCentral = false,
-    isInstantRoom = {},
-    cannotBePlacedInDirectly = false,
-    cannotBeLocked = false,
-  } = opts;
-  return [
-    {
-      id: `${baseId}.a`,
-      name,
-      sourcePackId: PACK_ID,
-      isUniversityCentral,
-      side: 'A',
-      isInstantRoom: isInstantRoom.a ?? false,
-      cannotBePlacedInDirectly,
-      cannotBeLocked,
-      actionSpaces: [],
-    },
-    {
-      id: `${baseId}.b`,
-      name,
-      sourcePackId: PACK_ID,
-      isUniversityCentral,
-      side: 'B',
-      isInstantRoom: isInstantRoom.b ?? false,
-      cannotBePlacedInDirectly,
-      cannotBeLocked,
-      actionSpaces: [],
-    },
-  ];
-}
+// (Helper for stub A/B room pairs removed — every room currently in the pack
+// has explicit A and B definitions. Re-add a helper here when we expand back
+// to placeholder rooms.)
 
 const rooms: Room[] = [
   // University Central — always present.
@@ -915,16 +948,13 @@ const rooms: Room[] = [
   councilChamberB,
   libraryA,
   libraryB,
-  ...roomPair({
-    baseId: 'base.room.infirmary',
-    name: 'Infirmary',
-    isUniversityCentral: true,
-    cannotBePlacedInDirectly: true,
-    cannotBeLocked: true,
-    isInstantRoom: { a: true, b: true },
-  }),
+  infirmaryA,
+  infirmaryB,
 
-  // Variable pool — 12 physical rooms.
+  // Variable pool — five physical rooms per the room file. (Chapel,
+  // Student Stores, Adventuring, Astronomy Tower, Great Hall, Archmage's
+  // Study, and Dormitory are not yet specified by content and so are
+  // omitted. Re-add them here when their slots are sourced.)
   trainingFieldsA,
   trainingFieldsB,
   courtyardA,
@@ -935,16 +965,6 @@ const rooms: Room[] = [
   guildsB,
   vaultA,
   vaultB,
-  ...roomPair({ baseId: 'base.room.chapel', name: 'Chapel' }),
-  ...roomPair({ baseId: 'base.room.student-stores', name: 'Student Stores' }),
-  ...roomPair({ baseId: 'base.room.adventuring', name: 'Adventuring' }),
-  ...roomPair({ baseId: 'base.room.astronomy-tower', name: 'Astronomy Tower' }),
-  ...roomPair({ baseId: 'base.room.great-hall', name: 'Great Hall' }),
-  ...roomPair({
-    baseId: 'base.room.archmages-study',
-    name: "Archmage's Study",
-  }),
-  ...roomPair({ baseId: 'base.room.dormitory', name: 'Dormitory' }),
 ];
 
 // ============================================================================

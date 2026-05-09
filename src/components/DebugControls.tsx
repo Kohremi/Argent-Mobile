@@ -1087,7 +1087,7 @@ function RoomsPanel({ state }: { state: GameState }) {
   return (
     <section>
       <h2 className="text-lg font-medium mb-2">Tower ({state.rooms.length} rooms)</h2>
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
         {state.rooms.map((room, ri) => {
           const isCurrent =
             state.phase.kind === 'resolution' && state.phase.pendingRoomIndex === ri;
@@ -1095,40 +1095,90 @@ function RoomsPanel({ state }: { state: GameState }) {
             <div
               key={room.id}
               className={clsx(
-                'rounded border p-2 text-xs',
+                'rounded border p-3 text-xs space-y-1',
                 isCurrent
                   ? 'border-amber-400 bg-amber-400/10'
                   : 'border-slate-700 bg-slate-900',
               )}
             >
-              <div className="font-medium">
-                {room.name} ({room.side})
+              <div className="flex items-baseline gap-2">
+                <span className="text-sm font-medium">{room.name}</span>
+                <span className="text-slate-500">side {room.side}</span>
                 {room.isUniversityCentral && (
-                  <span className="ml-1 text-slate-500">UC</span>
+                  <span className="text-[10px] uppercase tracking-wide text-amber-300/70">
+                    UC
+                  </span>
                 )}
                 {room.isInstantRoom && (
-                  <span className="ml-1 text-slate-500">instant</span>
+                  <span className="text-[10px] uppercase tracking-wide text-purple-300/70">
+                    instant
+                  </span>
+                )}
+                {room.maxMagesPerPlayerPerRound !== undefined && (
+                  <span className="text-[10px] uppercase tracking-wide text-slate-400">
+                    max {room.maxMagesPerPlayerPerRound}/round
+                  </span>
                 )}
               </div>
-              <div className="text-slate-500">
-                {room.actionSpaces.length} slot{room.actionSpaces.length === 1 ? '' : 's'}
-              </div>
-              {room.actionSpaces.map((s) => (
-                <div
-                  key={s.id}
-                  className={clsx(
-                    'text-[10px]',
-                    s.occupant ? 'text-amber-300' : 'text-slate-500',
-                  )}
-                >
-                  · {s.id.split('.').pop()} · {s.slotType} ·{' '}
-                  {s.occupant
-                    ? `[${s.occupant.ownerId} / ${s.occupant.mageId.slice(-8)}${
-                        s.occupant.isShadowing ? ' shadow' : ''
-                      }]`
-                    : 'empty'}
-                </div>
-              ))}
+              {room.description && (
+                <p className="text-[11px] text-slate-300 italic">
+                  {room.description}
+                </p>
+              )}
+              {room.actionSpaces.length === 0 ? (
+                <p className="text-[10px] text-slate-500 italic">
+                  no action spaces (or specials handled elsewhere)
+                </p>
+              ) : (
+                <ul className="space-y-1">
+                  {room.actionSpaces.map((s) => {
+                    const slotIndex = (s.id.split('.').pop() ?? '').replace(
+                      'slot-',
+                      'Slot ',
+                    );
+                    return (
+                      <li
+                        key={s.id}
+                        className={clsx(
+                          'text-[11px] leading-snug rounded px-1.5 py-1',
+                          s.occupant
+                            ? 'bg-amber-400/10 text-amber-200'
+                            : 'bg-slate-950/40 text-slate-300',
+                        )}
+                      >
+                        <div className="flex items-baseline gap-2">
+                          <span className="font-medium text-slate-200">
+                            {slotIndex}
+                          </span>
+                          <span className="text-[10px] uppercase tracking-wide text-slate-500">
+                            {s.slotType}
+                          </span>
+                          {s.costToActivate?.meritBadges && (
+                            <span className="text-[10px] uppercase tracking-wide text-orange-300/70">
+                              cost: {s.costToActivate.meritBadges} MB
+                            </span>
+                          )}
+                        </div>
+                        {s.description && (
+                          <div className="text-slate-300/90">{s.description}</div>
+                        )}
+                        <div
+                          className={clsx(
+                            'text-[10px]',
+                            s.occupant ? 'text-amber-300' : 'text-slate-500',
+                          )}
+                        >
+                          {s.occupant
+                            ? `occupied by ${s.occupant.ownerId} / ${s.occupant.mageId.slice(-8)}${
+                                s.occupant.isShadowing ? ' (shadow)' : ''
+                              }`
+                            : 'empty'}
+                        </div>
+                      </li>
+                    );
+                  })}
+                </ul>
+              )}
             </div>
           );
         })}

@@ -19,36 +19,11 @@ const MIN_PLAYERS = 2;
 const MAX_PLAYERS = 6;
 
 /**
- * Number of physical rooms drawn from the variable pool, by player count
- * (per rulebook clarification). Total rooms in play = this + 3 University
- * Central rooms.
- *
- *   2p: 6 (3 + 6 = 9 — uses the 2-player 3×3 layout variant)
- *   3p: 5 (3 + 5 = 8)
- *   4p: 7 (3 + 7 = 10)
- *   5p: 9 (3 + 9 = 12)
- *
- * 6p assumes Mancers content active and reuses 5p count for now.
+ * Validates that every physical room has both A and B definitions in the
+ * pack data. Currently we only return side A (B sides are stubs); this check
+ * exists to catch malformed content.
  */
-function variableRoomCount(playerCount: number): number {
-  switch (playerCount) {
-    case 2:
-      return 6;
-    case 3:
-      return 5;
-    case 4:
-      return 7;
-    case 5:
-      return 9;
-    case 6:
-      return 9;
-    default:
-      throw new Error(`Unsupported player count: ${playerCount}`);
-  }
-}
-
-/** Groups Rooms by physical room (id with `.a`/`.b` stripped). */
-function groupRoomsByPhysical(rooms: Room[]): [Room, Room][] {
+function assertEveryRoomHasBothSides(rooms: Room[]): void {
   const map = new Map<string, { a?: Room; b?: Room }>();
   for (const r of rooms) {
     const baseId = r.id.replace(/\.[ab]$/, '');
@@ -57,69 +32,21 @@ function groupRoomsByPhysical(rooms: Room[]): [Room, Room][] {
     else entry.b = r;
     map.set(baseId, entry);
   }
-  const result: [Room, Room][] = [];
   for (const [baseId, entry] of map) {
     if (!entry.a || !entry.b) {
       throw new Error(`Room "${baseId}" must declare both A and B sides`);
     }
-    result.push([entry.a, entry.b]);
   }
-  return result;
-}
-
-function isDormitoryPair(pair: [Room, Room]): boolean {
-  return pair[0].id.includes('dormitory');
-}
-
-function isGreatHallPair(pair: [Room, Room]): boolean {
-  return pair[0].id.includes('great-hall');
-}
-
-function isInfirmaryPair(pair: [Room, Room]): boolean {
-  return pair[0].id.includes('infirmary');
-}
-
-/**
- * 2-player variant filters per rulebook:
- *  - Dormitory excluded entirely.
- *  - Great Hall: only side B can be used (force B by replacing the A entry).
- *  - Infirmary: always side B (force B in the UC pair).
- *
- * Returns separate UC + variable lists so the caller can apply player-count
- * draws without mixing.
- */
-function applyTwoPlayerVariant(pairs: [Room, Room][]): [Room, Room][] {
-  return pairs
-    .filter((pair) => !isDormitoryPair(pair))
-    .map<[Room, Room]>((pair) => {
-      // For the rooms we want to lock to side B, replace the A slot with the
-      // B room so the random side pick later resolves to B regardless.
-      if (isGreatHallPair(pair) || isInfirmaryPair(pair)) {
-        return [pair[1], pair[1]];
-      }
-      return pair;
-    });
 }
 
 /**
  * Builds a fresh, valid GameState from the user's setup choices.
  *
- * Wired up:
- *   - Players with empty resource bundles (resource grants per candidate are
- *     deferred until candidate draft).
- *   - Random first player.
- *   - Variable room set: 3 University Central + N from variable pool;
- *     A/B side picked randomly per physical room. 2p variant applies its
- *     specific filters.
- *   - Voters: 2 always-face-up + 10 from face-down pool; 2p removes the
- *     second-place voters before drawing.
- *   - Bell Tower filtered by player count threshold.
- *   - Spell / Vault / Supporter decks shuffled; opening tableaus dealt.
- *
- * Deferred:
- *   - Candidate draft (each player's `candidateId` is `''`).
- *   - Mage allocation (5 mages base / 7 in 2p variant).
- *   - Starting hand / resource grants per candidate.
+ * Room layout: every room from the active packs is included, on side A. The
+ * earlier random "draw N variable rooms" / per-player-count logic was removed
+ * — content is now restricted to the rooms in `argent details.txt`, and the
+ * user wants every one visible at game start. Side B variants are kept in
+ * the data (for the 2p Infirmary B rule and future wiring) but not selected.
  */
 export function buildInitialState(config: GameConfig): GameState {
   const { activePackIds, playerNames, rngSeed } = config;
@@ -142,6 +69,8 @@ export function buildInitialState(config: GameConfig): GameState {
   const allSupporters = packs.flatMap((p) => p.supporters);
   const allVoters = packs.flatMap((p) => p.voters);
   const allBellTower = packs.flatMap((p) => p.bellTowerCards);
+
+  assertEveryRoomHasBothSides(allRooms);
 
   let rng = createRngState(rngSeed);
 
@@ -169,32 +98,8 @@ export function buildInitialState(config: GameConfig): GameState {
   rng = firstStep.state;
   const firstPlayerIndex = Math.floor(firstStep.value * playerCount);
 
-  // ---- Rooms ----
-  let physicalRooms = groupRoomsByPhysical(allRooms);
-  if (playerCount === 2) {
-    physicalRooms = applyTwoPlayerVariant(physicalRooms);
-  }
-  const universityCentralPairs = physicalRooms.filter(
-    (pair) => pair[0].isUniversityCentral,
-  );
-  const variablePairs = physicalRooms.filter(
-    (pair) => !pair[0].isUniversityCentral,
-  );
-
-  const targetVariableCount = variableRoomCount(playerCount);
-  const shuffledVariable = shuffleWithState(variablePairs, rng);
-  rng = shuffledVariable.state;
-  const drawnVariable = shuffledVariable.value.slice(0, targetVariableCount);
-
-  // Pick A or B side for each room in play. (For 2p-locked rooms, the pair
-  // is already [B, B] so the pick doesn't matter.)
-  const rooms: Room[] = [];
-  for (const pair of [...universityCentralPairs, ...drawnVariable]) {
-    const sideStep = nextRandom(rng);
-    rng = sideStep.state;
-    const picked = sideStep.value < 0.5 ? pair[0] : pair[1];
-    rooms.push(picked);
-  }
+  // ---- Rooms — every side-A room from the active packs, in declaration order. ----
+  const rooms: Room[] = allRooms.filter((r) => r.side === 'A');
 
   // ---- Voters ----
   let faceDownPool = allVoters.filter((v) => !v.isAlwaysFaceUp);

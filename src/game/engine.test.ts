@@ -226,15 +226,52 @@ describe('determinism', () => {
     expect(drive()).toEqual(drive());
   });
 
-  it('different seeds produce different room layouts', () => {
+  it('different seeds produce different voter draws', () => {
+    // Room layout is deterministic now (every room from the pack is always
+    // included on side A), but voter draws still pull from the seeded RNG.
     const a = initGame({ ...FOUR_PLAYER_CONFIG, rngSeed: 1 });
     const b = initGame({ ...FOUR_PLAYER_CONFIG, rngSeed: 2 });
-    // With distinct seeds the variable room draw should differ in either id
-    // or side selection. (Not strictly guaranteed by every two seeds, but
-    // exceptionally unlikely to coincide for these.)
-    const aIds = a.rooms.map((r) => r.id).join(',');
-    const bIds = b.rooms.map((r) => r.id).join(',');
+    const aIds = a.voters.map((v) => v.id).join(',');
+    const bIds = b.voters.map((v) => v.id).join(',');
     expect(aIds).not.toEqual(bIds);
+  });
+});
+
+describe('Room layout', () => {
+  it('seats every side-A room from the room file at game start', () => {
+    const s = initGame(FOUR_PLAYER_CONFIG);
+    const expectedSideARoomIds = [
+      'base.room.council-chamber.a',
+      'base.room.library.a',
+      'base.room.infirmary.a',
+      'base.room.training-fields.a',
+      'base.room.courtyard.a',
+      'base.room.catacombs.a',
+      'base.room.guilds.a',
+      'base.room.vault.a',
+    ];
+    const actualIds = s.rooms.map((r) => r.id).sort();
+    expect(actualIds).toEqual([...expectedSideARoomIds].sort());
+    // Every room is on side A (B sides are stubs).
+    expect(s.rooms.every((r) => r.side === 'A')).toBe(true);
+  });
+
+  it('every actionable slot has a description', () => {
+    const s = initGame(FOUR_PLAYER_CONFIG);
+    for (const room of s.rooms) {
+      // Infirmary's instant-room behavior lives at the room level; its
+      // slot list is intentionally empty.
+      if (room.cannotBePlacedInDirectly) continue;
+      for (const slot of room.actionSpaces) {
+        expect(slot.description, `${slot.id} missing description`).toBeTruthy();
+      }
+    }
+  });
+
+  it('Infirmary carries the on-wound description at the room level', () => {
+    const s = initGame(FOUR_PLAYER_CONFIG);
+    const infirmary = s.rooms.find((r) => r.name === 'Infirmary');
+    expect(infirmary?.description).toMatch(/wounded mages move here/i);
   });
 });
 

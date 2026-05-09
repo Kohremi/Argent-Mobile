@@ -313,6 +313,8 @@ export interface ActionSpace {
   occupant: WorkerOccupancy | null;
   effectId: EffectId;
   costToActivate?: ActionSpaceCost;
+  /** Human-readable summary of the slot's reward, sourced from the room file. */
+  description?: string;
 }
 
 export interface Room {
@@ -332,6 +334,8 @@ export interface Room {
    * `Player.roundPlacements`. Unset = unlimited.
    */
   maxMagesPerPlayerPerRound?: number;
+  /** Free-form room description (e.g., Infirmary's on-wound rules). */
+  description?: string;
 }
 
 // ============================================================================
