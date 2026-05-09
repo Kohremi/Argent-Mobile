@@ -3,8 +3,7 @@
 
 import { registerEffect } from './registry';
 import {
-  affordableVaultCards,
-  applyVaultPurchase,
+  applyVaultDraft,
   buildArsMagnaTargets,
   buildBurnTargets,
   buildReactionQueue,
@@ -263,38 +262,130 @@ function applyPhaseSteppers(
 }
 
 // ============================================================================
-// Vault A — buy a card from the tableau
+// Vault A — three slots per the room file:
+//   Slot 1 (merit, costs 1 MB to place): Draft a Vault Card AND Gain 4 Gold
+//   Slot 2 (regular):                    Draft a Vault Card OR Gain 5 Gold
+//   Slot 3 (regular):                    Gain 3 Gold
 // ============================================================================
 
-registerEffect('base.room.vault-a.buy', (ctx: EffectContext): EffectResult => {
+/** Vault A slot 1 — merit. Draft + 4 gold. Merit cost paid at placement. */
+registerEffect('base.room.vault-a.slot-1', (ctx: EffectContext): EffectResult => {
   if (!ctx.resumeAnswer) {
-    const eligibleCardIds = affordableVaultCards(ctx.state, ctx.triggeringPlayerId);
-    if (eligibleCardIds.length === 0) {
-      // Nothing affordable — slot resolves with no purchase.
-      return { kind: 'done', patch: {} };
+    if (ctx.state.vaultTableau.length === 0) {
+      // No card to draft — still get the gold.
+      return {
+        kind: 'done',
+        patch: gainResourcePatch(ctx.state, ctx.triggeringPlayerId, 'gold', 4),
+      };
     }
     return {
       kind: 'pause',
       pending: {
         responderId: ctx.triggeringPlayerId,
-        prompt: { kind: 'choose-vault-card', eligibleCardIds },
-        resume: { effectId: 'base.room.vault-a.buy', context: {} },
+        prompt: {
+          kind: 'choose-vault-card',
+          eligibleCardIds: [...ctx.state.vaultTableau],
+        },
+        resume: { effectId: 'base.room.vault-a.slot-1', context: {} },
         source: ctx.source,
       },
     };
   }
   if (ctx.resumeAnswer.kind !== 'card-chosen') {
     throw new Error(
-      `base.room.vault-a.buy expected card-chosen, got ${ctx.resumeAnswer.kind}`,
+      `vault-a.slot-1 expected card-chosen, got ${ctx.resumeAnswer.kind}`,
     );
   }
+  let working = ctx.state;
+  working = {
+    ...working,
+    ...applyVaultDraft(working, ctx.triggeringPlayerId, ctx.resumeAnswer.cardId),
+  };
+  working = {
+    ...working,
+    ...gainResourcePatch(working, ctx.triggeringPlayerId, 'gold', 4),
+  };
   return {
     kind: 'done',
-    patch: applyVaultPurchase(
-      ctx.state,
-      ctx.triggeringPlayerId,
-      ctx.resumeAnswer.cardId,
-    ),
+    patch: { players: working.players, vaultTableau: working.vaultTableau },
+  };
+});
+
+/** Vault A slot 2 — regular. Draft a Vault Card OR Gain 5 Gold. */
+registerEffect('base.room.vault-a.slot-2', (ctx: EffectContext): EffectResult => {
+  if (!ctx.resumeAnswer) {
+    return {
+      kind: 'pause',
+      pending: {
+        responderId: ctx.triggeringPlayerId,
+        prompt: {
+          kind: 'choose-from-options',
+          options: [
+            { id: 'draft', label: 'Draft a Vault Card', payload: {} },
+            { id: 'gold', label: 'Gain 5 Gold', payload: {} },
+          ],
+        },
+        resume: { effectId: 'base.room.vault-a.slot-2', context: { step: 'or' } },
+        source: ctx.source,
+      },
+    };
+  }
+
+  const step = ctx.resumeContext?.['step'];
+  if (step === 'or') {
+    if (ctx.resumeAnswer.kind !== 'option-chosen') {
+      throw new Error(`vault-a.slot-2 OR expected option-chosen`);
+    }
+    if (ctx.resumeAnswer.optionId === 'gold') {
+      return {
+        kind: 'done',
+        patch: gainResourcePatch(ctx.state, ctx.triggeringPlayerId, 'gold', 5),
+      };
+    }
+    if (ctx.resumeAnswer.optionId === 'draft') {
+      if (ctx.state.vaultTableau.length === 0) {
+        // No tableau cards — silently no-op. (Player already passed on gold.)
+        return { kind: 'done', patch: {} };
+      }
+      return {
+        kind: 'pause',
+        pending: {
+          responderId: ctx.triggeringPlayerId,
+          prompt: {
+            kind: 'choose-vault-card',
+            eligibleCardIds: [...ctx.state.vaultTableau],
+          },
+          resume: {
+            effectId: 'base.room.vault-a.slot-2',
+            context: { step: 'pick' },
+          },
+          source: ctx.source,
+        },
+      };
+    }
+    throw new Error(`vault-a.slot-2 unknown option: ${ctx.resumeAnswer.optionId}`);
+  }
+  if (step === 'pick') {
+    if (ctx.resumeAnswer.kind !== 'card-chosen') {
+      throw new Error(`vault-a.slot-2 pick expected card-chosen`);
+    }
+    return {
+      kind: 'done',
+      patch: applyVaultDraft(
+        ctx.state,
+        ctx.triggeringPlayerId,
+        ctx.resumeAnswer.cardId,
+      ),
+    };
+  }
+  throw new Error(`vault-a.slot-2 unexpected step: ${String(step)}`);
+});
+
+/** Vault A slot 3 — regular. Gain 3 Gold. */
+registerEffect('base.room.vault-a.slot-3', (ctx: EffectContext): EffectResult => {
+  return {
+    kind: 'done',
+    patch: gainResourcePatch(ctx.state, ctx.triggeringPlayerId, 'gold', 3),
   };
 });
 

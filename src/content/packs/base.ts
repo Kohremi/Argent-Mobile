@@ -373,28 +373,28 @@ const libraryB: Room = {
   actionSpaces: [],
 };
 
-// Vault A — Treasure-buy room. Three slots, all using the same buy effect.
-// Slot 2 is a Merit slot (placement costs 1 Merit Badge); slots 1 and 3 are
-// regular. Real Argent has slot priority bonuses (1st pick / 2nd pick / etc.)
-// — those are TODO; for now all three slots present the same buy prompt.
+// Vault A — three distinct slot effects per the room file:
+//   Slot 1 (merit, costs 1 MB to place): Draft a Vault Card AND Gain 4 Gold
+//   Slot 2 (regular):                    Draft a Vault Card OR Gain 5 Gold
+//   Slot 3 (regular):                    Gain 3 Gold
 
 const vaultASlot1: ActionSpace = {
   id: 'base.room.vault.a.slot-1',
   roomId: 'base.room.vault.a',
   index: 0,
-  slotType: 'regular',
+  slotType: 'merit',
   occupant: null,
-  effectId: 'base.room.vault-a.buy',
+  effectId: 'base.room.vault-a.slot-1',
+  costToActivate: { meritBadges: 1 },
 };
 
 const vaultASlot2: ActionSpace = {
   id: 'base.room.vault.a.slot-2',
   roomId: 'base.room.vault.a',
   index: 1,
-  slotType: 'merit',
+  slotType: 'regular',
   occupant: null,
-  effectId: 'base.room.vault-a.buy',
-  costToActivate: { meritBadges: 1 },
+  effectId: 'base.room.vault-a.slot-2',
 };
 
 const vaultASlot3: ActionSpace = {
@@ -403,7 +403,7 @@ const vaultASlot3: ActionSpace = {
   index: 2,
   slotType: 'regular',
   occupant: null,
-  effectId: 'base.room.vault-a.buy',
+  effectId: 'base.room.vault-a.slot-3',
 };
 
 const vaultA: Room = {

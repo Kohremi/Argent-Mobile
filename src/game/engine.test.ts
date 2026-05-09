@@ -891,7 +891,7 @@ describe('PLACE_WORKER', () => {
         type: 'PLACE_WORKER',
         playerId: 'p1',
         mageId: 'alice-mage-1',
-        actionSpaceId: 'base.room.vault.a.slot-2',
+        actionSpaceId: 'base.room.vault.a.slot-1',
       }),
     ).toThrow(/insufficient Merit Badges/);
   });
@@ -910,13 +910,13 @@ describe('PLACE_WORKER', () => {
       type: 'PLACE_WORKER',
       playerId: 'p1',
       mageId: 'alice-mage-1',
-      actionSpaceId: 'base.room.vault.a.slot-2',
+      actionSpaceId: 'base.room.vault.a.slot-1',
     });
     const alice = s.players.find((p) => p.id === 'p1');
     expect(alice?.resources.meritBadges).toBe(1);
     expect(alice?.resources.meritBadgesSpent).toBe(1);
     const vault = findRoom(s, (r) => r.name === 'Vault');
-    expect(vault.actionSpaces[1]?.occupant?.mageId).toBe('alice-mage-1');
+    expect(vault.actionSpaces[0]?.occupant?.mageId).toBe('alice-mage-1');
   });
 
   it('rejects placement directly into the Infirmary', () => {
@@ -964,75 +964,133 @@ describe('PLACE_WORKER', () => {
 });
 
 // ============================================================================
-// Vertical Slice 3a — Vault A (buy a vault card during resolution)
+// Vertical Slice 3a — Vault A (per the room file)
 // ============================================================================
 
-describe('Vault A buy slot vertical slice', () => {
-  function setupVaultBuyTest(opts: { gold?: number } = {}): GameState {
-    let s = initGame(TWO_PLAYER_CONFIG);
-    s = forceVaultSideA(s);
-    s = addMage(s, 'p1', {
-      id: 'alice-mage-1',
-      cardId: 'base.mage.divinity',
-      color: 'blue',
-    });
-    s = placeMageOnSpace(s, 'p1', 'alice-mage-1', 'base.room.vault.a.slot-1');
-    s = setGold(s, 'p1', opts.gold ?? 5);
-    s = setVaultTableau(s, [
-      'base.vault.placeholder-treasure-1', // 2g
-      'base.vault.placeholder-treasure-2', // 4g
-      'base.vault.phase-steppers',         // 3g
-    ]);
-    s = { ...s, bellTower: { ...s.bellTower, available: [] } };
-    return s;
-  }
+function setupVaultSlotTest(slotId: string): GameState {
+  let s = initGame(TWO_PLAYER_CONFIG);
+  s = forceVaultSideA(s);
+  s = addMage(s, 'p1', {
+    id: 'alice-mage-1',
+    cardId: 'base.mage.divinity',
+    color: 'blue',
+  });
+  s = placeMageOnSpace(s, 'p1', 'alice-mage-1', slotId);
+  s = setVaultTableau(s, [
+    'base.vault.placeholder-treasure-1',
+    'base.vault.placeholder-treasure-2',
+    'base.vault.phase-steppers',
+  ]);
+  s = { ...s, bellTower: { ...s.bellTower, available: [] } };
+  return s;
+}
 
-  it('resolution surfaces choose-vault-card with affordable cards', () => {
-    let s = setupVaultBuyTest({ gold: 3 });
-    s = applyAction(s, { type: 'ADVANCE_PHASE' }); // round-setup → errands
-    s = applyAction(s, { type: 'ADVANCE_PHASE' }); // errands → resolution
-    s = applyAction(s, { type: 'ADVANCE_PHASE' }); // pump → vault buy → pause
-    expect(s.phase.kind).toBe('resolution');
+function driveToVaultPrompt(state: GameState): GameState {
+  let s = state;
+  s = applyAction(s, { type: 'ADVANCE_PHASE' }); // round-setup → errands
+  s = applyAction(s, { type: 'ADVANCE_PHASE' }); // errands → resolution
+  s = applyAction(s, { type: 'ADVANCE_PHASE' }); // pump → slot effect
+  return s;
+}
+
+describe('Vault A slot 3 (Gain 3 Gold)', () => {
+  it('grants 3 gold with no prompt', () => {
+    let s = setupVaultSlotTest('base.room.vault.a.slot-3');
+    s = setGold(s, 'p1', 0);
+    s = driveToVaultPrompt(s);
+    expect(s.pendingResolutionStack).toHaveLength(0);
+    const alice = s.players.find((p) => p.id === 'p1');
+    expect(alice?.resources.gold).toBe(3);
+    const aliceMage = findMageById(s, 'alice-mage-1');
+    expect(aliceMage.location).toEqual({ kind: 'office', playerId: 'p1' });
+  });
+});
+
+describe('Vault A slot 2 (Draft a Vault Card OR Gain 5 Gold)', () => {
+  it('opens an OR prompt with two options', () => {
+    let s = setupVaultSlotTest('base.room.vault.a.slot-2');
+    s = driveToVaultPrompt(s);
     const top = topPending(s);
-    expect(top.prompt.kind).toBe('choose-vault-card');
-    if (top.prompt.kind === 'choose-vault-card') {
-      // 2g and 3g are affordable; 4g is not.
-      expect(top.prompt.eligibleCardIds.sort()).toEqual([
-        'base.vault.phase-steppers',
-        'base.vault.placeholder-treasure-1',
-      ]);
+    expect(top.prompt.kind).toBe('choose-from-options');
+    if (top.prompt.kind === 'choose-from-options') {
+      expect(top.prompt.options.map((o) => o.id).sort()).toEqual(['draft', 'gold']);
     }
   });
 
-  it('resolving with a vault card moves it to the player and deducts gold', () => {
-    let s = setupVaultBuyTest({ gold: 5 });
-    s = applyAction(s, { type: 'ADVANCE_PHASE' });
-    s = applyAction(s, { type: 'ADVANCE_PHASE' });
-    s = applyAction(s, { type: 'ADVANCE_PHASE' });
-    const top = topPending(s);
+  it('picking gold grants 5 gold and resolves', () => {
+    let s = setupVaultSlotTest('base.room.vault.a.slot-2');
+    s = setGold(s, 'p1', 0);
+    s = driveToVaultPrompt(s);
     s = applyAction(s, {
       type: 'RESOLVE_PENDING',
-      resolutionId: top.id,
+      resolutionId: topPending(s).id,
+      answer: { kind: 'option-chosen', optionId: 'gold', payload: {} },
+    });
+    expect(s.pendingResolutionStack).toHaveLength(0);
+    const alice = s.players.find((p) => p.id === 'p1');
+    expect(alice?.resources.gold).toBe(5);
+    expect(alice?.vaultCards).toHaveLength(0);
+  });
+
+  it('picking draft chains to choose-vault-card and grants the card with no gold', () => {
+    let s = setupVaultSlotTest('base.room.vault.a.slot-2');
+    s = setGold(s, 'p1', 1);
+    s = driveToVaultPrompt(s);
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'option-chosen', optionId: 'draft', payload: {} },
+    });
+    const draftPrompt = topPending(s);
+    expect(draftPrompt.prompt.kind).toBe('choose-vault-card');
+    if (draftPrompt.prompt.kind === 'choose-vault-card') {
+      // Draft has no affordability filter — every tableau card is eligible.
+      expect(draftPrompt.prompt.eligibleCardIds).toHaveLength(3);
+    }
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: draftPrompt.id,
       answer: { kind: 'card-chosen', cardId: 'base.vault.placeholder-treasure-2' },
     });
     const alice = s.players.find((p) => p.id === 'p1');
-    expect(alice?.resources.gold).toBe(1); // 5 - 4
+    expect(alice?.resources.gold).toBe(1); // unchanged — drafts don't cost gold
     expect(alice?.vaultCards).toEqual([
       { cardId: 'base.vault.placeholder-treasure-2', exhausted: false },
     ]);
     expect(s.vaultTableau).not.toContain('base.vault.placeholder-treasure-2');
-    expect(s.pendingResolutionStack).toHaveLength(0);
+  });
+});
+
+describe('Vault A slot 1 (Draft a Vault Card AND Gain 4 Gold)', () => {
+  it('opens choose-vault-card without affordability filter, then grants card + 4 gold', () => {
+    let s = setupVaultSlotTest('base.room.vault.a.slot-1');
+    s = setGold(s, 'p1', 0);
+    s = driveToVaultPrompt(s);
+    const draftPrompt = topPending(s);
+    expect(draftPrompt.prompt.kind).toBe('choose-vault-card');
+    if (draftPrompt.prompt.kind === 'choose-vault-card') {
+      expect(draftPrompt.prompt.eligibleCardIds).toHaveLength(3);
+    }
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: draftPrompt.id,
+      answer: { kind: 'card-chosen', cardId: 'base.vault.placeholder-treasure-1' },
+    });
+    const alice = s.players.find((p) => p.id === 'p1');
+    expect(alice?.resources.gold).toBe(4);
+    expect(alice?.vaultCards).toEqual([
+      { cardId: 'base.vault.placeholder-treasure-1', exhausted: false },
+    ]);
   });
 
-  it('vault slot resolves with no purchase if nothing is affordable', () => {
-    let s = setupVaultBuyTest({ gold: 0 });
-    s = applyAction(s, { type: 'ADVANCE_PHASE' });
-    s = applyAction(s, { type: 'ADVANCE_PHASE' });
-    s = applyAction(s, { type: 'ADVANCE_PHASE' });
-    // No prompt produced; mage just returns to office.
+  it('still grants 4 gold when the tableau is empty', () => {
+    let s = setupVaultSlotTest('base.room.vault.a.slot-1');
+    s = setVaultTableau(s, []);
+    s = setGold(s, 'p1', 0);
+    s = driveToVaultPrompt(s);
     expect(s.pendingResolutionStack).toHaveLength(0);
-    const aliceMage = findMageById(s, 'alice-mage-1');
-    expect(aliceMage.location).toEqual({ kind: 'office', playerId: 'p1' });
+    const alice = s.players.find((p) => p.id === 'p1');
+    expect(alice?.resources.gold).toBe(4);
   });
 });
 
@@ -1279,7 +1337,7 @@ describe('Ars Magna (Sorcery Mage power)', () => {
     // Place Bob's mage on the merit slot directly (bypass placement cost
     // for setup; the engine doesn't validate placements created via
     // placeMageOnSpace test helper).
-    s = placeMageOnSpace(s, 'p2', 'bob-mage', 'base.room.vault.a.slot-2');
+    s = placeMageOnSpace(s, 'p2', 'bob-mage', 'base.room.vault.a.slot-1');
     s = { ...s, firstPlayerIndex: 0, phase: { kind: 'errands', round: 1, activePlayerIndex: 0 } };
 
     s = applyAction(s, {
@@ -1304,7 +1362,7 @@ describe('Ars Magna (Sorcery Mage power)', () => {
     const aliceRed = findMageById(s, 'alice-red');
     expect(aliceRed.location).toEqual({
       kind: 'action-space',
-      spaceId: 'base.room.vault.a.slot-2',
+      spaceId: 'base.room.vault.a.slot-1',
     });
     const alice = s.players.find((p) => p.id === 'p1');
     expect(alice?.resources.meritBadges).toBe(0);

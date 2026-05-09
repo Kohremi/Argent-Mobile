@@ -280,6 +280,37 @@ export function findActionSpace(
  * Tableau slots are NOT auto-refilled here — Argent's tableau is refreshed
  * during round-setup, not after every purchase.
  */
+/**
+ * Drafts a Vault card from the tableau into a player's office. Same as a
+ * purchase but with no gold cost — used by Vault A slot 1 ("Draft a Vault
+ * Card AND Gain 4 Gold") and Vault A slot 2's draft branch.
+ *
+ * Tableau slots are NOT auto-refilled — refresh happens at round-setup.
+ */
+export function applyVaultDraft(
+  state: GameState,
+  playerId: PlayerId,
+  cardId: VaultCardId,
+): GameStatePatch {
+  if (!state.vaultTableau.includes(cardId)) {
+    throw new Error(`vault draft: ${cardId} not in vault tableau`);
+  }
+  if (!lookupVaultCardDef(state, cardId)) {
+    throw new Error(`vault draft: ${cardId} not in active packs`);
+  }
+  return {
+    players: state.players.map((p) =>
+      p.id !== playerId
+        ? p
+        : {
+            ...p,
+            vaultCards: [...p.vaultCards, { cardId, exhausted: false }],
+          },
+    ),
+    vaultTableau: state.vaultTableau.filter((c) => c !== cardId),
+  };
+}
+
 export function applyVaultPurchase(
   state: GameState,
   playerId: PlayerId,
