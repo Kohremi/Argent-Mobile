@@ -334,7 +334,8 @@ export function applyVaultDraft(
   playerId: PlayerId,
   cardId: VaultCardId,
 ): GameStatePatch {
-  if (!state.vaultTableau.includes(cardId)) {
+  const idx = state.vaultTableau.indexOf(cardId);
+  if (idx === -1) {
     throw new Error(`vault draft: ${cardId} not in vault tableau`);
   }
   if (!lookupVaultCardDef(state, cardId)) {
@@ -349,7 +350,10 @@ export function applyVaultDraft(
             vaultCards: [...p.vaultCards, { cardId, exhausted: false }],
           },
     ),
-    vaultTableau: state.vaultTableau.filter((c) => c !== cardId),
+    vaultTableau: [
+      ...state.vaultTableau.slice(0, idx),
+      ...state.vaultTableau.slice(idx + 1),
+    ],
   };
 }
 
@@ -362,7 +366,8 @@ export function applyVaultPurchase(
   if (!card) throw new Error(`vault purchase: ${cardId} not in active packs`);
   const player = findPlayer(state, playerId);
   if (!player) throw new Error(`vault purchase: player ${playerId} not found`);
-  if (!state.vaultTableau.includes(cardId)) {
+  const idx = state.vaultTableau.indexOf(cardId);
+  if (idx === -1) {
     throw new Error(`vault purchase: ${cardId} not in vault tableau`);
   }
   if (player.resources.gold < card.goldCost) {
@@ -381,7 +386,10 @@ export function applyVaultPurchase(
             vaultCards: [...p.vaultCards, { cardId, exhausted: false }],
           },
     ),
-    vaultTableau: state.vaultTableau.filter((c) => c !== cardId),
+    vaultTableau: [
+      ...state.vaultTableau.slice(0, idx),
+      ...state.vaultTableau.slice(idx + 1),
+    ],
   };
 }
 

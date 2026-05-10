@@ -1339,3 +1339,94 @@ registerEffect(
     );
   },
 );
+
+// ============================================================================
+// Vault cards — simple resource-gain and prompt-based effects.
+//
+// Mage manipulation, swap loops, refresh-spell, infirmary moves, multi-tap
+// mana spends, and Legendary research remain unregistered; PLAY_VAULT_CARD
+// on those throws "effect not registered" but the cards still exhaust /
+// discard and count for endgame scoring.
+// ============================================================================
+
+/** Mana Crystal (treasure, action) — Gain 2 Mana. */
+registerEffect(
+  'base.vault.mana-crystal',
+  (ctx): EffectResult => ({
+    kind: 'done',
+    patch: gainResourcePatch(ctx.state, ctx.triggeringPlayerId, 'mana', 2),
+  }),
+);
+
+/** Gilded Chalice (treasure, action) — Gain 2 IP. */
+registerEffect(
+  'base.vault.gilded-chalice',
+  (ctx): EffectResult => ({
+    kind: 'done',
+    patch: bumpInfluencePatch(ctx.state, ctx.triggeringPlayerId, 2),
+  }),
+);
+
+/** The Arcane Eye (treasure, action) — Gain a Mark. */
+registerEffect(
+  'base.vault.the-arcane-eye',
+  (ctx): EffectResult => {
+    if (!ctx.resumeAnswer) {
+      return {
+        kind: 'pause',
+        pending: spawnGainMarkPrompt(ctx.state, ctx.triggeringPlayerId, ctx.source),
+      };
+    }
+    throw new Error(
+      'the-arcane-eye should not be re-invoked (gain-mark handles its own resume)',
+    );
+  },
+);
+
+/** Spirits (consumable, fast-action) — Gain a Mark. */
+registerEffect(
+  'base.vault.spirits',
+  (ctx): EffectResult => {
+    if (!ctx.resumeAnswer) {
+      return {
+        kind: 'pause',
+        pending: spawnGainMarkPrompt(ctx.state, ctx.triggeringPlayerId, ctx.source),
+      };
+    }
+    throw new Error(
+      'spirits should not be re-invoked (gain-mark handles its own resume)',
+    );
+  },
+);
+
+/** Runestone (consumable, fast-action) — Gain 1 INT OR gain 1 WIS. */
+registerEffect(
+  'base.vault.runestone',
+  (ctx): EffectResult => {
+    if (!ctx.resumeAnswer) {
+      return {
+        kind: 'pause',
+        pending: {
+          responderId: ctx.triggeringPlayerId,
+          prompt: {
+            kind: 'choose-from-options',
+            options: [
+              { id: 'int', label: 'Gain 1 INT', payload: {} },
+              { id: 'wis', label: 'Gain 1 WIS', payload: {} },
+            ],
+          },
+          resume: { effectId: 'base.vault.runestone', context: {} },
+          source: ctx.source,
+        },
+      };
+    }
+    if (ctx.resumeAnswer.kind !== 'option-chosen') {
+      throw new Error(`runestone expected option-chosen, got ${ctx.resumeAnswer.kind}`);
+    }
+    const resource = ctx.resumeAnswer.optionId === 'int' ? 'intelligence' : 'wisdom';
+    return {
+      kind: 'done',
+      patch: gainResourcePatch(ctx.state, ctx.triggeringPlayerId, resource, 1),
+    };
+  },
+);

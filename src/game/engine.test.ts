@@ -1862,8 +1862,8 @@ function setupVaultSlotTest(slotId: string): GameState {
   });
   s = placeMageOnSpace(s, 'p1', 'alice-mage-1', slotId);
   s = setVaultTableau(s, [
-    'base.vault.placeholder-treasure-1',
-    'base.vault.placeholder-treasure-2',
+    'base.vault.mana-elixir',
+    'base.vault.gilded-chalice',
     'base.vault.phase-steppers',
   ]);
   // Grant enough MB to take any merit-cost reward by default.
@@ -1938,14 +1938,14 @@ describe('Vault A slot 2 (Draft a Vault Card OR Gain 5 Gold)', () => {
     s = applyAction(s, {
       type: 'RESOLVE_PENDING',
       resolutionId: draftPrompt.id,
-      answer: { kind: 'card-chosen', cardId: 'base.vault.placeholder-treasure-2' },
+      answer: { kind: 'card-chosen', cardId: 'base.vault.gilded-chalice' },
     });
     const alice = s.players.find((p) => p.id === 'p1');
     expect(alice?.resources.gold).toBe(1); // unchanged — drafts don't cost gold
     expect(alice?.vaultCards).toEqual([
-      { cardId: 'base.vault.placeholder-treasure-2', exhausted: false },
+      { cardId: 'base.vault.gilded-chalice', exhausted: false },
     ]);
-    expect(s.vaultTableau).not.toContain('base.vault.placeholder-treasure-2');
+    expect(s.vaultTableau).not.toContain('base.vault.gilded-chalice');
   });
 });
 
@@ -1962,12 +1962,12 @@ describe('Vault A slot 1 (Draft a Vault Card AND Gain 4 Gold)', () => {
     s = applyAction(s, {
       type: 'RESOLVE_PENDING',
       resolutionId: draftPrompt.id,
-      answer: { kind: 'card-chosen', cardId: 'base.vault.placeholder-treasure-1' },
+      answer: { kind: 'card-chosen', cardId: 'base.vault.mana-elixir' },
     });
     const alice = s.players.find((p) => p.id === 'p1');
     expect(alice?.resources.gold).toBe(4);
     expect(alice?.vaultCards).toEqual([
-      { cardId: 'base.vault.placeholder-treasure-1', exhausted: false },
+      { cardId: 'base.vault.mana-elixir', exhausted: false },
     ]);
   });
 
@@ -2096,6 +2096,202 @@ describe('PLAY_SUPPORTER', () => {
 });
 
 // ============================================================================
+// PLAY_VAULT_CARD action
+// ============================================================================
+
+describe('PLAY_VAULT_CARD', () => {
+  function setupVaultPlay(vaultCardId: string): GameState {
+    let s = initGame(TWO_PLAYER_CONFIG);
+    s = addVaultCard(s, 'p1', vaultCardId);
+    s = {
+      ...s,
+      firstPlayerIndex: 0,
+      phase: {
+        kind: 'errands',
+        round: 1,
+        activePlayerIndex: 0,
+        actionUsed: false,
+        fastActionUsed: false,
+      },
+    };
+    return s;
+  }
+
+  it('Mana Crystal (treasure, action): grants 2 Mana, exhausts in place', () => {
+    let s = setupVaultPlay('base.vault.mana-crystal');
+    s = applyAction(s, {
+      type: 'PLAY_VAULT_CARD',
+      playerId: 'p1',
+      vaultCardId: 'base.vault.mana-crystal',
+    });
+    const alice = s.players.find((p) => p.id === 'p1');
+    expect(alice?.resources.mana).toBe(2);
+    expect(alice?.vaultCards).toEqual([
+      { cardId: 'base.vault.mana-crystal', exhausted: true },
+    ]);
+    expect(alice?.personalDiscard).toEqual([]);
+  });
+
+  it('Spirits (consumable, fast-action): pauses for Mark, moves to discard', () => {
+    let s = setupVaultPlay('base.vault.spirits');
+    s = applyAction(s, {
+      type: 'PLAY_VAULT_CARD',
+      playerId: 'p1',
+      vaultCardId: 'base.vault.spirits',
+    });
+    const aliceMid = s.players.find((p) => p.id === 'p1');
+    // Card removed from vault, queued in discard.
+    expect(aliceMid?.vaultCards).toEqual([]);
+    expect(aliceMid?.personalDiscard).toEqual([
+      { kind: 'consumable', cardId: 'base.vault.spirits' },
+    ]);
+    // Mark prompt now on the stack.
+    const top = topPending(s);
+    expect(top.prompt.kind).toBe('choose-voter');
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: top.id,
+      answer: { kind: 'voter-chosen', voterId: s.voters[0]!.id },
+    });
+    const alice = s.players.find((p) => p.id === 'p1');
+    expect(alice?.resources.marks).toBe(1);
+    if (s.phase.kind !== 'errands') throw new Error('not errands');
+    expect(s.phase.fastActionUsed).toBe(true);
+    expect(s.phase.actionUsed).toBe(false);
+  });
+
+  it('Runestone (fast-action): OR prompt grants INT or WIS', () => {
+    let s = setupVaultPlay('base.vault.runestone');
+    s = applyAction(s, {
+      type: 'PLAY_VAULT_CARD',
+      playerId: 'p1',
+      vaultCardId: 'base.vault.runestone',
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'option-chosen', optionId: 'int', payload: {} },
+    });
+    const alice = s.players.find((p) => p.id === 'p1');
+    expect(alice?.resources.intelligence).toBe(1);
+    expect(alice?.resources.wisdom).toBe(0);
+  });
+
+  it('rejects playing a reaction-timing card via PLAY_VAULT_CARD', () => {
+    const s = setupVaultPlay('base.vault.phase-steppers');
+    expect(() =>
+      applyAction(s, {
+        type: 'PLAY_VAULT_CARD',
+        playerId: 'p1',
+        vaultCardId: 'base.vault.phase-steppers',
+      }),
+    ).toThrow(/fire from a reaction window/);
+  });
+
+  it('rejects playing a card the player does not own', () => {
+    const s = setupVaultPlay('base.vault.mana-crystal');
+    expect(() =>
+      applyAction(s, {
+        type: 'PLAY_VAULT_CARD',
+        playerId: 'p1',
+        vaultCardId: 'base.vault.gilded-chalice',
+      }),
+    ).toThrow(/not in your vault/);
+  });
+
+  it('rejects playing an exhausted treasure (until refresh)', () => {
+    let s = setupVaultPlay('base.vault.mana-crystal');
+    s = applyAction(s, {
+      type: 'PLAY_VAULT_CARD',
+      playerId: 'p1',
+      vaultCardId: 'base.vault.mana-crystal',
+    });
+    // Action consumed → turn auto-advanced. Reset back to alice's turn with
+    // a fresh budget to isolate the "exhausted treasure" guard.
+    s = {
+      ...s,
+      phase: {
+        kind: 'errands',
+        round: 1,
+        activePlayerIndex: 0,
+        actionUsed: false,
+        fastActionUsed: false,
+      },
+    };
+    expect(() =>
+      applyAction(s, {
+        type: 'PLAY_VAULT_CARD',
+        playerId: 'p1',
+        vaultCardId: 'base.vault.mana-crystal',
+      }),
+    ).toThrow(/not in your vault|exhausted/);
+  });
+
+  it('exhausted treasures refresh at round-setup of next round', () => {
+    let s = setupVaultPlay('base.vault.mana-crystal');
+    s = applyAction(s, {
+      type: 'PLAY_VAULT_CARD',
+      playerId: 'p1',
+      vaultCardId: 'base.vault.mana-crystal',
+    });
+    // Drain bell tower, run resolution, mid-game, round 2 setup → errands.
+    s = { ...s, bellTower: { ...s.bellTower, available: [] } };
+    s = applyAction(s, { type: 'ADVANCE_PHASE' }); // → resolution
+    s = applyAction(s, { type: 'ADVANCE_PHASE' }); // → mid-game-scoring
+    s = applyAction(s, { type: 'ADVANCE_PHASE' }); // → round-setup round 2
+    s = applyAction(s, { type: 'ADVANCE_PHASE' }); // → errands round 2
+    const alice = s.players.find((p) => p.id === 'p1');
+    expect(alice?.vaultCards).toEqual([
+      { cardId: 'base.vault.mana-crystal', exhausted: false },
+    ]);
+  });
+
+  it('the base pack ships all 26 vault cards', () => {
+    expect(baseGamePack.vaultCards).toHaveLength(26);
+  });
+
+  it('initial vault deck size reflects all card copies (38 total)', () => {
+    const s = initGame(TWO_PLAYER_CONFIG);
+    const totalCopies = baseGamePack.vaultCards.reduce(
+      (sum, c) => sum + (c.copies ?? 1),
+      0,
+    );
+    expect(s.vaultDeck.length + s.vaultTableau.length).toBe(totalCopies);
+  });
+
+  it('buying one copy of a duplicate leaves the other copy in the tableau', () => {
+    let s = initGame(TWO_PLAYER_CONFIG);
+    s = setGold(s, 'p1', 10);
+    // Force two Mana Crystal copies into the tableau.
+    s = setVaultTableau(s, [
+      'base.vault.mana-crystal',
+      'base.vault.mana-crystal',
+      'base.vault.spirits',
+    ]);
+    s = {
+      ...s,
+      firstPlayerIndex: 0,
+      phase: {
+        kind: 'errands',
+        round: 1,
+        activePlayerIndex: 0,
+        actionUsed: false,
+        fastActionUsed: false,
+      },
+    };
+    s = applyAction(s, {
+      type: 'BUY_VAULT_CARD',
+      playerId: 'p1',
+      vaultCardId: 'base.vault.mana-crystal',
+    });
+    expect(s.vaultTableau).toEqual([
+      'base.vault.mana-crystal',
+      'base.vault.spirits',
+    ]);
+  });
+});
+
+// ============================================================================
 // Vertical Slice 3b — BUY_VAULT_CARD action (player-driven during errands)
 // ============================================================================
 
@@ -2104,7 +2300,7 @@ describe('BUY_VAULT_CARD action', () => {
     let s = initGame(TWO_PLAYER_CONFIG);
     s = setGold(s, 'p1', 4);
     s = setVaultTableau(s, [
-      'base.vault.placeholder-treasure-1',
+      'base.vault.mana-elixir',
       'base.vault.phase-steppers',
     ]);
     s = { ...s, firstPlayerIndex: 0, phase: { kind: 'errands', round: 1, activePlayerIndex: 0, actionUsed: false, fastActionUsed: false } };
@@ -2116,12 +2312,12 @@ describe('BUY_VAULT_CARD action', () => {
     s = applyAction(s, {
       type: 'BUY_VAULT_CARD',
       playerId: 'p1',
-      vaultCardId: 'base.vault.placeholder-treasure-1',
+      vaultCardId: 'base.vault.mana-elixir',
     });
     const alice = s.players.find((p) => p.id === 'p1');
     expect(alice?.resources.gold).toBe(2); // 4 - 2
     expect(alice?.vaultCards).toEqual([
-      { cardId: 'base.vault.placeholder-treasure-1', exhausted: false },
+      { cardId: 'base.vault.mana-elixir', exhausted: false },
     ]);
     expect(s.vaultTableau).toEqual(['base.vault.phase-steppers']);
   });
@@ -2133,7 +2329,7 @@ describe('BUY_VAULT_CARD action', () => {
       applyAction(s, {
         type: 'BUY_VAULT_CARD',
         playerId: 'p1',
-        vaultCardId: 'base.vault.placeholder-treasure-1', // costs 2
+        vaultCardId: 'base.vault.mana-elixir', // costs 2
       }),
     ).toThrow(/insufficient gold/);
   });
@@ -2144,7 +2340,7 @@ describe('BUY_VAULT_CARD action', () => {
       applyAction(s, {
         type: 'BUY_VAULT_CARD',
         playerId: 'p1',
-        vaultCardId: 'base.vault.placeholder-treasure-2', // not in tableau
+        vaultCardId: 'base.vault.gilded-chalice', // not in tableau
       }),
     ).toThrow(/not in vault tableau/);
   });
@@ -2521,7 +2717,7 @@ describe('Resolution forfeit-or-reward', () => {
   it('merit slot: reward deducts the cost and runs the effect', () => {
     let s = setupRoomSlotTest('Vault', 'A', 'base.room.vault.a.slot-1');
     s = setMeritBadges(s, 'p1', 1);
-    s = setVaultTableau(s, ['base.vault.placeholder-treasure-1']);
+    s = setVaultTableau(s, ['base.vault.mana-elixir']);
     s = applyAction(s, { type: 'ADVANCE_PHASE' });
     s = applyAction(s, { type: 'ADVANCE_PHASE' });
     s = applyAction(s, { type: 'ADVANCE_PHASE' });
@@ -2532,7 +2728,7 @@ describe('Resolution forfeit-or-reward', () => {
       resolutionId: topPending(s).id,
       answer: {
         kind: 'card-chosen',
-        cardId: 'base.vault.placeholder-treasure-1',
+        cardId: 'base.vault.mana-elixir',
       },
     });
     const alice = s.players.find((p) => p.id === 'p1');
@@ -2619,19 +2815,19 @@ describe('Resolution forfeit-or-reward', () => {
 describe('Library A slot 1 (merit, 1 MB): WIS + Vault Draft', () => {
   it('opens choose-vault-card and grants WIS + drafted card', () => {
     let s = setupRoomSlotTest('Library', 'A', 'base.room.library.a.slot-1');
-    s = setVaultTableau(s, ['base.vault.placeholder-treasure-1']);
+    s = setVaultTableau(s, ['base.vault.mana-elixir']);
     s = driveToResolution(s);
     const top = topPending(s);
     expect(top.prompt.kind).toBe('choose-vault-card');
     s = applyAction(s, {
       type: 'RESOLVE_PENDING',
       resolutionId: top.id,
-      answer: { kind: 'card-chosen', cardId: 'base.vault.placeholder-treasure-1' },
+      answer: { kind: 'card-chosen', cardId: 'base.vault.mana-elixir' },
     });
     const alice = s.players.find((p) => p.id === 'p1');
     expect(alice?.resources.wisdom).toBe(1);
     expect(alice?.vaultCards).toEqual([
-      { cardId: 'base.vault.placeholder-treasure-1', exhausted: false },
+      { cardId: 'base.vault.mana-elixir', exhausted: false },
     ]);
   });
 
@@ -2664,7 +2860,7 @@ describe('Library A slot 2 (merit, 1 MB): INT + Research', () => {
 describe('Library A slot 3 (regular): Buy + Research', () => {
   it('prompts to buy or skip, then spawns Research', () => {
     let s = setupRoomSlotTest('Library', 'A', 'base.room.library.a.slot-3');
-    s = setVaultTableau(s, ['base.vault.placeholder-treasure-1']); // 2g
+    s = setVaultTableau(s, ['base.vault.mana-elixir']); // 2g
     s = setGold(s, 'p1', 2);
     s = driveToResolution(s);
     const buyPrompt = topPending(s);
@@ -2672,7 +2868,7 @@ describe('Library A slot 3 (regular): Buy + Research', () => {
     if (buyPrompt.prompt.kind === 'choose-from-options') {
       const optionIds = buyPrompt.prompt.options.map((o) => o.id).sort();
       expect(optionIds).toEqual([
-        'base.vault.placeholder-treasure-1',
+        'base.vault.mana-elixir',
         'skip',
       ]);
     }
@@ -2681,7 +2877,7 @@ describe('Library A slot 3 (regular): Buy + Research', () => {
       resolutionId: buyPrompt.id,
       answer: {
         kind: 'option-chosen',
-        optionId: 'base.vault.placeholder-treasure-1',
+        optionId: 'base.vault.mana-elixir',
         payload: {},
       },
     });

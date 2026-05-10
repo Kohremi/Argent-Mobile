@@ -300,44 +300,321 @@ const spells: SpellCard[] = [
 ];
 
 // ============================================================================
-// Vault cards — Phase Steppers wired up; rest deferred
+// Vault cards — the 26 base-game cards from the Argent data sheet.
+//
+// `effectId` always matches the card id; effects for the simple resource-gain
+// cards (Mana Crystal, Gilded Chalice, The Arcane Eye, Spirits, Runestone)
+// and the existing Phase Steppers reaction are registered in `effects/base.ts`.
+// The rest (mage manipulation, swap loops, infirmary moves, secret-supporter
+// peek, legendary research, multi-tap mana spend) remain unregistered;
+// PLAY_VAULT_CARD on those throws "effect not registered" but the cards can
+// still be bought / drafted and count for endgame scoring.
+//
+// Reaction-timing cards use a `.react` effect id suffix so the reaction-window
+// builder in `effects/helpers.ts` can wire them in once the reactor logic is
+// implemented.
+//
+// `copies` controls how many duplicates of a card go into the vault deck.
 // ============================================================================
 
-const phaseSteppers: VaultCard = {
-  id: 'base.vault.phase-steppers',
-  name: 'Phase Steppers',
-  sourcePackId: PACK_ID,
-  type: 'consumable',
-  goldCost: 3,
-  effectId: 'base.vault.phase-steppers.react',
-  timing: 'reaction',
-};
-
-// Two placeholder Treasures so the Vault tableau has cards a player can
-// actually buy. Effect IDs are unregistered (treasures are passive in real
-// Argent; their effect-on-use behavior comes later).
-const placeholderTreasure1: VaultCard = {
-  id: 'base.vault.placeholder-treasure-1',
-  name: 'Placeholder Treasure 1',
-  sourcePackId: PACK_ID,
-  type: 'treasure',
-  goldCost: 2,
-  effectId: 'base.vault.placeholder-treasure-1',
-};
-
-const placeholderTreasure2: VaultCard = {
-  id: 'base.vault.placeholder-treasure-2',
-  name: 'Placeholder Treasure 2',
-  sourcePackId: PACK_ID,
-  type: 'treasure',
-  goldCost: 4,
-  effectId: 'base.vault.placeholder-treasure-2',
-};
-
 const vaultCards: VaultCard[] = [
-  phaseSteppers,
-  placeholderTreasure1,
-  placeholderTreasure2,
+  {
+    id: 'base.vault.ancient-armor',
+    name: 'Ancient Armor',
+    sourcePackId: PACK_ID,
+    type: 'treasure',
+    goldCost: 5,
+    timing: 'reaction',
+    effectId: 'base.vault.ancient-armor.react',
+    description:
+      'After an opponent moves or wounds one of your Mages, you may move your Mage to any open slot on the board.',
+    copies: 2,
+  },
+  {
+    id: 'base.vault.the-arcane-eye',
+    name: 'The Arcane Eye',
+    sourcePackId: PACK_ID,
+    type: 'treasure',
+    goldCost: 4,
+    timing: 'action',
+    effectId: 'base.vault.the-arcane-eye',
+    description: 'Gain a Mark.',
+    copies: 2,
+  },
+  {
+    id: 'base.vault.auric-catalyst',
+    name: 'Auric Catalyst',
+    sourcePackId: PACK_ID,
+    type: 'consumable',
+    goldCost: 1,
+    timing: 'reaction',
+    effectId: 'base.vault.auric-catalyst.react',
+    description:
+      'Reduce any Gold cost (not a swap) you would pay to zero.',
+    copies: 1,
+  },
+  {
+    id: 'base.vault.bottled-memories',
+    name: 'Bottled Memories',
+    sourcePackId: PACK_ID,
+    type: 'consumable',
+    goldCost: 1,
+    timing: 'fast-action',
+    effectId: 'base.vault.bottled-memories',
+    description: 'Refresh an exhausted Spell.',
+    copies: 1,
+  },
+  {
+    id: 'base.vault.bottled-rage',
+    name: 'Bottled Rage',
+    sourcePackId: PACK_ID,
+    type: 'consumable',
+    goldCost: 1,
+    timing: 'action',
+    effectId: 'base.vault.bottled-rage',
+    description: 'Wound a Mage and place one of yours in its slot.',
+    copies: 1,
+  },
+  {
+    id: 'base.vault.the-contract',
+    name: 'The Contract',
+    sourcePackId: PACK_ID,
+    type: 'consumable',
+    goldCost: 2,
+    timing: 'fast-action',
+    effectId: 'base.vault.the-contract',
+    description:
+      'Gain 3 Research. Use this Research on spells of a single chosen type.',
+    copies: 1,
+  },
+  {
+    id: 'base.vault.endless-coin-purse',
+    name: 'Endless Coin Purse',
+    sourcePackId: PACK_ID,
+    type: 'treasure',
+    goldCost: 3,
+    timing: 'action',
+    effectId: 'base.vault.endless-coin-purse',
+    description: 'Gain 1 Gold. Gain a Buy.',
+    copies: 2,
+  },
+  {
+    id: 'base.vault.force-gloves',
+    name: 'Force Gloves',
+    sourcePackId: PACK_ID,
+    type: 'consumable',
+    goldCost: 5,
+    timing: 'action',
+    effectId: 'base.vault.force-gloves',
+    description:
+      'Spend 2 Mana to banish a Mage. Do this any number of times.',
+    copies: 1,
+  },
+  {
+    id: 'base.vault.gilded-chalice',
+    name: 'Gilded Chalice',
+    sourcePackId: PACK_ID,
+    type: 'treasure',
+    goldCost: 4,
+    timing: 'action',
+    effectId: 'base.vault.gilded-chalice',
+    description: 'Gain 2 IP.',
+    copies: 2,
+  },
+  {
+    id: 'base.vault.healing-drops',
+    name: 'Healing Drops',
+    sourcePackId: PACK_ID,
+    type: 'consumable',
+    goldCost: 1,
+    timing: 'action',
+    effectId: 'base.vault.healing-drops',
+    description: 'Move a Mage from the Infirmary to an open slot of your choice.',
+    copies: 1,
+  },
+  {
+    id: 'base.vault.invisibility-cloak',
+    name: 'Invisibility Cloak',
+    sourcePackId: PACK_ID,
+    type: 'treasure',
+    goldCost: 4,
+    timing: 'reaction',
+    effectId: 'base.vault.invisibility-cloak.react',
+    description:
+      'When one of your Mages would be wounded, banished, or moved, it shadows the original slot instead.',
+    copies: 1,
+  },
+  {
+    id: 'base.vault.liquid-lightning',
+    name: 'Liquid Lightning',
+    sourcePackId: PACK_ID,
+    type: 'consumable',
+    goldCost: 1,
+    timing: 'fast-action',
+    effectId: 'base.vault.liquid-lightning',
+    description: 'Place a Mage.',
+    copies: 1,
+  },
+  {
+    id: 'base.vault.malefic-torch',
+    name: 'Malefic Torch',
+    sourcePackId: PACK_ID,
+    type: 'consumable',
+    goldCost: 5,
+    timing: 'action',
+    effectId: 'base.vault.malefic-torch',
+    description:
+      'Spend 2 Mana to wound a Mage. Repeat this any number of times.',
+    copies: 1,
+  },
+  {
+    id: 'base.vault.mana-crystal',
+    name: 'Mana Crystal',
+    sourcePackId: PACK_ID,
+    type: 'treasure',
+    goldCost: 3,
+    timing: 'action',
+    effectId: 'base.vault.mana-crystal',
+    description: 'Gain 2 Mana.',
+    copies: 2,
+  },
+  {
+    id: 'base.vault.mana-elixir',
+    name: 'Mana Elixir',
+    sourcePackId: PACK_ID,
+    type: 'consumable',
+    goldCost: 2,
+    timing: 'fast-action',
+    effectId: 'base.vault.mana-elixir',
+    description: 'The next Spell you play this turn costs no Mana.',
+    copies: 1,
+  },
+  {
+    id: 'base.vault.mystic-amulet',
+    name: 'Mystic Amulet',
+    sourcePackId: PACK_ID,
+    type: 'treasure',
+    goldCost: 5,
+    timing: 'reaction',
+    effectId: 'base.vault.mystic-amulet.react',
+    description:
+      'After an opponent banishes or shadows one of your Mages, you may move your Mage to any open slot on the board.',
+    copies: 2,
+  },
+  {
+    id: 'base.vault.mystic-lantern',
+    name: 'Mystic Lantern',
+    sourcePackId: PACK_ID,
+    type: 'consumable',
+    goldCost: 3,
+    timing: 'fast-action',
+    effectId: 'base.vault.mystic-lantern',
+    description:
+      'Look at the top 3 cards of the Supporter Deck. Gain one as a Secret Supporter. Discard the others.',
+    copies: 1,
+  },
+  {
+    id: 'base.vault.phase-steppers',
+    name: 'Phase Steppers',
+    sourcePackId: PACK_ID,
+    type: 'consumable',
+    goldCost: 1,
+    timing: 'reaction',
+    effectId: 'base.vault.phase-steppers.react',
+    description:
+      'When one of your Mages would be wounded, banished, or moved, it shadows its original slot instead.',
+    copies: 1,
+  },
+  {
+    id: 'base.vault.runestone',
+    name: 'Runestone',
+    sourcePackId: PACK_ID,
+    type: 'consumable',
+    goldCost: 4,
+    timing: 'fast-action',
+    effectId: 'base.vault.runestone',
+    description: 'Gain 1 INT OR gain 1 WIS.',
+    copies: 2,
+  },
+  {
+    id: 'base.vault.sealed-jar',
+    name: 'Sealed Jar',
+    sourcePackId: PACK_ID,
+    type: 'consumable',
+    goldCost: 1,
+    timing: 'fast-action',
+    effectId: 'base.vault.sealed-jar',
+    description: 'Gain 7 Gold OR draw a Vault Card.',
+    copies: 1,
+  },
+  {
+    id: 'base.vault.sealed-scroll',
+    name: 'Sealed Scroll',
+    sourcePackId: PACK_ID,
+    type: 'treasure',
+    goldCost: 5,
+    timing: 'fast-action',
+    effectId: 'base.vault.sealed-scroll',
+    description:
+      'Research a Legendary Spell of your choice, then place this into your personal discard pile.',
+    copies: 5,
+  },
+  {
+    id: 'base.vault.shadow-potion',
+    name: 'Shadow Potion',
+    sourcePackId: PACK_ID,
+    type: 'consumable',
+    goldCost: 1,
+    timing: 'action',
+    effectId: 'base.vault.shadow-potion',
+    description: 'Shadow a slot with one of your Mages.',
+    copies: 1,
+  },
+  {
+    id: 'base.vault.shield-potion',
+    name: 'Shield Potion',
+    sourcePackId: PACK_ID,
+    type: 'consumable',
+    goldCost: 1,
+    timing: 'reaction',
+    effectId: 'base.vault.shield-potion.react',
+    description:
+      'When one of your Mages would be wounded, banished, or moved, place it into any empty slot instead.',
+    copies: 1,
+  },
+  {
+    id: 'base.vault.spellblade',
+    name: 'Spellblade',
+    sourcePackId: PACK_ID,
+    type: 'treasure',
+    goldCost: 4,
+    timing: 'action',
+    effectId: 'base.vault.spellblade',
+    description: 'Wound a Mage, then place one of yours into its slot.',
+    copies: 1,
+  },
+  {
+    id: 'base.vault.spirits',
+    name: 'Spirits',
+    sourcePackId: PACK_ID,
+    type: 'consumable',
+    goldCost: 1,
+    timing: 'fast-action',
+    effectId: 'base.vault.spirits',
+    description: 'Gain a Mark.',
+    copies: 2,
+  },
+  {
+    id: 'base.vault.unbreakable-box',
+    name: 'Unbreakable Box',
+    sourcePackId: PACK_ID,
+    type: 'consumable',
+    goldCost: 5,
+    timing: 'action',
+    effectId: 'base.vault.unbreakable-box',
+    description: 'Spend 6 Mana to gain the top 3 cards of the Vault Deck.',
+    copies: 1,
+  },
 ];
 
 // ============================================================================

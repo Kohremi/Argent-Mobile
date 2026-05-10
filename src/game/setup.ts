@@ -136,10 +136,14 @@ export function buildInitialState(config: GameConfig): GameState {
   const spellTableau = spellShuffle.value.slice(0, 3);
   const spellDeck = spellShuffle.value.slice(3);
 
-  const vaultShuffle = shuffleWithState(
-    allVault.map((v) => v.id),
-    rng,
-  );
+  // Expand the vault deck by each card's `copies` count (default 1).
+  const vaultExpanded: string[] = [];
+  for (const v of allVault) {
+    for (let i = 0; i < (v.copies ?? 1); i++) {
+      vaultExpanded.push(v.id);
+    }
+  }
+  const vaultShuffle = shuffleWithState(vaultExpanded, rng);
   rng = vaultShuffle.state;
   const vaultTableau = vaultShuffle.value.slice(0, 3);
   const vaultDeck = vaultShuffle.value.slice(3);

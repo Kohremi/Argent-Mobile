@@ -222,14 +222,20 @@ export interface SpellCard {
 
 export type VaultCardType = 'treasure' | 'consumable';
 
+export type VaultCardTiming = 'action' | 'fast-action' | 'reaction';
+
 export interface VaultCard {
   id: VaultCardId;
   name: string;
   sourcePackId: PackId;
   type: VaultCardType;
   goldCost: number;
+  timing: VaultCardTiming;
   effectId: EffectId;
-  timing?: 'reaction' | 'fast-action';
+  /** Human-readable summary of the card's effect, copied from the card. */
+  description?: string;
+  /** Number of copies of this card to add to the vault deck (default 1). */
+  copies?: number;
 }
 
 export type SupporterTiming =
@@ -762,6 +768,12 @@ export interface BuyVaultCardAction {
   vaultCardId: VaultCardId;
 }
 
+export interface PlayVaultCardAction {
+  type: 'PLAY_VAULT_CARD';
+  playerId: PlayerId;
+  vaultCardId: VaultCardId;
+}
+
 export interface RecruitSupporterAction {
   type: 'RECRUIT_SUPPORTER';
   playerId: PlayerId;
@@ -826,6 +838,7 @@ export type GameAction =
   | PlaceWorkerAction
   | CastSpellAction
   | BuyVaultCardAction
+  | PlayVaultCardAction
   | RecruitSupporterAction
   | PlaySupporterAction
   | PassTurnAction

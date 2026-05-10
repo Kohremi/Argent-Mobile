@@ -27,7 +27,9 @@ import type {
   ConsortiumVoter,
   DraftMageAction,
   PlaySupporterAction,
+  PlayVaultCardAction,
   SupporterCard,
+  VaultCard,
   EffectContext,
   EffectResult,
   GameAction,
@@ -81,6 +83,9 @@ export function applyAction(state: GameState, action: GameAction): GameState {
       break;
     case 'PLAY_SUPPORTER':
       next = handlePlaySupporter(state, action);
+      break;
+    case 'PLAY_VAULT_CARD':
+      next = handlePlayVaultCard(state, action);
       break;
     case 'RECRUIT_SUPPORTER':
       throw new Error(
@@ -1104,6 +1109,107 @@ function handlePlaySupporter(
   return applyEffectResult(consumed, result, ctx);
 }
 
+/**
+ * PLAY_VAULT_CARD: use a vault card the player owns. Treasure cards get
+ * marked exhausted (refresh at round-start); consumables are removed from
+ * the player's vault cards and added to their personal discard pile.
+ *
+ * Only `action` / `fast-action` timing cards are playable through this
+ * handler. Reaction-timing cards fire from a reaction window via the
+ * reaction-options mechanism.
+ */
+function handlePlayVaultCard(
+  state: GameState,
+  action: PlayVaultCardAction,
+): GameState {
+  if (state.phase.kind !== 'errands') {
+    throw new Error('PLAY_VAULT_CARD: only valid during errands phase');
+  }
+  if (state.pendingResolutionStack.length > 0) {
+    throw new Error('PLAY_VAULT_CARD: resolve pending prompt first');
+  }
+  const activePlayerId = state.players[state.phase.activePlayerIndex]?.id;
+  if (activePlayerId !== action.playerId) {
+    throw new Error(
+      `PLAY_VAULT_CARD: not your turn (active=${activePlayerId}, you=${action.playerId})`,
+    );
+  }
+  const player = state.players.find((p) => p.id === action.playerId);
+  if (!player) throw new Error(`PLAY_VAULT_CARD: player ${action.playerId} not found`);
+
+  const card = lookupVaultCardDef(state, action.vaultCardId);
+  if (!card) {
+    throw new Error(
+      `PLAY_VAULT_CARD: vault card ${action.vaultCardId} not in active packs`,
+    );
+  }
+  if (card.timing === 'reaction') {
+    throw new Error(
+      'PLAY_VAULT_CARD: reaction-timing vault cards fire from a reaction window, not as a direct action',
+    );
+  }
+
+  // Find the first unexhausted copy in the player's vault.
+  const ownedIdx = player.vaultCards.findIndex(
+    (v) => v.cardId === action.vaultCardId && !v.exhausted,
+  );
+  if (ownedIdx === -1) {
+    throw new Error(
+      `PLAY_VAULT_CARD: ${action.vaultCardId} not in your vault (or all copies exhausted)`,
+    );
+  }
+
+  state = consumeActionBudget(
+    state,
+    card.timing === 'fast-action' ? 'fast-action' : 'action',
+    'PLAY_VAULT_CARD',
+  );
+
+  // Treasures exhaust in place; consumables go to discard.
+  const consumed: GameState = {
+    ...state,
+    players: state.players.map((p) => {
+      if (p.id !== action.playerId) return p;
+      if (card.type === 'treasure') {
+        return {
+          ...p,
+          vaultCards: p.vaultCards.map((v, i) =>
+            i === ownedIdx ? { ...v, exhausted: true } : v,
+          ),
+        };
+      }
+      // consumable
+      return {
+        ...p,
+        vaultCards: p.vaultCards.filter((_, i) => i !== ownedIdx),
+        personalDiscard: [
+          ...p.personalDiscard,
+          { kind: 'consumable' as const, cardId: action.vaultCardId },
+        ],
+      };
+    }),
+  };
+
+  if (!hasEffect(card.effectId)) {
+    // Effect not yet wired — card is still spent.
+    return consumed;
+  }
+  const source: ResolutionSource = {
+    kind: 'vault-card',
+    id: card.id,
+    triggeringPlayerId: action.playerId,
+    description: card.name,
+  };
+  const ctx: EffectContext = {
+    state: consumed,
+    source,
+    triggeringPlayerId: action.playerId,
+    allowReactions: true,
+  };
+  const result = getEffect(card.effectId)(ctx);
+  return applyEffectResult(consumed, result, ctx);
+}
+
 function handleClaimBellTower(
   state: GameState,
   action: ClaimBellTowerAction,
@@ -1370,6 +1476,19 @@ function lookupSupporterCardDef(
     const pack = getPack(packId);
     if (!pack) continue;
     const found = pack.supporters.find((s) => s.id === supporterId);
+    if (found) return found;
+  }
+  return null;
+}
+
+function lookupVaultCardDef(
+  state: GameState,
+  vaultId: string,
+): VaultCard | null {
+  for (const packId of state.activePackIds) {
+    const pack = getPack(packId);
+    if (!pack) continue;
+    const found = pack.vaultCards.find((v) => v.id === vaultId);
     if (found) return found;
   }
   return null;

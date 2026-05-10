@@ -21,6 +21,7 @@ import type {
   PlayerId,
   ResolutionAnswer,
   SupporterCard,
+  VaultCard,
 } from '../game/types';
 
 const INJECTABLE_MAGE_COLORS: MageColor[] = [
@@ -266,6 +267,18 @@ function findSupporterCard(
   for (const pack of listPacks()) {
     if (!state.activePackIds.includes(pack.id)) continue;
     const found = pack.supporters.find((s) => s.id === supporterId);
+    if (found) return found;
+  }
+  return null;
+}
+
+function findVaultCard(
+  state: GameState,
+  vaultId: string,
+): VaultCard | null {
+  for (const pack of listPacks()) {
+    if (!state.activePackIds.includes(pack.id)) continue;
+    const found = pack.vaultCards.find((v) => v.id === vaultId);
     if (found) return found;
   }
   return null;
@@ -973,16 +986,94 @@ function PlayerCard({
         </ul>
       </details>
 
-      <details>
+      <details open={player.vaultCards.length > 0}>
         <summary className="text-xs text-slate-400 cursor-pointer">
           Vault cards ({player.vaultCards.length})
         </summary>
-        <ul className="text-xs mt-1 space-y-0.5 text-slate-300">
-          {player.vaultCards.map((v, i) => (
-            <li key={i}>
-              {v.cardId} {v.exhausted ? '(exhausted)' : ''}
-            </li>
-          ))}
+        <ul className="text-xs mt-1 space-y-1 text-slate-300">
+          {player.vaultCards.length === 0 && (
+            <li className="text-slate-500 italic">none yet</li>
+          )}
+          {player.vaultCards.map((v, i) => {
+            const card = findVaultCard(state, v.cardId);
+            if (!card) {
+              return (
+                <li key={i}>
+                  {v.cardId} {v.exhausted ? '(exhausted)' : ''}
+                </li>
+              );
+            }
+            const isFast = card.timing === 'fast-action';
+            const playable =
+              canAct &&
+              !v.exhausted &&
+              (card.timing === 'action' || card.timing === 'fast-action') &&
+              (isFast ? !fastActionUsed : !actionUsed);
+            const reason =
+              v.exhausted
+                ? 'exhausted — refreshes at next round'
+                : card.timing === 'reaction'
+                  ? 'fires from a reaction window'
+                  : !canAct
+                    ? 'not your turn'
+                    : isFast
+                      ? 'Fast Action already used'
+                      : 'Action already used';
+            return (
+              <li
+                key={i}
+                className={clsx(
+                  'flex items-start gap-2 rounded px-2 py-1',
+                  v.exhausted ? 'bg-slate-950/20 opacity-60' : 'bg-slate-950/40',
+                )}
+              >
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-baseline gap-1.5 flex-wrap">
+                    <span className="font-medium text-slate-200">
+                      {card.name}
+                    </span>
+                    <span className="text-[10px] uppercase tracking-wide text-slate-500">
+                      {card.type}
+                    </span>
+                    <span className="text-[10px] uppercase tracking-wide text-slate-400">
+                      {card.timing}
+                    </span>
+                    <span className="text-[10px] uppercase tracking-wide text-amber-300/70 inline-flex items-center gap-0.5">
+                      {card.goldCost}
+                      <ResourceIcon kind="gold" size={11} />
+                    </span>
+                    {v.exhausted && (
+                      <span className="text-[10px] uppercase tracking-wide text-slate-500">
+                        exhausted
+                      </span>
+                    )}
+                  </div>
+                  {card.description && (
+                    <div className="text-[11px] text-slate-300/90">
+                      {card.description}
+                    </div>
+                  )}
+                </div>
+                {(card.timing === 'action' || card.timing === 'fast-action') && (
+                  <button
+                    type="button"
+                    disabled={!playable}
+                    title={playable ? `Play ${card.name}` : reason}
+                    onClick={() =>
+                      dispatch({
+                        type: 'PLAY_VAULT_CARD',
+                        playerId: player.id,
+                        vaultCardId: v.cardId,
+                      })
+                    }
+                    className="px-2 py-0.5 rounded bg-amber-500 text-slate-950 text-[10px] hover:bg-amber-400 disabled:opacity-40 disabled:cursor-not-allowed self-start"
+                  >
+                    Play
+                  </button>
+                )}
+              </li>
+            );
+          })}
         </ul>
       </details>
 
@@ -1221,11 +1312,43 @@ function TableauPanel({ state }: { state: GameState }) {
           </ul>
         </div>
         <div>
-          <p className="font-medium text-slate-200">Vault ({state.vaultTableau.length})</p>
-          <ul className="space-y-0.5">
-            {state.vaultTableau.map((cid, i) => (
-              <li key={`${cid}-${i}`}>{cid}</li>
-            ))}
+          <p className="font-medium text-slate-200">
+            Vault ({state.vaultTableau.length}/3)
+          </p>
+          <ul className="space-y-1">
+            {state.vaultTableau.map((cid, i) => {
+              const card = findVaultCard(state, cid);
+              if (!card) {
+                return <li key={`${cid}-${i}`}>{cid}</li>;
+              }
+              return (
+                <li
+                  key={`${cid}-${i}`}
+                  className="rounded bg-slate-950/40 px-2 py-1"
+                >
+                  <div className="flex items-baseline gap-1.5 flex-wrap">
+                    <span className="font-medium text-slate-200">
+                      {card.name}
+                    </span>
+                    <span className="text-[10px] uppercase tracking-wide text-slate-500">
+                      {card.type}
+                    </span>
+                    <span className="text-[10px] uppercase tracking-wide text-slate-400">
+                      {card.timing}
+                    </span>
+                    <span className="text-[10px] uppercase tracking-wide text-amber-300/70 inline-flex items-center gap-0.5">
+                      {card.goldCost}
+                      <ResourceIcon kind="gold" size={11} />
+                    </span>
+                  </div>
+                  {card.description && (
+                    <div className="text-[11px] text-slate-300/90">
+                      {card.description}
+                    </div>
+                  )}
+                </li>
+              );
+            })}
             {state.vaultTableau.length === 0 && (
               <li className="text-slate-500 italic">empty</li>
             )}
