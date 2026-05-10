@@ -7,7 +7,6 @@ import { validateAction } from './actions';
 import { computeFinalScoring } from './scoring';
 import { buildInitialState } from './setup';
 import { getEffect, hasEffect } from './effects/index';
-import type { Effect } from './effects/index';
 import {
   applyCandidateAllocation,
   applyVaultPurchase,
@@ -374,34 +373,17 @@ function pumpResolutionPhase(state: GameState): GameState {
       continue;
     }
 
-    // Invoke the space's effect. Unregistered → no-op completion.
+    // Effect-less / unregistered slots: no reward to take, just complete.
     if (!hasEffect(space.effectId)) {
       curr = completeCurrentSpaceResolution(curr);
       continue;
     }
 
-    const effect: Effect = getEffect(space.effectId);
-    const source: ResolutionSource = describeSpaceSource(
-      space.id,
-      room.name,
-      room.side,
-      space.index,
-      space.occupant.ownerId,
-    );
-    const ctx: EffectContext = {
-      state: curr,
-      source,
-      triggeringPlayerId: space.occupant.ownerId,
-      allowReactions: true,
-    };
-    const result = effect(ctx);
-    curr = applyEffectResult(curr, result, ctx);
-
-    if (curr.pendingResolutionStack.length > 0 || curr.activeReactionWindows.length > 0) {
-      return curr; // paused or waiting on reactions
-    }
-
-    curr = completeCurrentSpaceResolution(curr);
+    // Push the forfeit-or-reward prompt and pause. The resume effect will
+    // either deduct the merit cost and invoke the slot's real effect, or
+    // grant the player 1 IP and skip the effect.
+    curr = pushResolutionChoicePrompt(curr, room, space, space.occupant.ownerId);
+    return curr;
   }
   throw new Error('pumpResolutionPhase: hit iteration cap');
 }
@@ -537,13 +519,11 @@ function handlePlaceWorker(state: GameState, action: PlaceWorkerAction): GameSta
     throw new Error(`PLACE_WORKER: slot type "wound" not yet supported`);
   }
 
-  const meritCost =
-    space.slotType === 'merit' ? (space.costToActivate?.meritBadges ?? 0) : 0;
-  if (meritCost > 0 && player.resources.meritBadges < meritCost) {
-    throw new Error(
-      `PLACE_WORKER: insufficient Merit Badges (need ${meritCost}, have ${player.resources.meritBadges})`,
-    );
-  }
+  // Merit-cost spaces are placeable even without enough Merit Badges. The
+  // cost (and the choice to take the reward or forfeit for 1 IP) is deferred
+  // to the resolution phase via `base.system.resolution-choice`. If the
+  // player still can't afford the cost when the prompt fires, only the
+  // forfeit option is available.
 
   const roomLimit = room.maxMagesPerPlayerPerRound ?? Infinity;
   if (Number.isFinite(roomLimit)) {
@@ -587,7 +567,7 @@ function handlePlaceWorker(state: GameState, action: PlaceWorkerAction): GameSta
   );
   const updatedPlayers = state.players.map((p): Player => {
     if (p.id !== action.playerId) return p;
-    const next: Player = {
+    return {
       ...p,
       mages: p.mages.map((m) =>
         m.id !== action.mageId
@@ -600,17 +580,6 @@ function handlePlaceWorker(state: GameState, action: PlaceWorkerAction): GameSta
       ),
       roundPlacements: [...p.roundPlacements, room.id],
     };
-    if (meritCost > 0) {
-      return {
-        ...next,
-        resources: {
-          ...next.resources,
-          meritBadges: next.resources.meritBadges - meritCost,
-          meritBadgesSpent: next.resources.meritBadgesSpent + meritCost,
-        },
-      };
-    }
-    return next;
   });
 
   const placed: GameState = {
@@ -619,29 +588,80 @@ function handlePlaceWorker(state: GameState, action: PlaceWorkerAction): GameSta
     players: updatedPlayers,
   };
 
-  // Instant rooms (Guilds, etc.) resolve their slot effect at PLACE_WORKER
-  // time, not in the resolution phase. The mage stays on the slot through
-  // errands and gets returned by the resolution pump (which skips the
-  // effect for instant rooms).
+  // Instant rooms resolve at placement time. We push the same forfeit-or-
+  // reward prompt the resolution pump uses for non-instant rooms, then the
+  // resume effect either runs the slot's effect or grants 1 IP and skips it.
   if (room.isInstantRoom && hasEffect(space.effectId)) {
-    const source = describeSpaceSource(
-      space.id,
-      room.name,
-      room.side,
-      space.index,
-      action.playerId,
-    );
-    const ctx: EffectContext = {
-      state: placed,
-      source,
-      triggeringPlayerId: action.playerId,
-      allowReactions: true,
-    };
-    const result = getEffect(space.effectId)(ctx);
-    return applyEffectResult(placed, result, ctx);
+    return pushResolutionChoicePrompt(placed, room, space, action.playerId);
   }
 
   return placed;
+}
+
+/**
+ * Pushes the "take the reward (paying any merit cost) or forfeit for 1 IP"
+ * prompt for the given action space. Used by both `pumpResolutionPhase`
+ * (non-instant rooms, fired during the resolution phase) and
+ * `handlePlaceWorker` (instant rooms, fired at placement).
+ */
+function pushResolutionChoicePrompt(
+  state: GameState,
+  room: Room,
+  space: GameState['rooms'][number]['actionSpaces'][number],
+  playerId: string,
+): GameState {
+  const player = state.players.find((p) => p.id === playerId);
+  if (!player) {
+    throw new Error(`pushResolutionChoicePrompt: player ${playerId} not found`);
+  }
+  const meritCost =
+    space.slotType === 'merit' ? (space.costToActivate?.meritBadges ?? 0) : 0;
+  const canAffordReward =
+    meritCost === 0 || player.resources.meritBadges >= meritCost;
+
+  const source: ResolutionSource = describeSpaceSource(
+    space.id,
+    room.name,
+    room.side,
+    space.index,
+    playerId,
+  );
+  const promptInput: PendingResolutionInput = {
+    responderId: playerId,
+    prompt: {
+      kind: 'choose-from-options',
+      options: [
+        canAffordReward
+          ? {
+              id: 'reward',
+              label:
+                meritCost > 0
+                  ? `Take reward (spend ${meritCost} MB)`
+                  : 'Take reward',
+              payload: {},
+              available: true,
+            }
+          : {
+              id: 'reward',
+              label: `Take reward (spend ${meritCost} MB)`,
+              payload: {},
+              available: false,
+              unavailableReason: `requires ${meritCost} Merit Badge${meritCost === 1 ? '' : 's'} (you have ${player.resources.meritBadges})`,
+            },
+        { id: 'forfeit', label: 'Forfeit for 1 IP', payload: {} },
+      ],
+    },
+    resume: {
+      effectId: 'base.system.resolution-choice',
+      context: {
+        spaceId: space.id,
+        innerEffectId: space.effectId,
+        meritCost,
+      },
+    },
+    source,
+  };
+  return pushPending(state, promptInput);
 }
 
 function handleBuyVaultCard(

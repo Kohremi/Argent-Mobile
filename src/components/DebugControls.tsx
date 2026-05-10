@@ -8,6 +8,7 @@ import clsx from 'clsx';
 import { useGameStore } from '../store/gameStore';
 import { baseGamePack } from '../content/packs/base';
 import { listPacks } from '../content/registry';
+import { MageIcon, ResourceIcon, type ResourceKind } from './icons';
 import type {
   Candidate,
   GameAction,
@@ -228,17 +229,28 @@ function findSpellL1Timing(
   return null;
 }
 
-function describeMage(m: OwnedMage): string {
-  let loc: string;
-  if (m.location.kind === 'office') loc = 'office';
-  else if (m.location.kind === 'action-space') loc = `at ${m.location.spaceId}`;
-  else if (m.location.kind === 'infirmary') loc = 'infirmary';
-  else loc = 'banished';
+function describeMageLocation(m: OwnedMage): string {
+  if (m.location.kind === 'office') return 'office';
+  if (m.location.kind === 'action-space') return `at ${m.location.spaceId}`;
+  if (m.location.kind === 'infirmary') return 'infirmary';
+  return 'banished';
+}
+
+function MageRow({ m }: { m: OwnedMage }) {
   const tags: string[] = [];
   if (m.isWounded) tags.push('wounded');
   if (m.isShadowing) tags.push('shadow');
-  const tagSuffix = tags.length ? ` [${tags.join(', ')}]` : '';
-  return `${m.color} (${m.id.slice(-12)}) — ${loc}${tagSuffix}`;
+  return (
+    <span className="inline-flex items-center gap-1.5">
+      <MageIcon color={m.color} size={14} />
+      <span className="capitalize">{m.color}</span>
+      <span className="text-slate-500">({m.id.slice(-12)})</span>
+      <span>— {describeMageLocation(m)}</span>
+      {tags.length > 0 && (
+        <span className="text-amber-300/80">[{tags.join(', ')}]</span>
+      )}
+    </span>
+  );
 }
 
 function describePhase(state: GameState): string {
@@ -679,11 +691,35 @@ function ReactionWindowsPanel({ state }: { state: GameState }) {
 function ResourceLine({ player }: { player: Player }) {
   const r = player.resources;
   return (
-    <p className="text-xs text-slate-300">
-      gold {r.gold} · mana {r.mana} · IP {r.influence} · INT {r.intelligence} · WIS{' '}
-      {r.wisdom} · marks {r.marks} · MB {r.meritBadges}
-      {r.meritBadgesSpent ? ` (spent ${r.meritBadgesSpent})` : ''}
-    </p>
+    <div className="flex flex-wrap gap-x-2 gap-y-1 text-xs text-slate-300 items-center">
+      <ResourcePill kind="gold" count={r.gold} />
+      <ResourcePill kind="mana" count={r.mana} />
+      <ResourcePill kind="influence" count={r.influence} />
+      <ResourcePill kind="intelligence" count={r.intelligence} />
+      <ResourcePill kind="wisdom" count={r.wisdom} />
+      <ResourcePill kind="marks" count={r.marks} />
+      <ResourcePill kind="merit-badge" count={r.meritBadges} />
+      {r.meritBadgesSpent > 0 && (
+        <span className="text-slate-500">spent {r.meritBadgesSpent} MB</span>
+      )}
+    </div>
+  );
+}
+
+function ResourcePill({
+  kind,
+  count,
+  size = 14,
+}: {
+  kind: ResourceKind;
+  count: number;
+  size?: number;
+}) {
+  return (
+    <span className="inline-flex items-center gap-1">
+      <ResourceIcon kind={kind} size={size} />
+      <span className="tabular-nums">{count}</span>
+    </span>
   );
 }
 
@@ -783,7 +819,9 @@ function PlayerCard({
         </summary>
         <ul className="text-xs mt-1 space-y-0.5 text-slate-300">
           {player.mages.map((m) => (
-            <li key={m.id}>{describeMage(m)}</li>
+            <li key={m.id}>
+              <MageRow m={m} />
+            </li>
           ))}
         </ul>
       </details>
@@ -952,9 +990,10 @@ function PlayerCard({
               key={c}
               type="button"
               onClick={() => patchState((s) => injectMage(s, player.id, c))}
-              className="px-1.5 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-[10px]"
+              className="px-1.5 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-[10px] inline-flex items-center gap-1"
+              title={`Inject a ${c} mage`}
             >
-              +{c}
+              +<MageIcon color={c} size={11} />
             </button>
           ))}
           <button
@@ -974,16 +1013,18 @@ function PlayerCard({
           <button
             type="button"
             onClick={() => patchState((s) => bumpResource(s, player.id, 'gold', 5))}
-            className="px-1.5 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-[10px]"
+            className="px-1.5 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-[10px] inline-flex items-center gap-1"
+            title="Inject 5 Gold"
           >
-            +5 gold
+            +5 <ResourceIcon kind="gold" size={11} />
           </button>
           <button
             type="button"
             onClick={() => patchState((s) => bumpResource(s, player.id, 'meritBadges', 1))}
-            className="px-1.5 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-[10px]"
+            className="px-1.5 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-[10px] inline-flex items-center gap-1"
+            title="Inject 1 Merit Badge"
           >
-            +1 MB
+            +1 <ResourceIcon kind="merit-badge" size={11} />
           </button>
         </div>
       </div>
@@ -1024,8 +1065,9 @@ function ArsMagnaControls({
                 sourceCardId: m.id,
               })
             }
-            className="px-1.5 py-0.5 rounded bg-red-700 hover:bg-red-600 text-[10px] disabled:opacity-40 disabled:cursor-not-allowed"
+            className="px-1.5 py-0.5 rounded bg-red-700 hover:bg-red-600 text-[10px] disabled:opacity-40 disabled:cursor-not-allowed inline-flex items-center gap-1"
           >
+            <MageIcon color="red" size={12} />
             Ars Magna ({m.id.slice(-8)})
           </button>
         ))}
@@ -1173,11 +1215,33 @@ function CandidateDraftScreen({
                   <h3 className="font-medium">{c.name}</h3>
                   <span className="text-xs text-slate-500">{c.title}</span>
                 </div>
-                <p className="text-xs text-slate-400">
-                  Department: {c.department} · Mage color:{' '}
-                  {c.startingMageColor}
-                  {c.startingExtraMeritBadge ? ' · +1 MB' : ''}
-                </p>
+                <div className="text-xs text-slate-400 flex items-center gap-2 flex-wrap">
+                  <span>Department: {c.department} · Mages:</span>
+                  <MageIcon
+                    color={
+                      c.startingMageColor === 'neutral'
+                        ? 'off-white'
+                        : c.startingMageColor
+                    }
+                    size={32}
+                  />
+                  <MageIcon
+                    color={
+                      c.startingMageColor === 'neutral'
+                        ? 'off-white'
+                        : c.startingMageColor
+                    }
+                    size={32}
+                  />
+                  <span className="capitalize">{c.startingMageColor}</span>
+                  {c.startingExtraMeritBadge && (
+                    <span className="inline-flex items-center gap-1">
+                      ·
+                      <ResourceIcon kind="merit-badge" size={14} />
+                      +1
+                    </span>
+                  )}
+                </div>
                 <p className="text-xs text-slate-500">
                   Starter spell: {c.starterSpellId}
                 </p>
@@ -1354,15 +1418,20 @@ function MageDraftScreen({
                     'disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:border-slate-700 disabled:hover:bg-slate-900',
                   )}
                 >
-                  <div className="flex items-baseline justify-between">
-                    <span className="font-medium capitalize">{color}</span>
-                    <span className="text-xs text-slate-400">
-                      {remaining} left
-                    </span>
+                  <div className="flex items-center gap-2">
+                    <MageIcon color={color} size={36} />
+                    <div className="flex flex-col flex-1 min-w-0">
+                      <div className="flex items-baseline justify-between gap-2">
+                        <span className="font-medium capitalize">{color}</span>
+                        <span className="text-xs text-slate-400">
+                          {remaining} left
+                        </span>
+                      </div>
+                      <p className="text-[11px] text-slate-500">
+                        you have {owned}/2{owned >= 2 ? ' (max)' : ''}
+                      </p>
+                    </div>
                   </div>
-                  <p className="text-[11px] text-slate-500">
-                    you have {owned}/2{owned >= 2 ? ' (max)' : ''}
-                  </p>
                 </button>
               );
             })}
@@ -1404,9 +1473,17 @@ function MageDraftScreen({
               className="rounded border border-slate-700 bg-slate-900 p-2"
             >
               <div className="font-medium">{playerDisplayName(state, p)}</div>
-              <div className="text-xs text-slate-400">
-                {p.mages.length} mage{p.mages.length === 1 ? '' : 's'}:{' '}
-                {p.mages.map((m) => m.color).join(', ') || '(none)'}
+              <div className="text-xs text-slate-400 flex items-center gap-1.5 flex-wrap">
+                <span>
+                  {p.mages.length} mage{p.mages.length === 1 ? '' : 's'}:
+                </span>
+                {p.mages.length === 0 ? (
+                  <span className="italic text-slate-500">(none)</span>
+                ) : (
+                  p.mages.map((m, i) => (
+                    <MageIcon key={i} color={m.color} size={24} />
+                  ))
+                )}
               </div>
             </li>
           ))}
@@ -1424,7 +1501,11 @@ function MageDraftPoolPanel({ state }: { state: GameState }) {
         {(
           ['red', 'grey', 'green', 'blue', 'purple', 'off-white'] as MageColor[]
         ).map((color) => (
-          <li key={color} className="capitalize">
+          <li
+            key={color}
+            className="capitalize inline-flex items-center gap-1.5"
+          >
+            <MageIcon color={color} size={14} />
             {color}: {state.mageDraftPool[color] ?? 0}
           </li>
         ))}
@@ -1504,8 +1585,9 @@ function RoomsPanel({ state }: { state: GameState }) {
                             {s.slotType}
                           </span>
                           {s.costToActivate?.meritBadges && (
-                            <span className="text-[10px] uppercase tracking-wide text-orange-300/70">
-                              cost: {s.costToActivate.meritBadges} MB
+                            <span className="text-[10px] uppercase tracking-wide text-orange-300/70 inline-flex items-center gap-1">
+                              cost: {s.costToActivate.meritBadges}
+                              <ResourceIcon kind="merit-badge" size={11} />
                             </span>
                           )}
                         </div>

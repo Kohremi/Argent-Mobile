@@ -1303,7 +1303,8 @@ describe('Library A slot 4 vertical slice', () => {
     let s = state;
     s = applyAction(s, { type: 'ADVANCE_PHASE' }); // round-setup → errands
     s = applyAction(s, { type: 'ADVANCE_PHASE' }); // errands → resolution (bell empty)
-    s = applyAction(s, { type: 'ADVANCE_PHASE' }); // resolution pump → Library effect → pause
+    s = applyAction(s, { type: 'ADVANCE_PHASE' }); // pump → forfeit-or-reward prompt
+    s = takeRewardAtResolution(s); // → Library slot's OR prompt
     return s;
   }
 
@@ -1748,7 +1749,7 @@ describe('PLACE_WORKER', () => {
     ).toThrow(/not in office/);
   });
 
-  it('rejects placement on a merit slot without enough Merit Badges', () => {
+  it('allows placement on a merit slot even without enough Merit Badges (cost is deferred)', () => {
     let s = initGame(TWO_PLAYER_CONFIG);
     s = forceVaultSideA(s);
     s = addMage(s, 'p1', {
@@ -1758,17 +1759,21 @@ describe('PLACE_WORKER', () => {
     });
     s = setMeritBadges(s, 'p1', 0);
     s = { ...s, firstPlayerIndex: 0, phase: { kind: 'errands', round: 1, activePlayerIndex: 0, actionUsed: false, fastActionUsed: false } };
-    expect(() =>
-      applyAction(s, {
-        type: 'PLACE_WORKER',
-        playerId: 'p1',
-        mageId: 'alice-mage-1',
-        actionSpaceId: 'base.room.vault.a.slot-1',
-      }),
-    ).toThrow(/insufficient Merit Badges/);
+    s = applyAction(s, {
+      type: 'PLACE_WORKER',
+      playerId: 'p1',
+      mageId: 'alice-mage-1',
+      actionSpaceId: 'base.room.vault.a.slot-1',
+    });
+    // Mage seated, MB unchanged. Cost is checked at resolution time.
+    const alice = s.players.find((p) => p.id === 'p1');
+    expect(alice?.resources.meritBadges).toBe(0);
+    expect(alice?.resources.meritBadgesSpent).toBe(0);
+    const vault = findRoom(s, (r) => r.name === 'Vault');
+    expect(vault.actionSpaces[0]?.occupant?.mageId).toBe('alice-mage-1');
   });
 
-  it('places on a merit slot when MB available, paying the cost', () => {
+  it('places on a merit slot without paying the cost up front (deduction happens at resolution)', () => {
     let s = initGame(TWO_PLAYER_CONFIG);
     s = forceVaultSideA(s);
     s = addMage(s, 'p1', {
@@ -1784,9 +1789,10 @@ describe('PLACE_WORKER', () => {
       mageId: 'alice-mage-1',
       actionSpaceId: 'base.room.vault.a.slot-1',
     });
+    // Mage seated; merit cost not yet deducted (still 2/0).
     const alice = s.players.find((p) => p.id === 'p1');
-    expect(alice?.resources.meritBadges).toBe(1);
-    expect(alice?.resources.meritBadgesSpent).toBe(1);
+    expect(alice?.resources.meritBadges).toBe(2);
+    expect(alice?.resources.meritBadgesSpent).toBe(0);
     const vault = findRoom(s, (r) => r.name === 'Vault');
     expect(vault.actionSpaces[0]?.occupant?.mageId).toBe('alice-mage-1');
   });
@@ -1853,6 +1859,8 @@ function setupVaultSlotTest(slotId: string): GameState {
     'base.vault.placeholder-treasure-2',
     'base.vault.phase-steppers',
   ]);
+  // Grant enough MB to take any merit-cost reward by default.
+  s = setMeritBadges(s, 'p1', 5);
   s = { ...s, bellTower: { ...s.bellTower, available: [] } };
   return s;
 }
@@ -1861,8 +1869,9 @@ function driveToVaultPrompt(state: GameState): GameState {
   let s = state;
   s = applyAction(s, { type: 'ADVANCE_PHASE' }); // round-setup → errands
   s = applyAction(s, { type: 'ADVANCE_PHASE' }); // errands → resolution
-  s = applyAction(s, { type: 'ADVANCE_PHASE' }); // pump → slot effect
-  return s;
+  s = applyAction(s, { type: 'ADVANCE_PHASE' }); // pump → forfeit-or-reward prompt
+  // Take the reward to land on the slot's actual prompt (or done state).
+  return takeRewardAtResolution(s);
 }
 
 describe('Vault A slot 3 (Gain 3 Gold)', () => {
@@ -2276,6 +2285,9 @@ function setupRoomSlotTest(
     color: 'blue',
   });
   s = placeMageOnSpace(s, 'p1', 'alice-mage-1', spaceId);
+  // Grant enough MB to take any merit-cost reward by default; tests that
+  // exercise the "can't afford" path override this to 0.
+  s = setMeritBadges(s, 'p1', 5);
   s = { ...s, bellTower: { ...s.bellTower, available: [] } };
   return s;
 }
@@ -2284,9 +2296,205 @@ function driveToResolution(state: GameState): GameState {
   let s = state;
   s = applyAction(s, { type: 'ADVANCE_PHASE' }); // round-setup → errands
   s = applyAction(s, { type: 'ADVANCE_PHASE' }); // errands → resolution
-  s = applyAction(s, { type: 'ADVANCE_PHASE' }); // pump → effect
-  return s;
+  s = applyAction(s, { type: 'ADVANCE_PHASE' }); // pump → forfeit-or-reward prompt
+  // Resolve the forfeit-or-reward prompt by taking the reward; tests that
+  // want to exercise the forfeit path should use `forfeitAtResolution` below.
+  return takeRewardAtResolution(s);
 }
+
+/** Resolves the top-of-stack forfeit-or-reward prompt by picking 'reward'. */
+function takeRewardAtResolution(state: GameState): GameState {
+  const top = topPending(state);
+  if (top.resume.effectId !== 'base.system.resolution-choice') {
+    throw new Error(
+      `takeRewardAtResolution: top of stack is ${top.resume.effectId}, not base.system.resolution-choice`,
+    );
+  }
+  return applyAction(state, {
+    type: 'RESOLVE_PENDING',
+    resolutionId: top.id,
+    answer: { kind: 'option-chosen', optionId: 'reward', payload: {} },
+  });
+}
+
+/** Resolves the top-of-stack forfeit-or-reward prompt by picking 'forfeit'. */
+function forfeitAtResolution(state: GameState): GameState {
+  const top = topPending(state);
+  if (top.resume.effectId !== 'base.system.resolution-choice') {
+    throw new Error(
+      `forfeitAtResolution: top of stack is ${top.resume.effectId}, not base.system.resolution-choice`,
+    );
+  }
+  return applyAction(state, {
+    type: 'RESOLVE_PENDING',
+    resolutionId: top.id,
+    answer: { kind: 'option-chosen', optionId: 'forfeit', payload: {} },
+  });
+}
+
+// ============================================================================
+// Resolution-time forfeit-or-reward prompt
+// ============================================================================
+
+describe('Resolution forfeit-or-reward', () => {
+  it('every occupied space prompts the player to choose reward or forfeit', () => {
+    let s = setupRoomSlotTest('Library', 'A', 'base.room.library.a.slot-3');
+    s = applyAction(s, { type: 'ADVANCE_PHASE' }); // round-setup → errands
+    s = applyAction(s, { type: 'ADVANCE_PHASE' }); // errands → resolution
+    s = applyAction(s, { type: 'ADVANCE_PHASE' }); // pump → forfeit-or-reward prompt
+    const top = topPending(s);
+    expect(top.resume.effectId).toBe('base.system.resolution-choice');
+    expect(top.prompt.kind).toBe('choose-from-options');
+    if (top.prompt.kind === 'choose-from-options') {
+      const ids = top.prompt.options.map((o) => o.id).sort();
+      expect(ids).toEqual(['forfeit', 'reward']);
+    }
+  });
+
+  it('forfeit grants the player 1 IP and skips the slot effect', () => {
+    let s = setupRoomSlotTest('Vault', 'A', 'base.room.vault.a.slot-3');
+    // Slot 3 is "Gain 3 Gold" — taking reward would give 3 gold; forfeit gives 1 IP.
+    s = applyAction(s, { type: 'ADVANCE_PHASE' });
+    s = applyAction(s, { type: 'ADVANCE_PHASE' });
+    s = applyAction(s, { type: 'ADVANCE_PHASE' });
+    s = forfeitAtResolution(s);
+    const alice = s.players.find((p) => p.id === 'p1');
+    expect(alice?.resources.influence).toBe(1);
+    expect(alice?.resources.gold).toBe(0);
+    // Mage returned to office, resolution continued past the slot.
+    const aliceMage = findMageById(s, 'alice-mage-1');
+    expect(aliceMage.location).toEqual({ kind: 'office', playerId: 'p1' });
+  });
+
+  it('reward on a non-merit slot runs the effect with no MB cost', () => {
+    let s = setupRoomSlotTest('Vault', 'A', 'base.room.vault.a.slot-3');
+    s = setMeritBadges(s, 'p1', 0);
+    s = driveToResolution(s); // takeReward auto-applied
+    const alice = s.players.find((p) => p.id === 'p1');
+    expect(alice?.resources.gold).toBe(3);
+    expect(alice?.resources.influence).toBe(0);
+    expect(alice?.resources.meritBadges).toBe(0);
+    expect(alice?.resources.meritBadgesSpent).toBe(0);
+  });
+
+  it('merit slot: reward option is unavailable if the player cannot afford it', () => {
+    let s = setupRoomSlotTest('Vault', 'A', 'base.room.vault.a.slot-1');
+    s = setMeritBadges(s, 'p1', 0); // overrides the helper's default
+    s = applyAction(s, { type: 'ADVANCE_PHASE' });
+    s = applyAction(s, { type: 'ADVANCE_PHASE' });
+    s = applyAction(s, { type: 'ADVANCE_PHASE' });
+    const top = topPending(s);
+    expect(top.prompt.kind).toBe('choose-from-options');
+    if (top.prompt.kind === 'choose-from-options') {
+      const reward = top.prompt.options.find((o) => o.id === 'reward');
+      const forfeit = top.prompt.options.find((o) => o.id === 'forfeit');
+      expect(reward?.available).toBe(false);
+      expect(reward?.unavailableReason).toMatch(/Merit Badge/);
+      expect(forfeit?.available).not.toBe(false); // available or undefined
+    }
+    // Resolving with forfeit grants the IP fallback.
+    s = forfeitAtResolution(s);
+    const alice = s.players.find((p) => p.id === 'p1');
+    expect(alice?.resources.influence).toBe(1);
+  });
+
+  it('merit slot: reward deducts the cost and runs the effect', () => {
+    let s = setupRoomSlotTest('Vault', 'A', 'base.room.vault.a.slot-1');
+    s = setMeritBadges(s, 'p1', 1);
+    s = setVaultTableau(s, ['base.vault.placeholder-treasure-1']);
+    s = applyAction(s, { type: 'ADVANCE_PHASE' });
+    s = applyAction(s, { type: 'ADVANCE_PHASE' });
+    s = applyAction(s, { type: 'ADVANCE_PHASE' });
+    s = takeRewardAtResolution(s);
+    // Vault A slot 1: Draft a Vault card AND gain 4 gold (after MB deducted).
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: {
+        kind: 'card-chosen',
+        cardId: 'base.vault.placeholder-treasure-1',
+      },
+    });
+    const alice = s.players.find((p) => p.id === 'p1');
+    expect(alice?.resources.meritBadges).toBe(0);
+    expect(alice?.resources.meritBadgesSpent).toBe(1);
+    expect(alice?.resources.gold).toBe(4);
+  });
+
+  it('placement on a merit slot without MB succeeds; resolution forfeit grants 1 IP', () => {
+    let s = initGame(TWO_PLAYER_CONFIG);
+    s = forceVaultSideA(s);
+    s = addMage(s, 'p1', {
+      id: 'alice-mage-1',
+      cardId: 'base.mage.divinity',
+      color: 'blue',
+    });
+    s = setMeritBadges(s, 'p1', 0);
+    s = {
+      ...s,
+      firstPlayerIndex: 0,
+      phase: {
+        kind: 'errands',
+        round: 1,
+        activePlayerIndex: 0,
+        actionUsed: false,
+        fastActionUsed: false,
+      },
+    };
+    // Place without MB — succeeds.
+    s = applyAction(s, {
+      type: 'PLACE_WORKER',
+      playerId: 'p1',
+      mageId: 'alice-mage-1',
+      actionSpaceId: 'base.room.vault.a.slot-1',
+    });
+    s = { ...s, bellTower: { ...s.bellTower, available: [] } };
+    s = applyAction(s, { type: 'ADVANCE_PHASE' });
+    s = applyAction(s, { type: 'ADVANCE_PHASE' });
+    // Reward unavailable → only forfeit is viable.
+    s = forfeitAtResolution(s);
+    const alice = s.players.find((p) => p.id === 'p1');
+    expect(alice?.resources.influence).toBe(1);
+    expect(alice?.resources.gold).toBe(0);
+    expect(alice?.resources.meritBadges).toBe(0);
+  });
+
+  it('instant rooms (Guilds): forfeit at placement gains 1 IP and skips the slot effect', () => {
+    let s = initGame(TWO_PLAYER_CONFIG);
+    s = forceRoomSide(s, 'Guilds', 'A');
+    s = addMage(s, 'p1', {
+      id: 'alice-mage-1',
+      cardId: 'base.mage.divinity',
+      color: 'blue',
+    });
+    s = setMeritBadges(s, 'p1', 0);
+    s = {
+      ...s,
+      firstPlayerIndex: 0,
+      phase: {
+        kind: 'errands',
+        round: 1,
+        activePlayerIndex: 0,
+        actionUsed: false,
+        fastActionUsed: false,
+      },
+    };
+    // Slot 1 is merit-cost, but the player can place anyway. They forfeit at
+    // the placement-time prompt and take the IP.
+    s = applyAction(s, {
+      type: 'PLACE_WORKER',
+      playerId: 'p1',
+      mageId: 'alice-mage-1',
+      actionSpaceId: 'base.room.guilds.a.slot-1',
+    });
+    s = forfeitAtResolution(s);
+    const alice = s.players.find((p) => p.id === 'p1');
+    expect(alice?.resources.influence).toBe(1);
+    expect(alice?.resources.gold).toBe(0);
+    expect(alice?.resources.mana).toBe(0);
+    expect(alice?.resources.meritBadges).toBe(0);
+  });
+});
 
 describe('Library A slot 1 (merit, 1 MB): WIS + Vault Draft', () => {
   it('opens choose-vault-card and grants WIS + drafted card', () => {
@@ -2437,7 +2645,7 @@ describe('Guilds A (instant room)', () => {
     return s;
   }
 
-  it('slot 2 placement opens an OR prompt immediately at PLACE_WORKER', () => {
+  it('slot 2 placement opens forfeit-or-reward; picking reward opens the slot OR prompt', () => {
     let s = setupGuildsPlacement();
     s = applyAction(s, {
       type: 'PLACE_WORKER',
@@ -2445,11 +2653,14 @@ describe('Guilds A (instant room)', () => {
       mageId: 'alice-mage-1',
       actionSpaceId: 'base.room.guilds.a.slot-2',
     });
-    expect(s.phase.kind).toBe('errands'); // still in errands
+    expect(s.phase.kind).toBe('errands');
     const top = topPending(s);
-    expect(top.prompt.kind).toBe('choose-from-options');
-    if (top.prompt.kind === 'choose-from-options') {
-      expect(top.prompt.options.map((o) => o.label).sort()).toEqual([
+    expect(top.resume.effectId).toBe('base.system.resolution-choice');
+    s = takeRewardAtResolution(s);
+    const after = topPending(s);
+    expect(after.prompt.kind).toBe('choose-from-options');
+    if (after.prompt.kind === 'choose-from-options') {
+      expect(after.prompt.options.map((o) => o.label).sort()).toEqual([
         'Gain 2 Mana',
         'Gain 4 Gold',
       ]);
@@ -2467,6 +2678,7 @@ describe('Guilds A (instant room)', () => {
       mageId: 'alice-mage-1',
       actionSpaceId: 'base.room.guilds.a.slot-2',
     });
+    s = takeRewardAtResolution(s);
     s = applyAction(s, {
       type: 'RESOLVE_PENDING',
       resolutionId: topPending(s).id,
@@ -2484,6 +2696,7 @@ describe('Guilds A (instant room)', () => {
       mageId: 'alice-mage-1',
       actionSpaceId: 'base.room.guilds.a.slot-3',
     });
+    s = takeRewardAtResolution(s);
     s = applyAction(s, {
       type: 'RESOLVE_PENDING',
       resolutionId: topPending(s).id,
@@ -2501,6 +2714,7 @@ describe('Guilds A (instant room)', () => {
       mageId: 'alice-mage-1',
       actionSpaceId: 'base.room.guilds.a.slot-3',
     });
+    s = takeRewardAtResolution(s);
     s = applyAction(s, {
       type: 'RESOLVE_PENDING',
       resolutionId: topPending(s).id,
@@ -2654,8 +2868,10 @@ describe('Round-setup clears roundPlacements', () => {
 
     // Drain bell tower; drive through resolution → mid-game → round 2 setup.
     s = { ...s, bellTower: { ...s.bellTower, available: [] } };
+    s = setMeritBadges(s, 'p1', 5); // afford the merit-slot reward
     s = applyAction(s, { type: 'ADVANCE_PHASE' }); // errands → resolution
-    s = applyAction(s, { type: 'ADVANCE_PHASE' }); // resolution pump → Council slot pauses
+    s = applyAction(s, { type: 'ADVANCE_PHASE' }); // pump → forfeit-or-reward prompt
+    s = takeRewardAtResolution(s); // → Council slot's OR prompt
     s = applyAction(s, {
       type: 'RESOLVE_PENDING',
       resolutionId: topPending(s).id,

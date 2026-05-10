@@ -1,7 +1,7 @@
 // Base game effect implementations. Currently scoped to the Vertical Slice
 // targets: Library A slot 1, Burn L1, Phase Steppers reaction.
 
-import { registerEffect } from './registry';
+import { getEffect, registerEffect } from './registry';
 import {
   affordableVaultCards,
   applyGainMark,
@@ -693,6 +693,105 @@ function bonusPromptFor(
     },
   };
 }
+
+// ============================================================================
+// Resolution-choice — fired before every space's effect runs.
+// ============================================================================
+//
+// Gives the active player two options:
+//   * Take the reward — deduct the merit cost (if any) and invoke the slot's
+//     real effect. Available only if they can afford the cost.
+//   * Forfeit for 1 IP — grant 1 Influence and skip the effect.
+//
+// Players can place on merit-cost slots without enough Merit Badges (the cost
+// is no longer enforced upfront), so this prompt is also the safety net for
+// "I placed here on speculation but never came up with the badges in time."
+
+registerEffect('base.system.resolution-choice', (ctx: EffectContext): EffectResult => {
+  if (ctx.resumeAnswer?.kind !== 'option-chosen') {
+    throw new Error(
+      `resolution-choice expected option-chosen, got ${ctx.resumeAnswer?.kind}`,
+    );
+  }
+  const optionId = ctx.resumeAnswer.optionId;
+  const innerEffectIdRaw = ctx.resumeContext?.['innerEffectId'];
+  const meritCostRaw = ctx.resumeContext?.['meritCost'];
+  if (
+    typeof innerEffectIdRaw !== 'string' ||
+    typeof meritCostRaw !== 'number'
+  ) {
+    throw new Error('resolution-choice: missing context fields');
+  }
+  const playerId = ctx.triggeringPlayerId;
+
+  if (optionId === 'forfeit') {
+    return {
+      kind: 'done',
+      patch: bumpInfluencePatch(ctx.state, playerId, 1),
+    };
+  }
+  if (optionId !== 'reward') {
+    throw new Error(`resolution-choice: unknown optionId ${optionId}`);
+  }
+
+  // Deduct the merit cost up front, then run the slot's effect against the
+  // post-deduction state so the inner effect's player-patch already reflects
+  // the spent badges.
+  let working: GameState = ctx.state;
+  if (meritCostRaw > 0) {
+    const player = working.players.find((p) => p.id === playerId);
+    if (!player) throw new Error('resolution-choice: player not found');
+    if (player.resources.meritBadges < meritCostRaw) {
+      // Should never happen — the prompt's "reward" option is unavailable in
+      // this case. Belt-and-suspenders.
+      throw new Error(
+        'resolution-choice: cannot take reward without sufficient Merit Badges',
+      );
+    }
+    working = {
+      ...working,
+      players: working.players.map((p) =>
+        p.id !== playerId
+          ? p
+          : {
+              ...p,
+              resources: {
+                ...p.resources,
+                meritBadges: p.resources.meritBadges - meritCostRaw,
+                meritBadgesSpent: p.resources.meritBadgesSpent + meritCostRaw,
+              },
+            },
+      ),
+    };
+  }
+
+  // Invoke the slot's real effect AS A FRESH CALL (no resumeAnswer/Context),
+  // so it doesn't mistake the resolution-choice's answer for its own resume.
+  const innerEffect = getEffect(innerEffectIdRaw);
+  const innerResult = innerEffect({
+    state: working,
+    source: ctx.source,
+    triggeringPlayerId: ctx.triggeringPlayerId,
+    allowReactions: ctx.allowReactions,
+  });
+  const meritPatch: GameStatePatch =
+    meritCostRaw > 0 ? { players: working.players } : {};
+  const innerPatch = innerResult.patch ?? {};
+  const combined: GameStatePatch = { ...meritPatch, ...innerPatch };
+
+  switch (innerResult.kind) {
+    case 'done':
+      return { kind: 'done', patch: combined };
+    case 'pause':
+      return { kind: 'pause', patch: combined, pending: innerResult.pending };
+    case 'open-reaction':
+      return {
+        kind: 'open-reaction',
+        patch: combined,
+        window: innerResult.window,
+      };
+  }
+});
 
 registerEffect('base.system.infirmary-bonus', (ctx) => {
   if (ctx.resumeAnswer?.kind !== 'option-chosen') {
