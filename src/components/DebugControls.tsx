@@ -170,22 +170,51 @@ function forceVaultSide(state: GameState, side: 'A' | 'B'): GameState {
 
 // ===== Lookup helpers =====
 
-interface SlotEntry {
-  roomName: string;
-  spaceId: string;
-}
-
-function findEmptyRegularSlots(state: GameState): SlotEntry[] {
-  const slots: SlotEntry[] = [];
-  for (const r of state.rooms) {
-    if (r.cannotBePlacedInDirectly) continue;
-    for (const s of r.actionSpaces) {
-      if (s.slotType === 'regular' && !s.occupant) {
-        slots.push({ roomName: `${r.name} (${r.side})`, spaceId: s.id });
-      }
-    }
+/**
+ * Mirrors the engine-side rules for placing a mage on a space, so the UI
+ * can pre-highlight viable targets and disable the rest. Returns null if
+ * placement is allowed, or a short string explaining why it is not.
+ */
+function placementBlockedReason(
+  state: GameState,
+  mage: OwnedMage,
+  room: GameState['rooms'][number],
+  space: GameState['rooms'][number]['actionSpaces'][number],
+): string | null {
+  if (room.cannotBePlacedInDirectly) return 'cannot place here';
+  if (state.roomLocks.some((l) => l.roomId === room.id)) return 'room locked';
+  if (space.occupant) return 'space occupied';
+  if (
+    space.slotType === 'shadow' ||
+    space.slotType === 'shadow-merit' ||
+    space.slotType === 'wound'
+  ) {
+    return `${space.slotType} slot not yet supported`;
   }
-  return slots;
+  if (state.phase.kind !== 'errands') return 'not in errands phase';
+  if (state.pendingResolutionStack.length > 0) return 'resolve pending prompt first';
+  if (mage.location.kind !== 'office') return 'mage not in office';
+  if (mage.isWounded) return 'wounded mages must heal first';
+  // Per-room-per-round limit.
+  const owner = state.players.find((p) =>
+    p.mages.some((m) => m.id === mage.id),
+  );
+  if (!owner) return 'mage owner not found';
+  const roomLimit = room.maxMagesPerPlayerPerRound ?? Infinity;
+  if (Number.isFinite(roomLimit)) {
+    const placedHere = owner.roundPlacements.filter(
+      (rid) => rid === room.id,
+    ).length;
+    if (placedHere >= roomLimit) return `${room.name}: already at room limit this round`;
+  }
+  // Action budget.
+  const isFast = mage.color === 'purple';
+  if (isFast) {
+    if (state.phase.fastActionUsed) return 'Fast Action already used';
+  } else {
+    if (state.phase.actionUsed) return 'Action already used';
+  }
+  return null;
 }
 
 function findOwnerLabel(state: GameState, mageId: string): string {
@@ -229,29 +258,6 @@ function findSpellL1Timing(
   return null;
 }
 
-function describeMageLocation(m: OwnedMage): string {
-  if (m.location.kind === 'office') return 'office';
-  if (m.location.kind === 'action-space') return `at ${m.location.spaceId}`;
-  if (m.location.kind === 'infirmary') return 'infirmary';
-  return 'banished';
-}
-
-function MageRow({ m }: { m: OwnedMage }) {
-  const tags: string[] = [];
-  if (m.isWounded) tags.push('wounded');
-  if (m.isShadowing) tags.push('shadow');
-  return (
-    <span className="inline-flex items-center gap-1.5">
-      <MageIcon color={m.color} size={14} />
-      <span className="capitalize">{m.color}</span>
-      <span className="text-slate-500">({m.id.slice(-12)})</span>
-      <span>— {describeMageLocation(m)}</span>
-      {tags.length > 0 && (
-        <span className="text-amber-300/80">[{tags.join(', ')}]</span>
-      )}
-    </span>
-  );
-}
 
 function describePhase(state: GameState): string {
   const p = state.phase;
@@ -297,6 +303,11 @@ export function DebugControls() {
   const patchState = useGameStore((s) => s.patchState);
   const reset = useGameStore((s) => s.reset);
 
+  // Hooks must run unconditionally on every render — keep this above any
+  // early returns. Two-step placement: click a mage in the active player's
+  // inventory to select it, then click an eligible space to place it.
+  const [placementMageId, setPlacementMageId] = useState<string | null>(null);
+
   if (!state) return null;
 
   // While the candidate draft is open, show only that — gameplay isn't
@@ -320,6 +331,26 @@ export function DebugControls() {
       ? (state.players[state.phase.activePlayerIndex]?.id ?? null)
       : null;
   const focusPlayerId = responderId ?? errandsActiveId;
+
+  // Auto-clear the selection if it becomes invalid (turn changed, mage was
+  // wounded, etc.) - cheaper than wiring useEffect.
+  const selectedMage = placementMageId
+    ? state.players.flatMap((p) => p.mages).find((m) => m.id === placementMageId)
+    : null;
+  const selectionValid =
+    selectedMage !== undefined &&
+    selectedMage !== null &&
+    selectedMage.location.kind === 'office' &&
+    !selectedMage.isWounded &&
+    state.phase.kind === 'errands' &&
+    state.pendingResolutionStack.length === 0 &&
+    (() => {
+      const owner = state.players.find((p) =>
+        p.mages.some((m) => m.id === selectedMage.id),
+      );
+      return owner?.id === errandsActiveId;
+    })();
+  const effectiveSelectedMage = selectionValid ? selectedMage : null;
 
   return (
     <div className="min-h-full p-6 max-w-6xl mx-auto space-y-5">
@@ -366,12 +397,19 @@ export function DebugControls() {
               isFocus={p.id === focusPlayerId}
               dispatch={dispatch}
               patchState={patchState}
+              selectedMageId={effectiveSelectedMage?.id ?? null}
+              onSelectMage={setPlacementMageId}
             />
           ))}
         </div>
       </section>
 
-      <RoomsPanel state={state} />
+      <RoomsPanel
+        state={state}
+        selectedMage={effectiveSelectedMage}
+        dispatch={dispatch}
+        onPlaced={() => setPlacementMageId(null)}
+      />
 
       <BellTowerPanel state={state} dispatch={dispatch} />
 
@@ -729,12 +767,16 @@ function PlayerCard({
   isFocus,
   dispatch,
   patchState,
+  selectedMageId,
+  onSelectMage,
 }: {
   state: GameState;
   player: Player;
   isFocus: boolean;
   dispatch: (action: GameAction) => void;
   patchState: (fn: (s: GameState) => GameState) => void;
+  selectedMageId: string | null;
+  onSelectMage: (id: string | null) => void;
 }) {
   const isErrandsActive =
     state.phase.kind === 'errands' &&
@@ -750,17 +792,6 @@ function PlayerCard({
       : false;
   const canTakeAction = canAct && !actionUsed;
   const canTakeFastAction = canAct && !fastActionUsed;
-
-  const [selectedMageId, setSelectedMageId] = useState('');
-  const [selectedSpaceId, setSelectedSpaceId] = useState('');
-
-  const emptySlots = findEmptyRegularSlots(state);
-  const officeMages = player.mages.filter(
-    (m) => m.location.kind === 'office' && !m.isWounded,
-  );
-  const selectedMage = officeMages.find((m) => m.id === selectedMageId);
-  const placeIsFastAction = selectedMage?.color === 'purple';
-  const placeAllowed = placeIsFastAction ? canTakeFastAction : canTakeAction;
 
   return (
     <div
@@ -813,18 +844,67 @@ function PlayerCard({
 
       <ResourceLine player={player} />
 
-      <details>
-        <summary className="text-xs text-slate-400 cursor-pointer">
-          Mages ({player.mages.length})
-        </summary>
-        <ul className="text-xs mt-1 space-y-0.5 text-slate-300">
-          {player.mages.map((m) => (
-            <li key={m.id}>
-              <MageRow m={m} />
-            </li>
-          ))}
-        </ul>
-      </details>
+      <div>
+        <p className="text-[10px] uppercase tracking-wide text-slate-500 mb-1">
+          Workers ({player.mages.length})
+        </p>
+        <div className="flex flex-wrap gap-1.5 items-center">
+          {player.mages.length === 0 && (
+            <span className="text-xs text-slate-500 italic">no mages yet</span>
+          )}
+          {player.mages.map((m) => {
+            const inOffice = m.location.kind === 'office';
+            const placeable =
+              canAct && inOffice && !m.isWounded;
+            const colorIsPurple = m.color === 'purple';
+            const budgetOpen = colorIsPurple
+              ? !fastActionUsed
+              : !actionUsed;
+            const clickable = placeable && budgetOpen;
+            const isSelected = selectedMageId === m.id;
+            const dimReason = !inOffice
+              ? m.location.kind === 'action-space'
+                ? 'on a slot'
+                : m.location.kind === 'infirmary'
+                  ? 'in infirmary'
+                  : 'banished'
+              : m.isWounded
+                ? 'wounded'
+                : !canAct
+                  ? 'not your turn'
+                  : !budgetOpen
+                    ? colorIsPurple
+                      ? 'Fast Action used'
+                      : 'Action used'
+                    : null;
+            return (
+              <button
+                key={m.id}
+                type="button"
+                disabled={!clickable}
+                onClick={() => onSelectMage(isSelected ? null : m.id)}
+                title={
+                  clickable
+                    ? isSelected
+                      ? 'Selected — click again to deselect'
+                      : `Place this ${m.color} mage`
+                    : (dimReason ?? m.color)
+                }
+                className={clsx(
+                  'rounded p-0.5 transition-all',
+                  isSelected
+                    ? 'ring-2 ring-amber-400 bg-amber-400/10'
+                    : clickable
+                      ? 'hover:ring-2 hover:ring-amber-400/40 hover:bg-slate-800'
+                      : 'opacity-40 cursor-not-allowed',
+                )}
+              >
+                <MageIcon color={m.color} size={28} />
+              </button>
+            );
+          })}
+        </div>
+      </div>
 
       <details>
         <summary className="text-xs text-slate-400 cursor-pointer">
@@ -908,57 +988,11 @@ function PlayerCard({
         </details>
       )}
 
-      {canAct && officeMages.length > 0 && emptySlots.length > 0 && (
-        <div className="flex gap-1 text-xs">
-          <select
-            value={selectedMageId}
-            onChange={(e) => setSelectedMageId(e.target.value)}
-            className="bg-slate-800 px-1 py-0.5 rounded flex-1 min-w-0"
-          >
-            <option value="">Pick mage…</option>
-            {officeMages.map((m) => (
-              <option key={m.id} value={m.id}>
-                {m.color} ({m.id.slice(-8)})
-              </option>
-            ))}
-          </select>
-          <select
-            value={selectedSpaceId}
-            onChange={(e) => setSelectedSpaceId(e.target.value)}
-            className="bg-slate-800 px-1 py-0.5 rounded flex-1 min-w-0"
-          >
-            <option value="">Pick slot…</option>
-            {emptySlots.map((s) => (
-              <option key={s.spaceId} value={s.spaceId}>
-                {s.roomName}
-              </option>
-            ))}
-          </select>
-          <button
-            type="button"
-            disabled={!selectedMageId || !selectedSpaceId || !placeAllowed}
-            title={
-              placeAllowed
-                ? undefined
-                : placeIsFastAction
-                  ? 'Fast Action already used this turn'
-                  : 'Action already used this turn'
-            }
-            onClick={() => {
-              dispatch({
-                type: 'PLACE_WORKER',
-                playerId: player.id,
-                mageId: selectedMageId,
-                actionSpaceId: selectedSpaceId,
-              });
-              setSelectedMageId('');
-              setSelectedSpaceId('');
-            }}
-            className="px-2 py-0.5 rounded bg-amber-500 text-slate-950 disabled:opacity-40 disabled:cursor-not-allowed"
-          >
-            Place{placeIsFastAction ? ' (fast)' : ''}
-          </button>
-        </div>
+      {canAct && selectedMageId && (
+        <p className="text-[11px] text-amber-300/80">
+          Selected — click a highlighted slot to place, or click the mage
+          again to cancel.
+        </p>
       )}
 
       {canAct && !actionUsed && (
@@ -1514,10 +1548,32 @@ function MageDraftPoolPanel({ state }: { state: GameState }) {
   );
 }
 
-function RoomsPanel({ state }: { state: GameState }) {
+function RoomsPanel({
+  state,
+  selectedMage,
+  dispatch,
+  onPlaced,
+}: {
+  state: GameState;
+  selectedMage: OwnedMage | null;
+  dispatch: (action: GameAction) => void;
+  onPlaced: () => void;
+}) {
+  const ownerOfSelected = selectedMage
+    ? state.players.find((p) => p.mages.some((m) => m.id === selectedMage.id))
+    : null;
+
   return (
     <section>
-      <h2 className="text-lg font-medium mb-2">Tower ({state.rooms.length} rooms)</h2>
+      <div className="flex items-baseline gap-2 mb-2">
+        <h2 className="text-lg font-medium">Tower ({state.rooms.length} rooms)</h2>
+        {selectedMage && ownerOfSelected && (
+          <span className="text-xs text-amber-300 inline-flex items-center gap-1.5">
+            placing <MageIcon color={selectedMage.color} size={14} /> for{' '}
+            {ownerOfSelected.name} — click a highlighted slot
+          </span>
+        )}
+      </div>
       <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
         {state.rooms.map((room, ri) => {
           const isCurrent =
@@ -1567,16 +1623,12 @@ function RoomsPanel({ state }: { state: GameState }) {
                       'slot-',
                       'Slot ',
                     );
-                    return (
-                      <li
-                        key={s.id}
-                        className={clsx(
-                          'text-[11px] leading-snug rounded px-1.5 py-1',
-                          s.occupant
-                            ? 'bg-amber-400/10 text-amber-200'
-                            : 'bg-slate-950/40 text-slate-300',
-                        )}
-                      >
+                    const placeBlocked = selectedMage
+                      ? placementBlockedReason(state, selectedMage, room, s)
+                      : 'no mage selected';
+                    const isPlaceable = selectedMage !== null && placeBlocked === null;
+                    const slotBody = (
+                      <>
                         <div className="flex items-baseline gap-2">
                           <span className="font-medium text-slate-200">
                             {slotIndex}
@@ -1600,12 +1652,76 @@ function RoomsPanel({ state }: { state: GameState }) {
                             s.occupant ? 'text-amber-300' : 'text-slate-500',
                           )}
                         >
-                          {s.occupant
-                            ? `occupied by ${s.occupant.ownerId} / ${s.occupant.mageId.slice(-8)}${
-                                s.occupant.isShadowing ? ' (shadow)' : ''
-                              }`
-                            : 'empty'}
+                          {s.occupant ? (
+                            <span className="inline-flex items-center gap-1">
+                              occupied by{' '}
+                              <MageIcon
+                                color={
+                                  state.players
+                                    .find((p) => p.id === s.occupant?.ownerId)
+                                    ?.mages.find(
+                                      (m) => m.id === s.occupant?.mageId,
+                                    )?.color ?? 'off-white'
+                                }
+                                size={12}
+                              />
+                              {s.occupant.ownerId}
+                              {s.occupant.isShadowing ? ' (shadow)' : ''}
+                            </span>
+                          ) : (
+                            'empty'
+                          )}
                         </div>
+                      </>
+                    );
+                    if (isPlaceable && selectedMage) {
+                      return (
+                        <li key={s.id}>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              dispatch({
+                                type: 'PLACE_WORKER',
+                                playerId:
+                                  state.players.find((p) =>
+                                    p.mages.some(
+                                      (m) => m.id === selectedMage.id,
+                                    ),
+                                  )?.id ?? '',
+                                mageId: selectedMage.id,
+                                actionSpaceId: s.id,
+                              });
+                              onPlaced();
+                            }}
+                            className={clsx(
+                              'w-full text-left text-[11px] leading-snug rounded px-1.5 py-1',
+                              'bg-slate-950/40 text-slate-300',
+                              'ring-2 ring-amber-400 hover:bg-amber-400/15 hover:ring-amber-300',
+                              'cursor-pointer',
+                            )}
+                          >
+                            {slotBody}
+                          </button>
+                        </li>
+                      );
+                    }
+                    return (
+                      <li
+                        key={s.id}
+                        title={
+                          selectedMage && placeBlocked
+                            ? `cannot place: ${placeBlocked}`
+                            : undefined
+                        }
+                        className={clsx(
+                          'text-[11px] leading-snug rounded px-1.5 py-1',
+                          s.occupant
+                            ? 'bg-amber-400/10 text-amber-200'
+                            : 'bg-slate-950/40 text-slate-300',
+                          selectedMage && !isPlaceable && !s.occupant && 'opacity-50',
+                        )}
+                      >
+                        {slotBody}
                       </li>
                     );
                   })}
