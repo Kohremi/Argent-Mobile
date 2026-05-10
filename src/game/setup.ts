@@ -5,6 +5,7 @@ import type {
   GameConfig,
   GamePhase,
   GameState,
+  MageColor,
   Player,
   Room,
 } from './types';
@@ -170,11 +171,23 @@ export function buildInitialState(config: GameConfig): GameState {
     bellTower: { available: bellAvailable, taken: [] },
     archmagesApprenticeOwner: null,
     roomLocks: [],
+    mageDraftPool: makeInitialMageDraftPool(),
     phase: initialPhase(config, firstPlayerIndex),
     pendingResolutionStack: [],
     activeReactionWindows: [],
     nextSequenceId: 1,
     actionLog: [],
+  };
+}
+
+function makeInitialMageDraftPool(): Record<MageColor, number> {
+  return {
+    red: 4,
+    grey: 4,
+    green: 4,
+    blue: 2,
+    purple: 2,
+    'off-white': 4,
   };
 }
 

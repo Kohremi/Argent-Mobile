@@ -59,11 +59,16 @@ describe('initGame', () => {
     expect(ucNames).toEqual(['Council Chamber', 'Infirmary', 'Library']);
   });
 
-  it('filters bell tower cards by player count threshold', () => {
+  it('seats the 3-card bell tower offering set', () => {
     const s = initGame(FOUR_PLAYER_CONFIG);
-    // 4p means cards with minPlayers <= 4: i.e., 4 of the 5 stub cards.
-    expect(s.bellTower.available).toHaveLength(4);
+    expect(s.bellTower.available).toHaveLength(3);
     expect(s.bellTower.available.every((c) => c.minPlayers <= 4)).toBe(true);
+    const ids = s.bellTower.available.map((c) => c.id).sort();
+    expect(ids).toEqual([
+      'base.bell.first-player',
+      'base.bell.gain-ip',
+      'base.bell.gold-or-mana',
+    ]);
   });
 });
 
@@ -276,6 +281,394 @@ describe('Room layout', () => {
 });
 
 // ============================================================================
+// Bell Tower offerings — claim flow
+// ============================================================================
+
+describe('Bell Tower offerings', () => {
+  function startErrands(): GameState {
+    let s = initGame(FOUR_PLAYER_CONFIG);
+    s = applyAction(s, { type: 'ADVANCE_PHASE' }); // round-setup → errands
+    return s;
+  }
+
+  it('CLAIM_BELL_TOWER moves card to taken and records on player', () => {
+    let s = startErrands();
+    const activeId = s.players[s.firstPlayerIndex]?.id;
+    if (!activeId) throw new Error('no active player');
+    s = applyAction(s, {
+      type: 'CLAIM_BELL_TOWER',
+      playerId: activeId,
+      bellTowerCardId: 'base.bell.gain-ip',
+    });
+    expect(s.bellTower.available.find((c) => c.id === 'base.bell.gain-ip')).toBeUndefined();
+    expect(s.bellTower.taken).toEqual([
+      { cardId: 'base.bell.gain-ip', takenBy: activeId },
+    ]);
+    const player = s.players.find((p) => p.id === activeId);
+    expect(player?.bellTowerCards).toEqual(['base.bell.gain-ip']);
+    expect(player?.resources.influence).toBe(1);
+  });
+
+  it('Gold-or-Mana card pauses for player choice and grants the picked resource', () => {
+    let s = startErrands();
+    const activeId = s.players[s.firstPlayerIndex]?.id;
+    if (!activeId) throw new Error('no active player');
+    s = applyAction(s, {
+      type: 'CLAIM_BELL_TOWER',
+      playerId: activeId,
+      bellTowerCardId: 'base.bell.gold-or-mana',
+    });
+    expect(s.pendingResolutionStack).toHaveLength(1);
+    const top = topPending(s);
+    expect(top.responderId).toBe(activeId);
+    expect(top.prompt.kind).toBe('choose-from-options');
+
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: top.id,
+      answer: { kind: 'option-chosen', optionId: 'gold', payload: {} },
+    });
+    expect(s.pendingResolutionStack).toHaveLength(0);
+    const player = s.players.find((p) => p.id === activeId);
+    expect(player?.resources.gold).toBe(2);
+    expect(player?.resources.mana).toBe(0);
+  });
+
+  it('First-Player Token sets firstPlayerIndex to the claimer', () => {
+    let s = startErrands();
+    // Pick a non-first-player to make the change observable.
+    const claimerIdx = (s.firstPlayerIndex + 1) % s.players.length;
+    const claimerId = s.players[claimerIdx]?.id;
+    if (!claimerId) throw new Error('no claimer');
+    // Walk turn order until the claimer is active.
+    while (
+      s.phase.kind === 'errands' &&
+      s.players[s.phase.activePlayerIndex]?.id !== claimerId
+    ) {
+      // Other players forfeit their action so we can reach the claimer cleanly.
+      s = applyAction(s, {
+        type: 'PASS_TURN',
+        playerId: s.players[s.phase.activePlayerIndex]!.id,
+      });
+    }
+    s = applyAction(s, {
+      type: 'CLAIM_BELL_TOWER',
+      playerId: claimerId,
+      bellTowerCardId: 'base.bell.first-player',
+    });
+    expect(s.firstPlayerIndex).toBe(claimerIdx);
+  });
+
+  it('claiming the last bell tower card drains the tower and ends the round', () => {
+    let s = startErrands();
+    const activeId = () => {
+      if (s.phase.kind !== 'errands') throw new Error('not errands');
+      const id = s.players[s.phase.activePlayerIndex]?.id;
+      if (!id) throw new Error('no active player');
+      return id;
+    };
+    // Each claim auto-ends the player's turn once it fully resolves.
+    s = applyAction(s, {
+      type: 'CLAIM_BELL_TOWER',
+      playerId: activeId(),
+      bellTowerCardId: 'base.bell.gain-ip',
+    });
+    s = applyAction(s, {
+      type: 'CLAIM_BELL_TOWER',
+      playerId: activeId(),
+      bellTowerCardId: 'base.bell.first-player',
+    });
+    s = applyAction(s, {
+      type: 'CLAIM_BELL_TOWER',
+      playerId: activeId(),
+      bellTowerCardId: 'base.bell.gold-or-mana',
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'option-chosen', optionId: 'mana', payload: {} },
+    });
+    // Tower drained + last action resolved → auto-advance promoted us to resolution.
+    expect(s.bellTower.available).toHaveLength(0);
+    expect(s.phase.kind).toBe('resolution');
+  });
+
+  it('rejects claiming a card that is not in the tower', () => {
+    const s = startErrands();
+    const activeId = s.players[s.firstPlayerIndex]?.id;
+    if (!activeId) throw new Error('no active player');
+    expect(() =>
+      applyAction(s, {
+        type: 'CLAIM_BELL_TOWER',
+        playerId: activeId,
+        bellTowerCardId: 'base.bell.does-not-exist',
+      }),
+    ).toThrow(/not in bell tower/);
+  });
+
+  it('rejects claiming when not your turn', () => {
+    const s = startErrands();
+    const activeId = s.players[s.firstPlayerIndex]?.id;
+    const otherId = s.players[(s.firstPlayerIndex + 1) % s.players.length]?.id;
+    if (!activeId || !otherId) throw new Error('missing player');
+    expect(() =>
+      applyAction(s, {
+        type: 'CLAIM_BELL_TOWER',
+        playerId: otherId,
+        bellTowerCardId: 'base.bell.gain-ip',
+      }),
+    ).toThrow(/not your turn/);
+  });
+
+  it('round-setup of round 2 restores the bell tower offerings claimed in round 1', () => {
+    let s = startErrands();
+    const activeId = () => {
+      if (s.phase.kind !== 'errands') throw new Error('not errands');
+      const id = s.players[s.phase.activePlayerIndex]?.id;
+      if (!id) throw new Error('no active player');
+      return id;
+    };
+    const firstClaimerId = activeId();
+    // Each claim auto-ends the player's turn; the last claim drains the
+    // tower and auto-advances us into the resolution phase.
+    s = applyAction(s, {
+      type: 'CLAIM_BELL_TOWER',
+      playerId: activeId(),
+      bellTowerCardId: 'base.bell.gain-ip',
+    });
+    s = applyAction(s, {
+      type: 'CLAIM_BELL_TOWER',
+      playerId: activeId(),
+      bellTowerCardId: 'base.bell.first-player',
+    });
+    s = applyAction(s, {
+      type: 'CLAIM_BELL_TOWER',
+      playerId: activeId(),
+      bellTowerCardId: 'base.bell.gold-or-mana',
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'option-chosen', optionId: 'mana', payload: {} },
+    });
+    expect(s.phase.kind).toBe('resolution');
+    s = applyAction(s, { type: 'ADVANCE_PHASE' }); // → mid-game-scoring
+    s = applyAction(s, { type: 'ADVANCE_PHASE' }); // → round-setup round 2
+    s = applyAction(s, { type: 'ADVANCE_PHASE' }); // → errands round 2
+    expect(s.bellTower.available).toHaveLength(3);
+    expect(s.bellTower.taken).toHaveLength(0);
+    // Per-round bell tower record reset on every player.
+    expect(s.players.every((p) => p.bellTowerCards.length === 0)).toBe(true);
+    // Sanity: previously claimed cards are back in the pool.
+    const ids = s.bellTower.available.map((c) => c.id).sort();
+    expect(ids).toEqual([
+      'base.bell.first-player',
+      'base.bell.gain-ip',
+      'base.bell.gold-or-mana',
+    ]);
+    // First-Player Token claimer becomes first player in round 2.
+    const claimer2Idx = (s.players.findIndex((p) => p.id === firstClaimerId) + 1) % s.players.length;
+    expect(s.firstPlayerIndex).toBe(claimer2Idx);
+    if (s.phase.kind === 'errands') {
+      expect(s.phase.activePlayerIndex).toBe(claimer2Idx);
+    }
+  });
+});
+
+// ============================================================================
+// Action / Fast Action budget per turn
+// ============================================================================
+
+describe('Per-turn Action / Fast Action budget', () => {
+  function startErrandsAt(playerIdx: number): GameState {
+    let s = initGame(FOUR_PLAYER_CONFIG);
+    s = applyAction(s, { type: 'ADVANCE_PHASE' }); // round-setup → errands
+    if (s.phase.kind !== 'errands') throw new Error('not errands');
+    return {
+      ...s,
+      firstPlayerIndex: playerIdx,
+      phase: { ...s.phase, activePlayerIndex: playerIdx },
+    };
+  }
+
+  it('starts a turn with both Action and Fast Action available', () => {
+    const s = startErrandsAt(0);
+    if (s.phase.kind !== 'errands') throw new Error('not errands');
+    expect(s.phase.actionUsed).toBe(false);
+    expect(s.phase.fastActionUsed).toBe(false);
+  });
+
+  it('a fully-resolved Regular Action auto-ends the turn (no explicit end)', () => {
+    let s = startErrandsAt(0);
+    // Bell tower IP card has no follow-up prompts — claim resolves immediately.
+    s = applyAction(s, {
+      type: 'CLAIM_BELL_TOWER',
+      playerId: 'p1',
+      bellTowerCardId: 'base.bell.gain-ip',
+    });
+    if (s.phase.kind !== 'errands') throw new Error('not errands');
+    // Auto-advance moved active player forward and reset both budgets.
+    expect(s.phase.activePlayerIndex).toBe(1);
+    expect(s.phase.actionUsed).toBe(false);
+    expect(s.phase.fastActionUsed).toBe(false);
+  });
+
+  it('Action that pauses on a prompt only auto-ends the turn once the prompt resolves', () => {
+    let s = startErrandsAt(0);
+    s = applyAction(s, {
+      type: 'CLAIM_BELL_TOWER',
+      playerId: 'p1',
+      bellTowerCardId: 'base.bell.gold-or-mana',
+    });
+    // Mid-action: still p1's turn, action used, awaiting prompt.
+    if (s.phase.kind !== 'errands') throw new Error('not errands');
+    expect(s.phase.activePlayerIndex).toBe(0);
+    expect(s.phase.actionUsed).toBe(true);
+    expect(s.pendingResolutionStack).toHaveLength(1);
+    // Resolve the OR prompt → auto-advance fires.
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'option-chosen', optionId: 'gold', payload: {} },
+    });
+    if (s.phase.kind !== 'errands') throw new Error('not errands');
+    expect(s.phase.activePlayerIndex).toBe(1);
+    expect(s.phase.actionUsed).toBe(false);
+  });
+
+  it('Fast Action keeps the turn open; the player still owes their Regular Action', () => {
+    let s = startErrandsAt(0);
+    // Set Alice up to wound an enemy mage, then drive Ars Magna to completion.
+    s = addMage(s, 'p2', {
+      id: 'bob-red',
+      cardId: 'base.mage.sorcery',
+      color: 'red',
+    });
+    s = placeMageOnSpace(s, 'p2', 'bob-red', 'base.room.library.a.slot-3');
+    s = addMage(s, 'p1', {
+      id: 'alice-red',
+      cardId: 'base.mage.sorcery',
+      color: 'red',
+    });
+    s = setMana(s, 'p1', 2);
+    s = applyAction(s, {
+      type: 'USE_ABILITY',
+      playerId: 'p1',
+      abilityId: 'base.mage.sorcery.ars-magna',
+      sourceCardId: 'alice-red',
+    });
+    while (s.pendingResolutionStack.length > 0) {
+      const top = topPending(s);
+      if (top.prompt.kind === 'choose-target-mage') {
+        s = applyAction(s, {
+          type: 'RESOLVE_PENDING',
+          resolutionId: top.id,
+          answer: { kind: 'mage-chosen', mageId: 'bob-red' },
+        });
+      } else if (top.prompt.kind === 'reaction-window') {
+        s = applyAction(s, {
+          type: 'RESOLVE_PENDING',
+          resolutionId: top.id,
+          answer: { kind: 'reaction-passed' },
+        });
+      } else if (top.prompt.kind === 'choose-from-options') {
+        s = applyAction(s, {
+          type: 'RESOLVE_PENDING',
+          resolutionId: top.id,
+          answer: { kind: 'option-chosen', optionId: 'gold', payload: {} },
+        });
+      } else {
+        throw new Error(`unexpected prompt kind ${top.prompt.kind}`);
+      }
+    }
+    // Fast Action consumed; Regular Action still owed → still Alice's turn.
+    if (s.phase.kind !== 'errands') throw new Error('not errands');
+    expect(s.phase.activePlayerIndex).toBe(0);
+    expect(s.phase.actionUsed).toBe(false);
+    expect(s.phase.fastActionUsed).toBe(true);
+  });
+
+  it('rejects a second Fast Action in the same turn', () => {
+    let s = startErrandsAt(0);
+    s = addMage(s, 'p1', {
+      id: 'alice-red',
+      cardId: 'base.mage.sorcery',
+      color: 'red',
+    });
+    s = addMage(s, 'p2', {
+      id: 'bob-red',
+      cardId: 'base.mage.sorcery',
+      color: 'red',
+    });
+    s = placeMageOnSpace(s, 'p2', 'bob-red', 'base.room.library.a.slot-3');
+    s = setMana(s, 'p1', 4);
+    s = applyAction(s, {
+      type: 'USE_ABILITY',
+      playerId: 'p1',
+      abilityId: 'base.mage.sorcery.ars-magna',
+      sourceCardId: 'alice-red',
+    });
+    while (s.pendingResolutionStack.length > 0) {
+      const top = topPending(s);
+      if (top.prompt.kind === 'choose-target-mage') {
+        s = applyAction(s, {
+          type: 'RESOLVE_PENDING',
+          resolutionId: top.id,
+          answer: { kind: 'mage-chosen', mageId: 'bob-red' },
+        });
+      } else if (top.prompt.kind === 'reaction-window') {
+        s = applyAction(s, {
+          type: 'RESOLVE_PENDING',
+          resolutionId: top.id,
+          answer: { kind: 'reaction-passed' },
+        });
+      } else if (top.prompt.kind === 'choose-from-options') {
+        s = applyAction(s, {
+          type: 'RESOLVE_PENDING',
+          resolutionId: top.id,
+          answer: { kind: 'option-chosen', optionId: 'gold', payload: {} },
+        });
+      } else {
+        throw new Error(`unexpected prompt kind ${top.prompt.kind}`);
+      }
+    }
+    // Fast Action 1 done; Action still owed.
+    expect(() =>
+      applyAction(s, {
+        type: 'USE_ABILITY',
+        playerId: 'p1',
+        abilityId: 'base.mage.sorcery.ars-magna',
+        sourceCardId: 'alice-red',
+      }),
+    ).toThrow(/already used your Fast Action this turn/);
+  });
+
+  it('PASS_TURN forfeits the Action and advances to the next player', () => {
+    let s = startErrandsAt(0);
+    s = applyAction(s, { type: 'PASS_TURN', playerId: 'p1' });
+    if (s.phase.kind !== 'errands') throw new Error('not errands');
+    expect(s.phase.activePlayerIndex).toBe(1);
+    expect(s.phase.actionUsed).toBe(false);
+    expect(s.phase.fastActionUsed).toBe(false);
+  });
+
+  it('CAST_SPELL action timing consumes the Action and auto-advances', () => {
+    let s = startErrandsAt(0);
+    s = addOwnedSpell(s, 'p1', 'base.spell.burn', { intPlaced: true });
+    s = setMana(s, 'p1', 5);
+    // No legal Burn targets → effect resolves with no patch and auto-advances.
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.burn',
+      level: 1,
+    });
+    if (s.phase.kind !== 'errands') throw new Error('not errands');
+    expect(s.phase.activePlayerIndex).toBe(1);
+  });
+});
+
+// ============================================================================
 // Candidate draft
 // ============================================================================
 
@@ -307,9 +700,10 @@ describe('Candidate draft', () => {
     expect(s.players.every((p) => p.mages.length === 0)).toBe(true);
   });
 
-  it('CHOOSE_CANDIDATE grants 2 leader mages + 3 neutral + starter spell (4p)', () => {
+  it('CHOOSE_CANDIDATE grants 2 leader-color mages + starter spell, decrements the pool', () => {
     let s = initGame(DRAFT_CONFIG_4P);
     s = withFirstPlayer(s, 0);
+    expect(s.mageDraftPool.red).toBe(4);
     s = applyAction(s, {
       type: 'CHOOSE_CANDIDATE',
       playerId: 'p1',
@@ -318,11 +712,9 @@ describe('Candidate draft', () => {
     const alice = s.players.find((p) => p.id === 'p1');
     expect(alice?.candidateId).toBe('base.candidate.larimore-burman');
     expect(alice?.candidateStartingSpellId).toBe('base.spell.flash-of-light');
-    expect(alice?.mages).toHaveLength(5); // 2 red + 3 neutral
-    const reds = alice?.mages.filter((m) => m.color === 'red') ?? [];
-    const neutrals = alice?.mages.filter((m) => m.color === 'off-white') ?? [];
-    expect(reds).toHaveLength(2);
-    expect(neutrals).toHaveLength(3);
+    expect(alice?.mages).toHaveLength(2);
+    expect(alice?.mages.every((m) => m.color === 'red')).toBe(true);
+    expect(s.mageDraftPool.red).toBe(2);
     expect(alice?.ownedSpells).toEqual([
       {
         cardId: 'base.spell.flash-of-light',
@@ -334,26 +726,7 @@ describe('Candidate draft', () => {
     ]);
   });
 
-  it('CHOOSE_CANDIDATE grants 7 mages total in 2-player games', () => {
-    let s = initGame({
-      activePackIds: ['base'],
-      playerNames: ['Alice', 'Bob'],
-      rngSeed: 7,
-      useCandidateDraft: true,
-    });
-    s = withFirstPlayer(s, 0);
-    s = applyAction(s, {
-      type: 'CHOOSE_CANDIDATE',
-      playerId: 'p1',
-      candidateId: 'base.candidate.larimore-burman',
-    });
-    const alice = s.players.find((p) => p.id === 'p1');
-    expect(alice?.mages).toHaveLength(7); // 2 red + 5 neutral
-    expect(alice?.mages.filter((m) => m.color === 'red')).toHaveLength(2);
-    expect(alice?.mages.filter((m) => m.color === 'off-white')).toHaveLength(5);
-  });
-
-  it('Trias Blackwind starts with all off-white mages and +1 MB', () => {
+  it('Trias Blackwind starts with 2 off-white mages and +1 MB', () => {
     let s = initGame(DRAFT_CONFIG_4P);
     s = withFirstPlayer(s, 0);
     s = applyAction(s, {
@@ -363,9 +736,10 @@ describe('Candidate draft', () => {
     });
     const alice = s.players.find((p) => p.id === 'p1');
     expect(alice?.mages.every((m) => m.color === 'off-white')).toBe(true);
-    expect(alice?.mages).toHaveLength(5);
+    expect(alice?.mages).toHaveLength(2);
     expect(alice?.resources.meritBadges).toBe(1);
     expect(alice?.candidateStartingSpellId).toBe('base.spell.living-image');
+    expect(s.mageDraftPool['off-white']).toBe(2);
   });
 
   it('rejects picking the same candidate twice', () => {
@@ -397,7 +771,7 @@ describe('Candidate draft', () => {
     ).toThrow(/not your turn/);
   });
 
-  it('transitions to round-setup once every player has picked', () => {
+  it('transitions to mage-draft (4p) once every player has picked their leader', () => {
     let s = initGame(DRAFT_CONFIG_4P);
     s = withFirstPlayer(s, 0);
     const picks = [
@@ -413,9 +787,40 @@ describe('Candidate draft', () => {
         candidateId: pick.c,
       });
     }
-    expect(s.phase).toEqual({ kind: 'round-setup', round: 1 });
+    expect(s.phase.kind).toBe('mage-draft');
+    if (s.phase.kind === 'mage-draft') {
+      // Snake from firstPlayerIndex (0): [0,1,2,3, 3,2,1,0, 0,1,2,3]
+      expect(s.phase.pickOrder).toEqual([0, 1, 2, 3, 3, 2, 1, 0, 0, 1, 2, 3]);
+      expect(s.phase.nextPickIndex).toBe(0);
+    }
     expect(s.players.every((p) => p.candidateId !== '')).toBe(true);
-    expect(s.players.every((p) => p.mages.length === 5)).toBe(true);
+    // 2 leader mages each, draft picks pending.
+    expect(s.players.every((p) => p.mages.length === 2)).toBe(true);
+  });
+
+  it('2-player games transition to mage-draft-first-choice after both leaders are picked', () => {
+    let s = initGame({
+      activePackIds: ['base'],
+      playerNames: ['Alice', 'Bob'],
+      rngSeed: 7,
+      useCandidateDraft: true,
+    });
+    s = withFirstPlayer(s, 0);
+    s = applyAction(s, {
+      type: 'CHOOSE_CANDIDATE',
+      playerId: 'p1',
+      candidateId: 'base.candidate.larimore-burman',
+    });
+    s = applyAction(s, {
+      type: 'CHOOSE_CANDIDATE',
+      playerId: 'p2',
+      candidateId: 'base.candidate.byron-krane',
+    });
+    expect(s.phase.kind).toBe('mage-draft-first-choice');
+    if (s.phase.kind === 'mage-draft-first-choice') {
+      // 2nd leader-picker (Bob, index 1) gets the choice.
+      expect(s.phase.chooserIndex).toBe(1);
+    }
   });
 
   it('rejects ADVANCE_PHASE during candidate-draft', () => {
@@ -447,6 +852,218 @@ describe('Candidate draft', () => {
         candidateId: 'base.candidate.lavanina',
       }),
     ).toThrow(/not in active packs/);
+  });
+});
+
+// ============================================================================
+// Mage draft (post-leader, pre-game-start)
+// ============================================================================
+
+describe('Mage draft', () => {
+  const DRAFT_CONFIG_2P = {
+    activePackIds: ['base'],
+    playerNames: ['Alice', 'Bob'],
+    rngSeed: 7,
+    useCandidateDraft: true,
+  } satisfies GameConfig;
+
+  const DRAFT_CONFIG_4P = {
+    activePackIds: ['base'],
+    playerNames: ['Alice', 'Bob', 'Cara', 'Dan'],
+    rngSeed: 42,
+    useCandidateDraft: true,
+  } satisfies GameConfig;
+
+  function withFirstPlayer(state: GameState, idx: number): GameState {
+    if (state.phase.kind !== 'candidate-draft') return state;
+    return {
+      ...state,
+      firstPlayerIndex: idx,
+      phase: { kind: 'candidate-draft', activePlayerIndex: idx },
+    };
+  }
+
+  /** Drives a 2-player setup through both leader picks; lands in mage-draft-first-choice. */
+  function pickBothLeaders2P(): GameState {
+    let s = withFirstPlayer(initGame(DRAFT_CONFIG_2P), 0);
+    s = applyAction(s, {
+      type: 'CHOOSE_CANDIDATE',
+      playerId: 'p1',
+      candidateId: 'base.candidate.larimore-burman', // red
+    });
+    s = applyAction(s, {
+      type: 'CHOOSE_CANDIDATE',
+      playerId: 'p2',
+      candidateId: 'base.candidate.byron-krane', // grey
+    });
+    return s;
+  }
+
+  it('seeds the initial mage draft pool with the documented counts', () => {
+    const s = initGame(DRAFT_CONFIG_2P);
+    expect(s.mageDraftPool).toEqual({
+      red: 4,
+      grey: 4,
+      green: 4,
+      blue: 2,
+      purple: 2,
+      'off-white': 4,
+    });
+  });
+
+  it('CHOOSE_DRAFT_FIRST=true: chooser drafts first; pickOrder is [chooser,other,other,chooser,chooser,other]', () => {
+    let s = pickBothLeaders2P();
+    s = applyAction(s, {
+      type: 'CHOOSE_DRAFT_FIRST',
+      playerId: 'p2',
+      draftFirst: true,
+    });
+    expect(s.phase.kind).toBe('mage-draft');
+    if (s.phase.kind === 'mage-draft') {
+      // p2 = index 1, p1 = index 0.
+      expect(s.phase.pickOrder).toEqual([1, 0, 0, 1, 1, 0]);
+      expect(s.phase.nextPickIndex).toBe(0);
+    }
+  });
+
+  it('CHOOSE_DRAFT_FIRST=false: chooser passes; pickOrder is [other,chooser,chooser,other,other,chooser]', () => {
+    let s = pickBothLeaders2P();
+    s = applyAction(s, {
+      type: 'CHOOSE_DRAFT_FIRST',
+      playerId: 'p2',
+      draftFirst: false,
+    });
+    expect(s.phase.kind).toBe('mage-draft');
+    if (s.phase.kind === 'mage-draft') {
+      // First drafter = p1 (index 0).
+      expect(s.phase.pickOrder).toEqual([0, 1, 1, 0, 0, 1]);
+    }
+  });
+
+  it('rejects CHOOSE_DRAFT_FIRST when not the chooser', () => {
+    const s = pickBothLeaders2P();
+    expect(() =>
+      applyAction(s, {
+        type: 'CHOOSE_DRAFT_FIRST',
+        playerId: 'p1',
+        draftFirst: true,
+      }),
+    ).toThrow(/only p2 may make this choice/);
+  });
+
+  it('DRAFT_MAGE: full 2-player draft (each player gets 2 leader + 3 drafted = 5)', () => {
+    let s = pickBothLeaders2P();
+    s = applyAction(s, {
+      type: 'CHOOSE_DRAFT_FIRST',
+      playerId: 'p2',
+      draftFirst: false,
+    });
+    // pickOrder: [0,1,1,0,0,1]
+    s = applyAction(s, { type: 'DRAFT_MAGE', playerId: 'p1', color: 'green' });
+    s = applyAction(s, { type: 'DRAFT_MAGE', playerId: 'p2', color: 'green' });
+    s = applyAction(s, { type: 'DRAFT_MAGE', playerId: 'p2', color: 'blue' });
+    s = applyAction(s, { type: 'DRAFT_MAGE', playerId: 'p1', color: 'blue' });
+    s = applyAction(s, { type: 'DRAFT_MAGE', playerId: 'p1', color: 'purple' });
+    s = applyAction(s, { type: 'DRAFT_MAGE', playerId: 'p2', color: 'purple' });
+
+    expect(s.phase).toEqual({ kind: 'round-setup', round: 1 });
+    const alice = s.players.find((p) => p.id === 'p1');
+    const bob = s.players.find((p) => p.id === 'p2');
+    expect(alice?.mages).toHaveLength(5); // 2 red + 1 green + 1 blue + 1 purple
+    expect(bob?.mages).toHaveLength(5); // 2 grey + 1 green + 1 blue + 1 purple
+
+    // Pool decremented as expected: red 4-2=2, grey 4-2=2, green 4-2=2,
+    // blue 2-2=0, purple 2-2=0, off-white untouched.
+    expect(s.mageDraftPool).toEqual({
+      red: 2,
+      grey: 2,
+      green: 2,
+      blue: 0,
+      purple: 0,
+      'off-white': 4,
+    });
+  });
+
+  it('rejects drafting a 3rd mage of a color the player already has 2 of (incl. leader color)', () => {
+    let s = pickBothLeaders2P();
+    s = applyAction(s, {
+      type: 'CHOOSE_DRAFT_FIRST',
+      playerId: 'p2',
+      draftFirst: false,
+    });
+    // p1 (Larimore Burman) already has 2 red leader mages — cannot draft red.
+    expect(() =>
+      applyAction(s, { type: 'DRAFT_MAGE', playerId: 'p1', color: 'red' }),
+    ).toThrow(/cannot have more than 2 red mages/);
+  });
+
+  it('rejects drafting a color the pool has run out of', () => {
+    let s = pickBothLeaders2P();
+    s = applyAction(s, {
+      type: 'CHOOSE_DRAFT_FIRST',
+      playerId: 'p2',
+      draftFirst: false,
+    });
+    // pickOrder [0,1,1,0,0,1] — alternate blue picks until pool exhausted.
+    s = applyAction(s, { type: 'DRAFT_MAGE', playerId: 'p1', color: 'blue' });
+    s = applyAction(s, { type: 'DRAFT_MAGE', playerId: 'p2', color: 'blue' });
+    // Pool of blue is now 0. p2 picks again at index 2; can't take blue.
+    expect(() =>
+      applyAction(s, { type: 'DRAFT_MAGE', playerId: 'p2', color: 'blue' }),
+    ).toThrow(/no blue mages left/);
+  });
+
+  it('rejects drafting out of turn order', () => {
+    let s = pickBothLeaders2P();
+    s = applyAction(s, {
+      type: 'CHOOSE_DRAFT_FIRST',
+      playerId: 'p2',
+      draftFirst: false,
+    });
+    expect(() =>
+      applyAction(s, { type: 'DRAFT_MAGE', playerId: 'p2', color: 'green' }),
+    ).toThrow(/not your pick/);
+  });
+
+  it('4-player draft uses snake order from firstPlayerIndex', () => {
+    let s = withFirstPlayer(initGame(DRAFT_CONFIG_4P), 0);
+    s = applyAction(s, {
+      type: 'CHOOSE_CANDIDATE',
+      playerId: 'p1',
+      candidateId: 'base.candidate.larimore-burman',
+    });
+    s = applyAction(s, {
+      type: 'CHOOSE_CANDIDATE',
+      playerId: 'p2',
+      candidateId: 'base.candidate.byron-krane',
+    });
+    s = applyAction(s, {
+      type: 'CHOOSE_CANDIDATE',
+      playerId: 'p3',
+      candidateId: 'base.candidate.rheye-cal',
+    });
+    s = applyAction(s, {
+      type: 'CHOOSE_CANDIDATE',
+      playerId: 'p4',
+      candidateId: 'base.candidate.exhufern-le-marigras',
+    });
+    if (s.phase.kind !== 'mage-draft') throw new Error('expected mage-draft');
+    expect(s.phase.pickOrder).toEqual([0, 1, 2, 3, 3, 2, 1, 0, 0, 1, 2, 3]);
+  });
+
+  it('rejects ADVANCE_PHASE during mage-draft phases', () => {
+    const sFirstChoice = pickBothLeaders2P();
+    expect(() => applyAction(sFirstChoice, { type: 'ADVANCE_PHASE' })).toThrow(
+      /mage-draft-first-choice must end via CHOOSE_DRAFT_FIRST/,
+    );
+    const sDraft = applyAction(sFirstChoice, {
+      type: 'CHOOSE_DRAFT_FIRST',
+      playerId: 'p2',
+      draftFirst: false,
+    });
+    expect(() => applyAction(sDraft, { type: 'ADVANCE_PHASE' })).toThrow(
+      /mage-draft must end via DRAFT_MAGE/,
+    );
   });
 });
 
@@ -828,7 +1445,7 @@ describe('Burn L1 + Phase Steppers vertical slice', () => {
 
     // Force errands phase with Alice as the active player. firstPlayerIndex
     // is randomized in setup; lock it down here for determinism.
-    s = { ...s, firstPlayerIndex: 0, phase: { kind: 'errands', round: 1, activePlayerIndex: 0 } };
+    s = { ...s, firstPlayerIndex: 0, phase: { kind: 'errands', round: 1, activePlayerIndex: 0, actionUsed: false, fastActionUsed: false } };
     return s;
   }
 
@@ -1091,7 +1708,7 @@ describe('PLACE_WORKER', () => {
       cardId: 'base.mage.divinity',
       color: 'blue',
     });
-    s = { ...s, firstPlayerIndex: 0, phase: { kind: 'errands', round: 1, activePlayerIndex: 0 } };
+    s = { ...s, firstPlayerIndex: 0, phase: { kind: 'errands', round: 1, activePlayerIndex: 0, actionUsed: false, fastActionUsed: false } };
     s = applyAction(s, {
       type: 'PLACE_WORKER',
       playerId: 'p1',
@@ -1120,7 +1737,7 @@ describe('PLACE_WORKER', () => {
       color: 'blue',
     });
     s = placeMageOnSpace(s, 'p1', 'alice-mage-1', 'base.room.library.a.slot-1');
-    s = { ...s, firstPlayerIndex: 0, phase: { kind: 'errands', round: 1, activePlayerIndex: 0 } };
+    s = { ...s, firstPlayerIndex: 0, phase: { kind: 'errands', round: 1, activePlayerIndex: 0, actionUsed: false, fastActionUsed: false } };
     expect(() =>
       applyAction(s, {
         type: 'PLACE_WORKER',
@@ -1140,7 +1757,7 @@ describe('PLACE_WORKER', () => {
       color: 'blue',
     });
     s = setMeritBadges(s, 'p1', 0);
-    s = { ...s, firstPlayerIndex: 0, phase: { kind: 'errands', round: 1, activePlayerIndex: 0 } };
+    s = { ...s, firstPlayerIndex: 0, phase: { kind: 'errands', round: 1, activePlayerIndex: 0, actionUsed: false, fastActionUsed: false } };
     expect(() =>
       applyAction(s, {
         type: 'PLACE_WORKER',
@@ -1160,7 +1777,7 @@ describe('PLACE_WORKER', () => {
       color: 'blue',
     });
     s = setMeritBadges(s, 'p1', 2);
-    s = { ...s, firstPlayerIndex: 0, phase: { kind: 'errands', round: 1, activePlayerIndex: 0 } };
+    s = { ...s, firstPlayerIndex: 0, phase: { kind: 'errands', round: 1, activePlayerIndex: 0, actionUsed: false, fastActionUsed: false } };
     s = applyAction(s, {
       type: 'PLACE_WORKER',
       playerId: 'p1',
@@ -1181,7 +1798,7 @@ describe('PLACE_WORKER', () => {
       cardId: 'base.mage.divinity',
       color: 'blue',
     });
-    s = { ...s, firstPlayerIndex: 0, phase: { kind: 'errands', round: 1, activePlayerIndex: 0 } };
+    s = { ...s, firstPlayerIndex: 0, phase: { kind: 'errands', round: 1, activePlayerIndex: 0, actionUsed: false, fastActionUsed: false } };
     const infirmary = s.rooms.find((r) => r.name === 'Infirmary');
     if (!infirmary) throw new Error('Infirmary missing from setup');
     // Synthesize a slot id (action spaces are stubbed, so fake one to test
@@ -1361,7 +1978,7 @@ describe('BUY_VAULT_CARD action', () => {
       'base.vault.placeholder-treasure-1',
       'base.vault.phase-steppers',
     ]);
-    s = { ...s, firstPlayerIndex: 0, phase: { kind: 'errands', round: 1, activePlayerIndex: 0 } };
+    s = { ...s, firstPlayerIndex: 0, phase: { kind: 'errands', round: 1, activePlayerIndex: 0, actionUsed: false, fastActionUsed: false } };
     return s;
   }
 
@@ -1443,7 +2060,7 @@ describe('Ars Magna (Sorcery Mage power)', () => {
       s = addVaultCard(s, 'p2', 'base.vault.phase-steppers');
     }
 
-    s = { ...s, firstPlayerIndex: 0, phase: { kind: 'errands', round: 1, activePlayerIndex: 0 } };
+    s = { ...s, firstPlayerIndex: 0, phase: { kind: 'errands', round: 1, activePlayerIndex: 0, actionUsed: false, fastActionUsed: false } };
     return s;
   }
 
@@ -1604,7 +2221,7 @@ describe('Ars Magna (Sorcery Mage power)', () => {
     // for setup; the engine doesn't validate placements created via
     // placeMageOnSpace test helper).
     s = placeMageOnSpace(s, 'p2', 'bob-mage', 'base.room.vault.a.slot-1');
-    s = { ...s, firstPlayerIndex: 0, phase: { kind: 'errands', round: 1, activePlayerIndex: 0 } };
+    s = { ...s, firstPlayerIndex: 0, phase: { kind: 'errands', round: 1, activePlayerIndex: 0, actionUsed: false, fastActionUsed: false } };
 
     s = applyAction(s, {
       type: 'USE_ABILITY',
@@ -1816,7 +2433,7 @@ describe('Guilds A (instant room)', () => {
       color: 'blue',
     });
     s = setMeritBadges(s, 'p1', 1);
-    s = { ...s, firstPlayerIndex: 0, phase: { kind: 'errands', round: 1, activePlayerIndex: 0 } };
+    s = { ...s, firstPlayerIndex: 0, phase: { kind: 'errands', round: 1, activePlayerIndex: 0, actionUsed: false, fastActionUsed: false } };
     return s;
   }
 
@@ -1993,13 +2610,19 @@ describe('Council Chamber A', () => {
       cardId: 'base.mage.divinity',
       color: 'blue',
     });
-    s = { ...s, firstPlayerIndex: 0, phase: { kind: 'errands', round: 1, activePlayerIndex: 0 } };
+    s = { ...s, firstPlayerIndex: 0, phase: { kind: 'errands', round: 1, activePlayerIndex: 0, actionUsed: false, fastActionUsed: false } };
+    // Alice places her first mage — auto-advances to Bob.
     s = applyAction(s, {
       type: 'PLACE_WORKER',
       playerId: 'p1',
       mageId: 'alice-mage-1',
       actionSpaceId: 'base.room.council-chamber.a.slot-2',
     });
+    // Bob passes; Alice's turn comes back around with a fresh action budget.
+    s = applyAction(s, { type: 'PASS_TURN', playerId: 'p2' });
+    if (s.phase.kind !== 'errands') throw new Error('not errands');
+    expect(s.players[s.phase.activePlayerIndex]?.id).toBe('p1');
+    // The room limit (1 mage / player / round) now blocks the second placement.
     expect(() =>
       applyAction(s, {
         type: 'PLACE_WORKER',
@@ -2020,7 +2643,7 @@ describe('Round-setup clears roundPlacements', () => {
       cardId: 'base.mage.divinity',
       color: 'blue',
     });
-    s = { ...s, firstPlayerIndex: 0, phase: { kind: 'errands', round: 1, activePlayerIndex: 0 } };
+    s = { ...s, firstPlayerIndex: 0, phase: { kind: 'errands', round: 1, activePlayerIndex: 0, actionUsed: false, fastActionUsed: false } };
     s = applyAction(s, {
       type: 'PLACE_WORKER',
       playerId: 'p1',
@@ -2081,7 +2704,7 @@ describe('Infirmary on-wound bonus', () => {
     if (opts.bobHasPhaseSteppers) {
       s = addVaultCard(s, 'p2', 'base.vault.phase-steppers');
     }
-    s = { ...s, firstPlayerIndex: 0, phase: { kind: 'errands', round: 1, activePlayerIndex: 0 } };
+    s = { ...s, firstPlayerIndex: 0, phase: { kind: 'errands', round: 1, activePlayerIndex: 0, actionUsed: false, fastActionUsed: false } };
     return s;
   }
 
@@ -2139,7 +2762,7 @@ describe('Infirmary on-wound bonus', () => {
       ...p,
       resources: { ...p.resources, mana: 5 },
     }));
-    s = { ...s, firstPlayerIndex: 0, phase: { kind: 'errands', round: 1, activePlayerIndex: 0 } };
+    s = { ...s, firstPlayerIndex: 0, phase: { kind: 'errands', round: 1, activePlayerIndex: 0, actionUsed: false, fastActionUsed: false } };
 
     s = applyAction(s, {
       type: 'CAST_SPELL',

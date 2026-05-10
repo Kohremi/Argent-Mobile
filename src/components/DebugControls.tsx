@@ -195,6 +195,39 @@ function findOwnerLabel(state: GameState, mageId: string): string {
   return mageId;
 }
 
+function findCandidateName(state: GameState, candidateId: string): string | null {
+  if (!candidateId) return null;
+  for (const pack of listPacks()) {
+    if (!state.activePackIds.includes(pack.id)) continue;
+    const c = pack.candidates.find((cand) => cand.id === candidateId);
+    if (c) return c.name;
+  }
+  return null;
+}
+
+function playerDisplayName(state: GameState, player: Player): string {
+  const leaderName = findCandidateName(state, player.candidateId);
+  return leaderName ? `${player.name} (${leaderName})` : player.name;
+}
+
+/**
+ * Looks up a spell's level-1 timing across the active packs (regular + leader
+ * spells). Returns null if not found.
+ */
+function findSpellL1Timing(
+  state: GameState,
+  spellCardId: string,
+): 'action' | 'fast-action' | 'reaction' | null {
+  for (const pack of listPacks()) {
+    if (!state.activePackIds.includes(pack.id)) continue;
+    const found =
+      pack.spells.find((s) => s.id === spellCardId) ??
+      pack.legendarySpells.find((s) => s.id === spellCardId);
+    if (found) return found.levels[0].timing;
+  }
+  return null;
+}
+
 function describeMage(m: OwnedMage): string {
   let loc: string;
   if (m.location.kind === 'office') loc = 'office';
@@ -217,11 +250,21 @@ function describePhase(state: GameState): string {
       const player = state.players[p.activePlayerIndex];
       return `Candidate Draft (active: ${player?.name ?? '?'})`;
     }
+    case 'mage-draft-first-choice': {
+      const chooser = state.players[p.chooserIndex];
+      return `Mage Draft — choose order (${chooser?.name ?? '?'})`;
+    }
+    case 'mage-draft': {
+      const idx = p.pickOrder[p.nextPickIndex];
+      const player = idx !== undefined ? state.players[idx] : undefined;
+      return `Mage Draft — pick ${p.nextPickIndex + 1}/${p.pickOrder.length} (${player?.name ?? '?'})`;
+    }
     case 'round-setup':
       return `Round ${p.round} — Round Setup`;
     case 'errands': {
       const player = state.players[p.activePlayerIndex];
-      return `Round ${p.round} — Errands (active: ${player?.name ?? '?'})`;
+      const label = player ? playerDisplayName(state, player) : '?';
+      return `Round ${p.round} — Errands (active: ${label})`;
     }
     case 'resolution':
       return `Round ${p.round} — Resolution (room ${p.pendingRoomIndex + 1}/${state.rooms.length})`;
@@ -248,6 +291,14 @@ export function DebugControls() {
   // available until every player has picked a leader.
   if (state.phase.kind === 'candidate-draft') {
     return <CandidateDraftScreen state={state} dispatch={dispatch} reset={reset} />;
+  }
+  if (state.phase.kind === 'mage-draft-first-choice') {
+    return (
+      <MageDraftFirstChoiceScreen state={state} dispatch={dispatch} reset={reset} />
+    );
+  }
+  if (state.phase.kind === 'mage-draft') {
+    return <MageDraftScreen state={state} dispatch={dispatch} reset={reset} />;
   }
 
   const top = state.pendingResolutionStack[state.pendingResolutionStack.length - 1];
@@ -309,6 +360,8 @@ export function DebugControls() {
       </section>
 
       <RoomsPanel state={state} />
+
+      <BellTowerPanel state={state} dispatch={dispatch} />
 
       <section className="rounded border border-slate-700 bg-slate-900 p-4 space-y-2">
         <h2 className="text-lg font-medium">Debug</h2>
@@ -382,6 +435,9 @@ function PendingPanel({
   dispatch: (action: GameAction) => void;
 }) {
   const responder = state.players.find((p) => p.id === pending.responderId);
+  const responderLabel = responder
+    ? playerDisplayName(state, responder)
+    : pending.responderId;
   return (
     <section className="rounded-lg border border-amber-500/60 bg-amber-500/10 p-4 space-y-3">
       <div>
@@ -389,7 +445,7 @@ function PendingPanel({
           Pending: {pending.prompt.kind}
         </h2>
         <p className="text-sm text-slate-300">
-          Responder: <strong>{responder?.name ?? pending.responderId}</strong> · Source:{' '}
+          Responder: <strong>{responderLabel}</strong> · Source:{' '}
           {pending.source.description}
         </p>
         {state.pendingResolutionStack.length > 1 && (
@@ -648,6 +704,16 @@ function PlayerCard({
     state.phase.kind === 'errands' &&
     state.players[state.phase.activePlayerIndex]?.id === player.id;
   const canAct = isErrandsActive && state.pendingResolutionStack.length === 0;
+  const actionUsed =
+    state.phase.kind === 'errands' && isErrandsActive
+      ? state.phase.actionUsed
+      : false;
+  const fastActionUsed =
+    state.phase.kind === 'errands' && isErrandsActive
+      ? state.phase.fastActionUsed
+      : false;
+  const canTakeAction = canAct && !actionUsed;
+  const canTakeFastAction = canAct && !fastActionUsed;
 
   const [selectedMageId, setSelectedMageId] = useState('');
   const [selectedSpaceId, setSelectedSpaceId] = useState('');
@@ -656,6 +722,9 @@ function PlayerCard({
   const officeMages = player.mages.filter(
     (m) => m.location.kind === 'office' && !m.isWounded,
   );
+  const selectedMage = officeMages.find((m) => m.id === selectedMageId);
+  const placeIsFastAction = selectedMage?.color === 'purple';
+  const placeAllowed = placeIsFastAction ? canTakeFastAction : canTakeAction;
 
   return (
     <div
@@ -668,15 +737,41 @@ function PlayerCard({
     >
       <div className="flex items-center justify-between">
         <div>
-          <h3 className="font-medium">{player.name}</h3>
+          <h3 className="font-medium">{playerDisplayName(state, player)}</h3>
           <p className="text-xs text-slate-500">
             {player.id} · color {player.color} · init {player.initiativeOrder}
           </p>
         </div>
         {isErrandsActive && (
-          <span className="text-xs px-2 py-0.5 rounded bg-amber-500 text-slate-950">
-            active
-          </span>
+          <div className="flex flex-col items-end gap-1">
+            <span className="text-xs px-2 py-0.5 rounded bg-amber-500 text-slate-950">
+              active
+            </span>
+            <div className="flex gap-1 text-[10px]">
+              <span
+                className={clsx(
+                  'px-1.5 py-0.5 rounded uppercase tracking-wide',
+                  actionUsed
+                    ? 'bg-slate-800 text-slate-500 line-through'
+                    : 'bg-emerald-500/20 text-emerald-300',
+                )}
+                title="Mandatory: 1 Action per turn"
+              >
+                action
+              </span>
+              <span
+                className={clsx(
+                  'px-1.5 py-0.5 rounded uppercase tracking-wide',
+                  fastActionUsed
+                    ? 'bg-slate-800 text-slate-500 line-through'
+                    : 'bg-purple-500/20 text-purple-300',
+                )}
+                title="Optional: 1 Fast Action per turn"
+              >
+                fast
+              </span>
+            </div>
+          </div>
         )}
       </div>
 
@@ -698,33 +793,52 @@ function PlayerCard({
           Spells ({player.ownedSpells.length})
         </summary>
         <ul className="text-xs mt-1 space-y-0.5 text-slate-300">
-          {player.ownedSpells.map((s) => (
-            <li key={s.cardId} className="flex items-center gap-2">
-              <span>
-                {s.cardId}
-                {s.intPlaced ? ' · L1' : ''}
-                {s.wisPlacedLevel2 ? ' · L2' : ''}
-                {s.wisPlacedLevel3 ? ' · L3' : ''}
-                {s.exhausted ? ' (exhausted)' : ''}
-              </span>
-              {!s.exhausted && s.intPlaced && canAct && (
-                <button
-                  type="button"
-                  onClick={() =>
-                    dispatch({
-                      type: 'CAST_SPELL',
-                      playerId: player.id,
-                      spellCardId: s.cardId,
-                      level: 1,
-                    })
-                  }
-                  className="px-1.5 py-0.5 rounded bg-amber-500 text-slate-950 text-[10px] hover:bg-amber-400"
-                >
-                  Cast L1
-                </button>
-              )}
-            </li>
-          ))}
+          {player.ownedSpells.map((s) => {
+            const timing = findSpellL1Timing(state, s.cardId);
+            const isFast = timing === 'fast-action';
+            const budgetOpen = isFast ? canTakeFastAction : canTakeAction;
+            const showCastButton =
+              !s.exhausted &&
+              s.intPlaced &&
+              canAct &&
+              timing !== 'reaction';
+            return (
+              <li key={s.cardId} className="flex items-center gap-2">
+                <span>
+                  {s.cardId}
+                  {timing ? ` (${timing})` : ''}
+                  {s.intPlaced ? ' · L1' : ''}
+                  {s.wisPlacedLevel2 ? ' · L2' : ''}
+                  {s.wisPlacedLevel3 ? ' · L3' : ''}
+                  {s.exhausted ? ' (exhausted)' : ''}
+                </span>
+                {showCastButton && (
+                  <button
+                    type="button"
+                    disabled={!budgetOpen}
+                    title={
+                      budgetOpen
+                        ? undefined
+                        : isFast
+                          ? 'Fast Action already used this turn'
+                          : 'Action already used this turn'
+                    }
+                    onClick={() =>
+                      dispatch({
+                        type: 'CAST_SPELL',
+                        playerId: player.id,
+                        spellCardId: s.cardId,
+                        level: 1,
+                      })
+                    }
+                    className="px-1.5 py-0.5 rounded bg-amber-500 text-slate-950 text-[10px] hover:bg-amber-400 disabled:opacity-40 disabled:cursor-not-allowed"
+                  >
+                    Cast L1
+                  </button>
+                )}
+              </li>
+            );
+          })}
         </ul>
       </details>
 
@@ -784,7 +898,14 @@ function PlayerCard({
           </select>
           <button
             type="button"
-            disabled={!selectedMageId || !selectedSpaceId}
+            disabled={!selectedMageId || !selectedSpaceId || !placeAllowed}
+            title={
+              placeAllowed
+                ? undefined
+                : placeIsFastAction
+                  ? 'Fast Action already used this turn'
+                  : 'Action already used this turn'
+            }
             onClick={() => {
               dispatch({
                 type: 'PLACE_WORKER',
@@ -797,25 +918,28 @@ function PlayerCard({
             }}
             className="px-2 py-0.5 rounded bg-amber-500 text-slate-950 disabled:opacity-40 disabled:cursor-not-allowed"
           >
-            Place
+            Place{placeIsFastAction ? ' (fast)' : ''}
           </button>
         </div>
       )}
 
-      {canAct && (
+      {canAct && !actionUsed && (
         <button
           type="button"
-          onClick={() =>
-            dispatch({ type: 'END_ERRANDS_TURN', playerId: player.id })
-          }
-          className="text-xs px-2 py-1 rounded bg-slate-700 hover:bg-slate-600"
+          onClick={() => dispatch({ type: 'PASS_TURN', playerId: player.id })}
+          className="text-xs px-2 py-1 rounded bg-slate-800 hover:bg-slate-700 text-slate-300"
+          title="Forfeit your Action and end your turn"
         >
-          End turn
+          Pass turn
         </button>
       )}
 
       {canAct && (
-        <ArsMagnaControls player={player} dispatch={dispatch} />
+        <ArsMagnaControls
+          player={player}
+          dispatch={dispatch}
+          enabled={canTakeFastAction}
+        />
       )}
 
       <div className="pt-1 border-t border-slate-800 space-y-1">
@@ -870,9 +994,11 @@ function PlayerCard({
 function ArsMagnaControls({
   player,
   dispatch,
+  enabled,
 }: {
   player: Player;
   dispatch: (action: GameAction) => void;
+  enabled: boolean;
 }) {
   const redMagesInOffice = player.mages.filter(
     (m) => m.color === 'red' && m.location.kind === 'office' && !m.isWounded,
@@ -881,13 +1007,15 @@ function ArsMagnaControls({
   return (
     <div className="text-xs space-y-1">
       <p className="text-[10px] uppercase tracking-wide text-slate-500">
-        mage powers
+        mage powers (fast action)
       </p>
       <div className="flex flex-wrap gap-1">
         {redMagesInOffice.map((m) => (
           <button
             key={m.id}
             type="button"
+            disabled={!enabled}
+            title={enabled ? undefined : 'Fast Action already used this turn'}
             onClick={() =>
               dispatch({
                 type: 'USE_ABILITY',
@@ -896,7 +1024,7 @@ function ArsMagnaControls({
                 sourceCardId: m.id,
               })
             }
-            className="px-1.5 py-0.5 rounded bg-red-700 hover:bg-red-600 text-[10px]"
+            className="px-1.5 py-0.5 rounded bg-red-700 hover:bg-red-600 text-[10px] disabled:opacity-40 disabled:cursor-not-allowed"
           >
             Ars Magna ({m.id.slice(-8)})
           </button>
@@ -1083,6 +1211,228 @@ function CandidateDraftScreen({
   );
 }
 
+function MageDraftFirstChoiceScreen({
+  state,
+  dispatch,
+  reset,
+}: {
+  state: GameState;
+  dispatch: (action: GameAction) => void;
+  reset: () => void;
+}) {
+  if (state.phase.kind !== 'mage-draft-first-choice') return null;
+  const chooser = state.players[state.phase.chooserIndex];
+  const otherIdx = (state.phase.chooserIndex + 1) % state.players.length;
+  const other = state.players[otherIdx];
+  if (!chooser || !other) return null;
+
+  return (
+    <div className="min-h-full p-6 max-w-3xl mx-auto space-y-5">
+      <header className="flex items-center justify-between flex-wrap gap-3">
+        <div>
+          <h1 className="text-2xl font-semibold">Argent — mage draft (order)</h1>
+          <p className="text-slate-400 text-sm">
+            {playerDisplayName(state, chooser)} chose their leader second and
+            picks who drafts first.
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={reset}
+          className="px-3 py-1.5 rounded bg-slate-800 hover:bg-slate-700 text-sm"
+        >
+          Back to setup
+        </button>
+      </header>
+      <section className="rounded border border-slate-700 bg-slate-900 p-4 space-y-3">
+        <p className="text-sm text-slate-300">
+          The draft order will be a snake: A, B, B, A, A, B (each player gets
+          3 picks).
+        </p>
+        <div className="flex flex-wrap gap-2">
+          <button
+            type="button"
+            onClick={() =>
+              dispatch({
+                type: 'CHOOSE_DRAFT_FIRST',
+                playerId: chooser.id,
+                draftFirst: true,
+              })
+            }
+            className="px-3 py-2 rounded bg-amber-500 text-slate-950 hover:bg-amber-400"
+          >
+            Draft first ({chooser.name} starts)
+          </button>
+          <button
+            type="button"
+            onClick={() =>
+              dispatch({
+                type: 'CHOOSE_DRAFT_FIRST',
+                playerId: chooser.id,
+                draftFirst: false,
+              })
+            }
+            className="px-3 py-2 rounded bg-slate-700 hover:bg-slate-600 text-slate-100"
+          >
+            Pass first pick to {other.name}
+          </button>
+        </div>
+      </section>
+      <MageDraftPoolPanel state={state} />
+    </div>
+  );
+}
+
+function MageDraftScreen({
+  state,
+  dispatch,
+  reset,
+}: {
+  state: GameState;
+  dispatch: (action: GameAction) => void;
+  reset: () => void;
+}) {
+  if (state.phase.kind !== 'mage-draft') return null;
+  const phase = state.phase;
+  const activeIdx = phase.pickOrder[phase.nextPickIndex];
+  const activePlayer = activeIdx !== undefined ? state.players[activeIdx] : undefined;
+
+  return (
+    <div className="min-h-full p-6 max-w-4xl mx-auto space-y-5">
+      <header className="flex items-center justify-between flex-wrap gap-3">
+        <div>
+          <h1 className="text-2xl font-semibold">Argent — mage draft</h1>
+          <p className="text-slate-400 text-sm">
+            Pick {phase.nextPickIndex + 1} of {phase.pickOrder.length} —{' '}
+            {activePlayer ? playerDisplayName(state, activePlayer) : '?'} is
+            choosing
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={reset}
+          className="px-3 py-1.5 rounded bg-slate-800 hover:bg-slate-700 text-sm"
+        >
+          Back to setup
+        </button>
+      </header>
+
+      <section>
+        <h2 className="text-lg font-medium mb-2">Pool</h2>
+        {activePlayer ? (
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+            {(
+              ['red', 'grey', 'green', 'blue', 'purple', 'off-white'] as MageColor[]
+            ).map((color) => {
+              const remaining = state.mageDraftPool[color] ?? 0;
+              const owned = activePlayer.mages.filter(
+                (m) => m.color === color,
+              ).length;
+              const disabled = remaining < 1 || owned >= 2;
+              const reason =
+                remaining < 1
+                  ? 'pool is empty'
+                  : owned >= 2
+                    ? 'already have 2 of this color'
+                    : undefined;
+              return (
+                <button
+                  key={color}
+                  type="button"
+                  disabled={disabled}
+                  title={reason}
+                  onClick={() =>
+                    dispatch({
+                      type: 'DRAFT_MAGE',
+                      playerId: activePlayer.id,
+                      color,
+                    })
+                  }
+                  className={clsx(
+                    'rounded border p-3 text-left text-sm space-y-1',
+                    'border-slate-700 bg-slate-900 hover:border-amber-400/60 hover:bg-slate-800',
+                    'disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:border-slate-700 disabled:hover:bg-slate-900',
+                  )}
+                >
+                  <div className="flex items-baseline justify-between">
+                    <span className="font-medium capitalize">{color}</span>
+                    <span className="text-xs text-slate-400">
+                      {remaining} left
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-slate-500">
+                    you have {owned}/2{owned >= 2 ? ' (max)' : ''}
+                  </p>
+                </button>
+              );
+            })}
+          </div>
+        ) : (
+          <p className="text-sm text-slate-500 italic">no active picker</p>
+        )}
+      </section>
+
+      <section>
+        <h2 className="text-lg font-medium mb-2">Pick order</h2>
+        <ol className="text-xs text-slate-400 space-y-0.5">
+          {phase.pickOrder.map((idx, i) => {
+            const p = state.players[idx];
+            const isCurrent = i === phase.nextPickIndex;
+            const isPast = i < phase.nextPickIndex;
+            return (
+              <li
+                key={i}
+                className={clsx(
+                  isCurrent && 'text-amber-300 font-medium',
+                  isPast && 'text-slate-600 line-through',
+                )}
+              >
+                {i + 1}. {p?.name ?? '?'}
+                {isCurrent ? ' ← current' : ''}
+              </li>
+            );
+          })}
+        </ol>
+      </section>
+
+      <section>
+        <h2 className="text-lg font-medium mb-2">Players</h2>
+        <ul className="grid grid-cols-1 md:grid-cols-2 gap-2 text-sm">
+          {state.players.map((p) => (
+            <li
+              key={p.id}
+              className="rounded border border-slate-700 bg-slate-900 p-2"
+            >
+              <div className="font-medium">{playerDisplayName(state, p)}</div>
+              <div className="text-xs text-slate-400">
+                {p.mages.length} mage{p.mages.length === 1 ? '' : 's'}:{' '}
+                {p.mages.map((m) => m.color).join(', ') || '(none)'}
+              </div>
+            </li>
+          ))}
+        </ul>
+      </section>
+    </div>
+  );
+}
+
+function MageDraftPoolPanel({ state }: { state: GameState }) {
+  return (
+    <section className="rounded border border-slate-700 bg-slate-900 p-3">
+      <h2 className="text-sm font-medium mb-2">Pool (after leader picks)</h2>
+      <ul className="grid grid-cols-2 sm:grid-cols-3 gap-1 text-xs text-slate-300">
+        {(
+          ['red', 'grey', 'green', 'blue', 'purple', 'off-white'] as MageColor[]
+        ).map((color) => (
+          <li key={color} className="capitalize">
+            {color}: {state.mageDraftPool[color] ?? 0}
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
 function RoomsPanel({ state }: { state: GameState }) {
   return (
     <section>
@@ -1183,6 +1533,91 @@ function RoomsPanel({ state }: { state: GameState }) {
           );
         })}
       </div>
+    </section>
+  );
+}
+
+function BellTowerPanel({
+  state,
+  dispatch,
+}: {
+  state: GameState;
+  dispatch: (action: GameAction) => void;
+}) {
+  const activePlayer =
+    state.phase.kind === 'errands'
+      ? state.players[state.phase.activePlayerIndex] ?? null
+      : null;
+  const actionAvailable =
+    state.phase.kind === 'errands' ? !state.phase.actionUsed : false;
+  const canClaim =
+    activePlayer !== null &&
+    state.pendingResolutionStack.length === 0 &&
+    actionAvailable;
+
+  return (
+    <section className="rounded border border-slate-700 bg-slate-900 p-3 space-y-2">
+      <div className="flex items-baseline justify-between">
+        <h2 className="text-sm font-medium">
+          Bell Tower ({state.bellTower.available.length} available
+          {state.bellTower.taken.length
+            ? `, ${state.bellTower.taken.length} taken`
+            : ''}
+          )
+        </h2>
+        <span className="text-[10px] text-slate-500">
+          claiming the last card ends the round
+        </span>
+      </div>
+      {state.bellTower.available.length === 0 ? (
+        <p className="text-xs text-slate-500 italic">
+          empty — round ends on next advance
+        </p>
+      ) : (
+        <ul className="space-y-1">
+          {state.bellTower.available.map((c) => (
+            <li
+              key={c.id}
+              className="flex items-center justify-between gap-2 rounded bg-slate-950/40 px-2 py-1 text-xs"
+            >
+              <span className="text-slate-200">{c.name}</span>
+              {canClaim && activePlayer && (
+                <button
+                  type="button"
+                  onClick={() =>
+                    dispatch({
+                      type: 'CLAIM_BELL_TOWER',
+                      playerId: activePlayer.id,
+                      bellTowerCardId: c.id,
+                    })
+                  }
+                  className="px-2 py-0.5 rounded bg-amber-500 text-slate-950 hover:bg-amber-400 text-[11px]"
+                >
+                  Claim (as {activePlayer.name})
+                </button>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+      {state.bellTower.taken.length > 0 && (
+        <details>
+          <summary className="text-[11px] text-slate-500 cursor-pointer">
+            Taken this round
+          </summary>
+          <ul className="text-[11px] mt-1 space-y-0.5 text-slate-400">
+            {state.bellTower.taken.map((t, i) => {
+              const taker = state.players.find((p) => p.id === t.takenBy);
+              return (
+                <li key={`${t.cardId}-${i}`}>
+                  {t.cardId} — claimed by{' '}
+                  {taker ? playerDisplayName(state, taker) : t.takenBy}
+                </li>
+              );
+            })}
+          </ul>
+        </details>
+      )}
     </section>
   );
 }

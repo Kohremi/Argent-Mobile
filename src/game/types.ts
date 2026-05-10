@@ -396,8 +396,41 @@ export type RoundNumber = 1 | 2 | 3 | 4 | 5;
 export type GamePhase =
   | { kind: 'setup' }
   | { kind: 'candidate-draft'; activePlayerIndex: number }
+  | {
+      /**
+       * 2-player only: after both leaders are picked, the player who picked
+       * second decides whether to draft first or pass the first pick to the
+       * other player. For 3+ player games we skip this and use the leader-pick
+       * order as the draft order.
+       */
+      kind: 'mage-draft-first-choice';
+      chooserIndex: number;
+    }
+  | {
+      /**
+       * Snake-style draft of additional Mages from the shared pool. Each
+       * player makes 3 picks total (so `pickOrder.length === playerCount * 3`).
+       */
+      kind: 'mage-draft';
+      pickOrder: number[];
+      nextPickIndex: number;
+    }
   | { kind: 'round-setup'; round: RoundNumber }
-  | { kind: 'errands'; round: RoundNumber; activePlayerIndex: number }
+  | {
+      kind: 'errands';
+      round: RoundNumber;
+      activePlayerIndex: number;
+      /**
+       * True once the active player has spent this turn's mandatory Action.
+       * Reset to false on every turn change (handled in `processErrandsAdvance`).
+       */
+      actionUsed: boolean;
+      /**
+       * True once the active player has spent this turn's optional Fast Action.
+       * Same reset cadence as `actionUsed`.
+       */
+      fastActionUsed: boolean;
+    }
   | {
       kind: 'resolution';
       round: RoundNumber;
@@ -647,6 +680,15 @@ export interface GameState {
   archmagesApprenticeOwner: PlayerId | null;
   roomLocks: { roomId: RoomId }[];
 
+  /**
+   * Shared Mage pool used during the candidate / mage-draft setup phases.
+   * Initialized to 4 Sorcery (red), 4 Mysticism (grey), 4 Natural Magick
+   * (green), 2 Divinity (blue), 2 Planar Studies (purple), 4 Neutral
+   * (off-white). Each candidate pick removes 2 of the leader's color; each
+   * draft pick removes 1.
+   */
+  mageDraftPool: Record<MageColor, number>;
+
   phase: GamePhase;
 
   /**
@@ -737,9 +779,23 @@ export interface ChooseCandidateAction {
   candidateId: CandidateId;
 }
 
-export interface EndErrandsTurnAction {
-  type: 'END_ERRANDS_TURN';
+export interface ChooseDraftFirstAction {
+  type: 'CHOOSE_DRAFT_FIRST';
   playerId: PlayerId;
+  /** True = chooser drafts first; false = chooser passes the first pick. */
+  draftFirst: boolean;
+}
+
+export interface DraftMageAction {
+  type: 'DRAFT_MAGE';
+  playerId: PlayerId;
+  color: MageColor;
+}
+
+export interface ClaimBellTowerAction {
+  type: 'CLAIM_BELL_TOWER';
+  playerId: PlayerId;
+  bellTowerCardId: BellTowerCardId;
 }
 
 export interface AdvancePhaseAction {
@@ -755,5 +811,7 @@ export type GameAction =
   | UseAbilityAction
   | ResolvePendingAction
   | ChooseCandidateAction
-  | EndErrandsTurnAction
+  | ChooseDraftFirstAction
+  | DraftMageAction
+  | ClaimBellTowerAction
   | AdvancePhaseAction;

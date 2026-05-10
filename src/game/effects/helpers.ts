@@ -565,12 +565,14 @@ export function lookupCandidate(
  * Builds a new GameState that applies the candidate's starting allocation
  * to the given player:
  *   - 2 Mages of the leader's color (or 2 neutral for Students leaders).
- *   - N additional neutral Mages so the player ends with 5 total (3 in normal
- *     play, 5 in 2p variant — bringing 2p totals to 7 mages per player per
- *     rulebook).
+ *     These Mages come out of the shared `mageDraftPool` — the leader's
+ *     color count is decremented by 2.
  *   - The candidate's unique starter Spell as a fully-researched OwnedSpell
  *     (intPlaced: true, exhausted: false).
  *   - +1 Merit Badge if `startingExtraMeritBadge` is set.
+ *
+ * Additional Mages are NOT allocated here — they come from the mage draft
+ * phase that runs after every player has chosen their candidate.
  *
  * Mints fresh OwnedMage ids from `state.nextSequenceId`, which is bumped to
  * stay deterministic across replays.
@@ -580,14 +582,19 @@ export function applyCandidateAllocation(
   playerId: PlayerId,
   candidate: Candidate,
 ): GameState {
-  const playerCount = state.players.length;
   const leaderColor: MageColor =
     candidate.startingMageColor === 'neutral'
       ? 'off-white'
       : candidate.startingMageColor;
   const leaderCardId = MAGE_CARD_BY_COLOR[leaderColor];
-  const neutralCardId = MAGE_CARD_BY_COLOR['off-white'];
-  const neutralCount = playerCount === 2 ? 5 : 3;
+
+  const poolNow = state.mageDraftPool[leaderColor] ?? 0;
+  if (poolNow < 2) {
+    throw new Error(
+      `applyCandidateAllocation: not enough ${leaderColor} mages in pool ` +
+        `(have ${poolNow}, need 2)`,
+    );
+  }
 
   let seq = state.nextSequenceId;
   const newMages: OwnedMage[] = [];
@@ -601,20 +608,11 @@ export function applyCandidateAllocation(
       isWounded: false,
     });
   }
-  for (let i = 0; i < neutralCount; i++) {
-    newMages.push({
-      id: `m-${seq++}`,
-      cardId: neutralCardId,
-      color: 'off-white',
-      location: { kind: 'office', playerId },
-      isShadowing: false,
-      isWounded: false,
-    });
-  }
 
   return {
     ...state,
     nextSequenceId: seq,
+    mageDraftPool: { ...state.mageDraftPool, [leaderColor]: poolNow - 2 },
     players: state.players.map((p) =>
       p.id !== playerId
         ? p
@@ -641,6 +639,29 @@ export function applyCandidateAllocation(
           },
     ),
   };
+}
+
+/**
+ * Builds a snake-style draft order: each player picks 3 times total, going
+ * forward in round 1, reverse in round 2, forward in round 3.
+ *
+ *   2p, firstPickerIdx=0:  [0, 1, 1, 0, 0, 1]
+ *   4p, firstPickerIdx=2:  [2, 3, 0, 1, 1, 0, 3, 2, 2, 3, 0, 1]
+ *
+ * Round 2 reversing the round-1 order is what makes it a "snake".
+ */
+export function buildSnakeDraftOrder(
+  playerCount: number,
+  firstPickerIdx: number,
+): number[] {
+  const order: number[] = [];
+  for (let r = 0; r < 3; r++) {
+    for (let i = 0; i < playerCount; i++) {
+      const offset = r % 2 === 0 ? i : playerCount - 1 - i;
+      order.push((firstPickerIdx + offset) % playerCount);
+    }
+  }
+  return order;
 }
 
 // ============================================================================

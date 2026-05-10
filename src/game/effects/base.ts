@@ -1101,3 +1101,63 @@ function moveRedMagePatch(
     ),
   };
 }
+
+// ============================================================================
+// Bell Tower offerings (base pack, 2-player game)
+// ============================================================================
+
+/** First-player Token — claimer becomes first player next round. */
+registerEffect('base.bell.first-player', (ctx: EffectContext): EffectResult => {
+  const idx = ctx.state.players.findIndex((p) => p.id === ctx.triggeringPlayerId);
+  if (idx === -1) {
+    throw new Error('base.bell.first-player: claimer not found');
+  }
+  return { kind: 'done', patch: { firstPlayerIndex: idx } };
+});
+
+/** Gold or Mana — claimer chooses 2 Gold OR 1 Mana. */
+registerEffect('base.bell.gold-or-mana', (ctx: EffectContext): EffectResult => {
+  if (!ctx.resumeAnswer) {
+    return {
+      kind: 'pause',
+      pending: {
+        responderId: ctx.triggeringPlayerId,
+        prompt: {
+          kind: 'choose-from-options',
+          options: [
+            { id: 'gold', label: 'Gain 2 Gold', payload: {} },
+            { id: 'mana', label: 'Gain 1 Mana', payload: {} },
+          ],
+        },
+        resume: { effectId: 'base.bell.gold-or-mana', context: {} },
+        source: ctx.source,
+      },
+    };
+  }
+  if (ctx.resumeAnswer.kind !== 'option-chosen') {
+    throw new Error(
+      `base.bell.gold-or-mana expected option-chosen, got ${ctx.resumeAnswer.kind}`,
+    );
+  }
+  if (ctx.resumeAnswer.optionId === 'gold') {
+    return {
+      kind: 'done',
+      patch: gainResourcePatch(ctx.state, ctx.triggeringPlayerId, 'gold', 2),
+    };
+  }
+  if (ctx.resumeAnswer.optionId === 'mana') {
+    return {
+      kind: 'done',
+      patch: gainResourcePatch(ctx.state, ctx.triggeringPlayerId, 'mana', 1),
+    };
+  }
+  throw new Error(
+    `base.bell.gold-or-mana unknown option ${ctx.resumeAnswer.optionId}`,
+  );
+});
+
+/** Influence Point — claimer gains 1 IP. */
+registerEffect('base.bell.gain-ip', (ctx: EffectContext): EffectResult => ({
+  kind: 'done',
+  patch: bumpInfluencePatch(ctx.state, ctx.triggeringPlayerId, 1),
+}));

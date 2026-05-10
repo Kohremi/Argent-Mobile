@@ -12,8 +12,10 @@ import {
   applyCandidateAllocation,
   applyVaultPurchase,
   buildReactionOptionsFor,
+  buildSnakeDraftOrder,
   describeSpaceSource,
   lookupCandidate,
+  MAGE_CARD_BY_COLOR,
 } from './effects/helpers';
 import type {
   BellTowerCard,
@@ -21,14 +23,18 @@ import type {
   BuyVaultCardAction,
   CastSpellAction,
   ChooseCandidateAction,
+  ChooseDraftFirstAction,
+  ClaimBellTowerAction,
   ConsortiumVoter,
+  DraftMageAction,
   EffectContext,
   EffectResult,
-  EndErrandsTurnAction,
   GameAction,
   GameConfig,
   GameState,
   GameStatePatch,
+  OwnedMage,
+  PassTurnAction,
   PendingResolution,
   PendingResolutionInput,
   PlaceWorkerAction,
@@ -55,33 +61,51 @@ export function initGame(config: GameConfig): GameState {
 export function applyAction(state: GameState, action: GameAction): GameState {
   validateAction(state, action);
 
+  let next: GameState;
   switch (action.type) {
     case 'PLACE_WORKER':
-      return handlePlaceWorker(state, action);
+      next = handlePlaceWorker(state, action);
+      break;
     case 'CAST_SPELL':
-      return handleCastSpell(state, action);
+      next = handleCastSpell(state, action);
+      break;
     case 'BUY_VAULT_CARD':
-      return handleBuyVaultCard(state, action);
+      next = handleBuyVaultCard(state, action);
+      break;
     case 'USE_ABILITY':
-      return handleUseAbility(state, action);
-    case 'RECRUIT_SUPPORTER':
+      next = handleUseAbility(state, action);
+      break;
     case 'PASS_TURN':
+      next = handlePassTurn(state, action);
+      break;
+    case 'RECRUIT_SUPPORTER':
       throw new Error(
         `applyAction: action "${action.type}" not yet implemented (phase=${state.phase.kind})`,
       );
-    case 'END_ERRANDS_TURN':
-      return handleEndErrandsTurn(state, action);
+    case 'CLAIM_BELL_TOWER':
+      next = handleClaimBellTower(state, action);
+      break;
     case 'RESOLVE_PENDING':
-      return handleResolvePending(state, action);
+      next = handleResolvePending(state, action);
+      break;
     case 'CHOOSE_CANDIDATE':
-      return handleChooseCandidate(state, action);
+      next = handleChooseCandidate(state, action);
+      break;
+    case 'CHOOSE_DRAFT_FIRST':
+      next = handleChooseDraftFirst(state, action);
+      break;
+    case 'DRAFT_MAGE':
+      next = handleDraftMage(state, action);
+      break;
     case 'ADVANCE_PHASE':
-      return handleAdvancePhase(state);
+      next = handleAdvancePhase(state);
+      break;
     default: {
       const exhaustive: never = action;
       throw new Error(`applyAction: unknown action ${JSON.stringify(exhaustive)}`);
     }
   }
+  return autoAdvanceIfTurnDone(next);
 }
 
 // ============================================================================
@@ -91,6 +115,60 @@ export function applyAction(state: GameState, action: GameAction): GameState {
 function applyPatch(state: GameState, patch: GameStatePatch | undefined): GameState {
   if (!patch) return state;
   return { ...state, ...patch };
+}
+
+type ActionBudgetKind = 'action' | 'fast-action';
+
+/**
+ * Validates that the active player's per-turn Action / Fast-Action budget is
+ * available for the given slot kind, then marks it spent.
+ *
+ * Per the Argent rulebook, a turn proceeds: (optional) Fast Action FIRST,
+ * then (mandatory) Regular Action. After the Regular Action resolves, the
+ * turn ends automatically — Fast Actions cannot follow the Regular Action,
+ * and you cannot take two Fast Actions in place of a Regular Action.
+ *
+ * Reactions are NOT counted here — they fire from an open reaction window,
+ * not from the player's own turn budget.
+ */
+function consumeActionBudget(
+  state: GameState,
+  kind: ActionBudgetKind,
+  label: string,
+): GameState {
+  if (state.phase.kind !== 'errands') {
+    throw new Error(`${label}: only valid during errands phase`);
+  }
+  if (kind === 'action') {
+    if (state.phase.actionUsed) {
+      throw new Error(`${label}: you already used your Action this turn`);
+    }
+    return { ...state, phase: { ...state.phase, actionUsed: true } };
+  }
+  // kind === 'fast-action'
+  if (state.phase.actionUsed) {
+    throw new Error(
+      `${label}: a Fast Action must be taken BEFORE your Regular Action`,
+    );
+  }
+  if (state.phase.fastActionUsed) {
+    throw new Error(`${label}: you already used your Fast Action this turn`);
+  }
+  return { ...state, phase: { ...state.phase, fastActionUsed: true } };
+}
+
+/**
+ * If the active player has spent their Regular Action and no prompts or
+ * reaction windows are still open, the turn ends automatically (per
+ * rulebook). Called at the end of every dispatch so that turns advance
+ * without an explicit "end turn" action.
+ */
+function autoAdvanceIfTurnDone(state: GameState): GameState {
+  if (state.phase.kind !== 'errands') return state;
+  if (!state.phase.actionUsed) return state;
+  if (state.pendingResolutionStack.length > 0) return state;
+  if (state.activeReactionWindows.length > 0) return state;
+  return processErrandsAdvance(state);
 }
 
 function mintId(state: GameState, prefix: string): { id: string; state: GameState } {
@@ -482,6 +560,12 @@ function handlePlaceWorker(state: GameState, action: PlaceWorkerAction): GameSta
   // TODO: Mage Power triggers (Red Ars Magna, Purple fast-action). Not in
   // this slice.
 
+  // Purple (Planar Studies) Mages place as a Fast Action; everyone else
+  // consumes the Action budget.
+  const budgetKind: ActionBudgetKind =
+    mage.color === 'purple' ? 'fast-action' : 'action';
+  state = consumeActionBudget(state, budgetKind, 'PLACE_WORKER');
+
   const updatedRooms = state.rooms.map((r, ri) =>
     ri !== foundRoomIdx
       ? r
@@ -576,6 +660,7 @@ function handleBuyVaultCard(
       `BUY_VAULT_CARD: not your turn (active=${activePlayerId}, you=${action.playerId})`,
     );
   }
+  state = consumeActionBudget(state, 'action', 'BUY_VAULT_CARD');
   const patch = applyVaultPurchase(state, action.playerId, action.vaultCardId);
   return { ...state, ...patch };
 }
@@ -599,6 +684,9 @@ function handleUseAbility(
   if (!hasEffect(action.abilityId)) {
     throw new Error(`USE_ABILITY: unknown ability "${action.abilityId}"`);
   }
+  // Mage-power abilities (Ars Magna, etc.) are fast actions per the rulebook.
+  // No non-fast abilities exist yet; revisit this when one is added.
+  state = consumeActionBudget(state, 'fast-action', 'USE_ABILITY');
   const sourceId = action.sourceCardId ?? action.abilityId;
   const source: ResolutionSource = {
     kind: 'mage-power',
@@ -655,6 +743,19 @@ function handleCastSpell(state: GameState, action: CastSpellAction): GameState {
       `CAST_SPELL: insufficient mana (need ${levelDef.manaCost}, have ${player.resources.mana})`,
     );
   }
+  if (levelDef.timing === 'reaction') {
+    throw new Error(
+      'CAST_SPELL: reaction-timing spells fire from a reaction window, not as a direct action',
+    );
+  }
+
+  // Consume the appropriate per-turn budget slot (action vs fast-action) per
+  // the level's timing.
+  state = consumeActionBudget(
+    state,
+    levelDef.timing === 'fast-action' ? 'fast-action' : 'action',
+    'CAST_SPELL',
+  );
 
   // Spend mana, exhaust spell.
   let next: GameState = {
@@ -731,8 +832,8 @@ function handleChooseCandidate(
 
   const allocated = applyCandidateAllocation(state, action.playerId, candidate);
 
-  // Find the next un-chosen player in turn order; transition to round-setup
-  // when everyone has picked.
+  // Find the next un-chosen player in turn order; transition out of the
+  // candidate draft when everyone has picked.
   const nPlayers = allocated.players.length;
   const startIdx = state.phase.activePlayerIndex;
   let nextIdx = startIdx;
@@ -746,33 +847,200 @@ function handleChooseCandidate(
     }
   }
 
-  if (allChosen) {
-    return { ...allocated, phase: { kind: 'round-setup', round: 1 } };
+  if (!allChosen) {
+    return {
+      ...allocated,
+      phase: { kind: 'candidate-draft', activePlayerIndex: nextIdx },
+    };
   }
+
+  // Everyone has picked. 2-player games hand the draft-order choice to the
+  // 2nd leader-picker (the player who just picked, i.e. `action.playerId`).
+  // 3+ player games skip the choice and use the leader-pick order as the
+  // draft order.
+  if (nPlayers === 2) {
+    return {
+      ...allocated,
+      phase: { kind: 'mage-draft-first-choice', chooserIndex: startIdx },
+    };
+  }
+  const firstLeaderPickerIdx = state.firstPlayerIndex;
   return {
     ...allocated,
-    phase: { kind: 'candidate-draft', activePlayerIndex: nextIdx },
+    phase: {
+      kind: 'mage-draft',
+      pickOrder: buildSnakeDraftOrder(nPlayers, firstLeaderPickerIdx),
+      nextPickIndex: 0,
+    },
   };
 }
 
-function handleEndErrandsTurn(
+function handleChooseDraftFirst(
   state: GameState,
-  action: EndErrandsTurnAction,
+  action: ChooseDraftFirstAction,
 ): GameState {
+  if (state.phase.kind !== 'mage-draft-first-choice') {
+    throw new Error(
+      `CHOOSE_DRAFT_FIRST: only valid during mage-draft-first-choice phase (current: ${state.phase.kind})`,
+    );
+  }
+  const chooserId = state.players[state.phase.chooserIndex]?.id;
+  if (chooserId !== action.playerId) {
+    throw new Error(
+      `CHOOSE_DRAFT_FIRST: only ${chooserId ?? '?'} may make this choice (you=${action.playerId})`,
+    );
+  }
+  const firstDrafterIdx = action.draftFirst
+    ? state.phase.chooserIndex
+    : (state.phase.chooserIndex + 1) % state.players.length;
+  return {
+    ...state,
+    phase: {
+      kind: 'mage-draft',
+      pickOrder: buildSnakeDraftOrder(state.players.length, firstDrafterIdx),
+      nextPickIndex: 0,
+    },
+  };
+}
+
+function handleDraftMage(state: GameState, action: DraftMageAction): GameState {
+  if (state.phase.kind !== 'mage-draft') {
+    throw new Error(
+      `DRAFT_MAGE: only valid during mage-draft phase (current: ${state.phase.kind})`,
+    );
+  }
+  const phase = state.phase;
+  if (phase.nextPickIndex >= phase.pickOrder.length) {
+    throw new Error('DRAFT_MAGE: all draft picks already resolved');
+  }
+  const expectedPlayerIdx = phase.pickOrder[phase.nextPickIndex];
+  const expectedPlayerId = state.players[expectedPlayerIdx!]?.id;
+  if (expectedPlayerId !== action.playerId) {
+    throw new Error(
+      `DRAFT_MAGE: not your pick (active=${expectedPlayerId ?? '?'}, you=${action.playerId})`,
+    );
+  }
+  const remaining = state.mageDraftPool[action.color] ?? 0;
+  if (remaining < 1) {
+    throw new Error(
+      `DRAFT_MAGE: no ${action.color} mages left in the pool`,
+    );
+  }
+  const player = state.players.find((p) => p.id === action.playerId);
+  if (!player) throw new Error(`DRAFT_MAGE: player ${action.playerId} not found`);
+  const ownedOfColor = player.mages.filter((m) => m.color === action.color).length;
+  if (ownedOfColor >= 2) {
+    throw new Error(
+      `DRAFT_MAGE: cannot have more than 2 ${action.color} mages (already have ${ownedOfColor})`,
+    );
+  }
+
+  const seq = state.nextSequenceId;
+  const newMage: OwnedMage = {
+    id: `m-${seq}`,
+    cardId: MAGE_CARD_BY_COLOR[action.color],
+    color: action.color,
+    location: { kind: 'office', playerId: action.playerId },
+    isShadowing: false,
+    isWounded: false,
+  };
+
+  const updated: GameState = {
+    ...state,
+    nextSequenceId: seq + 1,
+    mageDraftPool: { ...state.mageDraftPool, [action.color]: remaining - 1 },
+    players: state.players.map((p) =>
+      p.id !== action.playerId ? p : { ...p, mages: [...p.mages, newMage] },
+    ),
+    phase: { ...phase, nextPickIndex: phase.nextPickIndex + 1 },
+  };
+
+  // If that was the last pick, transition into round-setup.
+  if (updated.phase.kind === 'mage-draft' && updated.phase.nextPickIndex >= phase.pickOrder.length) {
+    return { ...updated, phase: { kind: 'round-setup', round: 1 } };
+  }
+  return updated;
+}
+
+/**
+ * PASS_TURN: explicit "I forfeit my Action this turn" — consumes the Action
+ * budget and advances to the next player. The Fast Action is also surrendered;
+ * passing means giving up the whole turn per Argent rules.
+ */
+function handlePassTurn(state: GameState, action: PassTurnAction): GameState {
   if (state.phase.kind !== 'errands') {
-    throw new Error('END_ERRANDS_TURN: only valid during errands phase');
+    throw new Error('PASS_TURN: only valid during errands phase');
   }
   if (state.pendingResolutionStack.length > 0) {
-    throw new Error('END_ERRANDS_TURN: resolve pending prompt first');
+    throw new Error('PASS_TURN: resolve pending prompt first');
   }
   const activePlayerId = state.players[state.phase.activePlayerIndex]?.id;
   if (activePlayerId !== action.playerId) {
     throw new Error(
-      `END_ERRANDS_TURN: not your turn (active=${activePlayerId}, you=${action.playerId})`,
+      `PASS_TURN: not your turn (active=${activePlayerId}, you=${action.playerId})`,
     );
   }
-  // Exact same advancement rule as ADVANCE_PHASE while in errands.
-  return processErrandsAdvance(state);
+  const passed: GameState = {
+    ...state,
+    phase: { ...state.phase, actionUsed: true },
+  };
+  return processErrandsAdvance(passed);
+}
+
+function handleClaimBellTower(
+  state: GameState,
+  action: ClaimBellTowerAction,
+): GameState {
+  if (state.phase.kind !== 'errands') {
+    throw new Error('CLAIM_BELL_TOWER: only valid during errands phase');
+  }
+  if (state.pendingResolutionStack.length > 0) {
+    throw new Error('CLAIM_BELL_TOWER: resolve pending prompt first');
+  }
+  const activePlayerId = state.players[state.phase.activePlayerIndex]?.id;
+  if (activePlayerId !== action.playerId) {
+    throw new Error(
+      `CLAIM_BELL_TOWER: not your turn (active=${activePlayerId}, you=${action.playerId})`,
+    );
+  }
+  const card = state.bellTower.available.find(
+    (c) => c.id === action.bellTowerCardId,
+  );
+  if (!card) {
+    throw new Error(
+      `CLAIM_BELL_TOWER: card ${action.bellTowerCardId} not in bell tower`,
+    );
+  }
+  state = consumeActionBudget(state, 'action', 'CLAIM_BELL_TOWER');
+
+  const claimed: GameState = {
+    ...state,
+    bellTower: {
+      available: state.bellTower.available.filter((c) => c.id !== card.id),
+      taken: [...state.bellTower.taken, { cardId: card.id, takenBy: action.playerId }],
+    },
+    players: state.players.map((p) =>
+      p.id !== action.playerId
+        ? p
+        : { ...p, bellTowerCards: [...p.bellTowerCards, card.id] },
+    ),
+  };
+
+  if (!hasEffect(card.effectId)) return claimed;
+  const source: ResolutionSource = {
+    kind: 'bell-tower',
+    id: card.id,
+    triggeringPlayerId: action.playerId,
+    description: card.name,
+  };
+  const ctx: EffectContext = {
+    state: claimed,
+    source,
+    triggeringPlayerId: action.playerId,
+    allowReactions: true,
+  };
+  const result = getEffect(card.effectId)(ctx);
+  return applyEffectResult(claimed, result, ctx);
 }
 
 function handleResolvePending(
@@ -994,6 +1262,14 @@ function handleAdvancePhase(state: GameState): GameState {
       throw new Error(
         'ADVANCE_PHASE: candidate-draft must end via CHOOSE_CANDIDATE for each player',
       );
+    case 'mage-draft-first-choice':
+      throw new Error(
+        'ADVANCE_PHASE: mage-draft-first-choice must end via CHOOSE_DRAFT_FIRST',
+      );
+    case 'mage-draft':
+      throw new Error(
+        'ADVANCE_PHASE: mage-draft must end via DRAFT_MAGE for each pick',
+      );
     case 'round-setup':
       return processRoundSetup(state, state.phase.round);
     case 'errands':
@@ -1022,6 +1298,8 @@ function processRoundSetup(state: GameState, round: RoundNumber): GameState {
       kind: 'errands',
       round,
       activePlayerIndex: state.firstPlayerIndex,
+      actionUsed: false,
+      fastActionUsed: false,
     },
   };
 }
@@ -1112,7 +1390,12 @@ function processErrandsAdvance(state: GameState): GameState {
   const next = (state.phase.activePlayerIndex + 1) % state.players.length;
   return {
     ...state,
-    phase: { ...state.phase, activePlayerIndex: next },
+    phase: {
+      ...state.phase,
+      activePlayerIndex: next,
+      actionUsed: false,
+      fastActionUsed: false,
+    },
   };
 }
 

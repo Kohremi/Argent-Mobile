@@ -1069,44 +1069,37 @@ const voters: ConsortiumVoter[] = [
 ];
 
 // ============================================================================
-// Bell Tower — 5 placeholder offerings with player-count thresholds
+// Bell Tower — 3 offerings (2-player-game set per the room file)
 // ============================================================================
+//
+// Each round refreshes the offering pool to 3. Claiming the last card drains
+// the tower and ends the round (handled by `processErrandsAdvance`).
+//
+//   1. First-player Token: claimer becomes first player next round.
+//   2. Gold or Mana:        claimer chooses 2 Gold OR 1 Mana.
+//   3. IP:                  claimer gains 1 IP.
 
 const bellTowerCards: BellTowerCard[] = [
   {
-    id: 'base.bell.placeholder.1',
-    name: 'Bell Tower Offering 1',
+    id: 'base.bell.first-player',
+    name: 'First Player Token',
     sourcePackId: PACK_ID,
-    effectId: 'base.bell.placeholder.1',
+    effectId: 'base.bell.first-player',
     minPlayers: 2,
   },
   {
-    id: 'base.bell.placeholder.2',
-    name: 'Bell Tower Offering 2',
+    id: 'base.bell.gold-or-mana',
+    name: 'Gold or Mana',
     sourcePackId: PACK_ID,
-    effectId: 'base.bell.placeholder.2',
+    effectId: 'base.bell.gold-or-mana',
     minPlayers: 2,
   },
   {
-    id: 'base.bell.placeholder.3',
-    name: 'Bell Tower Offering 3',
+    id: 'base.bell.gain-ip',
+    name: 'Influence Point',
     sourcePackId: PACK_ID,
-    effectId: 'base.bell.placeholder.3',
-    minPlayers: 3,
-  },
-  {
-    id: 'base.bell.placeholder.4',
-    name: 'Bell Tower Offering 4',
-    sourcePackId: PACK_ID,
-    effectId: 'base.bell.placeholder.4',
-    minPlayers: 4,
-  },
-  {
-    id: 'base.bell.placeholder.5',
-    name: 'Bell Tower Offering 5',
-    sourcePackId: PACK_ID,
-    effectId: 'base.bell.placeholder.5',
-    minPlayers: 5,
+    effectId: 'base.bell.gain-ip',
+    minPlayers: 2,
   },
 ];
 
