@@ -185,8 +185,8 @@ function makeInitialMageDraftPool(): Record<MageColor, number> {
     red: 4,
     grey: 4,
     green: 4,
-    blue: 2,
-    purple: 2,
+    blue: 4,
+    purple: 4,
     'off-white': 4,
   };
 }

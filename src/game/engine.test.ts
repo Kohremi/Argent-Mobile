@@ -899,14 +899,14 @@ describe('Mage draft', () => {
     return s;
   }
 
-  it('seeds the initial mage draft pool with the documented counts', () => {
+  it('seeds the initial mage draft pool with 4 of each color', () => {
     const s = initGame(DRAFT_CONFIG_2P);
     expect(s.mageDraftPool).toEqual({
       red: 4,
       grey: 4,
       green: 4,
-      blue: 2,
-      purple: 2,
+      blue: 4,
+      purple: 4,
       'off-white': 4,
     });
   });
@@ -972,14 +972,15 @@ describe('Mage draft', () => {
     expect(alice?.mages).toHaveLength(5); // 2 red + 1 green + 1 blue + 1 purple
     expect(bob?.mages).toHaveLength(5); // 2 grey + 1 green + 1 blue + 1 purple
 
-    // Pool decremented as expected: red 4-2=2, grey 4-2=2, green 4-2=2,
-    // blue 2-2=0, purple 2-2=0, off-white untouched.
+    // Pool decremented as expected: leader colors red/grey lose 2 each
+    // from candidate allocation; blue/green/purple each lose 2 from drafts;
+    // off-white untouched.
     expect(s.mageDraftPool).toEqual({
       red: 2,
       grey: 2,
       green: 2,
-      blue: 0,
-      purple: 0,
+      blue: 2,
+      purple: 2,
       'off-white': 4,
     });
   });
@@ -1004,12 +1005,11 @@ describe('Mage draft', () => {
       playerId: 'p2',
       draftFirst: false,
     });
-    // pickOrder [0,1,1,0,0,1] — alternate blue picks until pool exhausted.
-    s = applyAction(s, { type: 'DRAFT_MAGE', playerId: 'p1', color: 'blue' });
-    s = applyAction(s, { type: 'DRAFT_MAGE', playerId: 'p2', color: 'blue' });
-    // Pool of blue is now 0. p2 picks again at index 2; can't take blue.
+    // Artificially zero the blue pool — the 2-of-a-color cap would normally
+    // stop a player from draining it on their own.
+    s = { ...s, mageDraftPool: { ...s.mageDraftPool, blue: 0 } };
     expect(() =>
-      applyAction(s, { type: 'DRAFT_MAGE', playerId: 'p2', color: 'blue' }),
+      applyAction(s, { type: 'DRAFT_MAGE', playerId: 'p1', color: 'blue' }),
     ).toThrow(/no blue mages left/);
   });
 

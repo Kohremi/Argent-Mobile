@@ -696,10 +696,10 @@ export interface GameState {
 
   /**
    * Shared Mage pool used during the candidate / mage-draft setup phases.
-   * Initialized to 4 Sorcery (red), 4 Mysticism (grey), 4 Natural Magick
-   * (green), 2 Divinity (blue), 2 Planar Studies (purple), 4 Neutral
-   * (off-white). Each candidate pick removes 2 of the leader's color; each
-   * draft pick removes 1.
+   * Initialized to 4 of each color (Sorcery red, Mysticism grey, Natural
+   * Magick green, Divinity blue, Planar Studies purple, Neutral off-white).
+   * Each candidate pick removes 2 of the leader's color; each draft pick
+   * removes 1.
    */
   mageDraftPool: Record<MageColor, number>;
 
