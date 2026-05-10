@@ -38,7 +38,8 @@ export type Department =
   | 'natural-magick' // Green
   | 'planar-studies' // Purple
   | 'divinity' // Blue
-  | 'students'; // Off-white / neutral candidates
+  | 'students' // Off-white / neutral candidates
+  | 'wild'; // Special: counts as any department for scoring (e.g., White Ash)
 
 export const DEPARTMENTS: readonly Department[] = [
   'sorcery',
@@ -47,6 +48,7 @@ export const DEPARTMENTS: readonly Department[] = [
   'planar-studies',
   'divinity',
   'students',
+  'wild',
 ];
 
 /**
@@ -230,13 +232,25 @@ export interface VaultCard {
   timing?: 'reaction' | 'fast-action';
 }
 
+export type SupporterTiming =
+  | 'action'
+  | 'fast-action'
+  | 'reaction'
+  | 'passive' // Familiars and similar — sit in office, not played as an action.
+  | 'endgame'; // Wild cards / scoring-only effects.
+
 export interface SupporterCard {
   id: SupporterCardId;
   name: string;
+  /** Optional in-world title / role (e.g., "Professor of Correspondence"). */
+  title?: string;
   sourcePackId: PackId;
   department: Department;
+  timing: SupporterTiming;
+  /** Effect to invoke when the supporter is played; ignored for passive/endgame. */
   effectId: EffectId;
-  timing?: 'fast-action' | 'reaction';
+  /** Human-readable summary of the card's effect, copied from the card. */
+  description?: string;
 }
 
 export interface MageAbility {
@@ -754,6 +768,12 @@ export interface RecruitSupporterAction {
   supporterCardId: SupporterCardId;
 }
 
+export interface PlaySupporterAction {
+  type: 'PLAY_SUPPORTER';
+  playerId: PlayerId;
+  supporterCardId: SupporterCardId;
+}
+
 export interface PassTurnAction {
   type: 'PASS_TURN';
   playerId: PlayerId;
@@ -807,6 +827,7 @@ export type GameAction =
   | CastSpellAction
   | BuyVaultCardAction
   | RecruitSupporterAction
+  | PlaySupporterAction
   | PassTurnAction
   | UseAbilityAction
   | ResolvePendingAction

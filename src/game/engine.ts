@@ -26,6 +26,8 @@ import type {
   ClaimBellTowerAction,
   ConsortiumVoter,
   DraftMageAction,
+  PlaySupporterAction,
+  SupporterCard,
   EffectContext,
   EffectResult,
   GameAction,
@@ -76,6 +78,9 @@ export function applyAction(state: GameState, action: GameAction): GameState {
       break;
     case 'PASS_TURN':
       next = handlePassTurn(state, action);
+      break;
+    case 'PLAY_SUPPORTER':
+      next = handlePlaySupporter(state, action);
       break;
     case 'RECRUIT_SUPPORTER':
       throw new Error(
@@ -1007,6 +1012,98 @@ function handlePassTurn(state: GameState, action: PassTurnAction): GameState {
   return processErrandsAdvance(passed);
 }
 
+/**
+ * PLAY_SUPPORTER: spend the supporter from the player's office to invoke its
+ * effect. Consumes Action or Fast-Action budget based on the card's timing,
+ * moves the card to the personal discard pile, and dispatches to the effect.
+ *
+ * Reaction- and passive-timing supporters cannot be played as actions.
+ * Reaction supporters fire from a reaction window; passive supporters
+ * (familiars) sit in the office for endgame scoring.
+ */
+function handlePlaySupporter(
+  state: GameState,
+  action: PlaySupporterAction,
+): GameState {
+  if (state.phase.kind !== 'errands') {
+    throw new Error('PLAY_SUPPORTER: only valid during errands phase');
+  }
+  if (state.pendingResolutionStack.length > 0) {
+    throw new Error('PLAY_SUPPORTER: resolve pending prompt first');
+  }
+  const activePlayerId = state.players[state.phase.activePlayerIndex]?.id;
+  if (activePlayerId !== action.playerId) {
+    throw new Error(
+      `PLAY_SUPPORTER: not your turn (active=${activePlayerId}, you=${action.playerId})`,
+    );
+  }
+  const player = state.players.find((p) => p.id === action.playerId);
+  if (!player) throw new Error(`PLAY_SUPPORTER: player ${action.playerId} not found`);
+  if (!player.supporters.includes(action.supporterCardId)) {
+    throw new Error(
+      `PLAY_SUPPORTER: ${action.supporterCardId} not in your office`,
+    );
+  }
+  const card = lookupSupporterCardDef(state, action.supporterCardId);
+  if (!card) {
+    throw new Error(
+      `PLAY_SUPPORTER: supporter ${action.supporterCardId} not in active packs`,
+    );
+  }
+  if (card.timing === 'reaction') {
+    throw new Error(
+      'PLAY_SUPPORTER: reaction supporters fire from a reaction window, not as a direct action',
+    );
+  }
+  if (card.timing === 'passive' || card.timing === 'endgame') {
+    throw new Error(
+      `PLAY_SUPPORTER: ${card.name} (${card.timing}) cannot be played as an action`,
+    );
+  }
+
+  state = consumeActionBudget(
+    state,
+    card.timing === 'fast-action' ? 'fast-action' : 'action',
+    'PLAY_SUPPORTER',
+  );
+
+  // Move the card from office → personal discard.
+  const consumed: GameState = {
+    ...state,
+    players: state.players.map((p) =>
+      p.id !== action.playerId
+        ? p
+        : {
+            ...p,
+            supporters: p.supporters.filter((id) => id !== action.supporterCardId),
+            personalDiscard: [
+              ...p.personalDiscard,
+              { kind: 'supporter' as const, cardId: action.supporterCardId },
+            ],
+          },
+    ),
+  };
+
+  if (!hasEffect(card.effectId)) {
+    // Effect not yet implemented — card is consumed but does nothing.
+    return consumed;
+  }
+  const source: ResolutionSource = {
+    kind: 'supporter',
+    id: card.id,
+    triggeringPlayerId: action.playerId,
+    description: card.name,
+  };
+  const ctx: EffectContext = {
+    state: consumed,
+    source,
+    triggeringPlayerId: action.playerId,
+    allowReactions: true,
+  };
+  const result = getEffect(card.effectId)(ctx);
+  return applyEffectResult(consumed, result, ctx);
+}
+
 function handleClaimBellTower(
   state: GameState,
   action: ClaimBellTowerAction,
@@ -1261,6 +1358,19 @@ function lookupSpellCardDef(state: GameState, spellCardId: string) {
     if (found) return found;
     const legendary = pack.legendarySpells.find((s) => s.id === spellCardId);
     if (legendary) return legendary;
+  }
+  return null;
+}
+
+function lookupSupporterCardDef(
+  state: GameState,
+  supporterId: string,
+): SupporterCard | null {
+  for (const packId of state.activePackIds) {
+    const pack = getPack(packId);
+    if (!pack) continue;
+    const found = pack.supporters.find((s) => s.id === supporterId);
+    if (found) return found;
   }
   return null;
 }

@@ -20,6 +20,7 @@ import type {
   Player,
   PlayerId,
   ResolutionAnswer,
+  SupporterCard,
 } from '../game/types';
 
 const INJECTABLE_MAGE_COLORS: MageColor[] = [
@@ -254,6 +255,18 @@ function findSpellL1Timing(
       pack.spells.find((s) => s.id === spellCardId) ??
       pack.legendarySpells.find((s) => s.id === spellCardId);
     if (found) return found.levels[0].timing;
+  }
+  return null;
+}
+
+function findSupporterCard(
+  state: GameState,
+  supporterId: string,
+): SupporterCard | null {
+  for (const pack of listPacks()) {
+    if (!state.activePackIds.includes(pack.id)) continue;
+    const found = pack.supporters.find((s) => s.id === supporterId);
+    if (found) return found;
   }
   return null;
 }
@@ -973,6 +986,87 @@ function PlayerCard({
         </ul>
       </details>
 
+      <details open={player.supporters.length > 0}>
+        <summary className="text-xs text-slate-400 cursor-pointer">
+          Supporters ({player.supporters.length})
+        </summary>
+        <ul className="text-xs mt-1 space-y-1 text-slate-300">
+          {player.supporters.length === 0 && (
+            <li className="text-slate-500 italic">none yet</li>
+          )}
+          {player.supporters.map((cid, i) => {
+            const card = findSupporterCard(state, cid);
+            if (!card) {
+              return <li key={`${cid}-${i}`}>{cid}</li>;
+            }
+            const isFast = card.timing === 'fast-action';
+            const playable =
+              canAct &&
+              (card.timing === 'action' || card.timing === 'fast-action') &&
+              (isFast ? !fastActionUsed : !actionUsed);
+            const reasonNotPlayable =
+              card.timing === 'passive'
+                ? 'familiar — passive, never played'
+                : card.timing === 'endgame'
+                  ? 'endgame scoring only'
+                  : card.timing === 'reaction'
+                    ? 'fires from a reaction window'
+                    : !canAct
+                      ? 'not your turn'
+                      : isFast
+                        ? 'Fast Action already used'
+                        : 'Action already used';
+            return (
+              <li
+                key={`${cid}-${i}`}
+                className="flex items-start gap-2 rounded bg-slate-950/40 px-2 py-1"
+              >
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-baseline gap-1.5 flex-wrap">
+                    <span className="font-medium text-slate-200">
+                      {card.name}
+                    </span>
+                    <span className="text-[10px] uppercase tracking-wide text-slate-500">
+                      {card.department}
+                    </span>
+                    <span className="text-[10px] uppercase tracking-wide text-slate-400">
+                      {card.timing}
+                    </span>
+                  </div>
+                  {card.title && (
+                    <div className="text-[10px] text-slate-500 italic">
+                      {card.title}
+                    </div>
+                  )}
+                  {card.description && (
+                    <div className="text-[11px] text-slate-300/90">
+                      {card.description}
+                    </div>
+                  )}
+                </div>
+                {(card.timing === 'action' || card.timing === 'fast-action') && (
+                  <button
+                    type="button"
+                    disabled={!playable}
+                    title={playable ? `Play ${card.name}` : reasonNotPlayable}
+                    onClick={() =>
+                      dispatch({
+                        type: 'PLAY_SUPPORTER',
+                        playerId: player.id,
+                        supporterCardId: cid,
+                      })
+                    }
+                    className="px-2 py-0.5 rounded bg-amber-500 text-slate-950 text-[10px] hover:bg-amber-400 disabled:opacity-40 disabled:cursor-not-allowed self-start"
+                  >
+                    Play
+                  </button>
+                )}
+              </li>
+            );
+          })}
+        </ul>
+      </details>
+
       {player.personalDiscard.length > 0 && (
         <details>
           <summary className="text-xs text-slate-400 cursor-pointer">
@@ -1138,11 +1232,44 @@ function TableauPanel({ state }: { state: GameState }) {
           </ul>
         </div>
         <div>
-          <p className="font-medium text-slate-200">Supporters ({state.supporterTableau.length})</p>
-          <ul className="space-y-0.5">
-            {state.supporterTableau.map((cid, i) => (
-              <li key={`${cid}-${i}`}>{cid}</li>
-            ))}
+          <p className="font-medium text-slate-200">
+            Supporters ({state.supporterTableau.length}/5)
+          </p>
+          <ul className="space-y-1">
+            {state.supporterTableau.map((cid, i) => {
+              const card = findSupporterCard(state, cid);
+              if (!card) {
+                return <li key={`${cid}-${i}`}>{cid}</li>;
+              }
+              return (
+                <li
+                  key={`${cid}-${i}`}
+                  className="rounded bg-slate-950/40 px-2 py-1"
+                >
+                  <div className="flex items-baseline gap-1.5 flex-wrap">
+                    <span className="font-medium text-slate-200">
+                      {card.name}
+                    </span>
+                    <span className="text-[10px] uppercase tracking-wide text-slate-500">
+                      {card.department}
+                    </span>
+                    <span className="text-[10px] uppercase tracking-wide text-slate-400">
+                      {card.timing}
+                    </span>
+                  </div>
+                  {card.title && (
+                    <div className="text-[10px] text-slate-500 italic">
+                      {card.title}
+                    </div>
+                  )}
+                  {card.description && (
+                    <div className="text-[11px] text-slate-300/90">
+                      {card.description}
+                    </div>
+                  )}
+                </li>
+              );
+            })}
             {state.supporterTableau.length === 0 && (
               <li className="text-slate-500 italic">empty</li>
             )}

@@ -1245,6 +1245,13 @@ function addVaultCard(state: GameState, playerId: string, cardId: string): GameS
   }));
 }
 
+function addSupporter(state: GameState, playerId: string, cardId: string): GameState {
+  return mapPlayer(state, playerId, (p) => ({
+    ...p,
+    supporters: [...p.supporters, cardId],
+  }));
+}
+
 function setMana(state: GameState, playerId: string, mana: number): GameState {
   return mapPlayer(state, playerId, (p) => ({
     ...p,
@@ -1972,6 +1979,119 @@ describe('Vault A slot 1 (Draft a Vault Card AND Gain 4 Gold)', () => {
     expect(s.pendingResolutionStack).toHaveLength(0);
     const alice = s.players.find((p) => p.id === 'p1');
     expect(alice?.resources.gold).toBe(4);
+  });
+});
+
+// ============================================================================
+// PLAY_SUPPORTER action
+// ============================================================================
+
+describe('PLAY_SUPPORTER', () => {
+  function setupSupporterTest(supporterId: string): GameState {
+    let s = initGame(TWO_PLAYER_CONFIG);
+    s = addSupporter(s, 'p1', supporterId);
+    s = {
+      ...s,
+      firstPlayerIndex: 0,
+      phase: {
+        kind: 'errands',
+        round: 1,
+        activePlayerIndex: 0,
+        actionUsed: false,
+        fastActionUsed: false,
+      },
+    };
+    return s;
+  }
+
+  it('plays a fast-action supporter, consumes the Fast budget, moves card to discard', () => {
+    let s = setupSupporterTest('base.supporter.kallistar-flarechild');
+    s = applyAction(s, {
+      type: 'PLAY_SUPPORTER',
+      playerId: 'p1',
+      supporterCardId: 'base.supporter.kallistar-flarechild',
+    });
+    const alice = s.players.find((p) => p.id === 'p1');
+    expect(alice?.resources.influence).toBe(1); // Kallistar grants 1 IP
+    expect(alice?.supporters).toEqual([]);
+    expect(alice?.personalDiscard).toEqual([
+      { kind: 'supporter', cardId: 'base.supporter.kallistar-flarechild' },
+    ]);
+    if (s.phase.kind !== 'errands') throw new Error('not errands');
+    expect(s.phase.fastActionUsed).toBe(true);
+    expect(s.phase.actionUsed).toBe(false);
+  });
+
+  it('plays an action-timing supporter and the turn auto-ends', () => {
+    let s = setupSupporterTest('base.supporter.jasper-haekel');
+    s = applyAction(s, {
+      type: 'PLAY_SUPPORTER',
+      playerId: 'p1',
+      supporterCardId: 'base.supporter.jasper-haekel',
+    });
+    // Jasper Haekel pauses for a Mark prompt; resolve it.
+    const top = topPending(s);
+    expect(top.prompt.kind).toBe('choose-voter');
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: top.id,
+      answer: { kind: 'voter-chosen', voterId: s.voters[0]!.id },
+    });
+    // Resolution drained → action auto-advances to next player.
+    if (s.phase.kind !== 'errands') throw new Error('not errands');
+    expect(s.phase.activePlayerIndex).toBe(1);
+    const alice = s.players.find((p) => p.id === 'p1');
+    expect(alice?.resources.marks).toBe(1);
+  });
+
+  it('rejects playing a passive (familiar) supporter', () => {
+    const s = setupSupporterTest('base.supporter.salamander');
+    expect(() =>
+      applyAction(s, {
+        type: 'PLAY_SUPPORTER',
+        playerId: 'p1',
+        supporterCardId: 'base.supporter.salamander',
+      }),
+    ).toThrow(/cannot be played as an action/);
+  });
+
+  it("rejects playing a supporter the player doesn't own", () => {
+    const s = setupSupporterTest('base.supporter.allys-mehrmus');
+    expect(() =>
+      applyAction(s, {
+        type: 'PLAY_SUPPORTER',
+        playerId: 'p1',
+        supporterCardId: 'base.supporter.salem-silver',
+      }),
+    ).toThrow(/not in your office/);
+  });
+
+  it('rejects playing a Fast Action supporter after Action is used', () => {
+    let s = setupSupporterTest('base.supporter.allys-mehrmus');
+    // Burn the Action via PASS_TURN's sibling? Cheaper: set actionUsed=true.
+    if (s.phase.kind !== 'errands') throw new Error('not errands');
+    s = { ...s, phase: { ...s.phase, actionUsed: true } };
+    expect(() =>
+      applyAction(s, {
+        type: 'PLAY_SUPPORTER',
+        playerId: 'p1',
+        supporterCardId: 'base.supporter.allys-mehrmus',
+      }),
+    ).toThrow(/Fast Action must be taken BEFORE/);
+  });
+
+  it('grants 4 Mana for St. Mikhail Isen (Fast Action)', () => {
+    let s = setupSupporterTest('base.supporter.st-mikhail-isen');
+    s = applyAction(s, {
+      type: 'PLAY_SUPPORTER',
+      playerId: 'p1',
+      supporterCardId: 'base.supporter.st-mikhail-isen',
+    });
+    expect(s.players.find((p) => p.id === 'p1')?.resources.mana).toBe(4);
+  });
+
+  it('the base pack ships all 36 supporter cards', () => {
+    expect(baseGamePack.supporters).toHaveLength(36);
   });
 });
 

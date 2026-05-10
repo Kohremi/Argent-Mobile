@@ -1260,3 +1260,82 @@ registerEffect('base.bell.gain-ip', (ctx: EffectContext): EffectResult => ({
   kind: 'done',
   patch: bumpInfluencePatch(ctx.state, ctx.triggeringPlayerId, 1),
 }));
+
+// ============================================================================
+// Supporters — simple resource-gain effects.
+//
+// The remaining base supporters (gold-swap loops, mage manipulation, mage
+// supply swaps, custom voter logic, endgame-only metaeffects) are not yet
+// registered; PLAY_SUPPORTER on those will throw "effect not registered" and
+// the engine will surface a clear error in the UI.
+// ============================================================================
+
+/** Allys Mehrmus — Gain 3 IP. */
+registerEffect(
+  'base.supporter.allys-mehrmus',
+  (ctx): EffectResult => ({
+    kind: 'done',
+    patch: bumpInfluencePatch(ctx.state, ctx.triggeringPlayerId, 3),
+  }),
+);
+
+/** Andrus Dochartaigh — Gain 2 Mana. */
+registerEffect(
+  'base.supporter.andrus-dochartaigh',
+  (ctx): EffectResult => ({
+    kind: 'done',
+    patch: gainResourcePatch(ctx.state, ctx.triggeringPlayerId, 'mana', 2),
+  }),
+);
+
+/** Kallistar Flarechild — Gain 1 IP. */
+registerEffect(
+  'base.supporter.kallistar-flarechild',
+  (ctx): EffectResult => ({
+    kind: 'done',
+    patch: bumpInfluencePatch(ctx.state, ctx.triggeringPlayerId, 1),
+  }),
+);
+
+/** Quan Gon Kall — Gain 2 IP. */
+registerEffect(
+  'base.supporter.quan-gon-kall',
+  (ctx): EffectResult => ({
+    kind: 'done',
+    patch: bumpInfluencePatch(ctx.state, ctx.triggeringPlayerId, 2),
+  }),
+);
+
+/** Salem Silver — Gain 3 Mana. */
+registerEffect(
+  'base.supporter.salem-silver',
+  (ctx): EffectResult => ({
+    kind: 'done',
+    patch: gainResourcePatch(ctx.state, ctx.triggeringPlayerId, 'mana', 3),
+  }),
+);
+
+/** St. Mikhail Isen — Gain 4 Mana. */
+registerEffect(
+  'base.supporter.st-mikhail-isen',
+  (ctx): EffectResult => ({
+    kind: 'done',
+    patch: gainResourcePatch(ctx.state, ctx.triggeringPlayerId, 'mana', 4),
+  }),
+);
+
+/** Jasper Haekel — Gain a Mark (one voter prompt). */
+registerEffect(
+  'base.supporter.jasper-haekel',
+  (ctx): EffectResult => {
+    if (!ctx.resumeAnswer) {
+      return {
+        kind: 'pause',
+        pending: spawnGainMarkPrompt(ctx.state, ctx.triggeringPlayerId, ctx.source),
+      };
+    }
+    throw new Error(
+      'jasper-haekel should not be re-invoked (gain-mark handles its own resume)',
+    );
+  },
+);
