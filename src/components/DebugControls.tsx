@@ -20,6 +20,7 @@ import type {
   Player,
   PlayerId,
   ResolutionAnswer,
+  SpellCard,
   SupporterCard,
   VaultCard,
 } from '../game/types';
@@ -246,19 +247,20 @@ function playerDisplayName(state: GameState, player: Player): string {
  * Looks up a spell's level-1 timing across the active packs (regular + leader
  * spells). Returns null if not found.
  */
-function findSpellL1Timing(
+function findSpellCard(
   state: GameState,
   spellCardId: string,
-): 'action' | 'fast-action' | 'reaction' | null {
+): SpellCard | null {
   for (const pack of listPacks()) {
     if (!state.activePackIds.includes(pack.id)) continue;
     const found =
       pack.spells.find((s) => s.id === spellCardId) ??
       pack.legendarySpells.find((s) => s.id === spellCardId);
-    if (found) return found.levels[0].timing;
+    if (found) return found;
   }
   return null;
 }
+
 
 function findSupporterCard(
   state: GameState,
@@ -932,54 +934,119 @@ function PlayerCard({
         </div>
       </div>
 
-      <details>
+      <details open={player.ownedSpells.length > 0}>
         <summary className="text-xs text-slate-400 cursor-pointer">
           Spells ({player.ownedSpells.length})
         </summary>
-        <ul className="text-xs mt-1 space-y-0.5 text-slate-300">
+        <ul className="text-xs mt-1 space-y-1 text-slate-300">
+          {player.ownedSpells.length === 0 && (
+            <li className="text-slate-500 italic">none yet</li>
+          )}
           {player.ownedSpells.map((s) => {
-            const timing = findSpellL1Timing(state, s.cardId);
-            const isFast = timing === 'fast-action';
-            const budgetOpen = isFast ? canTakeFastAction : canTakeAction;
-            const showCastButton =
-              !s.exhausted &&
-              s.intPlaced &&
-              canAct &&
-              timing !== 'reaction';
+            const card = findSpellCard(state, s.cardId);
+            if (!card) {
+              return (
+                <li key={s.cardId} className="flex items-center gap-2">
+                  <span>
+                    {s.cardId}
+                    {s.exhausted ? ' (exhausted)' : ''}
+                  </span>
+                </li>
+              );
+            }
+            const researched: (1 | 2 | 3)[] = [];
+            if (s.intPlaced) researched.push(1);
+            if (s.wisPlacedLevel2) researched.push(2);
+            if (s.wisPlacedLevel3) researched.push(3);
             return (
-              <li key={s.cardId} className="flex items-center gap-2">
-                <span>
-                  {s.cardId}
-                  {timing ? ` (${timing})` : ''}
-                  {s.intPlaced ? ' · L1' : ''}
-                  {s.wisPlacedLevel2 ? ' · L2' : ''}
-                  {s.wisPlacedLevel3 ? ' · L3' : ''}
-                  {s.exhausted ? ' (exhausted)' : ''}
-                </span>
-                {showCastButton && (
-                  <button
-                    type="button"
-                    disabled={!budgetOpen}
-                    title={
-                      budgetOpen
-                        ? undefined
-                        : isFast
-                          ? 'Fast Action already used this turn'
-                          : 'Action already used this turn'
-                    }
-                    onClick={() =>
-                      dispatch({
-                        type: 'CAST_SPELL',
-                        playerId: player.id,
-                        spellCardId: s.cardId,
-                        level: 1,
-                      })
-                    }
-                    className="px-1.5 py-0.5 rounded bg-amber-500 text-slate-950 text-[10px] hover:bg-amber-400 disabled:opacity-40 disabled:cursor-not-allowed"
-                  >
-                    Cast L1
-                  </button>
+              <li
+                key={s.cardId}
+                className={clsx(
+                  'rounded px-2 py-1',
+                  s.exhausted ? 'bg-slate-950/20 opacity-60' : 'bg-slate-950/40',
                 )}
+              >
+                <div className="flex items-baseline gap-1.5 flex-wrap">
+                  <span className="font-medium text-slate-200">
+                    {card.name}
+                  </span>
+                  <span className="text-[10px] uppercase tracking-wide text-slate-500">
+                    {card.department}
+                  </span>
+                  {s.exhausted && (
+                    <span className="text-[10px] uppercase tracking-wide text-slate-500">
+                      exhausted
+                    </span>
+                  )}
+                  {researched.length > 0 && (
+                    <span className="text-[10px] uppercase tracking-wide text-emerald-300/70">
+                      researched: {researched.join(',')}
+                    </span>
+                  )}
+                </div>
+                <ul className="mt-1 space-y-0.5">
+                  {card.levels.map((lv) => {
+                    const owned =
+                      (lv.level === 1 && s.intPlaced) ||
+                      (lv.level === 2 && s.wisPlacedLevel2) ||
+                      (lv.level === 3 && s.wisPlacedLevel3);
+                    const isFast = lv.timing === 'fast-action';
+                    const budgetOpen = isFast ? canTakeFastAction : canTakeAction;
+                    const canCast =
+                      !s.exhausted &&
+                      owned &&
+                      canAct &&
+                      lv.timing !== 'reaction';
+                    return (
+                      <li
+                        key={lv.level}
+                        className={clsx(
+                          'flex items-baseline gap-1.5 text-[11px]',
+                          !owned && 'opacity-50',
+                        )}
+                      >
+                        <span className="text-slate-500">L{lv.level}</span>
+                        <span className="font-medium text-slate-300">
+                          {lv.title}
+                        </span>
+                        <span className="text-[10px] uppercase text-slate-500">
+                          {lv.timing}
+                        </span>
+                        <span className="text-[10px] uppercase text-cyan-300/70 inline-flex items-center gap-0.5">
+                          {lv.manaCost}
+                          <ResourceIcon kind="mana" size={10} />
+                        </span>
+                        <span className="text-slate-400/80 flex-1">
+                          {lv.description ?? ''}
+                        </span>
+                        {canCast && (
+                          <button
+                            type="button"
+                            disabled={!budgetOpen}
+                            title={
+                              budgetOpen
+                                ? `Cast ${lv.title}`
+                                : isFast
+                                  ? 'Fast Action already used'
+                                  : 'Action already used'
+                            }
+                            onClick={() =>
+                              dispatch({
+                                type: 'CAST_SPELL',
+                                playerId: player.id,
+                                spellCardId: s.cardId,
+                                level: lv.level,
+                              })
+                            }
+                            className="px-1.5 py-0.5 rounded bg-amber-500 text-slate-950 text-[10px] hover:bg-amber-400 disabled:opacity-40 disabled:cursor-not-allowed"
+                          >
+                            Cast
+                          </button>
+                        )}
+                      </li>
+                    );
+                  })}
+                </ul>
               </li>
             );
           })}
@@ -1301,11 +1368,46 @@ function TableauPanel({ state }: { state: GameState }) {
       <h2 className="text-sm font-medium mb-2">Tableaus</h2>
       <div className="grid grid-cols-1 md:grid-cols-3 gap-3 text-xs text-slate-300">
         <div>
-          <p className="font-medium text-slate-200">Spells ({state.spellTableau.length})</p>
-          <ul className="space-y-0.5">
-            {state.spellTableau.map((cid, i) => (
-              <li key={`${cid}-${i}`}>{cid}</li>
-            ))}
+          <p className="font-medium text-slate-200">
+            Spells ({state.spellTableau.length}/3)
+          </p>
+          <ul className="space-y-1">
+            {state.spellTableau.map((cid, i) => {
+              const card = findSpellCard(state, cid);
+              if (!card) {
+                return <li key={`${cid}-${i}`}>{cid}</li>;
+              }
+              return (
+                <li
+                  key={`${cid}-${i}`}
+                  className="rounded bg-slate-950/40 px-2 py-1"
+                >
+                  <div className="flex items-baseline gap-1.5 flex-wrap">
+                    <span className="font-medium text-slate-200">
+                      {card.name}
+                    </span>
+                    <span className="text-[10px] uppercase tracking-wide text-slate-500">
+                      {card.department}
+                    </span>
+                  </div>
+                  <ul className="text-[11px] text-slate-400 space-y-0.5 mt-0.5">
+                    {card.levels.map((lv) => (
+                      <li key={lv.level} className="flex items-baseline gap-1">
+                        <span className="text-slate-500">L{lv.level}</span>
+                        <span className="text-slate-300">{lv.title}</span>
+                        <span className="text-[10px] uppercase text-slate-500">
+                          {lv.timing}
+                        </span>
+                        <span className="text-[10px] text-cyan-300/70 inline-flex items-center gap-0.5">
+                          {lv.manaCost}
+                          <ResourceIcon kind="mana" size={9} />
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                </li>
+              );
+            })}
             {state.spellTableau.length === 0 && (
               <li className="text-slate-500 italic">empty</li>
             )}

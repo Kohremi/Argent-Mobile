@@ -209,6 +209,8 @@ export interface SpellLevel {
   manaCost: number;
   effectId: EffectId;
   timing: SpellTiming;
+  /** Human-readable effect text for this level, copied from the card. */
+  description?: string;
 }
 
 export interface SpellCard {

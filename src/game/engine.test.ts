@@ -2250,6 +2250,43 @@ describe('PLAY_VAULT_CARD', () => {
     expect(baseGamePack.vaultCards).toHaveLength(26);
   });
 
+  it('the base pack ships 26 spell books (25 from the sheet + the Burn vertical-slice card)', () => {
+    // 25 regular base game spell books + Burn (used by the engine tests).
+    expect(baseGamePack.spells).toHaveLength(26);
+    // Each book has three levels with names + costs + timings + effect ids.
+    for (const book of baseGamePack.spells) {
+      expect(book.levels).toHaveLength(3);
+      for (const lvl of book.levels) {
+        expect(lvl.title).toBeTruthy();
+        expect(lvl.effectId).toBeTruthy();
+        expect(typeof lvl.manaCost).toBe('number');
+      }
+    }
+  });
+
+  it('the base pack ships 11 legendary spell books (6 candidate starters + 5 from the sheet)', () => {
+    expect(baseGamePack.legendarySpells).toHaveLength(11);
+    // Each candidate's starter must appear in the legendary list.
+    const ids = new Set(baseGamePack.legendarySpells.map((s) => s.id));
+    for (const cand of baseGamePack.candidates) {
+      expect(ids.has(cand.starterSpellId)).toBe(true);
+    }
+  });
+
+  it('initial spell tableau holds 3 cards drawn from the base deck', () => {
+    const s = initGame(TWO_PLAYER_CONFIG);
+    expect(s.spellTableau).toHaveLength(3);
+    expect(s.spellDeck.length + s.spellTableau.length).toBe(
+      baseGamePack.spells.length,
+    );
+    // None of the candidate starter spells (or other legendaries) should be
+    // shuffled into the regular deck.
+    const legendaryIds = new Set(baseGamePack.legendarySpells.map((s) => s.id));
+    for (const cid of [...s.spellTableau, ...s.spellDeck]) {
+      expect(legendaryIds.has(cid)).toBe(false);
+    }
+  });
+
   it('initial vault deck size reflects all card copies (38 total)', () => {
     const s = initGame(TWO_PLAYER_CONFIG);
     const totalCopies = baseGamePack.vaultCards.reduce(

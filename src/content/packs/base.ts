@@ -95,44 +95,10 @@ const mages: Mage[] = [
 // Spells
 // ============================================================================
 //
-// Burn (Sorcery, L1–L3) is wired up as the Vertical Slice 2 spell. The other
-// four are placeholders pending real names from card images.
-
-function placeholderSpell(args: {
-  id: string;
-  name: string;
-  department: Department;
-}): SpellCard {
-  return {
-    id: args.id,
-    name: args.name,
-    sourcePackId: PACK_ID,
-    department: args.department,
-    levels: [
-      {
-        level: 1,
-        title: `${args.name} I`,
-        manaCost: 1,
-        effectId: `${args.id}.l1`,
-        timing: 'action',
-      },
-      {
-        level: 2,
-        title: `${args.name} II`,
-        manaCost: 2,
-        effectId: `${args.id}.l2`,
-        timing: 'action',
-      },
-      {
-        level: 3,
-        title: `${args.name} III`,
-        manaCost: 3,
-        effectId: `${args.id}.l3`,
-        timing: 'action',
-      },
-    ],
-  };
-}
+// Burn (Sorcery, L1–L3) was the Vertical Slice 2 placeholder spell. Its L1
+// effect (wound a Mage) is fully wired up and referenced by many engine
+// tests. It is kept alongside the 25 real spell books below; the closest
+// data-sheet equivalent is "The Gift of Fire" (Firebolt = wound a Mage).
 
 const burnSpell: SpellCard = {
   id: 'base.spell.burn',
@@ -266,37 +232,371 @@ const paralocation: SpellCard = leaderSpell({
   l1Timing: 'action',
 });
 
+// ============================================================================
+// Base spell books — 25 regular books + 5 legendary books from the data sheet.
+//
+// Spell effects (Wound a Mage, Banish, Refresh, Move-from-Infirmary, etc.)
+// are not yet wired; CAST_SPELL on these throws "effect not registered".
+// Burn (defined above) remains as the vertical-slice test spell — its L1
+// effect is fully implemented and is referenced by many engine tests.
+// ============================================================================
+
+const baseSpellBooks: SpellCard[] = [
+  {
+    id: 'base.spell.wrath-of-heaven',
+    name: 'Wrath of Heaven',
+    sourcePackId: PACK_ID,
+    department: 'divinity',
+    levels: [
+      { level: 1, title: 'Justice', manaCost: 1, timing: 'reaction', effectId: 'base.spell.wrath-of-heaven.l1', description: 'When one of your Mages is shadowed or moved by an opponent, wound any placed Mage belonging to that opponent.' },
+      { level: 2, title: 'Recompense', manaCost: 1, timing: 'reaction', effectId: 'base.spell.wrath-of-heaven.l2', description: 'When one of your Mages is banished, banish a Mage belonging to the player who Banished it.' },
+      { level: 3, title: 'Retribution', manaCost: 3, timing: 'reaction', effectId: 'base.spell.wrath-of-heaven.l3', description: 'After one of your Mages is wounded, choose and wound two Mages owned by the player who wounded yours.' },
+    ],
+  },
+  {
+    id: 'base.spell.will-of-the-divines',
+    name: 'Will of the Divines',
+    sourcePackId: PACK_ID,
+    department: 'divinity',
+    levels: [
+      { level: 1, title: 'Concentration', manaCost: 0, timing: 'fast-action', effectId: 'base.spell.will-of-the-divines.l1', description: 'The next time you cast a Spell this turn, do not exhaust it.' },
+      { level: 2, title: 'Silence', manaCost: 1, timing: 'action', effectId: 'base.spell.will-of-the-divines.l2', description: 'Until the start of your next turn, players may not cast Spells.' },
+      { level: 3, title: 'Revival', manaCost: 1, timing: 'action', effectId: 'base.spell.will-of-the-divines.l3', description: 'For the rest of this round, you may move your wounded Mages after the action that wounded them. Still gain Infirmary Bonuses.' },
+    ],
+  },
+  {
+    id: 'base.spell.tome-of-protection',
+    name: 'Tome of Protection',
+    sourcePackId: PACK_ID,
+    department: 'divinity',
+    levels: [
+      { level: 1, title: 'Spell Shield', manaCost: 1, timing: 'action', effectId: 'base.spell.tome-of-protection.l1', description: 'Until your next turn, all of your Mages are immune to all Spells.' },
+      { level: 2, title: 'Wall', manaCost: 2, timing: 'action', effectId: 'base.spell.tome-of-protection.l2', description: 'Until your next turn, all your Mages are immune to all negative effects (Spells, Vault Cards, and other Mages).' },
+      { level: 3, title: 'Absorb Mana', manaCost: 0, timing: 'reaction', effectId: 'base.spell.tome-of-protection.l3', description: 'After one of your Mages would be moved, wounded, or banished, by a spell, gain Mana equal to the cost of that spell.' },
+    ],
+  },
+  {
+    id: 'base.spell.rites-of-renewal',
+    name: 'Rites of Renewal',
+    sourcePackId: PACK_ID,
+    department: 'divinity',
+    levels: [
+      { level: 1, title: 'Chain of Healing', manaCost: 1, timing: 'action', effectId: 'base.spell.rites-of-renewal.l1', description: 'Return up to two of your Mages from the Infirmary to your Office.' },
+      { level: 2, title: 'Circle of Healing', manaCost: 2, timing: 'fast-action', effectId: 'base.spell.rites-of-renewal.l2', description: 'Return all of your Mages in the Infirmary to your Office.' },
+      { level: 3, title: 'Well of Healing', manaCost: 3, timing: 'action', effectId: 'base.spell.rites-of-renewal.l3', description: "Return all Mages in the Infirmary to their Offices. Gain 2 IP if you returned at least one opponent's Mage to their Office." },
+    ],
+  },
+  {
+    id: 'base.spell.of-mortal-form',
+    name: 'Of Mortal Form',
+    sourcePackId: PACK_ID,
+    department: 'divinity',
+    levels: [
+      { level: 1, title: 'Heal', manaCost: 0, timing: 'action', effectId: 'base.spell.of-mortal-form.l1', description: "Return a Mage from the Infirmary to its owner's Office." },
+      { level: 2, title: 'Amelioration', manaCost: 1, timing: 'action', effectId: 'base.spell.of-mortal-form.l2', description: 'Move a Mage from the Infirmary to an open slot of your choice.' },
+      { level: 3, title: 'Innervation', manaCost: 2, timing: 'action', effectId: 'base.spell.of-mortal-form.l3', description: "Move a Mage from the Infirmary to any slot. You may wound an opponent's Mage in order to place your own." },
+    ],
+  },
+  {
+    id: 'base.spell.the-grasping-darkness',
+    name: 'The Grasping Darkness',
+    sourcePackId: PACK_ID,
+    department: 'mysticism',
+    levels: [
+      { level: 1, title: 'Repeating Hex', manaCost: 2, timing: 'action', effectId: 'base.spell.the-grasping-darkness.l1', description: 'Swap this Spell for a (non-starter, non-legendary) level 1 Spell from another player and exhaust both Spells.' },
+      { level: 2, title: 'Telepathy', manaCost: 3, timing: 'action', effectId: 'base.spell.the-grasping-darkness.l2', description: "Discard an opponent's (non-starter, non-legendary) level 1 Spell to the bottom of the Spell Deck. He keeps the INT on it." },
+      { level: 3, title: 'Deathly Paling', manaCost: 3, timing: 'action', effectId: 'base.spell.the-grasping-darkness.l3', description: 'Steal 1 unspent INT from a player with more INT than you OR steal 1 unspent WIS from a player with more WIS than you.' },
+    ],
+  },
+  {
+    id: 'base.spell.the-darkness-within',
+    name: 'The Darkness Within',
+    sourcePackId: PACK_ID,
+    department: 'mysticism',
+    levels: [
+      { level: 1, title: 'Malaise', manaCost: 1, timing: 'action', effectId: 'base.spell.the-darkness-within.l1', description: 'Until your next turn, Mages cannot be placed.' },
+      { level: 2, title: 'Haunt', manaCost: 2, timing: 'reaction', effectId: 'base.spell.the-darkness-within.l2', description: 'When one of your Mages is wounded, moved, or banished, it instead shadows the slot it previously occupied.' },
+      { level: 3, title: 'Possession', manaCost: 4, timing: 'action', effectId: 'base.spell.the-darkness-within.l3', description: 'Swap ownership badges between two Mages on the board. Their ownership is permanently swapped.' },
+    ],
+  },
+  {
+    id: 'base.spell.tenets-of-dominance',
+    name: 'Tenets of Dominance',
+    sourcePackId: PACK_ID,
+    department: 'mysticism',
+    levels: [
+      { level: 1, title: 'Mesmerize', manaCost: 1, timing: 'action', effectId: 'base.spell.tenets-of-dominance.l1', description: 'Until your next turn, all Mages (except those immune to Spells) lose their powers.' },
+      { level: 2, title: 'Mystic Link', manaCost: 2, timing: 'action', effectId: 'base.spell.tenets-of-dominance.l2', description: 'Cast another Spell. Then, place any Mage you control.' },
+      { level: 3, title: 'Shadow Puppet', manaCost: 4, timing: 'action', effectId: 'base.spell.tenets-of-dominance.l3', description: 'Gain a Secret Supporter.' },
+    ],
+  },
+  {
+    id: 'base.spell.thirteen-greater-mysteries',
+    name: 'Thirteen Greater Mysteries',
+    sourcePackId: PACK_ID,
+    department: 'mysticism',
+    levels: [
+      { level: 1, title: 'Mana Drain', manaCost: 0, timing: 'action', effectId: 'base.spell.thirteen-greater-mysteries.l1', description: 'Steal 1 mana from a single opponent.' },
+      { level: 2, title: 'Tap the Well', manaCost: 0, timing: 'action', effectId: 'base.spell.thirteen-greater-mysteries.l2', description: 'Cast a Level 1 Spell from the Spell Tableau, paying all costs.' },
+      { level: 3, title: 'Energy Drain', manaCost: 0, timing: 'action', effectId: 'base.spell.thirteen-greater-mysteries.l3', description: 'X is the number of opponents in the game. During this round, opponents must pay you 1 extra mana in order to cast a Spell.' },
+    ],
+  },
+  {
+    id: 'base.spell.the-lamentations-of-sareth',
+    name: 'The Lamentations of Sareth',
+    sourcePackId: PACK_ID,
+    department: 'mysticism',
+    levels: [
+      { level: 1, title: 'Venom', manaCost: 1, timing: 'action', effectId: 'base.spell.the-lamentations-of-sareth.l1', description: 'Wound a Mage. Its owner gains no Infirmary bonus.' },
+      { level: 2, title: 'Poison', manaCost: 3, timing: 'action', effectId: 'base.spell.the-lamentations-of-sareth.l2', description: 'Wound a Mage and place one of yours in its slot. Its owner gains no Infirmary Bonus.' },
+      { level: 3, title: 'Nox', manaCost: 5, timing: 'action', effectId: 'base.spell.the-lamentations-of-sareth.l3', description: 'Wound all Mages in a room, and their owners receive no Infirmary bonuses.' },
+    ],
+  },
+  {
+    id: 'base.spell.songs-of-springtime',
+    name: 'Songs of Springtime',
+    sourcePackId: PACK_ID,
+    department: 'natural-magick',
+    levels: [
+      { level: 1, title: 'Regeneration', manaCost: 0, timing: 'reaction', effectId: 'base.spell.songs-of-springtime.l1', description: 'When one of your Mages is wounded or moved, refresh an exhausted Spell or Treasure.' },
+      { level: 2, title: 'Regrowth', manaCost: 1, timing: 'reaction', effectId: 'base.spell.songs-of-springtime.l2', description: 'When one of your Mages is wounded or moved, place it into an empty slot.' },
+      { level: 3, title: 'Renewal', manaCost: 2, timing: 'reaction', effectId: 'base.spell.songs-of-springtime.l3', description: 'When one of your Mages is wounded or moved, place it into an empty slot, then refresh an exhausted Spell or Treasure.' },
+    ],
+  },
+  {
+    id: 'base.spell.book-of-one-hundred-seas',
+    name: 'Book of One Hundred Seas',
+    sourcePackId: PACK_ID,
+    department: 'natural-magick',
+    levels: [
+      { level: 1, title: 'Wave', manaCost: 1, timing: 'action', effectId: 'base.spell.book-of-one-hundred-seas.l1', description: "Banish an opponent's Mage." },
+      { level: 2, title: 'Tidal Wave', manaCost: 2, timing: 'action', effectId: 'base.spell.book-of-one-hundred-seas.l2', description: "Banish an opponent's Mage and place a Mage from your Office in its place." },
+      { level: 3, title: 'Tsunami', manaCost: 4, timing: 'action', effectId: 'base.spell.book-of-one-hundred-seas.l3', description: 'Banish all Mages in a room.' },
+    ],
+  },
+  {
+    id: 'base.spell.heart-of-the-mountain',
+    name: 'Heart of the Mountain',
+    sourcePackId: PACK_ID,
+    department: 'natural-magick',
+    levels: [
+      { level: 1, title: 'Oakskin', manaCost: 1, timing: 'action', effectId: 'base.spell.heart-of-the-mountain.l1', description: 'Until your next turn, your Mages are immune to being wounded and moved.' },
+      { level: 2, title: 'Stoneskin', manaCost: 4, timing: 'action', effectId: 'base.spell.heart-of-the-mountain.l2', description: 'For the rest of the round, your mages are immune to being wounded and moved.' },
+      { level: 3, title: 'Diamondskin', manaCost: 6, timing: 'action', effectId: 'base.spell.heart-of-the-mountain.l3', description: 'For the rest of the round, your Mages lose their innate powers, but become immune to all negative effects.' },
+    ],
+  },
+  {
+    id: 'base.spell.lightning-and-you',
+    name: 'Lightning and You',
+    sourcePackId: PACK_ID,
+    department: 'natural-magick',
+    levels: [
+      { level: 1, title: 'Bolt', manaCost: 1, timing: 'action', effectId: 'base.spell.lightning-and-you.l1', description: "Wound an opponent's Mage." },
+      { level: 2, title: 'Lightning', manaCost: 3, timing: 'action', effectId: 'base.spell.lightning-and-you.l2', description: "Wound an opponent's Mage, then place a Mage of your own." },
+      { level: 3, title: 'Chain Lightning', manaCost: 5, timing: 'action', effectId: 'base.spell.lightning-and-you.l3', description: "Wound an opponent's Mage, then place a Mage of your own. You may then cast another Spell." },
+    ],
+  },
+  {
+    id: 'base.spell.taming-of-the-storm',
+    name: 'Taming of the Storm',
+    sourcePackId: PACK_ID,
+    department: 'natural-magick',
+    levels: [
+      { level: 1, title: 'Zephyr', manaCost: 1, timing: 'action', effectId: 'base.spell.taming-of-the-storm.l1', description: "Move an opponent's Mage to another open slot in the same room." },
+      { level: 2, title: 'Tornado', manaCost: 2, timing: 'action', effectId: 'base.spell.taming-of-the-storm.l2', description: 'Rearrange all Mages in a room.' },
+      { level: 3, title: 'Hurricane', manaCost: 3, timing: 'action', effectId: 'base.spell.taming-of-the-storm.l3', description: 'Wound a Mage, then rearrange the rest of the Mages in that room.' },
+    ],
+  },
+  {
+    id: 'base.spell.indefinite-definitives',
+    name: 'Indefinite Definitives',
+    sourcePackId: PACK_ID,
+    department: 'planar-studies',
+    levels: [
+      { level: 1, title: 'Cut Plane', manaCost: 1, timing: 'action', effectId: 'base.spell.indefinite-definitives.l1', description: "An opponent's Mage is now shadowing its slot. Place one of your Mages into the slot they were in." },
+      { level: 2, title: 'Invisibility', manaCost: 1, timing: 'action', effectId: 'base.spell.indefinite-definitives.l2', description: 'Shadow an empty slot.' },
+      { level: 3, title: 'Doppelganger', manaCost: 2, timing: 'action', effectId: 'base.spell.indefinite-definitives.l3', description: 'Shadow one of your own Mages.' },
+    ],
+  },
+  {
+    id: 'base.spell.everyday-paralocation',
+    name: 'Everyday Paralocation',
+    sourcePackId: PACK_ID,
+    department: 'planar-studies',
+    levels: [
+      { level: 1, title: 'Celerity', manaCost: 1, timing: 'fast-action', effectId: 'base.spell.everyday-paralocation.l1', description: 'Place any Mage.' },
+      { level: 2, title: 'Accelerate Time', manaCost: 2, timing: 'fast-action', effectId: 'base.spell.everyday-paralocation.l2', description: 'Cast another Spell.' },
+      { level: 3, title: 'Teleport', manaCost: 3, timing: 'action', effectId: 'base.spell.everyday-paralocation.l3', description: 'Move up to 2 of your Mages to any open slots (you may move them out of the Infirmary).' },
+    ],
+  },
+  {
+    id: 'base.spell.temporal-calculus-6th-ed',
+    name: 'Temporal Calculus, 6th Ed.',
+    sourcePackId: PACK_ID,
+    department: 'planar-studies',
+    levels: [
+      { level: 1, title: 'Slow Time', manaCost: 2, timing: 'action', effectId: 'base.spell.temporal-calculus-6th-ed.l1', description: 'Choose a room. Place up to two of your Mages into it.' },
+      { level: 2, title: 'Stop Time', manaCost: 3, timing: 'reaction', effectId: 'base.spell.temporal-calculus-6th-ed.l2', description: "After the last Bell Tower Offering is taken by another player, take two more 'Place a Mage' actions, without using Mage Powers." },
+      { level: 3, title: 'Bend Time', manaCost: 4, timing: 'action', effectId: 'base.spell.temporal-calculus-6th-ed.l3', description: 'Take up to 3 more actions. Each must be a different type of action (using a Vault Card, Supporter, and Spell are all different types).' },
+    ],
+  },
+  {
+    id: 'base.spell.memoirs-of-the-future-past',
+    name: 'Memoirs of the Future-Past',
+    sourcePackId: PACK_ID,
+    department: 'planar-studies',
+    levels: [
+      { level: 1, title: 'Future Power', manaCost: 0, timing: 'action', effectId: 'base.spell.memoirs-of-the-future-past.l1', description: 'Cast a Spell that you have not yet researched from among your learned Spells (paying all mana costs).' },
+      { level: 2, title: 'Past Power', manaCost: 3, timing: 'action', effectId: 'base.spell.memoirs-of-the-future-past.l2', description: "Cast one of your regular Action Spells at a level less than the highest level you've researched. Do not pay any additional mana or exhaust it." },
+      { level: 3, title: 'Eternal Power', manaCost: 7, timing: 'action', effectId: 'base.spell.memoirs-of-the-future-past.l3', description: 'Cast one of your regular Action Spells of any level (it need not even be researched). Do not pay any additional mana or exhaust it.' },
+    ],
+  },
+  {
+    id: 'base.spell.parallel-synchronicity',
+    name: 'Parallel Synchronicity',
+    sourcePackId: PACK_ID,
+    department: 'planar-studies',
+    levels: [
+      { level: 1, title: 'Flicker', manaCost: 1, timing: 'action', effectId: 'base.spell.parallel-synchronicity.l1', description: "Shadow an opponent's Mage with one of your Mages." },
+      { level: 2, title: 'Fade', manaCost: 2, timing: 'action', effectId: 'base.spell.parallel-synchronicity.l2', description: "Move any number of Mages (yours or opponents') in a room into the shadow position." },
+      { level: 3, title: 'Planar Disjunction', manaCost: 4, timing: 'action', effectId: 'base.spell.parallel-synchronicity.l3', description: 'Choose a room. All Mages in that room are banished. Any that were shadowing move into normal spaces.' },
+    ],
+  },
+  {
+    id: 'base.spell.sorcerous-inspiration',
+    name: 'Sorcerous Inspiration',
+    sourcePackId: PACK_ID,
+    department: 'sorcery',
+    levels: [
+      { level: 1, title: 'Luminosity', manaCost: 1, timing: 'action', effectId: 'base.spell.sorcerous-inspiration.l1', description: 'Gain a Mark.' },
+      { level: 2, title: 'Brilliance', manaCost: 2, timing: 'action', effectId: 'base.spell.sorcerous-inspiration.l2', description: 'Gain two Research.' },
+      { level: 3, title: 'Radiance', manaCost: 3, timing: 'action', effectId: 'base.spell.sorcerous-inspiration.l3', description: 'Gain a Research, refresh an exhausted Spell, then gain a Mark.' },
+    ],
+  },
+  {
+    id: 'base.spell.the-light-that-leads',
+    name: 'The Light that Leads',
+    sourcePackId: PACK_ID,
+    department: 'sorcery',
+    levels: [
+      { level: 1, title: 'Illuminate', manaCost: 2, timing: 'fast-action', effectId: 'base.spell.the-light-that-leads.l1', description: 'Gain a Mark.' },
+      { level: 2, title: 'Flare', manaCost: 2, timing: 'fast-action', effectId: 'base.spell.the-light-that-leads.l2', description: 'Take a normal action.' },
+      { level: 3, title: 'Dazzle', manaCost: 3, timing: 'fast-action', effectId: 'base.spell.the-light-that-leads.l3', description: 'Take two normal actions.' },
+    ],
+  },
+  {
+    id: 'base.spell.a-brighter-flame',
+    name: 'A Brighter Flame',
+    sourcePackId: PACK_ID,
+    department: 'sorcery',
+    levels: [
+      { level: 1, title: 'Inner Fire', manaCost: 1, timing: 'action', effectId: 'base.spell.a-brighter-flame.l1', description: 'For the rest of the round, your Spells cost 1 less mana.' },
+      { level: 2, title: 'Kindle', manaCost: 2, timing: 'fast-action', effectId: 'base.spell.a-brighter-flame.l2', description: 'Refresh an exhausted Spell.' },
+      { level: 3, title: 'Immolation', manaCost: 3, timing: 'fast-action', effectId: 'base.spell.a-brighter-flame.l3', description: 'Place a Mage into any slot. If the slot is occupied, wound the Mage there and take its place.' },
+    ],
+  },
+  {
+    id: 'base.spell.the-gift-of-fire',
+    name: 'The Gift of Fire',
+    sourcePackId: PACK_ID,
+    department: 'sorcery',
+    levels: [
+      { level: 1, title: 'Firebolt', manaCost: 1, timing: 'action', effectId: 'base.spell.the-gift-of-fire.l1', description: 'Wound a Mage.' },
+      { level: 2, title: 'Fireball', manaCost: 3, timing: 'action', effectId: 'base.spell.the-gift-of-fire.l2', description: 'Choose two adjacent rooms, wound one Mage in each.' },
+      { level: 3, title: 'Inferno', manaCost: 6, timing: 'action', effectId: 'base.spell.the-gift-of-fire.l3', description: 'Wound all Mages in two adjacent rooms.' },
+    ],
+  },
+  {
+    id: 'base.spell.the-pursuit-of-power',
+    name: 'The Pursuit of Power',
+    sourcePackId: PACK_ID,
+    department: 'sorcery',
+    levels: [
+      { level: 1, title: 'Warmth', manaCost: 0, timing: 'action', effectId: 'base.spell.the-pursuit-of-power.l1', description: 'Gain 2 Mana.' },
+      { level: 2, title: 'Power', manaCost: 0, timing: 'action', effectId: 'base.spell.the-pursuit-of-power.l2', description: 'Gain 1 Mana and refresh a Spell.' },
+      { level: 3, title: 'Intensity', manaCost: 1, timing: 'action', effectId: 'base.spell.the-pursuit-of-power.l3', description: 'Refresh a Spell and then gain a Research.' },
+    ],
+  },
+];
+
+// Base legendary spell books — researchable by anyone (e.g., via Sealed Scroll).
+// These are distinct from the 6 candidate starter spells defined above.
+const baseLegendarySpellBooks: SpellCard[] = [
+  {
+    id: 'base.spell.moste-holie-litanies',
+    name: 'Moste Holie Litanies',
+    sourcePackId: PACK_ID,
+    department: 'divinity',
+    levels: [
+      { level: 1, title: 'Sanctification', manaCost: 1, timing: 'fast-action', effectId: 'base.spell.moste-holie-litanies.l1', description: 'Until the start of your next turn, your Mages are immune to wounding.' },
+      { level: 2, title: 'Protective Aura', manaCost: 2, timing: 'action', effectId: 'base.spell.moste-holie-litanies.l2', description: 'For the rest of the round, your Mages are immune to wounding.' },
+      { level: 3, title: 'Consecration', manaCost: 6, timing: 'action', effectId: 'base.spell.moste-holie-litanies.l3', description: 'Place as many Mages as you wish into a single room, then Lock that room.' },
+    ],
+  },
+  {
+    id: 'base.spell.on-the-weakness-of-flesh',
+    name: 'On the Weakness of Flesh',
+    sourcePackId: PACK_ID,
+    department: 'mysticism',
+    levels: [
+      { level: 1, title: 'Disease', manaCost: 0, timing: 'action', effectId: 'base.spell.on-the-weakness-of-flesh.l1', description: 'Wound a Mage OR banish a Mage.' },
+      { level: 2, title: 'Plague', manaCost: 1, timing: 'action', effectId: 'base.spell.on-the-weakness-of-flesh.l2', description: 'Choose two adjacent rooms. Wound one Mage in each of them.' },
+      { level: 3, title: 'Pestilence', manaCost: 4, timing: 'action', effectId: 'base.spell.on-the-weakness-of-flesh.l3', description: 'Choose up to four adjacent rooms. Wound one Mage in each of them.' },
+    ],
+  },
+  {
+    id: 'base.spell.master-book-of-starcalling',
+    name: 'Master Book of Starcalling',
+    sourcePackId: PACK_ID,
+    department: 'natural-magick',
+    levels: [
+      { level: 1, title: 'Ice Comet', manaCost: 3, timing: 'action', effectId: 'base.spell.master-book-of-starcalling.l1', description: 'In a single room, wound a Mage, banish a Mage, and move a Mage to an open slot in the same room.' },
+      { level: 2, title: 'Meteor', manaCost: 4, timing: 'action', effectId: 'base.spell.master-book-of-starcalling.l2', description: 'Place a Mage into a room, then lock that room for the rest of the round.' },
+      { level: 3, title: 'Cataclysm', manaCost: 4, timing: 'action', effectId: 'base.spell.master-book-of-starcalling.l3', description: 'Banish all Mages in a room, then lock that room for the rest of the round.' },
+    ],
+  },
+  {
+    id: 'base.spell.infinite-universes-realized',
+    name: 'Infinite Universes Realized',
+    sourcePackId: PACK_ID,
+    department: 'planar-studies',
+    levels: [
+      { level: 1, title: 'Event Horizon', manaCost: 2, timing: 'action', effectId: 'base.spell.infinite-universes-realized.l1', description: 'Shadow two Mages with two of your Mages.' },
+      { level: 2, title: 'Zero Hour', manaCost: 3, timing: 'fast-action', effectId: 'base.spell.infinite-universes-realized.l2', description: "For the rest of the round, your Mages can shadow opponent's Mages when placed." },
+      { level: 3, title: 'Inversion', manaCost: 3, timing: 'action', effectId: 'base.spell.infinite-universes-realized.l3', description: 'All of your placed Mages move to the Shadow position if able. For the rest of the round, you must Shadow opponents or empty slots.' },
+    ],
+  },
+  {
+    id: 'base.spell.calvals-deadliest-magicks',
+    name: "Calval's Deadliest Magicks",
+    sourcePackId: PACK_ID,
+    department: 'sorcery',
+    levels: [
+      { level: 1, title: 'Pyre', manaCost: 2, timing: 'action', effectId: 'base.spell.calvals-deadliest-magicks.l1', description: 'Wound up to two Mages in the same room.' },
+      { level: 2, title: 'Flamespout', manaCost: 4, timing: 'action', effectId: 'base.spell.calvals-deadliest-magicks.l2', description: 'Wound a Mage, then lock the room it previously occupied.' },
+      { level: 3, title: 'Volcano', manaCost: 0, timing: 'fast-action', effectId: 'base.spell.calvals-deadliest-magicks.l3', description: 'Banish one Mage belonging to each opponent. X is the number of opponents.' },
+    ],
+  },
+];
+
 const legendarySpells: SpellCard[] = [
+  // Candidate starter spells (one per faction leader).
   flashOfLight,
   livingImage,
   trance,
   strengthOfEarth,
   bless,
   paralocation,
+  // Legendary books from the data sheet — research these via Sealed Scroll, etc.
+  ...baseLegendarySpellBooks,
 ];
 
 const spells: SpellCard[] = [
+  // Burn is kept as the wired-up vertical-slice test spell; its L1 effect is
+  // implemented and many engine tests depend on it. The data-sheet equivalent
+  // is "The Gift of Fire" (Firebolt = wound a Mage).
   burnSpell,
-  placeholderSpell({
-    id: 'base.spell.placeholder.2',
-    name: 'Placeholder Spell 2',
-    department: 'mysticism',
-  }),
-  placeholderSpell({
-    id: 'base.spell.placeholder.3',
-    name: 'Placeholder Spell 3',
-    department: 'natural-magick',
-  }),
-  placeholderSpell({
-    id: 'base.spell.placeholder.4',
-    name: 'Placeholder Spell 4',
-    department: 'divinity',
-  }),
-  placeholderSpell({
-    id: 'base.spell.placeholder.5',
-    name: 'Placeholder Spell 5',
-    department: 'planar-studies',
-  }),
+  ...baseSpellBooks,
 ];
 
 // ============================================================================
