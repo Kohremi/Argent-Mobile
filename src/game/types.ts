@@ -388,6 +388,10 @@ export type ScoringCriterion =
 export interface ConsortiumVoter {
   id: ConsortiumVoterId;
   name: string;
+  /** In-world title / role (e.g., "Departing Chancellor"). */
+  title?: string;
+  /** Human-readable description of how this voter awards their vote. */
+  description?: string;
   sourcePackId: PackId;
   criterion: ScoringCriterion;
   votes: number;

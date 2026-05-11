@@ -1894,6 +1894,8 @@ const rooms: Room[] = [
 function voter(args: {
   id: string;
   name: string;
+  title: string;
+  description: string;
   criterion: ScoringCriterion;
   votes?: number;
   isAlwaysFaceUp?: boolean;
@@ -1901,6 +1903,8 @@ function voter(args: {
   return {
     id: args.id,
     name: args.name,
+    title: args.title,
+    description: args.description,
     sourcePackId: PACK_ID,
     criterion: args.criterion,
     votes: args.votes ?? 1,
@@ -1909,82 +1913,148 @@ function voter(args: {
   };
 }
 
+// All 18 base voters, sourced from the Argent data sheet. The 2 required
+// face-up voters (Nostros Calahan and Luna Van Kessel) are always revealed;
+// the other 16 form the face-down pool from which `setup.ts` draws 10 (or
+// fewer when 2nd-Most criteria are excluded by the 2-player variant).
 const voters: ConsortiumVoter[] = [
   voter({
-    id: 'base.voter.most-supporters',
-    name: 'Most Supporters',
-    criterion: 'most-supporters',
-    isAlwaysFaceUp: true,
-  }),
-  voter({
     id: 'base.voter.most-influence',
-    name: 'Most Influence',
+    name: 'Nostros Calahan',
+    title: 'Departing Chancellor',
     criterion: 'most-influence',
+    description: 'Awards a vote to the player with the most Influence Points (IP).',
     isAlwaysFaceUp: true,
   }),
-  voter({ id: 'base.voter.most-mana', name: 'Most Mana', criterion: 'most-mana' }),
-  voter({ id: 'base.voter.most-gold', name: 'Most Gold', criterion: 'most-gold' }),
-  voter({ id: 'base.voter.most-marks', name: 'Most Marks', criterion: 'most-marks' }),
   voter({
-    id: 'base.voter.most-intelligence',
-    name: 'Most Intelligence',
-    criterion: 'most-intelligence',
-  }),
-  voter({ id: 'base.voter.most-wisdom', name: 'Most Wisdom', criterion: 'most-wisdom' }),
-  voter({
-    id: 'base.voter.most-research',
-    name: 'Most Research',
-    criterion: 'most-research',
-  }),
-  voter({
-    id: 'base.voter.most-treasures',
-    name: 'Most Treasures',
-    criterion: 'most-treasures',
-  }),
-  voter({
-    id: 'base.voter.most-consumables',
-    name: 'Most Consumables',
-    criterion: 'most-consumables',
-  }),
-  voter({
-    id: 'base.voter.most-diversity',
-    name: 'Most Diversity',
-    criterion: 'most-diversity',
-  }),
-  voter({
-    id: 'base.voter.most-sorcery',
-    name: 'Most Sorcery',
-    criterion: 'most-sorcery',
-  }),
-  voter({
-    id: 'base.voter.most-mysticism',
-    name: 'Most Mysticism',
-    criterion: 'most-mysticism',
+    id: 'base.voter.most-supporters',
+    name: 'Luna Van Kessel',
+    title: 'Dean of Students',
+    criterion: 'most-supporters',
+    description: 'Awards a vote to the player with the most Supporter Cards.',
+    isAlwaysFaceUp: true,
   }),
   voter({
     id: 'base.voter.most-natural-magick',
-    name: 'Most Natural Magick',
+    name: 'Abarene Unt Hallicris',
+    title: 'Amalao Senate Majority Whip',
     criterion: 'most-natural-magick',
+    description:
+      'Awards a vote to the player with the most Natural Magick Spell Research and Supporter Cards.',
   }),
   voter({
-    id: 'base.voter.most-planar-studies',
-    name: 'Most Planar Studies',
-    criterion: 'most-planar-studies',
+    id: 'base.voter.most-mana',
+    name: 'Adienna Callista',
+    title: 'The "Crystal Witch"',
+    criterion: 'most-mana',
+    description: 'Awards a vote to the player with the most Mana.',
   }),
   voter({
-    id: 'base.voter.most-divinity',
-    name: 'Most Divinity',
-    criterion: 'most-divinity',
+    id: 'base.voter.most-intelligence',
+    name: 'Ainos Lockehart',
+    title: 'Professor Emeritus',
+    criterion: 'most-intelligence',
+    description: 'Awards a vote to the player with the most Intelligence Tokens.',
   }),
   voter({
-    id: 'base.voter.second-most-influence',
-    name: '2nd Most Influence',
-    criterion: 'second-most-influence',
+    id: 'base.voter.most-treasures',
+    name: 'Amon Elcela',
+    title: 'Representative for the Reliquary',
+    criterion: 'most-treasures',
+    description:
+      'Awards a vote to the player with the most Treasure Vault Cards.',
+  }),
+  voter({
+    id: 'base.voter.most-marks',
+    name: 'Cairngort Rexan',
+    title: 'Overlord of Gesselheim',
+    criterion: 'most-marks',
+    description: 'Awards a vote to the player with the most Marks placed.',
+  }),
+  voter({
+    id: 'base.voter.most-research',
+    name: 'Candide Malephaise',
+    title: 'Afterworld Emissary',
+    criterion: 'most-research',
+    description: 'Awards a vote to the player with the most Spell Research.',
   }),
   voter({
     id: 'base.voter.second-most-supporters',
-    name: '2nd Most Supporters',
+    name: 'Colth Midlun',
+    title: 'Keeper of the Keys',
     criterion: 'second-most-supporters',
+    description:
+      'Awards a vote to the player with the second-most Supporter Cards.',
+  }),
+  voter({
+    id: 'base.voter.most-consumables',
+    name: 'Dareios Kuel',
+    title: 'Wandering Apothecarist',
+    criterion: 'most-consumables',
+    description:
+      'Awards a vote to the player with the most Consumable Vault Cards.',
+  }),
+  voter({
+    id: 'base.voter.most-gold',
+    name: 'Gerard Matranga',
+    title: 'The "Mercenary King"',
+    criterion: 'most-gold',
+    description: 'Awards a vote to the player with the most Gold.',
+  }),
+  voter({
+    id: 'base.voter.most-mysticism',
+    name: 'Hepzibah Culotre',
+    title: 'Legendary Healer',
+    criterion: 'most-mysticism',
+    description:
+      'Awards a vote to the player with the most Mysticism Spell Research and Supporter Cards.',
+  }),
+  voter({
+    id: 'base.voter.most-planar-studies',
+    name: 'Jeris Iyes',
+    title: 'Magister of Willat',
+    criterion: 'most-planar-studies',
+    description:
+      'Awards a vote to the player with the most Planar Studies Spell Research and Supporter Cards.',
+  }),
+  voter({
+    id: 'base.voter.most-wisdom',
+    name: 'Lord Eustace',
+    title: 'Baron of Kherdoza',
+    criterion: 'most-wisdom',
+    description: 'Awards a vote to the player with the most Wisdom Tokens.',
+  }),
+  voter({
+    id: 'base.voter.most-diversity',
+    name: 'Marmelee Greyheart',
+    title: 'Amalao National Historian',
+    criterion: 'most-diversity',
+    description:
+      'Awards a vote to the player with the most different kinds of Supporter Cards and Spell Research.',
+  }),
+  voter({
+    id: 'base.voter.second-most-influence',
+    name: 'Melinda Marsellis',
+    title: "Chancellor's Secretary",
+    criterion: 'second-most-influence',
+    description:
+      'Awards a vote to the player with the second-most Influence Points (IP).',
+  }),
+  voter({
+    id: 'base.voter.most-sorcery',
+    name: 'Rufus Zane',
+    title: 'The "Sorceror Baron"',
+    criterion: 'most-sorcery',
+    description:
+      'Awards a vote to the player with the most Sorcery Spell Research and Supporter Cards.',
+  }),
+  voter({
+    id: 'base.voter.most-divinity',
+    name: 'St. Abdel Iyes',
+    title: 'Archmage of Sanghalim',
+    criterion: 'most-divinity',
+    description:
+      'Awards a vote to the player with the most Divinity Spell Research and Supporter Cards.',
   }),
 ];
 

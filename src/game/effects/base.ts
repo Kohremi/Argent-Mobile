@@ -15,6 +15,7 @@ import {
   buildReactionQueue,
   bumpInfluencePatch,
   checkInfirmaryBonusApplies,
+  eligibleVotersForMark,
   findActionSpace,
   gainResourcePatch,
   gainResourcesPatch,
@@ -817,16 +818,22 @@ registerEffect('base.system.infirmary-bonus', (ctx) => {
 // Marks — system effect used by every "gain a Mark" prompt
 // ============================================================================
 
+/**
+ * Builds the prompt to gain a Mark, or returns `null` if the player has
+ * already marked every voter (no eligible target — the effect fizzles).
+ */
 function spawnGainMarkPrompt(
   state: GameState,
   playerId: string,
   source: ResolutionSource,
-): PendingResolutionInput {
+): PendingResolutionInput | null {
+  const eligible = eligibleVotersForMark(state, playerId);
+  if (eligible.length === 0) return null;
   return {
     responderId: playerId,
     prompt: {
       kind: 'choose-voter',
-      eligibleVoterIds: state.voters.map((v) => v.id),
+      eligibleVoterIds: eligible.map((v) => v.id),
     },
     resume: { effectId: 'base.system.gain-mark', context: {} },
     source,
@@ -901,14 +908,13 @@ registerEffect('base.room.council-chamber-a.slot', (ctx: EffectContext): EffectR
       };
     }
     if (ctx.resumeAnswer.optionId === 'mark') {
-      return {
-        kind: 'pause',
-        pending: spawnGainMarkPrompt(
-          ctx.state,
-          ctx.triggeringPlayerId,
-          ctx.source,
-        ),
-      };
+      const prompt = spawnGainMarkPrompt(
+        ctx.state,
+        ctx.triggeringPlayerId,
+        ctx.source,
+      );
+      if (prompt === null) return { kind: 'done', patch: {} };
+      return { kind: 'pause', pending: prompt };
     }
     throw new Error(
       `council-chamber-a.slot OR unknown option ${ctx.resumeAnswer.optionId}`,
@@ -939,11 +945,15 @@ registerEffect('base.room.catacombs-a.slot-1', (ctx: EffectContext): EffectResul
   if (!ctx.resumeAnswer) {
     const drawPatch = applySecretSupporterDraw(ctx.state, ctx.triggeringPlayerId);
     const afterDraw = { ...ctx.state, ...drawPatch };
-    return {
-      kind: 'pause',
-      patch: drawPatch,
-      pending: spawnGainMarkPrompt(afterDraw, ctx.triggeringPlayerId, ctx.source),
-    };
+    const markPrompt = spawnGainMarkPrompt(
+      afterDraw,
+      ctx.triggeringPlayerId,
+      ctx.source,
+    );
+    if (markPrompt === null) {
+      return { kind: 'done', patch: drawPatch };
+    }
+    return { kind: 'pause', patch: drawPatch, pending: markPrompt };
   }
   throw new Error('catacombs-a.slot-1 should not be re-invoked (mark handles its own resume)');
 });
@@ -1329,10 +1339,13 @@ registerEffect(
   'base.supporter.jasper-haekel',
   (ctx): EffectResult => {
     if (!ctx.resumeAnswer) {
-      return {
-        kind: 'pause',
-        pending: spawnGainMarkPrompt(ctx.state, ctx.triggeringPlayerId, ctx.source),
-      };
+      const prompt = spawnGainMarkPrompt(
+        ctx.state,
+        ctx.triggeringPlayerId,
+        ctx.source,
+      );
+      if (prompt === null) return { kind: 'done', patch: {} };
+      return { kind: 'pause', pending: prompt };
     }
     throw new Error(
       'jasper-haekel should not be re-invoked (gain-mark handles its own resume)',
@@ -1372,10 +1385,13 @@ registerEffect(
   'base.vault.the-arcane-eye',
   (ctx): EffectResult => {
     if (!ctx.resumeAnswer) {
-      return {
-        kind: 'pause',
-        pending: spawnGainMarkPrompt(ctx.state, ctx.triggeringPlayerId, ctx.source),
-      };
+      const prompt = spawnGainMarkPrompt(
+        ctx.state,
+        ctx.triggeringPlayerId,
+        ctx.source,
+      );
+      if (prompt === null) return { kind: 'done', patch: {} };
+      return { kind: 'pause', pending: prompt };
     }
     throw new Error(
       'the-arcane-eye should not be re-invoked (gain-mark handles its own resume)',
@@ -1388,10 +1404,13 @@ registerEffect(
   'base.vault.spirits',
   (ctx): EffectResult => {
     if (!ctx.resumeAnswer) {
-      return {
-        kind: 'pause',
-        pending: spawnGainMarkPrompt(ctx.state, ctx.triggeringPlayerId, ctx.source),
-      };
+      const prompt = spawnGainMarkPrompt(
+        ctx.state,
+        ctx.triggeringPlayerId,
+        ctx.source,
+      );
+      if (prompt === null) return { kind: 'done', patch: {} };
+      return { kind: 'pause', pending: prompt };
     }
     throw new Error(
       'spirits should not be re-invoked (gain-mark handles its own resume)',

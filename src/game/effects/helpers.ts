@@ -7,6 +7,7 @@ import type {
   ActionSpaceId,
   Candidate,
   CandidateId,
+  ConsortiumVoter,
   ConsortiumVoterId,
   GameState,
   GameStatePatch,
@@ -416,15 +417,42 @@ export function affordableVaultCards(
 // ============================================================================
 
 /**
+ * Returns voters the player is still allowed to place a Mark on — i.e., the
+ * subset of `state.voters` they haven't already marked. Used to filter the
+ * `choose-voter` prompt presented for every "Gain a Mark" effect.
+ */
+export function eligibleVotersForMark(
+  state: GameState,
+  playerId: PlayerId,
+): ConsortiumVoter[] {
+  return state.voters.filter(
+    (v) =>
+      !state.voterMarks.some(
+        (m) => m.voterId === v.id && m.playerId === playerId,
+      ),
+  );
+}
+
+/**
  * Places a Mark for a player on a Voter. Records the placement in
  * `voterMarks` and bumps the player's `marks` resource (which is what the
  * "Most Marks" voter scores).
+ *
+ * Per the rulebook, a player can hold at most one Mark on any given Voter.
+ * Throws if the player already has a mark on this voter.
  */
 export function applyGainMark(
   state: GameState,
   playerId: PlayerId,
   voterId: ConsortiumVoterId,
 ): GameStatePatch {
+  if (
+    state.voterMarks.some((m) => m.voterId === voterId && m.playerId === playerId)
+  ) {
+    throw new Error(
+      `applyGainMark: ${playerId} already has a mark on ${voterId}`,
+    );
+  }
   return {
     voterMarks: [...state.voterMarks, { voterId, playerId }],
     players: state.players.map((p) =>

@@ -1,5 +1,7 @@
+import { getPack } from '../content/registry';
 import type {
   ConsortiumVoter,
+  Department,
   GameState,
   Player,
   PlayerId,
@@ -9,13 +11,11 @@ import type {
 /**
  * Returns the player's score for a given criterion.
  *
- * `most-research` is always 0 because Research is transient (not stored).
- *
  * `second-most-*` criteria return 0 here — second-place ranking is computed
  * across players in `computeVoterWinner`, not by per-player scoring.
  */
 export function scorePlayerForCriterion(
-  _state: GameState,
+  state: GameState,
   player: Player,
   criterion: ScoringCriterion,
 ): number {
@@ -33,25 +33,29 @@ export function scorePlayerForCriterion(
     case 'most-wisdom':
       return player.resources.wisdom;
     case 'most-research':
-      return 0;
+      return countResearchLevels(player);
     case 'most-supporters':
       return countSupporters(player);
     case 'most-treasures':
-      return countTreasures(player);
+      return countTreasures(state, player);
     case 'most-consumables':
       return countConsumables(player);
     case 'most-diversity':
-      // TODO: distinct departments across player's cards
-      return 0;
+      return countDiversity(state, player);
     case 'most-sorcery':
+      return countDepartment(state, player, 'sorcery');
     case 'most-mysticism':
+      return countDepartment(state, player, 'mysticism');
     case 'most-natural-magick':
+      return countDepartment(state, player, 'natural-magick');
     case 'most-planar-studies':
+      return countDepartment(state, player, 'planar-studies');
     case 'most-divinity':
-      // TODO: count cards in player's tableau matching the department
-      return 0;
+      return countDepartment(state, player, 'divinity');
     case 'second-most-influence':
     case 'second-most-supporters':
+      // Resolved by `computeVoterWinner` via second-place ranking; the
+      // per-player score here is not used.
       return 0;
     case 'custom':
       // TODO: invoke voter.customScoringEffectId via the effect registry
@@ -66,14 +70,141 @@ function countSupporters(player: Player): number {
   return player.supporters.length + inDiscard;
 }
 
-function countTreasures(player: Player): number {
-  // TODO: filter by VaultCardType === 'treasure' (requires card lookup).
-  return player.vaultCards.length;
+function countTreasures(state: GameState, player: Player): number {
+  let n = 0;
+  for (const owned of player.vaultCards) {
+    if (lookupVaultType(state, owned.cardId) === 'treasure') n += 1;
+  }
+  return n;
 }
 
 function countConsumables(player: Player): number {
   return player.personalDiscard.filter((d) => d.kind === 'consumable').length;
 }
+
+/**
+ * Total Spell Research = sum of researched levels across the player's owned
+ * Spell cards (intPlaced + wisPlacedLevel2 + wisPlacedLevel3 each count 1).
+ * Used by the Candide Malephaise / "Most Research" voter.
+ */
+function countResearchLevels(player: Player): number {
+  let n = 0;
+  for (const owned of player.ownedSpells) {
+    if (owned.intPlaced) n += 1;
+    if (owned.wisPlacedLevel2) n += 1;
+    if (owned.wisPlacedLevel3) n += 1;
+  }
+  return n;
+}
+
+/**
+ * "Most X Department" voters award their vote to whoever owns the most
+ * cards (supporters + researched spells) of that department.
+ *
+ * Each Spell Book counts once if researched at any level (intPlaced) — the
+ * extra L2/L3 research doesn't multiply the count toward department voters.
+ * Each Supporter Card counts once. Wild-department supporters (currently
+ * just White Ash) are deferred — wild scoring announces a department at
+ * end-of-game and isn't wired yet.
+ */
+function countDepartment(
+  state: GameState,
+  player: Player,
+  dept: Department,
+): number {
+  let n = 0;
+  // Researched Spell Books in this department.
+  for (const owned of player.ownedSpells) {
+    if (!owned.intPlaced) continue;
+    const card = lookupSpellDepartment(state, owned.cardId);
+    if (card === dept) n += 1;
+  }
+  // Supporters in this department (office + in personal discard).
+  const allSupporterIds = [
+    ...player.supporters,
+    ...player.personalDiscard
+      .filter((d) => d.kind === 'supporter' || d.kind === 'secret-supporter')
+      .map((d) => d.cardId),
+  ];
+  for (const sid of allSupporterIds) {
+    const supDept = lookupSupporterDepartment(state, sid);
+    if (supDept === dept) n += 1;
+  }
+  return n;
+}
+
+/**
+ * "Most Diversity" awards their vote to whoever spans the most distinct
+ * departments across their researched Spell Books and Supporter Cards.
+ */
+function countDiversity(state: GameState, player: Player): number {
+  const depts = new Set<Department>();
+  for (const owned of player.ownedSpells) {
+    if (!owned.intPlaced) continue;
+    const d = lookupSpellDepartment(state, owned.cardId);
+    if (d) depts.add(d);
+  }
+  const supporterIds = [
+    ...player.supporters,
+    ...player.personalDiscard
+      .filter((d) => d.kind === 'supporter' || d.kind === 'secret-supporter')
+      .map((d) => d.cardId),
+  ];
+  for (const sid of supporterIds) {
+    const d = lookupSupporterDepartment(state, sid);
+    if (d) depts.add(d);
+  }
+  return depts.size;
+}
+
+// ============================================================================
+// Card lookups (active-pack scoped)
+// ============================================================================
+
+function lookupSpellDepartment(
+  state: GameState,
+  spellCardId: string,
+): Department | null {
+  for (const packId of state.activePackIds) {
+    const pack = getPack(packId);
+    if (!pack) continue;
+    const found =
+      pack.spells.find((s) => s.id === spellCardId) ??
+      pack.legendarySpells.find((s) => s.id === spellCardId);
+    if (found) return found.department;
+  }
+  return null;
+}
+
+function lookupSupporterDepartment(
+  state: GameState,
+  supporterId: string,
+): Department | null {
+  for (const packId of state.activePackIds) {
+    const pack = getPack(packId);
+    if (!pack) continue;
+    const found = pack.supporters.find((s) => s.id === supporterId);
+    if (found) return found.department;
+  }
+  return null;
+}
+
+function lookupVaultType(
+  state: GameState,
+  vaultId: string,
+): 'treasure' | 'consumable' | null {
+  for (const packId of state.activePackIds) {
+    const pack = getPack(packId);
+    if (!pack) continue;
+    const found = pack.vaultCards.find((v) => v.id === vaultId);
+    if (found) return found.type;
+  }
+  return null;
+}
+
+// ============================================================================
+// Tiebreakers
+// ============================================================================
 
 function countMarksOnVoter(
   state: GameState,
@@ -134,18 +265,20 @@ function breakVoterTie(
 }
 
 /**
- * Determines which player wins a given voter's vote, or null if no one
- * scored above 0 or the tiebreakers exhaust without a winner.
+ * For "Most X" voters: returns the single player with the highest score for
+ * the criterion (above 0), with tiebreakers applied. Returns null if every
+ * player scored 0 or the tiebreakers exhaust without a winner.
  */
-export function computeVoterWinner(
+function computeMostWinner(
   state: GameState,
   voter: ConsortiumVoter,
+  criterion: ScoringCriterion,
 ): PlayerId | null {
   if (state.players.length === 0) return null;
 
   const scored = state.players.map((p) => ({
     player: p,
-    score: scorePlayerForCriterion(state, p, voter.criterion),
+    score: scorePlayerForCriterion(state, p, criterion),
   }));
 
   let max = -1;
@@ -158,6 +291,59 @@ export function computeVoterWinner(
   if (tied.length === 1) return tied[0]!.id;
 
   return breakVoterTie(state, voter, tied);
+}
+
+/**
+ * For "Second-Most X" voters: returns the player ranked second (by base
+ * criterion). Tied-for-first counts as a single group — second place is the
+ * highest scorer strictly below the top tier. If no player exists strictly
+ * below the top tier, no one earns this voter's vote.
+ */
+function computeSecondMostWinner(
+  state: GameState,
+  voter: ConsortiumVoter,
+  baseCriterion: ScoringCriterion,
+): PlayerId | null {
+  if (state.players.length === 0) return null;
+
+  const scored = state.players.map((p) => ({
+    player: p,
+    score: scorePlayerForCriterion(state, p, baseCriterion),
+  }));
+  // Find top score.
+  let top = -1;
+  for (const s of scored) {
+    if (s.score > top) top = s.score;
+  }
+  if (top <= 0) return null;
+  // Find the highest score strictly below `top`.
+  let second = -1;
+  for (const s of scored) {
+    if (s.score < top && s.score > second) second = s.score;
+  }
+  if (second <= 0) return null;
+  const secondTier = scored
+    .filter((s) => s.score === second)
+    .map((s) => s.player);
+  if (secondTier.length === 1) return secondTier[0]!.id;
+  return breakVoterTie(state, voter, secondTier);
+}
+
+/**
+ * Determines which player wins a given voter's vote, or null if no one
+ * scored above 0 or the tiebreakers exhaust without a winner.
+ */
+export function computeVoterWinner(
+  state: GameState,
+  voter: ConsortiumVoter,
+): PlayerId | null {
+  if (voter.criterion === 'second-most-influence') {
+    return computeSecondMostWinner(state, voter, 'most-influence');
+  }
+  if (voter.criterion === 'second-most-supporters') {
+    return computeSecondMostWinner(state, voter, 'most-supporters');
+  }
+  return computeMostWinner(state, voter, voter.criterion);
 }
 
 export interface FinalScoringResult {

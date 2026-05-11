@@ -469,18 +469,7 @@ export function DebugControls() {
 
       <TableauPanel state={state} />
 
-      <details>
-        <summary className="text-xs text-slate-500 cursor-pointer">
-          Voters ({state.voters.length})
-        </summary>
-        <ul className="text-xs space-y-0.5 mt-2">
-          {state.voters.map((v) => (
-            <li key={v.id} className="text-slate-400">
-              {v.revealed ? v.name : '[face-down]'} — {v.criterion} ({v.votes} votes)
-            </li>
-          ))}
-        </ul>
-      </details>
+      <VoterTableauPanel state={state} />
     </div>
   );
 }
@@ -1359,6 +1348,178 @@ function ArsMagnaControls({
         ))}
       </div>
     </div>
+  );
+}
+
+// ============================================================================
+// VoterTableauPanel — the Consortium voter board.
+//
+// Renders every voter as a row with the voter's identity (or "[face-down]"
+// for unrevealed mystery voters), per-player mark slots, and a per-row
+// "peek" affordance that reveals the voter's identity locally to a player
+// who has placed their mark on it. The "peeked" state lives in component
+// state — it's a UI memory aid, not game state — so it disappears on reload.
+// ============================================================================
+
+const PLAYER_COLOR_BG: Record<string, string> = {
+  red: 'bg-red-500',
+  blue: 'bg-blue-500',
+  green: 'bg-emerald-500',
+  yellow: 'bg-yellow-400',
+  purple: 'bg-purple-500',
+  orange: 'bg-orange-500',
+};
+
+function VoterTableauPanel({ state }: { state: GameState }) {
+  // Per-player peeked voters: lets the active player reveal a face-down
+  // voter they've marked. Resets on page reload (intentional — it's a UI
+  // memory aid, not authoritative game state).
+  const [peeked, setPeeked] = useState<Record<string, Set<string>>>({});
+  const peekedFor = (playerId: string) => peeked[playerId] ?? new Set<string>();
+  const togglePeek = (playerId: string, voterId: string) => {
+    setPeeked((prev) => {
+      const next = new Set(prev[playerId] ?? new Set<string>());
+      if (next.has(voterId)) next.delete(voterId);
+      else next.add(voterId);
+      return { ...prev, [playerId]: next };
+    });
+  };
+
+  const activeId =
+    state.phase.kind === 'errands'
+      ? (state.players[state.phase.activePlayerIndex]?.id ?? null)
+      : null;
+  const scoringRevealed =
+    state.phase.kind === 'mid-game-scoring' ||
+    state.phase.kind === 'final-scoring' ||
+    state.phase.kind === 'complete';
+
+  const playerHasMark = (playerId: string, voterId: string) =>
+    state.voterMarks.some(
+      (m) => m.voterId === voterId && m.playerId === playerId,
+    );
+
+  return (
+    <section>
+      <div className="flex items-baseline gap-2 mb-2 flex-wrap">
+        <h2 className="text-lg font-medium">
+          Consortium Voters ({state.voters.length})
+        </h2>
+        <span className="text-xs text-slate-500">
+          {state.voters.filter((v) => v.revealed).length} face-up ·{' '}
+          {state.voters.filter((v) => !v.revealed).length} face-down ·{' '}
+          {state.voterMarks.length} mark{state.voterMarks.length === 1 ? '' : 's'} placed
+        </span>
+      </div>
+      <div className="rounded border border-slate-700 bg-slate-900 overflow-hidden">
+        <table className="w-full text-xs">
+          <thead className="bg-slate-950/40 text-slate-400 text-[10px] uppercase tracking-wide">
+            <tr>
+              <th className="text-left px-2 py-1.5 w-1/2">Voter</th>
+              {state.players.map((p) => (
+                <th key={p.id} className="text-center px-1 py-1.5">
+                  {p.name}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {state.voters.map((v) => {
+              const revealedNow =
+                v.revealed ||
+                scoringRevealed ||
+                (activeId !== null &&
+                  peekedFor(activeId).has(v.id) &&
+                  playerHasMark(activeId, v.id));
+              return (
+                <tr
+                  key={v.id}
+                  className="border-t border-slate-800 align-top"
+                >
+                  <td className="px-2 py-1.5">
+                    {revealedNow ? (
+                      <div>
+                        <div className="flex items-baseline gap-1.5 flex-wrap">
+                          <span className="font-medium text-slate-200">
+                            {v.name}
+                          </span>
+                          {v.isAlwaysFaceUp && (
+                            <span className="text-[10px] uppercase tracking-wide text-amber-300/70">
+                              required
+                            </span>
+                          )}
+                          <span className="text-[10px] uppercase tracking-wide text-slate-500">
+                            {v.votes} vote{v.votes === 1 ? '' : 's'}
+                          </span>
+                        </div>
+                        {v.title && (
+                          <div className="text-[10px] text-slate-500 italic">
+                            {v.title}
+                          </div>
+                        )}
+                        {v.description && (
+                          <div className="text-[11px] text-slate-300/90">
+                            {v.description}
+                          </div>
+                        )}
+                      </div>
+                    ) : (
+                      <div className="flex items-baseline gap-2 flex-wrap">
+                        <span className="text-slate-500 italic">
+                          [face-down voter]
+                        </span>
+                        {activeId !== null && playerHasMark(activeId, v.id) && (
+                          <button
+                            type="button"
+                            onClick={() => togglePeek(activeId, v.id)}
+                            className="px-2 py-0.5 rounded bg-amber-500/20 hover:bg-amber-500/30 text-amber-200 text-[10px]"
+                            title="Reveal this voter to yourself (UI only)"
+                          >
+                            Peek
+                          </button>
+                        )}
+                      </div>
+                    )}
+                    {revealedNow && !v.revealed && !scoringRevealed && activeId !== null && peekedFor(activeId).has(v.id) && (
+                      <button
+                        type="button"
+                        onClick={() => togglePeek(activeId, v.id)}
+                        className="mt-1 px-2 py-0.5 rounded bg-slate-700 hover:bg-slate-600 text-slate-300 text-[10px]"
+                        title="Hide this voter again"
+                      >
+                        Hide
+                      </button>
+                    )}
+                  </td>
+                  {state.players.map((p) => {
+                    const marked = playerHasMark(p.id, v.id);
+                    const colorClass =
+                      PLAYER_COLOR_BG[p.color] ?? 'bg-slate-400';
+                    return (
+                      <td key={p.id} className="px-1 py-1.5 text-center">
+                        <span
+                          className={clsx(
+                            'inline-block w-4 h-4 rounded-full border',
+                            marked
+                              ? `${colorClass} border-slate-200`
+                              : 'border-slate-700 bg-slate-950/40',
+                          )}
+                          title={
+                            marked
+                              ? `${p.name} has placed a Mark here`
+                              : `${p.name} has not marked this voter`
+                          }
+                        />
+                      </td>
+                    );
+                  })}
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </section>
   );
 }
 
