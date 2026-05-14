@@ -1398,10 +1398,11 @@ function VoterTableauPanel({ state }: { state: GameState }) {
     state.phase.kind === 'errands'
       ? (state.players[state.phase.activePlayerIndex]?.id ?? null)
       : null;
-  const scoringRevealed =
-    state.phase.kind === 'mid-game-scoring' ||
-    state.phase.kind === 'final-scoring' ||
-    state.phase.kind === 'complete';
+  // Voters only reveal globally when the game is complete (at which point
+  // `finalizeGame` has already flipped every voter's `revealed` flag).
+  // mid-game-scoring is a pass-through phase between rounds and must NOT
+  // expose face-down voters.
+  const scoringRevealed = state.phase.kind === 'complete';
 
   const playerHasMark = (playerId: string, voterId: string) =>
     state.voterMarks.some(

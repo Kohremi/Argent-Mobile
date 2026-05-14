@@ -1465,7 +1465,7 @@ const councilChamberB: Room = {
 // Library Side A — per the room file:
 //   Slot 1 (merit, 1 MB): Gain 1 WIS AND Draft a Vault Card
 //   Slot 2 (merit, 1 MB): Gain 1 INT AND gain 1 Research
-//   Slot 3 (regular):     Purchase a Vault Item AND Gain 1 Research
+//   Slot 3 (regular):     Draft a Vault Card AND Gain 1 Research
 //   Slot 4 (regular):     Choose 1 of: 1 INT / 1 WIS / 1 Research
 
 const librarySlot1: ActionSpace = {
@@ -1497,7 +1497,7 @@ const librarySlot3: ActionSpace = {
     index: 2,
     effectId: 'base.room.library-a.slot-3',
   }),
-  description: 'Purchase a Vault Item and Gain a Research.',
+  description: 'Draft a Vault Card and Gain a Research.',
 };
 
 const librarySlot4: ActionSpace = {
@@ -1799,8 +1799,8 @@ const courtyardB: Room = {
 };
 
 // Vault A — three distinct slot effects per the room file:
-//   Slot 1 (merit, costs 1 MB to place): Purchase a Vault Item AND Gain 4 Gold
-//   Slot 2 (regular):                    Purchase a Vault Item OR Gain 5 Gold
+//   Slot 1 (merit, costs 1 MB to place): Draft a Vault Card AND Gain 4 Gold
+//   Slot 2 (regular):                    Draft a Vault Card OR Gain 5 Gold
 //   Slot 3 (regular):                    Gain 3 Gold
 
 const vaultASlot1: ActionSpace = {
@@ -1821,7 +1821,7 @@ const vaultASlot2: ActionSpace = {
   slotType: 'regular',
   occupant: null,
   effectId: 'base.room.vault-a.slot-2',
-  description: 'Purchase a Vault Item OR Gain 5 Gold.',
+  description: 'Draft a Vault Card OR Gain 5 Gold.',
 };
 
 const vaultASlot3: ActionSpace = {

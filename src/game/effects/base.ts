@@ -99,12 +99,12 @@ registerEffect('base.room.library-a.slot-2', (ctx: EffectContext): EffectResult 
   throw new Error('library-a.slot-2 should not be re-invoked (research handles its own resume)');
 });
 
-/** Slot 3 (regular): Purchase a Vault Item AND Gain 1 Research. */
+/** Slot 3 (regular): Draft a Vault Card AND Gain 1 Research. */
 registerEffect('base.room.library-a.slot-3', (ctx: EffectContext): EffectResult => {
   if (!ctx.resumeAnswer) {
     const affordable = affordableVaultCards(ctx.state, ctx.triggeringPlayerId);
     if (affordable.length === 0) {
-      // No vault item is affordable — skip straight to the research step.
+      // No vault card is affordable to draft — skip straight to the research step.
       return {
         kind: 'pause',
         pending: spawnResearchPrompt(ctx.triggeringPlayerId, ctx.source),
@@ -117,10 +117,10 @@ registerEffect('base.room.library-a.slot-3', (ctx: EffectContext): EffectResult 
         prompt: {
           kind: 'choose-from-options',
           options: [
-            { id: 'skip', label: 'Skip the Purchase', payload: {} },
+            { id: 'skip', label: 'Skip the Draft', payload: {} },
             ...affordable.map((cid) => ({
               id: cid,
-              label: `Purchase ${cid}`,
+              label: `Draft ${cid}`,
               payload: {},
             })),
           ],
@@ -452,7 +452,7 @@ registerEffect('base.room.vault-a.slot-1', (ctx: EffectContext): EffectResult =>
   };
 });
 
-/** Vault A slot 2 — regular. Purchase a Vault Item OR Gain 5 Gold. */
+/** Vault A slot 2 — regular. Draft a Vault Card OR Gain 5 Gold. */
 registerEffect('base.room.vault-a.slot-2', (ctx: EffectContext): EffectResult => {
   if (!ctx.resumeAnswer) {
     return {
@@ -462,7 +462,7 @@ registerEffect('base.room.vault-a.slot-2', (ctx: EffectContext): EffectResult =>
         prompt: {
           kind: 'choose-from-options',
           options: [
-            { id: 'draft', label: 'Purchase a Vault Item', payload: {} },
+            { id: 'draft', label: 'Draft a Vault Card', payload: {} },
             { id: 'gold', label: 'Gain 5 Gold', payload: {} },
           ],
         },
