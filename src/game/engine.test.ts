@@ -841,49 +841,14 @@ describe('Per-turn Action / Fast Action budget', () => {
 
   it('Fast Action keeps the turn open; the player still owes their Regular Action', () => {
     let s = startErrandsAt(0);
-    // Set Alice up to wound an enemy mage, then drive Ars Magna to completion.
-    s = addMage(s, 'p2', {
-      id: 'bob-red',
-      cardId: 'base.mage.sorcery',
-      color: 'red',
-    });
-    s = placeMageOnSpace(s, 'p2', 'bob-red', 'base.room.library.a.slot-3');
-    s = addMage(s, 'p1', {
-      id: 'alice-red',
-      cardId: 'base.mage.sorcery',
-      color: 'red',
-    });
-    s = setMana(s, 'p1', 2);
+    // Allys Mehrmus is a fast-action supporter (Gain 3 IP) with no prompts —
+    // ideal for exercising the Fast Action budget rule in isolation.
+    s = addSupporter(s, 'p1', 'base.supporter.allys-mehrmus');
     s = applyAction(s, {
-      type: 'USE_ABILITY',
+      type: 'PLAY_SUPPORTER',
       playerId: 'p1',
-      abilityId: 'base.mage.sorcery.ars-magna',
-      sourceCardId: 'alice-red',
+      supporterCardId: 'base.supporter.allys-mehrmus',
     });
-    while (s.pendingResolutionStack.length > 0) {
-      const top = topPending(s);
-      if (top.prompt.kind === 'choose-target-mage') {
-        s = applyAction(s, {
-          type: 'RESOLVE_PENDING',
-          resolutionId: top.id,
-          answer: { kind: 'mage-chosen', mageId: 'bob-red' },
-        });
-      } else if (top.prompt.kind === 'reaction-window') {
-        s = applyAction(s, {
-          type: 'RESOLVE_PENDING',
-          resolutionId: top.id,
-          answer: { kind: 'reaction-passed' },
-        });
-      } else if (top.prompt.kind === 'choose-from-options') {
-        s = applyAction(s, {
-          type: 'RESOLVE_PENDING',
-          resolutionId: top.id,
-          answer: { kind: 'option-chosen', optionId: 'gold', payload: {} },
-        });
-      } else {
-        throw new Error(`unexpected prompt kind ${top.prompt.kind}`);
-      }
-    }
     // Fast Action consumed; Regular Action still owed → still Alice's turn.
     if (s.phase.kind !== 'errands') throw new Error('not errands');
     expect(s.phase.activePlayerIndex).toBe(0);
@@ -893,55 +858,19 @@ describe('Per-turn Action / Fast Action budget', () => {
 
   it('rejects a second Fast Action in the same turn', () => {
     let s = startErrandsAt(0);
-    s = addMage(s, 'p1', {
-      id: 'alice-red',
-      cardId: 'base.mage.sorcery',
-      color: 'red',
-    });
-    s = addMage(s, 'p2', {
-      id: 'bob-red',
-      cardId: 'base.mage.sorcery',
-      color: 'red',
-    });
-    s = placeMageOnSpace(s, 'p2', 'bob-red', 'base.room.library.a.slot-3');
-    s = setMana(s, 'p1', 4);
+    // Two fast-action supporters in hand; play one, try to play the other.
+    s = addSupporter(s, 'p1', 'base.supporter.allys-mehrmus');
+    s = addSupporter(s, 'p1', 'base.supporter.kallistar-flarechild');
     s = applyAction(s, {
-      type: 'USE_ABILITY',
+      type: 'PLAY_SUPPORTER',
       playerId: 'p1',
-      abilityId: 'base.mage.sorcery.ars-magna',
-      sourceCardId: 'alice-red',
+      supporterCardId: 'base.supporter.allys-mehrmus',
     });
-    while (s.pendingResolutionStack.length > 0) {
-      const top = topPending(s);
-      if (top.prompt.kind === 'choose-target-mage') {
-        s = applyAction(s, {
-          type: 'RESOLVE_PENDING',
-          resolutionId: top.id,
-          answer: { kind: 'mage-chosen', mageId: 'bob-red' },
-        });
-      } else if (top.prompt.kind === 'reaction-window') {
-        s = applyAction(s, {
-          type: 'RESOLVE_PENDING',
-          resolutionId: top.id,
-          answer: { kind: 'reaction-passed' },
-        });
-      } else if (top.prompt.kind === 'choose-from-options') {
-        s = applyAction(s, {
-          type: 'RESOLVE_PENDING',
-          resolutionId: top.id,
-          answer: { kind: 'option-chosen', optionId: 'gold', payload: {} },
-        });
-      } else {
-        throw new Error(`unexpected prompt kind ${top.prompt.kind}`);
-      }
-    }
-    // Fast Action 1 done; Action still owed.
     expect(() =>
       applyAction(s, {
-        type: 'USE_ABILITY',
+        type: 'PLAY_SUPPORTER',
         playerId: 'p1',
-        abilityId: 'base.mage.sorcery.ars-magna',
-        sourceCardId: 'alice-red',
+        supporterCardId: 'base.supporter.kallistar-flarechild',
       }),
     ).toThrow(/already used your Fast Action this turn/);
   });
@@ -2962,6 +2891,215 @@ describe('Ars Magna (Sorcery Mage power)', () => {
     const alice = s.players.find((p) => p.id === 'p1');
     expect(alice?.resources.meritBadges).toBe(0);
     expect(alice?.resources.meritBadgesSpent).toBe(0);
+  });
+
+  // ==========================================================================
+  // Placement-time Ars Magna (the streamlined "Place" flow)
+  //
+  // The red mage's power triggers when placing — picking an occupied slot
+  // spends 1 mana, wounds the occupant, and lands the red mage there once
+  // the reaction window closes.
+  // ==========================================================================
+
+  it('PLACE_WORKER on an occupied slot with a red mage runs Ars Magna', () => {
+    let s = setupArsMagnaTest({ bobColor: 'red' });
+    // Bob's mage is on Vault A slot 3 (red, not green/blue, not wounded).
+    // Alice has 5 mana; placing on Bob's slot must trigger Ars Magna.
+    s = applyAction(s, {
+      type: 'PLACE_WORKER',
+      playerId: 'p1',
+      mageId: 'alice-red',
+      actionSpaceId: 'base.room.vault.a.slot-3',
+    });
+    // 1 mana spent up front.
+    const aliceMid = s.players.find((p) => p.id === 'p1');
+    expect(aliceMid?.resources.mana).toBe(4);
+    // Bob's mage is wounded and now in the infirmary; the slot is empty.
+    const bobMage = findMageById(s, 'bob-mage');
+    expect(bobMage.isWounded).toBe(true);
+    expect(bobMage.location.kind).toBe('infirmary');
+    // A reaction window is open for Bob to respond.
+    expect(s.activeReactionWindows).toHaveLength(1);
+    expect(s.pendingResolutionStack).toHaveLength(1);
+    expect(topPending(s).prompt.kind).toBe('reaction-window');
+    // Pass the reaction → Infirmary bonus prompt → take gold.
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'reaction-passed' },
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'option-chosen', optionId: 'gold', payload: {} },
+    });
+    // Alice's red mage now sits on the slot.
+    const aliceMage = findMageById(s, 'alice-red');
+    expect(aliceMage.location).toEqual({
+      kind: 'action-space',
+      spaceId: 'base.room.vault.a.slot-3',
+    });
+    const room = findRoom(s, (r) => r.name === 'Vault');
+    expect(room.actionSpaces[2]?.occupant?.mageId).toBe('alice-red');
+    // Action consumed; turn auto-advanced once all prompts drained.
+    if (s.phase.kind !== 'errands') throw new Error('not errands');
+    expect(s.phase.activePlayerIndex).toBe(1);
+  });
+
+  it('rejects placement on an occupied slot when the red mage has 0 mana', () => {
+    const s = setupArsMagnaTest({ bobColor: 'red', aliceMana: 0 });
+    expect(() =>
+      applyAction(s, {
+        type: 'PLACE_WORKER',
+        playerId: 'p1',
+        mageId: 'alice-red',
+        actionSpaceId: 'base.room.vault.a.slot-3',
+      }),
+    ).toThrow(/already occupied/);
+  });
+
+  it('rejects placement on an occupied slot when the occupant is green', () => {
+    const s = setupArsMagnaTest({ bobColor: 'green' });
+    expect(() =>
+      applyAction(s, {
+        type: 'PLACE_WORKER',
+        playerId: 'p1',
+        mageId: 'alice-red',
+        actionSpaceId: 'base.room.vault.a.slot-3',
+      }),
+    ).toThrow(/already occupied/);
+  });
+
+  it('rejects placement on an occupied slot when the occupant is blue', () => {
+    const s = setupArsMagnaTest({ bobColor: 'blue' });
+    expect(() =>
+      applyAction(s, {
+        type: 'PLACE_WORKER',
+        playerId: 'p1',
+        mageId: 'alice-red',
+        actionSpaceId: 'base.room.vault.a.slot-3',
+      }),
+    ).toThrow(/already occupied/);
+  });
+
+  it('a non-red mage cannot Ars Magna into an occupied slot', () => {
+    let s = setupArsMagnaTest({ bobColor: 'red' });
+    // Replace Alice's red mage with a blue one.
+    s = mapPlayer(s, 'p1', (p) => ({
+      ...p,
+      mages: p.mages.map((m) =>
+        m.id !== 'alice-red'
+          ? m
+          : {
+              ...m,
+              cardId: 'base.mage.divinity',
+              color: 'blue',
+            },
+      ),
+    }));
+    expect(() =>
+      applyAction(s, {
+        type: 'PLACE_WORKER',
+        playerId: 'p1',
+        mageId: 'alice-red',
+        actionSpaceId: 'base.room.vault.a.slot-3',
+      }),
+    ).toThrow(/already occupied/);
+  });
+
+  it('Phase Steppers reverts an Ars Magna placement; red mage stays in office', () => {
+    let s = setupArsMagnaTest({ bobColor: 'red', bobHasPhaseSteppers: true });
+    s = applyAction(s, {
+      type: 'PLACE_WORKER',
+      playerId: 'p1',
+      mageId: 'alice-red',
+      actionSpaceId: 'base.room.vault.a.slot-3',
+    });
+    // Bob plays Phase Steppers in response.
+    const reactionPrompt = topPending(s);
+    if (reactionPrompt.prompt.kind !== 'reaction-window') {
+      throw new Error('expected reaction-window prompt');
+    }
+    const phaseSteppers = reactionPrompt.prompt.reactionOptions.find(
+      (o) => o.effectId === 'base.vault.phase-steppers.react',
+    );
+    expect(phaseSteppers).toBeTruthy();
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: reactionPrompt.id,
+      answer: {
+        kind: 'reaction-played',
+        effectId: 'base.vault.phase-steppers.react',
+        reactionContext: {},
+      },
+    });
+    // Bob's mage is back on the slot (shadowing); Alice's red mage stays in
+    // office and never made it onto the board.
+    const bobMage = findMageById(s, 'bob-mage');
+    expect(bobMage.isWounded).toBe(false);
+    expect(bobMage.location).toEqual({
+      kind: 'action-space',
+      spaceId: 'base.room.vault.a.slot-3',
+    });
+    const aliceMage = findMageById(s, 'alice-red');
+    expect(aliceMage.location).toEqual({ kind: 'office', playerId: 'p1' });
+    // Mana still spent — the cost is paid up front even if the placement
+    // doesn't stick.
+    expect(s.players.find((p) => p.id === 'p1')?.resources.mana).toBe(4);
+  });
+
+  it('Ars Magna placement counts toward the per-room per-round cap', () => {
+    let s = setupArsMagnaTest({ bobColor: 'red', bobOnSpace: 'base.room.council-chamber.a.slot-2' });
+    // Bob's mage already occupies Council slot 2. Alice's red mage Ars-Magnas
+    // into it. The Council Chamber has maxMagesPerPlayerPerRound = 1, so
+    // p1.roundPlacements should be updated and a second placement in the
+    // same room must be rejected.
+    s = forceRoomSide(s, 'Council Chamber', 'A');
+    // Re-anchor Bob onto Council slot 2 after forcing the room.
+    s = mapPlayer(s, 'p2', (p) => ({
+      ...p,
+      mages: p.mages.map((m) =>
+        m.id !== 'bob-mage'
+          ? m
+          : {
+              ...m,
+              location: {
+                kind: 'action-space' as const,
+                spaceId: 'base.room.council-chamber.a.slot-2',
+              },
+            },
+      ),
+    }));
+    s = {
+      ...s,
+      rooms: s.rooms.map((r) =>
+        r.name !== 'Council Chamber'
+          ? r
+          : {
+              ...r,
+              actionSpaces: r.actionSpaces.map((sp, i) =>
+                i !== 1
+                  ? sp
+                  : {
+                      ...sp,
+                      occupant: {
+                        mageId: 'bob-mage',
+                        ownerId: 'p2',
+                        isShadowing: false,
+                      },
+                    },
+              ),
+            },
+      ),
+    };
+    s = applyAction(s, {
+      type: 'PLACE_WORKER',
+      playerId: 'p1',
+      mageId: 'alice-red',
+      actionSpaceId: 'base.room.council-chamber.a.slot-2',
+    });
+    const alice = s.players.find((p) => p.id === 'p1');
+    expect(alice?.roundPlacements).toContain('base.room.council-chamber.a');
   });
 });
 

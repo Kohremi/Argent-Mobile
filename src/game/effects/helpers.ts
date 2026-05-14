@@ -727,3 +727,35 @@ export function buildArsMagnaTargets(
   }
   return targets;
 }
+
+/**
+ * Whether a red (Sorcery) mage can use Ars Magna to take the given space
+ * by wounding its current occupant. The data-sheet rule is:
+ *   "Spend 1 Mana when placing this Mage to Wound an opponent's Mage and
+ *    take its place."
+ *
+ * Returns true when:
+ *   - the caster owns at least 1 Mana,
+ *   - the space is currently occupied,
+ *   - the occupant belongs to a different player,
+ *   - the occupant's mage isn't green (immune), blue (Divinity immunity),
+ *     or already wounded.
+ */
+export function canArsMagnaTakeSpace(
+  state: GameState,
+  casterId: PlayerId,
+  space: ActionSpace,
+): boolean {
+  if (!space.occupant) return false;
+  if (space.occupant.ownerId === casterId) return false;
+  const caster = findPlayer(state, casterId);
+  if (!caster) return false;
+  if (caster.resources.mana < 1) return false;
+  const targetLookup = findMageOwner(state, space.occupant.mageId);
+  if (!targetLookup) return false;
+  const { mage: target } = targetLookup;
+  if (target.isWounded) return false;
+  if (target.color === 'green') return false;
+  if (target.color === 'blue') return false;
+  return true;
+}

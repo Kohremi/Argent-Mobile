@@ -178,6 +178,35 @@ function forceVaultSide(state: GameState, side: 'A' | 'B'): GameState {
  * can pre-highlight viable targets and disable the rest. Returns null if
  * placement is allowed, or a short string explaining why it is not.
  */
+/**
+ * Mirrors `canArsMagnaTakeSpace` in the engine: a red mage can place on
+ * an occupied slot by spending 1 Mana to wound the occupant, provided the
+ * target isn't a same-team mage, isn't green/blue, and isn't already
+ * wounded.
+ */
+function isArsMagnaPlacement(
+  state: GameState,
+  mage: OwnedMage,
+  space: GameState['rooms'][number]['actionSpaces'][number],
+): boolean {
+  if (mage.color !== 'red') return false;
+  if (!space.occupant) return false;
+  const owner = state.players.find((p) =>
+    p.mages.some((m) => m.id === mage.id),
+  );
+  if (!owner) return false;
+  if (space.occupant.ownerId === owner.id) return false;
+  if (owner.resources.mana < 1) return false;
+  const occMage = state.players
+    .find((p) => p.id === space.occupant?.ownerId)
+    ?.mages.find((m) => m.id === space.occupant?.mageId);
+  if (!occMage) return false;
+  if (occMage.isWounded) return false;
+  if (occMage.color === 'green') return false;
+  if (occMage.color === 'blue') return false;
+  return true;
+}
+
 function placementBlockedReason(
   state: GameState,
   mage: OwnedMage,
@@ -186,7 +215,9 @@ function placementBlockedReason(
 ): string | null {
   if (room.cannotBePlacedInDirectly) return 'cannot place here';
   if (state.roomLocks.some((l) => l.roomId === room.id)) return 'room locked';
-  if (space.occupant) return 'space occupied';
+  if (space.occupant && !isArsMagnaPlacement(state, mage, space)) {
+    return 'space occupied';
+  }
   if (
     space.slotType === 'shadow' ||
     space.slotType === 'shadow-merit' ||
@@ -1256,14 +1287,6 @@ function PlayerCard({
         </button>
       )}
 
-      {canAct && (
-        <ArsMagnaControls
-          player={player}
-          dispatch={dispatch}
-          enabled={canTakeFastAction}
-        />
-      )}
-
       <div className="pt-1 border-t border-slate-800 space-y-1">
         <p className="text-[10px] uppercase tracking-wide text-slate-500">
           inject (debug)
@@ -1311,50 +1334,6 @@ function PlayerCard({
             +1 <ResourceIcon kind="merit-badge" size={11} />
           </button>
         </div>
-      </div>
-    </div>
-  );
-}
-
-function ArsMagnaControls({
-  player,
-  dispatch,
-  enabled,
-}: {
-  player: Player;
-  dispatch: (action: GameAction) => void;
-  enabled: boolean;
-}) {
-  const redMagesInOffice = player.mages.filter(
-    (m) => m.color === 'red' && m.location.kind === 'office' && !m.isWounded,
-  );
-  if (redMagesInOffice.length === 0 || player.resources.mana < 1) return null;
-  return (
-    <div className="text-xs space-y-1">
-      <p className="text-[10px] uppercase tracking-wide text-slate-500">
-        mage powers (fast action)
-      </p>
-      <div className="flex flex-wrap gap-1">
-        {redMagesInOffice.map((m) => (
-          <button
-            key={m.id}
-            type="button"
-            disabled={!enabled}
-            title={enabled ? undefined : 'Fast Action already used this turn'}
-            onClick={() =>
-              dispatch({
-                type: 'USE_ABILITY',
-                playerId: player.id,
-                abilityId: 'base.mage.sorcery.ars-magna',
-                sourceCardId: m.id,
-              })
-            }
-            className="px-1.5 py-0.5 rounded bg-red-700 hover:bg-red-600 text-[10px] disabled:opacity-40 disabled:cursor-not-allowed inline-flex items-center gap-1"
-          >
-            <MageIcon color="red" size={12} />
-            Ars Magna ({m.id.slice(-8)})
-          </button>
-        ))}
       </div>
     </div>
   );
@@ -2291,6 +2270,9 @@ function RoomsPanel({
                       ? placementBlockedReason(state, selectedMage, room, s)
                       : 'no mage selected';
                     const isPlaceable = selectedMage !== null && placeBlocked === null;
+                    const isArsMagna =
+                      selectedMage !== null &&
+                      isArsMagnaPlacement(state, selectedMage, s);
                     const slotBody = (
                       <>
                         <div className="flex items-baseline gap-2">
@@ -2304,6 +2286,12 @@ function RoomsPanel({
                             <span className="text-[10px] uppercase tracking-wide text-orange-300/70 inline-flex items-center gap-1">
                               cost: {s.costToActivate.meritBadges}
                               <ResourceIcon kind="merit-badge" size={11} />
+                            </span>
+                          )}
+                          {isPlaceable && isArsMagna && (
+                            <span className="text-[10px] uppercase tracking-wide text-red-300 inline-flex items-center gap-1">
+                              ars magna — spend 1
+                              <ResourceIcon kind="mana" size={11} />
                             </span>
                           )}
                         </div>
@@ -2360,7 +2348,9 @@ function RoomsPanel({
                             className={clsx(
                               'w-full text-left text-[11px] leading-snug rounded px-1.5 py-1',
                               'bg-slate-950/40 text-slate-300',
-                              'ring-2 ring-amber-400 hover:bg-amber-400/15 hover:ring-amber-300',
+                              isArsMagna
+                                ? 'ring-2 ring-red-500 hover:bg-red-500/15 hover:ring-red-400'
+                                : 'ring-2 ring-amber-400 hover:bg-amber-400/15 hover:ring-amber-300',
                               'cursor-pointer',
                             )}
                           >

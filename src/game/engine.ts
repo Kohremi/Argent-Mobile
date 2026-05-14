@@ -11,10 +11,13 @@ import {
   applyCandidateAllocation,
   applyVaultPurchase,
   buildReactionOptionsFor,
+  buildReactionQueue,
   buildSnakeDraftOrder,
+  canArsMagnaTakeSpace,
   describeSpaceSource,
   lookupCandidate,
   MAGE_CARD_BY_COLOR,
+  woundMage,
 } from './effects/helpers';
 import type {
   BellTowerCard,
@@ -516,7 +519,14 @@ function handlePlaceWorker(state: GameState, action: PlaceWorkerAction): GameSta
   if (state.roomLocks.some((l) => l.roomId === room.id)) {
     throw new Error(`PLACE_WORKER: room ${room.id} is locked`);
   }
-  if (space.occupant) {
+  // Red (Sorcery) mages may place on an OCCUPIED slot if they can pay
+  // 1 mana and the occupant is a valid Ars Magna target (opposing, not
+  // wounded, not green, not blue). All other placements require an empty
+  // slot.
+  const isArsMagnaPlacement =
+    mage.color === 'red' &&
+    canArsMagnaTakeSpace(state, action.playerId, space);
+  if (space.occupant && !isArsMagnaPlacement) {
     throw new Error(`PLACE_WORKER: space ${space.id} already occupied`);
   }
   if (space.slotType === 'shadow' || space.slotType === 'shadow-merit') {
@@ -547,14 +557,75 @@ function handlePlaceWorker(state: GameState, action: PlaceWorkerAction): GameSta
     }
   }
 
-  // TODO: Mage Power triggers (Red Ars Magna, Purple fast-action). Not in
-  // this slice.
+  // TODO: Purple-mage placement-as-fast-action trigger (the Planar Studies
+  // mage power). Not yet implemented; purple still pays the Fast Action
+  // budget through the standard placement path below.
 
   // Purple (Planar Studies) Mages place as a Fast Action; everyone else
   // consumes the Action budget.
   const budgetKind: ActionBudgetKind =
     mage.color === 'purple' ? 'fast-action' : 'action';
   state = consumeActionBudget(state, budgetKind, 'PLACE_WORKER');
+
+  // Red Mage Ars Magna: spending 1 mana when placing wounds the slot's
+  // occupant and lets the red mage take that slot. The standard placement
+  // logic below assumes an empty slot — we branch here for Ars Magna and
+  // route the rest through the existing `ars-magna.complete` continuation
+  // which handles the Infirmary bonus prompt + the move into the slot.
+  if (isArsMagnaPlacement && space.occupant) {
+    const targetMageId = space.occupant.mageId;
+    const stateAfterCosts: GameState = {
+      ...state,
+      players: state.players.map((p) =>
+        p.id !== action.playerId
+          ? p
+          : {
+              ...p,
+              resources: { ...p.resources, mana: p.resources.mana - 1 },
+              roundPlacements: [...p.roundPlacements, room.id],
+            },
+      ),
+    };
+    const wounded = woundMage(
+      stateAfterCosts,
+      targetMageId,
+      action.playerId,
+    );
+    const source: ResolutionSource = {
+      kind: 'mage-power',
+      id: action.mageId,
+      triggeringPlayerId: action.playerId,
+      description: 'Ars Magna (placement)',
+    };
+    const ctx: EffectContext = {
+      state: stateAfterCosts,
+      source,
+      triggeringPlayerId: action.playerId,
+      allowReactions: true,
+    };
+    const result: EffectResult = {
+      kind: 'open-reaction',
+      patch: wounded.patch,
+      window: {
+        triggerEvent: wounded.triggerEvent,
+        pendingResponderIds: buildReactionQueue(
+          stateAfterCosts,
+          action.playerId,
+        ),
+        reactedPlayerIds: [],
+        afterResume: {
+          effectId: 'base.mage.sorcery.ars-magna.complete',
+          context: {
+            sourceMageId: action.mageId,
+            targetSpaceId: space.id,
+            triggerEvent: wounded.triggerEvent as unknown as SerializableContext,
+          },
+        },
+        source,
+      },
+    };
+    return applyEffectResult(stateAfterCosts, result, ctx);
+  }
 
   const updatedRooms = state.rooms.map((r, ri) =>
     ri !== foundRoomIdx
@@ -714,9 +785,12 @@ function handleUseAbility(
   if (!hasEffect(action.abilityId)) {
     throw new Error(`USE_ABILITY: unknown ability "${action.abilityId}"`);
   }
-  // Mage-power abilities (Ars Magna, etc.) are fast actions per the rulebook.
-  // No non-fast abilities exist yet; revisit this when one is added.
-  state = consumeActionBudget(state, 'fast-action', 'USE_ABILITY');
+  // Ars Magna is a Sorcery Mage power that fires on placement; until the
+  // place-time trigger is fully wired, USE_ABILITY stands in for it and
+  // consumes the player's Regular Action. The rulebook lists Mage Powers
+  // with "Place" timing — the placement itself is the Action, the power
+  // rides along.
+  state = consumeActionBudget(state, 'action', 'USE_ABILITY');
   const sourceId = action.sourceCardId ?? action.abilityId;
   const source: ResolutionSource = {
     kind: 'mage-power',
