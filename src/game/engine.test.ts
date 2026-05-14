@@ -207,6 +207,70 @@ describe('round-setup refresh logic', () => {
     expect(s.players[0]?.resources.meritBadges).toBe(2);
     expect(s.players[0]?.resources.meritBadgesSpent).toBe(0);
   });
+
+  it('round 2 returns every wounded mage from the infirmary to its office', () => {
+    let s = initGame(FOUR_PLAYER_CONFIG);
+    // Send a couple of mages to the infirmary directly.
+    s = {
+      ...s,
+      players: s.players.map((p, i) =>
+        i === 0
+          ? {
+              ...p,
+              mages: [
+                {
+                  id: 'p1-wounded-red',
+                  cardId: 'base.mage.sorcery',
+                  color: 'red',
+                  location: { kind: 'infirmary' as const },
+                  isShadowing: false,
+                  isWounded: true,
+                },
+                {
+                  id: 'p1-fine-blue',
+                  cardId: 'base.mage.divinity',
+                  color: 'blue',
+                  location: { kind: 'office' as const, playerId: 'p1' },
+                  isShadowing: false,
+                  isWounded: false,
+                },
+              ],
+            }
+          : i === 1
+            ? {
+                ...p,
+                mages: [
+                  {
+                    id: 'p2-wounded-green',
+                    cardId: 'base.mage.natural-magick',
+                    color: 'green',
+                    location: { kind: 'infirmary' as const },
+                    isShadowing: false,
+                    isWounded: true,
+                  },
+                ],
+              }
+            : p,
+      ),
+    };
+    // Drive through round 1 → round-setup of round 2 → errands round 2.
+    s = advance(s); // → errands round 1
+    s = emptyBellTower(s);
+    s = advance(s); // → resolution
+    s = advance(s); // → mid-game-scoring
+    s = advance(s); // → round-setup round 2
+    s = advance(s); // → errands round 2 (heal runs here)
+
+    const p1 = s.players[0]!;
+    const p2 = s.players[1]!;
+    expect(p1.mages.every((m) => m.location.kind === 'office')).toBe(true);
+    expect(p1.mages.every((m) => !m.isWounded)).toBe(true);
+    expect(p2.mages.every((m) => m.location.kind === 'office')).toBe(true);
+    expect(p2.mages.every((m) => !m.isWounded)).toBe(true);
+    // The previously-fine blue mage is unchanged.
+    const blue = p1.mages.find((m) => m.id === 'p1-fine-blue');
+    expect(blue?.location).toEqual({ kind: 'office', playerId: 'p1' });
+  });
 });
 
 describe('determinism', () => {

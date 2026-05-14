@@ -1652,6 +1652,7 @@ function processRoundSetup(state: GameState, round: RoundNumber): GameState {
     updated = refreshPlayerCardsAndMerit(updated);
     updated = redealTableaus(updated);
     updated = restoreBellTower(updated);
+    updated = healInfirmaryMages(updated);
   }
   return {
     ...updated,
@@ -1662,6 +1663,29 @@ function processRoundSetup(state: GameState, round: RoundNumber): GameState {
       actionUsed: false,
       fastActionUsed: false,
     },
+  };
+}
+
+/**
+ * Per the rulebook, every wounded Mage returns to its owner's Office at the
+ * start of each new round. Run as part of `processRoundSetup` for rounds 2+.
+ */
+function healInfirmaryMages(state: GameState): GameState {
+  return {
+    ...state,
+    players: state.players.map((p) => ({
+      ...p,
+      mages: p.mages.map((m) =>
+        m.location.kind === 'infirmary'
+          ? {
+              ...m,
+              isWounded: false,
+              isShadowing: false,
+              location: { kind: 'office' as const, playerId: p.id },
+            }
+          : m,
+      ),
+    })),
   };
 }
 

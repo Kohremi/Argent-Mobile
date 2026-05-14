@@ -2191,6 +2191,43 @@ function MageDraftPoolPanel({ state }: { state: GameState }) {
   );
 }
 
+/**
+ * Lists every mage currently in the infirmary (wounded — any player). Future
+ * "move from infirmary" effects (Heal, Chain of Healing, Amelioration, Rheye
+ * Cal's spell, etc.) will need to pick from this set.
+ */
+function InfirmaryRoster({ state }: { state: GameState }) {
+  const wounded: { mage: OwnedMage; ownerId: string; ownerName: string }[] = [];
+  for (const p of state.players) {
+    for (const m of p.mages) {
+      if (m.location.kind === 'infirmary') {
+        wounded.push({ mage: m, ownerId: p.id, ownerName: p.name });
+      }
+    }
+  }
+  if (wounded.length === 0) {
+    return (
+      <p className="text-[10px] text-slate-500 italic">infirmary is empty</p>
+    );
+  }
+  return (
+    <ul className="space-y-1">
+      {wounded.map(({ mage, ownerId, ownerName }) => (
+        <li
+          key={mage.id}
+          className="rounded bg-slate-950/40 px-1.5 py-1 text-[11px] leading-snug flex items-center gap-1.5"
+        >
+          <MageIcon color={mage.color} size={14} />
+          <span className="capitalize text-slate-200">{mage.color}</span>
+          <span className="text-slate-500">({mage.id.slice(-8)})</span>
+          <span className="text-slate-400">— {ownerName}</span>
+          <span className="text-slate-600 text-[10px]">{ownerId}</span>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
 function RoomsPanel({
   state,
   selectedMage,
@@ -2255,7 +2292,9 @@ function RoomsPanel({
                   {room.description}
                 </p>
               )}
-              {room.actionSpaces.length === 0 ? (
+              {room.cannotBePlacedInDirectly ? (
+                <InfirmaryRoster state={state} />
+              ) : room.actionSpaces.length === 0 ? (
                 <p className="text-[10px] text-slate-500 italic">
                   no action spaces (or specials handled elsewhere)
                 </p>
