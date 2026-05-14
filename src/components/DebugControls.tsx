@@ -305,6 +305,10 @@ function describePhase(state: GameState): string {
       const player = idx !== undefined ? state.players[idx] : undefined;
       return `Mage Draft — pick ${p.nextPickIndex + 1}/${p.pickOrder.length} (${player?.name ?? '?'})`;
     }
+    case 'initial-mark-placement': {
+      const player = state.players[p.activePlayerIndex];
+      return `Initial Mark Placement (${player?.name ?? '?'})`;
+    }
     case 'round-setup':
       return `Round ${p.round} — Round Setup`;
     case 'errands': {
@@ -350,6 +354,11 @@ export function DebugControls() {
   }
   if (state.phase.kind === 'mage-draft') {
     return <MageDraftScreen state={state} dispatch={dispatch} reset={reset} />;
+  }
+  if (state.phase.kind === 'initial-mark-placement') {
+    return (
+      <InitialMarkPlacementScreen state={state} dispatch={dispatch} reset={reset} />
+    );
   }
 
   const top = state.pendingResolutionStack[state.pendingResolutionStack.length - 1];
@@ -2035,6 +2044,147 @@ function MageDraftScreen({
             </li>
           ))}
         </ul>
+      </section>
+    </div>
+  );
+}
+
+function InitialMarkPlacementScreen({
+  state,
+  dispatch,
+  reset,
+}: {
+  state: GameState;
+  dispatch: (action: GameAction) => void;
+  reset: () => void;
+}) {
+  if (state.phase.kind !== 'initial-mark-placement') return null;
+  const phase = state.phase;
+  const activePlayer = state.players[phase.activePlayerIndex];
+  const top = state.pendingResolutionStack[state.pendingResolutionStack.length - 1];
+  const eligibleSet =
+    top?.prompt.kind === 'choose-voter'
+      ? new Set(top.prompt.eligibleVoterIds)
+      : new Set<string>();
+  const resolveWithVoter = (voterId: string) => {
+    if (!top) return;
+    dispatch({
+      type: 'RESOLVE_PENDING',
+      resolutionId: top.id,
+      answer: { kind: 'voter-chosen', voterId },
+    });
+  };
+
+  return (
+    <div className="min-h-full p-6 max-w-5xl mx-auto space-y-5">
+      <header className="flex items-center justify-between flex-wrap gap-3">
+        <div>
+          <h1 className="text-2xl font-semibold">Argent — initial mark placement</h1>
+          <p className="text-slate-400 text-sm">
+            Each player places their starting Mark on a Voter before round 1.
+            Currently choosing:{' '}
+            <strong>
+              {activePlayer ? playerDisplayName(state, activePlayer) : '?'}
+            </strong>
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={reset}
+          className="px-3 py-1.5 rounded bg-slate-800 hover:bg-slate-700 text-sm"
+        >
+          Back to setup
+        </button>
+      </header>
+
+      <section>
+        <h2 className="text-lg font-medium mb-2">Players</h2>
+        <ul className="grid grid-cols-1 md:grid-cols-2 gap-2 text-sm">
+          {state.players.map((p, i) => {
+            const hasPlaced = p.resources.marks > 0;
+            return (
+              <li
+                key={p.id}
+                className={clsx(
+                  'p-2 rounded border flex items-center justify-between gap-2',
+                  i === phase.activePlayerIndex
+                    ? 'border-amber-400/60 bg-amber-400/5'
+                    : 'border-slate-700 bg-slate-900',
+                )}
+              >
+                <span className="font-medium">{playerDisplayName(state, p)}</span>
+                {hasPlaced ? (
+                  <span className="text-[11px] uppercase tracking-wide text-emerald-300/70">
+                    placed
+                  </span>
+                ) : i === phase.activePlayerIndex ? (
+                  <span className="text-[11px] uppercase tracking-wide text-amber-300">
+                    choosing
+                  </span>
+                ) : (
+                  <span className="text-[11px] uppercase tracking-wide text-slate-500">
+                    waiting
+                  </span>
+                )}
+              </li>
+            );
+          })}
+        </ul>
+      </section>
+
+      <section>
+        <h2 className="text-lg font-medium mb-2">
+          Pick a Consortium Voter to mark
+        </h2>
+        <p className="text-xs text-slate-500 mb-2">
+          Marks on face-down voters let you peek at them during play and
+          break voter-level ties at endgame scoring.
+        </p>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+          {state.voters.map((v) => {
+            const eligible = eligibleSet.has(v.id);
+            return (
+              <button
+                key={v.id}
+                type="button"
+                disabled={!eligible}
+                onClick={() => resolveWithVoter(v.id)}
+                className={clsx(
+                  'rounded border p-3 text-left text-xs space-y-0.5',
+                  eligible
+                    ? 'border-slate-700 bg-slate-900 hover:border-amber-400/60 hover:bg-slate-800 cursor-pointer'
+                    : 'border-slate-800 bg-slate-900/40 opacity-50 cursor-not-allowed',
+                )}
+              >
+                <div className="flex items-baseline gap-1.5 flex-wrap">
+                  <span className="font-medium text-slate-200">
+                    {v.revealed ? v.name : '[face-down voter]'}
+                  </span>
+                  {v.isAlwaysFaceUp && (
+                    <span className="text-[10px] uppercase tracking-wide text-amber-300/70">
+                      required
+                    </span>
+                  )}
+                </div>
+                {v.revealed && v.title && (
+                  <div className="text-[10px] text-slate-500 italic">
+                    {v.title}
+                  </div>
+                )}
+                {v.revealed && v.description && (
+                  <div className="text-[11px] text-slate-300/90">
+                    {v.description}
+                  </div>
+                )}
+                {!v.revealed && (
+                  <div className="text-[11px] text-slate-500 italic">
+                    contents hidden until end of game (or peek after placement)
+                  </div>
+                )}
+              </button>
+            );
+          })}
+        </div>
       </section>
     </div>
   );

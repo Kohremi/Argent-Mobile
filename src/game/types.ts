@@ -441,6 +441,15 @@ export type GamePhase =
       pickOrder: number[];
       nextPickIndex: number;
     }
+  | {
+      /**
+       * Each player places their starting Mark on a Consortium voter,
+       * in turn order from `firstPlayerIndex`. Transitions to `round-setup`
+       * once every player has placed.
+       */
+      kind: 'initial-mark-placement';
+      activePlayerIndex: number;
+    }
   | { kind: 'round-setup'; round: RoundNumber }
   | {
       kind: 'errands';

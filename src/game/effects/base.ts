@@ -99,12 +99,12 @@ registerEffect('base.room.library-a.slot-2', (ctx: EffectContext): EffectResult 
   throw new Error('library-a.slot-2 should not be re-invoked (research handles its own resume)');
 });
 
-/** Slot 3 (regular): Gain a Buy AND gain 1 Research. */
+/** Slot 3 (regular): Purchase a Vault Item AND Gain 1 Research. */
 registerEffect('base.room.library-a.slot-3', (ctx: EffectContext): EffectResult => {
   if (!ctx.resumeAnswer) {
     const affordable = affordableVaultCards(ctx.state, ctx.triggeringPlayerId);
     if (affordable.length === 0) {
-      // No buy possible; go straight to research.
+      // No vault item is affordable — skip straight to the research step.
       return {
         kind: 'pause',
         pending: spawnResearchPrompt(ctx.triggeringPlayerId, ctx.source),
@@ -117,10 +117,10 @@ registerEffect('base.room.library-a.slot-3', (ctx: EffectContext): EffectResult 
         prompt: {
           kind: 'choose-from-options',
           options: [
-            { id: 'skip', label: 'Skip the Buy', payload: {} },
+            { id: 'skip', label: 'Skip the Purchase', payload: {} },
             ...affordable.map((cid) => ({
               id: cid,
-              label: `Buy ${cid}`,
+              label: `Purchase ${cid}`,
               payload: {},
             })),
           ],
@@ -452,7 +452,7 @@ registerEffect('base.room.vault-a.slot-1', (ctx: EffectContext): EffectResult =>
   };
 });
 
-/** Vault A slot 2 — regular. Draft a Vault Card OR Gain 5 Gold. */
+/** Vault A slot 2 — regular. Purchase a Vault Item OR Gain 5 Gold. */
 registerEffect('base.room.vault-a.slot-2', (ctx: EffectContext): EffectResult => {
   if (!ctx.resumeAnswer) {
     return {
@@ -462,7 +462,7 @@ registerEffect('base.room.vault-a.slot-2', (ctx: EffectContext): EffectResult =>
         prompt: {
           kind: 'choose-from-options',
           options: [
-            { id: 'draft', label: 'Draft a Vault Card', payload: {} },
+            { id: 'draft', label: 'Purchase a Vault Item', payload: {} },
             { id: 'gold', label: 'Gain 5 Gold', payload: {} },
           ],
         },
@@ -839,6 +839,88 @@ function spawnGainMarkPrompt(
     source,
   };
 }
+
+// ============================================================================
+// Initial Mark placement (game-start, one per player)
+//
+// Triggered from `enterInitialMarkPlacement` in engine.ts. Each player, in
+// turn order from `firstPlayerIndex`, gets a choose-voter prompt that resumes
+// here. We apply the chosen mark, then either push the next player's prompt
+// or transition to round-setup once everyone has placed.
+// ============================================================================
+
+registerEffect('base.system.initial-mark', (ctx) => {
+  if (ctx.resumeAnswer?.kind !== 'voter-chosen') {
+    throw new Error(
+      `initial-mark expected voter-chosen, got ${ctx.resumeAnswer?.kind}`,
+    );
+  }
+  if (ctx.state.phase.kind !== 'initial-mark-placement') {
+    throw new Error(
+      `initial-mark: state is not in initial-mark-placement (current: ${ctx.state.phase.kind})`,
+    );
+  }
+  const markPatch = applyGainMark(
+    ctx.state,
+    ctx.triggeringPlayerId,
+    ctx.resumeAnswer.voterId,
+  );
+  const afterMark: GameState = { ...ctx.state, ...markPatch };
+
+  // Find the next player (in clockwise order from current) who hasn't yet
+  // placed their starting mark. Players who have placed have resources.marks
+  // strictly greater than 0; the starting bundle sets marks=0.
+  const N = afterMark.players.length;
+  const startIdx = afterMark.phase.kind === 'initial-mark-placement'
+    ? afterMark.phase.activePlayerIndex
+    : 0;
+  let nextIdx = -1;
+  for (let step = 1; step <= N; step++) {
+    const idx = (startIdx + step) % N;
+    const candidate = afterMark.players[idx];
+    if (candidate && candidate.resources.marks === 0) {
+      nextIdx = idx;
+      break;
+    }
+  }
+
+  if (nextIdx === -1) {
+    // Everyone placed → transition to round-setup.
+    return {
+      kind: 'done',
+      patch: { ...markPatch, phase: { kind: 'round-setup', round: 1 } },
+    };
+  }
+
+  // Push the next player's choose-voter prompt and update the phase.
+  const nextPlayer = afterMark.players[nextIdx]!;
+  return {
+    kind: 'pause',
+    patch: {
+      ...markPatch,
+      phase: {
+        kind: 'initial-mark-placement',
+        activePlayerIndex: nextIdx,
+      },
+    },
+    pending: {
+      responderId: nextPlayer.id,
+      prompt: {
+        kind: 'choose-voter',
+        eligibleVoterIds: eligibleVotersForMark(afterMark, nextPlayer.id).map(
+          (v) => v.id,
+        ),
+      },
+      resume: { effectId: 'base.system.initial-mark', context: {} },
+      source: {
+        kind: 'system',
+        id: 'base.system.initial-mark',
+        triggeringPlayerId: nextPlayer.id,
+        description: 'Place your starting Mark',
+      },
+    },
+  };
+});
 
 registerEffect('base.system.gain-mark', (ctx) => {
   if (ctx.resumeAnswer?.kind !== 'voter-chosen') {

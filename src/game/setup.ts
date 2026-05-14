@@ -14,7 +14,7 @@ import {
   nextRandom,
   shuffleWithState,
 } from '../utils/rng';
-import { emptyResourceBundle, pickPlayerColor } from '../utils/helpers';
+import { pickPlayerColor, startingResourceBundle } from '../utils/helpers';
 
 const MIN_PLAYERS = 2;
 const MAX_PLAYERS = 6;
@@ -82,7 +82,7 @@ export function buildInitialState(config: GameConfig): GameState {
     color: pickPlayerColor(i),
     candidateId: '',
     candidateStartingSpellId: '',
-    resources: emptyResourceBundle(),
+    resources: startingResourceBundle(),
     mages: [],
     ownedSpells: [],
     vaultCards: [],

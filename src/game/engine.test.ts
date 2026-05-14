@@ -539,6 +539,8 @@ describe('Endgame scoring', () => {
 
   it('voter-level tiebreaker uses marks on this voter', () => {
     let s = initGame(FOUR_PLAYER_CONFIG);
+    // Zero everyone first so the starting bundle doesn't muddy the test.
+    for (const p of s.players) s = zeroPlayerResources(s, p.id);
     // Both p1 and p2 tied at 5 gold; p2 has a mark on the Most Gold voter.
     s = mapPlayer(s, 'p1', (p) => ({
       ...p,
@@ -604,7 +606,8 @@ describe('Bell Tower offerings', () => {
     ]);
     const player = s.players.find((p) => p.id === activeId);
     expect(player?.bellTowerCards).toEqual(['base.bell.gain-ip']);
-    expect(player?.resources.influence).toBe(1);
+    // Starting IP (5) + 1 from the bell tower card.
+    expect(player?.resources.influence).toBe(6);
   });
 
   it('Gold-or-Mana card pauses for player choice and grants the picked resource', () => {
@@ -628,8 +631,10 @@ describe('Bell Tower offerings', () => {
     });
     expect(s.pendingResolutionStack).toHaveLength(0);
     const player = s.players.find((p) => p.id === activeId);
-    expect(player?.resources.gold).toBe(2);
-    expect(player?.resources.mana).toBe(0);
+    // Starting gold (6) + 2 from the bell tower card.
+    expect(player?.resources.gold).toBe(8);
+    // Starting mana (2) unchanged since we picked gold.
+    expect(player?.resources.mana).toBe(2);
   });
 
   it('First-Player Token sets firstPlayerIndex to the claimer', () => {
@@ -1264,7 +1269,14 @@ describe('Mage draft', () => {
     s = applyAction(s, { type: 'DRAFT_MAGE', playerId: 'p1', color: 'purple' });
     s = applyAction(s, { type: 'DRAFT_MAGE', playerId: 'p2', color: 'purple' });
 
-    expect(s.phase).toEqual({ kind: 'round-setup', round: 1 });
+    // After the last draft pick, transition to initial-mark-placement (each
+    // player places their starting Mark on a Voter before round 1 begins).
+    expect(s.phase.kind).toBe('initial-mark-placement');
+    if (s.phase.kind === 'initial-mark-placement') {
+      // First drafter (p1, since draftFirst=false handed the lead back) takes
+      // the first mark-placement turn.
+      expect(s.phase.activePlayerIndex).toBe(s.firstPlayerIndex);
+    }
     const alice = s.players.find((p) => p.id === 'p1');
     const bob = s.players.find((p) => p.id === 'p2');
     expect(alice?.mages).toHaveLength(5); // 2 red + 1 green + 1 blue + 1 purple
@@ -1453,6 +1465,28 @@ function setMeritBadges(
   }));
 }
 
+/**
+ * Resets a player's resources to zero — used by setup helpers that want to
+ * isolate effect-grant arithmetic from the per-rulebook starting resources
+ * (6 Gold / 2 Mana / 2 INT / 2 WIS / 5 IP / 0 marks / 0 Merit Badges).
+ */
+function zeroPlayerResources(state: GameState, playerId: string): GameState {
+  return mapPlayer(state, playerId, (p) => ({
+    ...p,
+    resources: {
+      gold: 0,
+      mana: 0,
+      influence: 0,
+      intelligence: 0,
+      wisdom: 0,
+      marks: 0,
+      meritBadges: 0,
+      meritBadgesSpent: 0,
+    },
+    influenceArrivalSeq: 0,
+  }));
+}
+
 function setGold(state: GameState, playerId: string, gold: number): GameState {
   return mapPlayer(state, playerId, (p) => ({
     ...p,
@@ -1599,6 +1633,7 @@ describe('Library A slot 4 vertical slice', () => {
     // here keeps this test focused on the resolution-phase path; PLACE_WORKER
     // is exercised in its own test below.
     s = placeMageOnSpace(s, 'p1', 'alice-mage-1', 'base.room.library.a.slot-4');
+    s = zeroPlayerResources(s, 'p1');
     // Drain the bell tower so errands ends as soon as we advance.
     s = { ...s, bellTower: { ...s.bellTower, available: [] } };
     return s;
@@ -1727,6 +1762,9 @@ describe('Burn L1 + Phase Steppers vertical slice', () => {
     const bobColor = opts.bobColor ?? 'red';
     let s = initGame(TWO_PLAYER_CONFIG);
     s = forceLibrarySideA(s);
+    // Isolate effect arithmetic from the rulebook starting bundle.
+    s = zeroPlayerResources(s, 'p1');
+    s = zeroPlayerResources(s, 'p2');
 
     // Alice's caster mage in office (color irrelevant for L1 cast).
     s = addMage(s, 'p1', {
@@ -2164,6 +2202,9 @@ function setupVaultSlotTest(slotId: string): GameState {
     'base.vault.gilded-chalice',
     'base.vault.phase-steppers',
   ]);
+  // Zero out p1's starting resources so per-slot grant tests can assert
+  // deltas directly.
+  s = zeroPlayerResources(s, 'p1');
   // Grant enough MB to take any merit-cost reward by default.
   s = setMeritBadges(s, 'p1', 5);
   s = { ...s, bellTower: { ...s.bellTower, available: [] } };
@@ -2287,6 +2328,7 @@ describe('Vault A slot 1 (Draft a Vault Card AND Gain 4 Gold)', () => {
 describe('PLAY_SUPPORTER', () => {
   function setupSupporterTest(supporterId: string): GameState {
     let s = initGame(TWO_PLAYER_CONFIG);
+    s = zeroPlayerResources(s, 'p1');
     s = addSupporter(s, 'p1', supporterId);
     s = {
       ...s,
@@ -2400,6 +2442,7 @@ describe('PLAY_SUPPORTER', () => {
 describe('PLAY_VAULT_CARD', () => {
   function setupVaultPlay(vaultCardId: string): GameState {
     let s = initGame(TWO_PLAYER_CONFIG);
+    s = zeroPlayerResources(s, 'p1');
     s = addVaultCard(s, 'p1', vaultCardId);
     s = {
       ...s,
@@ -2696,6 +2739,9 @@ describe('Ars Magna (Sorcery Mage power)', () => {
     const bobSpace = opts.bobOnSpace ?? 'base.room.vault.a.slot-3';
     let s = initGame(TWO_PLAYER_CONFIG);
     s = forceVaultSideA(s);
+    // Isolate Infirmary-bonus arithmetic from the rulebook starting bundle.
+    s = zeroPlayerResources(s, 'p1');
+    s = zeroPlayerResources(s, 'p2');
 
     // Alice — caster.
     s = addMage(s, 'p1', {
@@ -2936,6 +2982,10 @@ function setupRoomSlotTest(
     color: 'blue',
   });
   s = placeMageOnSpace(s, 'p1', 'alice-mage-1', spaceId);
+  // Zero out p1's starting resources so per-slot grant tests can assert
+  // deltas directly. Tests that need the rulebook starting bundle should
+  // skip this helper.
+  s = zeroPlayerResources(s, 'p1');
   // Grant enough MB to take any merit-cost reward by default; tests that
   // exercise the "can't afford" path override this to 0.
   s = setMeritBadges(s, 'p1', 5);
@@ -3080,6 +3130,7 @@ describe('Resolution forfeit-or-reward', () => {
       cardId: 'base.mage.divinity',
       color: 'blue',
     });
+    s = zeroPlayerResources(s, 'p1');
     s = setMeritBadges(s, 'p1', 0);
     s = {
       ...s,
@@ -3118,6 +3169,7 @@ describe('Resolution forfeit-or-reward', () => {
       cardId: 'base.mage.divinity',
       color: 'blue',
     });
+    s = zeroPlayerResources(s, 'p1');
     s = setMeritBadges(s, 'p1', 0);
     s = {
       ...s,
@@ -3291,6 +3343,7 @@ describe('Guilds A (instant room)', () => {
       cardId: 'base.mage.divinity',
       color: 'blue',
     });
+    s = zeroPlayerResources(s, 'p1');
     s = setMeritBadges(s, 'p1', 1);
     s = { ...s, firstPlayerIndex: 0, phase: { kind: 'errands', round: 1, activePlayerIndex: 0, actionUsed: false, fastActionUsed: false } };
     return s;
@@ -3552,6 +3605,8 @@ describe('Infirmary on-wound bonus', () => {
   function setupBurnTargetTest(opts: { bobHasPhaseSteppers?: boolean } = {}): GameState {
     let s = initGame(TWO_PLAYER_CONFIG);
     s = forceLibrarySideA(s);
+    s = zeroPlayerResources(s, 'p1');
+    s = zeroPlayerResources(s, 'p2');
     s = addMage(s, 'p1', {
       id: 'alice-mage-1',
       cardId: 'base.mage.divinity',
@@ -3625,6 +3680,7 @@ describe('Infirmary on-wound bonus', () => {
     });
     s = placeMageOnSpace(s, 'p1', 'alice-target', 'base.room.library.a.slot-4');
     s = addOwnedSpell(s, 'p1', 'base.spell.burn');
+    s = zeroPlayerResources(s, 'p1');
     s = mapPlayer(s, 'p1', (p) => ({
       ...p,
       resources: { ...p.resources, mana: 5 },
@@ -3721,7 +3777,8 @@ describe('Catacombs A', () => {
       'A',
       'base.room.catacombs.a.slot-3',
     );
-    // Both players at 0 IP; no one is strictly ahead.
+    // setupRoomSlotTest only zeroes p1; zero p2 too so no one is strictly ahead.
+    s = zeroPlayerResources(s, 'p2');
     s = driveToResolution(s);
     expect(s.players.find((p) => p.id === 'p1')?.resources.influence).toBe(0);
   });

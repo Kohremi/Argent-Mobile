@@ -985,11 +985,45 @@ function handleDraftMage(state: GameState, action: DraftMageAction): GameState {
     phase: { ...phase, nextPickIndex: phase.nextPickIndex + 1 },
   };
 
-  // If that was the last pick, transition into round-setup.
+  // If that was the last pick, transition into the initial-mark placement
+  // step so every player puts their starting Mark on a Voter.
   if (updated.phase.kind === 'mage-draft' && updated.phase.nextPickIndex >= phase.pickOrder.length) {
-    return { ...updated, phase: { kind: 'round-setup', round: 1 } };
+    return enterInitialMarkPlacement(updated);
   }
   return updated;
+}
+
+/**
+ * Transitions into the initial-mark-placement phase: sets the active player
+ * to `firstPlayerIndex` and pushes their choose-voter prompt. When the
+ * prompt resolves via `base.system.initial-mark`, the resume effect either
+ * advances to the next player or transitions to round-setup.
+ */
+function enterInitialMarkPlacement(state: GameState): GameState {
+  const firstIdx = state.firstPlayerIndex;
+  const player = state.players[firstIdx];
+  if (!player) {
+    // No players? Just bypass straight to round-setup.
+    return { ...state, phase: { kind: 'round-setup', round: 1 } };
+  }
+  const next: GameState = {
+    ...state,
+    phase: { kind: 'initial-mark-placement', activePlayerIndex: firstIdx },
+  };
+  return pushPending(next, {
+    responderId: player.id,
+    prompt: {
+      kind: 'choose-voter',
+      eligibleVoterIds: next.voters.map((v) => v.id),
+    },
+    resume: { effectId: 'base.system.initial-mark', context: {} },
+    source: {
+      kind: 'system',
+      id: 'base.system.initial-mark',
+      triggeringPlayerId: player.id,
+      description: 'Place your starting Mark',
+    },
+  });
 }
 
 /**
@@ -1518,6 +1552,10 @@ function handleAdvancePhase(state: GameState): GameState {
     case 'mage-draft':
       throw new Error(
         'ADVANCE_PHASE: mage-draft must end via DRAFT_MAGE for each pick',
+      );
+    case 'initial-mark-placement':
+      throw new Error(
+        'ADVANCE_PHASE: initial-mark-placement must end via RESOLVE_PENDING for each player',
       );
     case 'round-setup':
       return processRoundSetup(state, state.phase.round);

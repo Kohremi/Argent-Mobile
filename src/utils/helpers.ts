@@ -19,6 +19,27 @@ export function emptyResourceBundle(): ResourceBundle {
   };
 }
 
+/**
+ * Returns the per-player starting resource bundle (per rulebook):
+ *   6 Gold, 2 Mana, 5 IP, 2 INT, 2 WIS, 0 marks, 0 merit badges.
+ *
+ * Players also begin with 1 Mark to place on a Voter; that placement is
+ * handled by the `initial-mark-placement` phase (which increments
+ * `resources.marks` to 1 once the player picks a voter).
+ */
+export function startingResourceBundle(): ResourceBundle {
+  return {
+    gold: 6,
+    mana: 2,
+    influence: 5,
+    intelligence: 2,
+    wisdom: 2,
+    marks: 0,
+    meritBadges: 0,
+    meritBadgesSpent: 0,
+  };
+}
+
 /** Returns the matching Department for a Mage piece color, or null for off-white. */
 export function mageColorToDepartment(color: MageColor): Department | null {
   switch (color) {
