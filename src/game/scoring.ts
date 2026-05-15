@@ -103,9 +103,13 @@ function countResearchLevels(player: Player): number {
  *
  * Each Spell Book counts once if researched at any level (intPlaced) — the
  * extra L2/L3 research doesn't multiply the count toward department voters.
- * Each Supporter Card counts once. Wild-department supporters (currently
- * just White Ash) are deferred — wild scoring announces a department at
- * end-of-game and isn't wired yet.
+ * Each Supporter Card counts once.
+ *
+ * Wild-department supporters (White Ash): the player declares a department
+ * before voters are revealed. The declared department is stored in
+ * `player.wildDepartmentChoice` and counted here as +1 toward that
+ * department's total. The wild supporter is NOT double-counted when the
+ * chosen department matches the criterion.
  */
 function countDepartment(
   state: GameState,
@@ -120,15 +124,17 @@ function countDepartment(
     if (card === dept) n += 1;
   }
   // Supporters in this department (office + in personal discard).
-  const allSupporterIds = [
-    ...player.supporters,
-    ...player.personalDiscard
-      .filter((d) => d.kind === 'supporter' || d.kind === 'secret-supporter')
-      .map((d) => d.cardId),
-  ];
-  for (const sid of allSupporterIds) {
+  // Wild-department supporters are handled below via wildDepartmentChoice.
+  for (const sid of allSupporterIdsOf(player)) {
     const supDept = lookupSupporterDepartment(state, sid);
     if (supDept === dept) n += 1;
+  }
+  // Wild supporter contribution.
+  if (
+    player.wildDepartmentChoice === dept &&
+    hasWildSupporter(state, player)
+  ) {
+    n += 1;
   }
   return n;
 }
@@ -136,25 +142,49 @@ function countDepartment(
 /**
  * "Most Diversity" awards their vote to whoever spans the most distinct
  * departments across their researched Spell Books and Supporter Cards.
+ * Wild supporters count as the declared department (not as a separate
+ * "wild" tally).
  */
 function countDiversity(state: GameState, player: Player): number {
   const depts = new Set<Department>();
   for (const owned of player.ownedSpells) {
     if (!owned.intPlaced) continue;
     const d = lookupSpellDepartment(state, owned.cardId);
-    if (d) depts.add(d);
+    if (d && d !== 'wild') depts.add(d);
   }
-  const supporterIds = [
+  for (const sid of allSupporterIdsOf(player)) {
+    const d = lookupSupporterDepartment(state, sid);
+    if (d && d !== 'wild') depts.add(d);
+  }
+  if (player.wildDepartmentChoice && hasWildSupporter(state, player)) {
+    depts.add(player.wildDepartmentChoice);
+  }
+  return depts.size;
+}
+
+function allSupporterIdsOf(player: Player): string[] {
+  return [
     ...player.supporters,
     ...player.personalDiscard
       .filter((d) => d.kind === 'supporter' || d.kind === 'secret-supporter')
       .map((d) => d.cardId),
   ];
-  for (const sid of supporterIds) {
-    const d = lookupSupporterDepartment(state, sid);
-    if (d) depts.add(d);
+}
+
+/** True if the player owns at least one supporter whose department is 'wild'. */
+function hasWildSupporter(state: GameState, player: Player): boolean {
+  for (const sid of allSupporterIdsOf(player)) {
+    if (lookupSupporterDepartment(state, sid) === 'wild') return true;
   }
-  return depts.size;
+  return false;
+}
+
+/** Exported lookup used by the wild-department-choice prompt step. */
+export function playerOwnsWildSupporter(
+  state: GameState,
+  player: Player,
+): boolean {
+  return hasWildSupporter(state, player);
 }
 
 // ============================================================================

@@ -2,6 +2,7 @@
 // targets: Library A slot 1, Burn L1, Phase Steppers reaction.
 
 import { getEffect, registerEffect } from './registry';
+import { computeFinalScoring, playerOwnsWildSupporter } from '../scoring';
 import {
   affordableVaultCards,
   applyGainMark,
@@ -33,6 +34,7 @@ import {
 import type {
   ActionSpaceId,
   ChoiceOption,
+  Department,
   EffectContext,
   EffectResult,
   GameState,
@@ -2527,6 +2529,72 @@ registerEffect('base.supporter.yinsei-arlington', (ctx): EffectResult => {
 /** No-op effect used as `afterResume` when a reaction window has no
  *  follow-up step (the action's only job was to fire its trigger). */
 registerEffect('base.system.noop', () => ({ kind: 'done', patch: {} }));
+
+/**
+ * Wild-department choice (White Ash) — fires once per White Ash owner
+ * during the 'final-scoring' phase, before voters are revealed. The
+ * prompt's optionId is the chosen Department. We save the choice on the
+ * responder; if this was the last White Ash owner waiting to declare, we
+ * finalize the game inline (reveal voters + compute scoring + flip phase
+ * to 'complete'). Otherwise the next pending in the queue takes over.
+ */
+registerEffect(
+  'base.system.wild-department-choice',
+  (ctx): EffectResult => {
+    if (ctx.resumeAnswer?.kind !== 'option-chosen') {
+      throw new Error(
+        'wild-department-choice expected option-chosen',
+      );
+    }
+    const dept = ctx.resumeAnswer.optionId;
+    const valid: readonly Department[] = [
+      'sorcery',
+      'mysticism',
+      'natural-magick',
+      'planar-studies',
+      'divinity',
+      'students',
+    ];
+    if (!valid.includes(dept as Department)) {
+      throw new Error(
+        `wild-department-choice: ${dept} is not a real department`,
+      );
+    }
+    const chosen = dept as Department;
+    const playersWithChoice = ctx.state.players.map((p) =>
+      p.id !== ctx.triggeringPlayerId
+        ? p
+        : { ...p, wildDepartmentChoice: chosen },
+    );
+    const afterChoice: GameState = {
+      ...ctx.state,
+      players: playersWithChoice,
+    };
+    // If anyone else still needs to choose, just emit the patch — the
+    // next pending in the stack will fire when this one pops.
+    const stillNeed = afterChoice.players.some(
+      (p) => playerOwnsWildSupporter(afterChoice, p) && !p.wildDepartmentChoice,
+    );
+    if (stillNeed) {
+      return { kind: 'done', patch: { players: playersWithChoice } };
+    }
+    // Last choice — finalize the game inline.
+    const revealedVoters = afterChoice.voters.map((v) => ({
+      ...v,
+      revealed: true,
+    }));
+    const finalState: GameState = { ...afterChoice, voters: revealedVoters };
+    const result = computeFinalScoring(finalState);
+    return {
+      kind: 'done',
+      patch: {
+        players: playersWithChoice,
+        voters: revealedVoters,
+        phase: { kind: 'complete', archmage: result.archmage },
+      },
+    };
+  },
+);
 
 /**
  * Grey (Mysticism) mage ability — when a player casts a spell as a

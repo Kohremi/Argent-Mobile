@@ -178,6 +178,64 @@ describe('phase machine', () => {
     s = advance(s);
     expect(s).toBe(before);
   });
+
+  it('end-of-round-5 with White Ash owner pauses on a department choice before voters reveal', () => {
+    let s = initGame(FOUR_PLAYER_CONFIG);
+    // Drop White Ash into Alice's office BEFORE driving to the end.
+    s = {
+      ...s,
+      players: s.players.map((p) =>
+        p.id !== 'p1'
+          ? p
+          : {
+              ...p,
+              supporters: [...p.supporters, 'base.supporter.white-ash'],
+            },
+      ),
+    };
+    // Drive rounds 1–4 to completion as usual.
+    for (let r = 1; r <= 4; r++) {
+      s = advance(s); // → errands
+      s = emptyBellTower(s);
+      s = advance(s); // → resolution
+      s = advance(s); // → mid-game-scoring
+      s = advance(s); // → next round-setup
+    }
+    // Now round 5: drive to mid-game-scoring, then advance.
+    s = advance(s); // → errands
+    s = emptyBellTower(s);
+    s = advance(s); // → resolution
+    s = advance(s); // → mid-game-scoring
+    s = advance(s); // → should pause on wild-department-choice prompt
+    // Phase is now 'final-scoring' with a pending prompt for Alice;
+    // voters NOT yet revealed.
+    expect(s.phase.kind).toBe('final-scoring');
+    expect(s.voters.every((v) => v.revealed)).toBe(false);
+    const top = topPending(s);
+    expect(top.responderId).toBe('p1');
+    expect(top.prompt.kind).toBe('choose-from-options');
+    if (top.prompt.kind === 'choose-from-options') {
+      expect(top.prompt.options.map((o) => o.id).sort()).toEqual([
+        'divinity',
+        'mysticism',
+        'natural-magick',
+        'planar-studies',
+        'sorcery',
+        'students',
+      ]);
+    }
+    // Alice picks Sorcery → game finalizes (voters revealed, phase=complete).
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: top.id,
+      answer: { kind: 'option-chosen', optionId: 'sorcery', payload: {} },
+    });
+    expect(s.phase.kind).toBe('complete');
+    expect(s.voters.every((v) => v.revealed)).toBe(true);
+    expect(
+      s.players.find((p) => p.id === 'p1')?.wildDepartmentChoice,
+    ).toBe('sorcery');
+  });
 });
 
 describe('round-setup refresh logic', () => {
@@ -645,6 +703,57 @@ describe('Endgame scoring', () => {
         result.votesPerPlayer[pid] ?? 0,
       );
     }
+  });
+
+  it('White Ash: counts as the declared department for Most-X-Department scoring', () => {
+    let s = initGame(TWO_PLAYER_CONFIG);
+    // Give Alice White Ash + nothing else; declare it as sorcery.
+    s = mapPlayer(s, 'p1', (p) => ({
+      ...p,
+      supporters: [...p.supporters, 'base.supporter.white-ash'],
+      wildDepartmentChoice: 'sorcery',
+    }));
+    const alice = s.players.find((p) => p.id === 'p1')!;
+    expect(scorePlayerForCriterion(s, alice, 'most-sorcery')).toBe(1);
+    expect(scorePlayerForCriterion(s, alice, 'most-divinity')).toBe(0);
+    expect(scorePlayerForCriterion(s, alice, 'most-mysticism')).toBe(0);
+  });
+
+  it('White Ash: counts toward most-diversity as the declared department, not as a separate "wild" entry', () => {
+    let s = initGame(TWO_PLAYER_CONFIG);
+    // Give Alice one Sorcery supporter (red) AND White Ash declared as
+    // Sorcery — diversity should stay at 1 (both contribute the same dept).
+    s = mapPlayer(s, 'p1', (p) => ({
+      ...p,
+      supporters: [
+        ...p.supporters,
+        'base.supporter.allys-mehrmus', // Sorcery
+        'base.supporter.white-ash',
+      ],
+      wildDepartmentChoice: 'sorcery',
+    }));
+    const alice = s.players.find((p) => p.id === 'p1')!;
+    expect(scorePlayerForCriterion(s, alice, 'most-diversity')).toBe(1);
+
+    // Now switch the declaration to Divinity — diversity becomes 2.
+    s = mapPlayer(s, 'p1', (p) => ({
+      ...p,
+      wildDepartmentChoice: 'divinity',
+    }));
+    const alice2 = s.players.find((p) => p.id === 'p1')!;
+    expect(scorePlayerForCriterion(s, alice2, 'most-diversity')).toBe(2);
+  });
+
+  it('White Ash: scoring does NOT add the wild bonus if the player has no White Ash in supporters/discard', () => {
+    let s = initGame(TWO_PLAYER_CONFIG);
+    // wildDepartmentChoice is set but the player doesn't actually own
+    // White Ash — should not count.
+    s = mapPlayer(s, 'p1', (p) => ({
+      ...p,
+      wildDepartmentChoice: 'sorcery',
+    }));
+    const alice = s.players.find((p) => p.id === 'p1')!;
+    expect(scorePlayerForCriterion(s, alice, 'most-sorcery')).toBe(0);
   });
 });
 

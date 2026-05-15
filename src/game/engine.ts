@@ -4,7 +4,7 @@
 
 import { getPack } from '../content/registry';
 import { validateAction } from './actions';
-import { computeFinalScoring } from './scoring';
+import { computeFinalScoring, playerOwnsWildSupporter } from './scoring';
 import { buildInitialState } from './setup';
 import { getEffect, hasEffect } from './effects/index';
 import {
@@ -1923,7 +1923,48 @@ function processMidGameScoring(state: GameState, round: RoundNumber): GameState 
     const next = (round + 1) as RoundNumber;
     return { ...state, phase: { kind: 'round-setup', round: next } };
   }
-  return finalizeGame(state);
+  // End of round 5 — game is over. If any player holds a wild-department
+  // supporter (White Ash), they must declare a department BEFORE voters
+  // are revealed. Push those prompts and transition to 'final-scoring';
+  // the wild-department-choice effect will finalize the game once the
+  // last choice is in. If no one holds a wild supporter, finalize now.
+  const needsChoice = state.players.filter(
+    (p) => playerOwnsWildSupporter(state, p) && !p.wildDepartmentChoice,
+  );
+  if (needsChoice.length === 0) {
+    return finalizeGame(state);
+  }
+  let next: GameState = { ...state, phase: { kind: 'final-scoring' } };
+  // Pendings push onto a LIFO stack; iterate in reverse so the first
+  // player in turn order is the first to be asked.
+  for (let i = needsChoice.length - 1; i >= 0; i--) {
+    const player = needsChoice[i]!;
+    next = pushPending(next, {
+      responderId: player.id,
+      prompt: {
+        kind: 'choose-from-options',
+        options: [
+          { id: 'sorcery', label: 'Sorcery (Red)', payload: {} },
+          { id: 'mysticism', label: 'Mysticism (Grey)', payload: {} },
+          { id: 'natural-magick', label: 'Natural Magick (Green)', payload: {} },
+          { id: 'planar-studies', label: 'Planar Studies (Purple)', payload: {} },
+          { id: 'divinity', label: 'Divinity (Blue)', payload: {} },
+          { id: 'students', label: 'Students (Off-White)', payload: {} },
+        ],
+      },
+      resume: {
+        effectId: 'base.system.wild-department-choice',
+        context: {},
+      },
+      source: {
+        kind: 'system',
+        id: 'base.system.wild-department-choice',
+        triggeringPlayerId: player.id,
+        description: 'White Ash — declare a department',
+      },
+    });
+  }
+  return next;
 }
 
 function finalizeGame(state: GameState): GameState {

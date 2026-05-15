@@ -201,6 +201,15 @@ export interface Player {
    * the very next spell, and cleared unconditionally at turn end.
    */
   nextSpellFreeMana?: boolean;
+  /**
+   * For each wild-department supporter the player owns (e.g. White Ash),
+   * the department they've declared it counts as. Set during the
+   * 'final-scoring' phase prompt (before voters are revealed) and read by
+   * `countDepartment` / `countDiversity`. A single field is enough for
+   * the base game since White Ash is the only wild supporter; if a future
+   * expansion ships multiple, this can become a Record keyed by card id.
+   */
+  wildDepartmentChoice?: Department;
 }
 
 // ============================================================================
