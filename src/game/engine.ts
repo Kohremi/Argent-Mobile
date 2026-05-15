@@ -1656,6 +1656,7 @@ function validateAnswerForPrompt(
       return;
     case 'choose-vault-card':
     case 'choose-supporter-card':
+    case 'choose-peeked-supporter':
       if (answer.kind !== 'card-chosen') throw new Error('validateAnswer: expected card-chosen');
       return;
     case 'choose-spell-level':

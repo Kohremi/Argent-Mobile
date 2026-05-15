@@ -3904,6 +3904,69 @@ registerEffect('base.vault.unbreakable-box', (ctx): EffectResult => {
 });
 
 /**
+ * Mystic Lantern (consumable, fast-action) — Look at the top 3 cards of
+ * the Supporter Deck. Gain one as a Secret Supporter. The other two are
+ * placed at the bottom of the Supporter Deck (no separate discard pile;
+ * per user guidance the deck simply cycles).
+ *
+ * Flow: first call presents a `choose-peeked-supporter` prompt with the
+ * top-3 ids; on resume, the chosen card is added to the player's
+ * personalDiscard as `secret-supporter`, and the remaining peeked ids
+ * are appended to the END of supporterDeck (bottom).
+ */
+registerEffect('base.vault.mystic-lantern', (ctx): EffectResult => {
+  if (!ctx.resumeAnswer) {
+    const top3 = ctx.state.supporterDeck.slice(0, 3);
+    if (top3.length === 0) return { kind: 'done', patch: {} };
+    return {
+      kind: 'pause',
+      pending: {
+        responderId: ctx.triggeringPlayerId,
+        prompt: {
+          kind: 'choose-peeked-supporter',
+          eligibleCardIds: [...top3],
+        },
+        resume: { effectId: 'base.vault.mystic-lantern', context: {} },
+        source: ctx.source,
+      },
+    };
+  }
+  if (ctx.resumeAnswer.kind !== 'card-chosen') {
+    throw new Error(
+      `mystic-lantern expected card-chosen, got ${ctx.resumeAnswer.kind}`,
+    );
+  }
+  const chosen = ctx.resumeAnswer.cardId;
+  // Re-peek the top 3 — should match the original peek since prompts
+  // block other deck-mutating actions.
+  const top3 = ctx.state.supporterDeck.slice(0, 3);
+  if (!top3.includes(chosen)) {
+    throw new Error('mystic-lantern: chosen card is not among the top 3');
+  }
+  const unchosen = top3.filter((id) => id !== chosen);
+  const remainingDeck = ctx.state.supporterDeck.slice(top3.length);
+  // Unchosen cards go to the bottom of the deck.
+  const newDeck = [...remainingDeck, ...unchosen];
+  return {
+    kind: 'done',
+    patch: {
+      supporterDeck: newDeck,
+      players: ctx.state.players.map((p) =>
+        p.id !== ctx.triggeringPlayerId
+          ? p
+          : {
+              ...p,
+              personalDiscard: [
+                ...p.personalDiscard,
+                { kind: 'secret-supporter' as const, cardId: chosen },
+              ],
+            },
+      ),
+    },
+  };
+});
+
+/**
  * The Contract (consumable, fast-action) — Gain 3 Research. Use this
  * Research on spells of a single chosen type. Research currently a TODO;
  * we surface the type-restriction note in the prompt label only.

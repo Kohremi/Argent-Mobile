@@ -754,6 +754,60 @@ function PromptControls({
         </div>
       );
 
+    case 'choose-peeked-supporter':
+      // The eligible cards aren't on the tableau (typically peeked off the
+      // top of the supporter deck) so the player needs to see their full
+      // text inline to pick. Render each as a small card-button.
+      return (
+        <div className="flex flex-wrap gap-2">
+          {prompt.eligibleCardIds.map((cid) => {
+            const card = findSupporterCard(state, cid);
+            if (!card) {
+              return (
+                <button
+                  key={cid}
+                  type="button"
+                  onClick={() => resolve({ kind: 'card-chosen', cardId: cid })}
+                  className="px-3 py-1.5 rounded bg-amber-500 text-slate-950 hover:bg-amber-400"
+                >
+                  {cid}
+                </button>
+              );
+            }
+            return (
+              <button
+                key={cid}
+                type="button"
+                onClick={() => resolve({ kind: 'card-chosen', cardId: cid })}
+                className="w-60 text-left rounded px-2 py-2 bg-slate-950 ring-2 ring-amber-400 hover:bg-amber-500/15 hover:ring-amber-300"
+              >
+                <div className="flex items-baseline gap-1.5 flex-wrap">
+                  <span className="font-medium text-slate-100">
+                    {card.name}
+                  </span>
+                  <span className="text-[10px] uppercase tracking-wide text-slate-500">
+                    {card.department}
+                  </span>
+                  <span className="text-[10px] uppercase tracking-wide text-slate-400">
+                    {card.timing}
+                  </span>
+                </div>
+                {card.title && (
+                  <div className="text-[10px] text-slate-500 italic mt-0.5">
+                    {card.title}
+                  </div>
+                )}
+                {card.description && (
+                  <div className="text-[11px] text-slate-300/90 mt-0.5">
+                    {card.description}
+                  </div>
+                )}
+              </button>
+            );
+          })}
+        </div>
+      );
+
     case 'choose-spell-level':
       return (
         <div className="flex flex-wrap gap-2">

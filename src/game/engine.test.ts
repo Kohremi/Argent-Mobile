@@ -3718,6 +3718,45 @@ describe('PLAY_VAULT_CARD', () => {
       spaceId: 'base.room.library.a.slot-1',
     });
   });
+
+  it('Mystic Lantern: peek top 3, gain one as Secret Supporter, others go to the bottom of the deck', () => {
+    let s = setupVaultPlay('base.vault.mystic-lantern');
+    // Lock the supporter deck order so we know exactly what gets peeked.
+    const lockedTop = [
+      'base.supporter.adelaide-chivers',
+      'base.supporter.arec-russel-zane',
+      'base.supporter.allys-mehrmus',
+    ];
+    const lockedRest = ['base.supporter.alumis', 'base.supporter.andros-duvalt'];
+    s = { ...s, supporterDeck: [...lockedTop, ...lockedRest] };
+    s = applyAction(s, {
+      type: 'PLAY_VAULT_CARD',
+      playerId: 'p1',
+      vaultCardId: 'base.vault.mystic-lantern',
+    });
+    // Prompt is choose-peeked-supporter with the top 3 ids.
+    const top = topPending(s);
+    expect(top.prompt.kind).toBe('choose-peeked-supporter');
+    if (top.prompt.kind === 'choose-peeked-supporter') {
+      expect(top.prompt.eligibleCardIds).toEqual(lockedTop);
+    }
+    // Pick the middle card.
+    const picked = 'base.supporter.arec-russel-zane';
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: top.id,
+      answer: { kind: 'card-chosen', cardId: picked },
+    });
+    // The picked card lands in the caster's personal discard as a
+    // secret-supporter; the other two go to the BOTTOM of the deck.
+    const alice = s.players.find((p) => p.id === 'p1');
+    expect(alice?.personalDiscard).toContainEqual({
+      kind: 'secret-supporter',
+      cardId: picked,
+    });
+    const unchosen = lockedTop.filter((id) => id !== picked);
+    expect(s.supporterDeck).toEqual([...lockedRest, ...unchosen]);
+  });
 });
 
 // ============================================================================

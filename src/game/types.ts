@@ -579,6 +579,14 @@ export type PendingPrompt =
   | { kind: 'choose-target-action-space'; eligibleSpaceIds: ActionSpaceId[] }
   | { kind: 'choose-vault-card'; eligibleCardIds: VaultCardId[] }
   | { kind: 'choose-supporter-card'; eligibleCardIds: SupporterCardId[] }
+  /**
+   * Picks one supporter card out of a small set the player has just peeked
+   * at — typically the top N of the Supporter Deck (Mystic Lantern). Same
+   * shape as `choose-supporter-card` but the UI shouldn't try to route the
+   * pick through the supporter tableau, because the eligible cards live
+   * outside it. The prompt panel renders full card details inline.
+   */
+  | { kind: 'choose-peeked-supporter'; eligibleCardIds: SupporterCardId[] }
   | {
       kind: 'choose-spell-level';
       spellId: SpellCardId;
