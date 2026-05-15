@@ -15,6 +15,7 @@ import {
   buildArsMagnaTargets,
   buildBanishTargets,
   buildBurnTargets,
+  buildMageShadowedEvent,
   buildNonSpellHarmfulTargets,
   buildReactionQueue,
   bumpInfluencePatch,
@@ -27,7 +28,6 @@ import {
   healMageToSpace,
   moveMageToSpace,
   placeOfficeMageAsShadow,
-  shadowMageInPlace,
   woundMage,
 } from './helpers';
 import type {
@@ -523,11 +523,10 @@ function applyReactionReposition(
     return updated;
   });
 
-  // All reaction repositions land the mage on the slot's BASE position
-  // (the original placement). For shadowing reactions (Phase Steppers /
-  // Invisibility Cloak) the occupant is flagged isShadowing=true so the
-  // mage's color ability is suppressed; non-shadowing reactions land it
-  // unflagged.
+  // Shadowing reactions (Phase Steppers / Invisibility Cloak) land the
+  // mage in the slot's SHADOW position with isShadowing=true; the base
+  // position is left untouched. Non-shadowing reactions (Shield Potion /
+  // Ancient Armor / Mystic Amulet) replace the base occupant unflagged.
   const occupancy: WorkerOccupancy = {
     mageId,
     ownerId,
@@ -536,7 +535,11 @@ function applyReactionReposition(
   const rooms = state.rooms.map((r) => ({
     ...r,
     actionSpaces: r.actionSpaces.map((s) =>
-      s.id !== destinationSpaceId ? s : { ...s, occupant: occupancy },
+      s.id !== destinationSpaceId
+        ? s
+        : asShadow
+          ? { ...s, shadowOccupant: occupancy }
+          : { ...s, occupant: occupancy },
     ),
   }));
 
@@ -1995,7 +1998,15 @@ registerEffect('base.supporter.letum-conspicere', (ctx): EffectResult => {
 });
 
 /** Rennel Pedrigor — Shadow an opponent's Mage. (Fast Action) */
+/**
+ * Rennel Pedrigor (Fast Action): pick an opponent's placed mage, then pick
+ * one of YOUR office mages to place in that slot's shadow position. The
+ * opponent's mage is unaffected; your shadow mage claims the slot's
+ * reward right after the opponent does (color ability suppressed).
+ */
 registerEffect('base.supporter.rennel-pedrigor', (ctx): EffectResult => {
+  const step = ctx.resumeContext?.['step'];
+
   if (!ctx.resumeAnswer) {
     const targets: string[] = [];
     for (const p of ctx.state.players) {
@@ -2016,32 +2027,95 @@ registerEffect('base.supporter.rennel-pedrigor', (ctx): EffectResult => {
       pending: {
         responderId: ctx.triggeringPlayerId,
         prompt: { kind: 'choose-target-mage', eligibleMageIds: targets },
-        resume: { effectId: 'base.supporter.rennel-pedrigor', context: {} },
+        resume: {
+          effectId: 'base.supporter.rennel-pedrigor',
+          context: { step: 'pick-shadow-mage' },
+        },
         source: ctx.source,
       },
     };
   }
-  if (ctx.resumeAnswer.kind !== 'mage-chosen') {
-    throw new Error(
-      `rennel-pedrigor expected mage-chosen, got ${ctx.resumeAnswer.kind}`,
+
+  if (step === 'pick-shadow-mage') {
+    if (ctx.resumeAnswer.kind !== 'mage-chosen') {
+      throw new Error(
+        `rennel-pedrigor pick-shadow-mage expected mage-chosen, got ${ctx.resumeAnswer.kind}`,
+      );
+    }
+    const targetMageId = ctx.resumeAnswer.mageId;
+    const targetMage = ctx.state.players
+      .flatMap((p) => p.mages)
+      .find((m) => m.id === targetMageId);
+    if (!targetMage || targetMage.location.kind !== 'action-space') {
+      throw new Error('rennel-pedrigor: target no longer on a slot');
+    }
+    const targetSpaceId = targetMage.location.spaceId;
+    const targetSpace = ctx.state.rooms
+      .flatMap((r) => r.actionSpaces)
+      .find((s) => s.id === targetSpaceId);
+    if (targetSpace?.shadowOccupant) {
+      return { kind: 'done', patch: {} };
+    }
+    const caster = ctx.state.players.find(
+      (p) => p.id === ctx.triggeringPlayerId,
     );
+    const officeMages =
+      caster?.mages
+        .filter((m) => m.location.kind === 'office' && !m.isWounded)
+        .map((m) => m.id) ?? [];
+    if (officeMages.length === 0) return { kind: 'done', patch: {} };
+    return {
+      kind: 'pause',
+      pending: {
+        responderId: ctx.triggeringPlayerId,
+        prompt: { kind: 'choose-target-mage', eligibleMageIds: officeMages },
+        resume: {
+          effectId: 'base.supporter.rennel-pedrigor',
+          context: { step: 'apply', targetMageId, targetSpaceId },
+        },
+        source: ctx.source,
+      },
+    };
   }
-  const shadowed = shadowMageInPlace(
-    ctx.state,
-    ctx.resumeAnswer.mageId,
-    ctx.triggeringPlayerId,
-  );
-  return {
-    kind: 'open-reaction',
-    patch: shadowed.patch,
-    window: {
-      triggerEvent: shadowed.triggerEvent,
-      pendingResponderIds: buildReactionQueue(ctx.state, ctx.triggeringPlayerId),
-      reactedPlayerIds: [],
-      afterResume: { effectId: 'base.system.noop', context: {} },
-      source: ctx.source,
-    },
-  };
+
+  if (step === 'apply') {
+    if (ctx.resumeAnswer.kind !== 'mage-chosen') {
+      throw new Error('rennel-pedrigor apply expected mage-chosen');
+    }
+    const targetMageId = ctx.resumeContext?.['targetMageId'];
+    const targetSpaceId = ctx.resumeContext?.['targetSpaceId'];
+    if (
+      typeof targetMageId !== 'string' ||
+      typeof targetSpaceId !== 'string'
+    ) {
+      throw new Error('rennel-pedrigor apply: missing context fields');
+    }
+    const placerMageId = ctx.resumeAnswer.mageId;
+    const patch = placeOfficeMageAsShadow(
+      ctx.state,
+      ctx.triggeringPlayerId,
+      placerMageId,
+      targetSpaceId,
+    );
+    const event = buildMageShadowedEvent(
+      { ...ctx.state, ...patch },
+      targetMageId,
+      ctx.triggeringPlayerId,
+    );
+    return {
+      kind: 'open-reaction',
+      patch,
+      window: {
+        triggerEvent: event,
+        pendingResponderIds: buildReactionQueue(ctx.state, ctx.triggeringPlayerId),
+        reactedPlayerIds: [],
+        afterResume: { effectId: 'base.system.noop', context: {} },
+        source: ctx.source,
+      },
+    };
+  }
+
+  throw new Error(`rennel-pedrigor unexpected step ${String(step)}`);
 });
 
 // ---------------------------------------------------------------------------
@@ -2731,7 +2805,17 @@ registerEffect('base.spell.strength-of-earth.l1', (ctx): EffectResult => {
 
 /** Xal Ezra — Paralocation: shadow an opponent's mage on its current slot.
  *  The slot remains occupied but the occupant is now flagged as shadowing. */
+/**
+ * Paralocation: pick an opponent's placed mage, then pick one of YOUR
+ * office mages to drop into that slot's shadow position. The opponent's
+ * mage is unaffected — it keeps the base slot and will still collect the
+ * reward at resolution; your shadow mage collects the same reward right
+ * after. Your shadow mage loses its color-based ability while shadowing.
+ */
 registerEffect('base.spell.paralocation.l1', (ctx): EffectResult => {
+  const step = ctx.resumeContext?.['step'];
+
+  // Step 1: pick the opponent target.
   if (!ctx.resumeAnswer) {
     const targets: string[] = [];
     for (const p of ctx.state.players) {
@@ -2754,32 +2838,101 @@ registerEffect('base.spell.paralocation.l1', (ctx): EffectResult => {
       pending: {
         responderId: ctx.triggeringPlayerId,
         prompt: { kind: 'choose-target-mage', eligibleMageIds: targets },
-        resume: { effectId: 'base.spell.paralocation.l1', context: {} },
+        resume: {
+          effectId: 'base.spell.paralocation.l1',
+          context: { step: 'pick-shadow-mage' },
+        },
         source: ctx.source,
       },
     };
   }
-  if (ctx.resumeAnswer.kind !== 'mage-chosen') {
-    throw new Error(
-      `paralocation expected mage-chosen, got ${ctx.resumeAnswer.kind}`,
+
+  // Step 2: pick one of YOUR office mages to place as shadow.
+  if (step === 'pick-shadow-mage') {
+    if (ctx.resumeAnswer.kind !== 'mage-chosen') {
+      throw new Error(
+        `paralocation pick-shadow-mage expected mage-chosen, got ${ctx.resumeAnswer.kind}`,
+      );
+    }
+    const targetMageId = ctx.resumeAnswer.mageId;
+    const targetMage = ctx.state.players
+      .flatMap((p) => p.mages)
+      .find((m) => m.id === targetMageId);
+    if (!targetMage || targetMage.location.kind !== 'action-space') {
+      throw new Error('paralocation: target no longer on a slot');
+    }
+    const targetSpaceId = targetMage.location.spaceId;
+    const targetSpace = ctx.state.rooms
+      .flatMap((r) => r.actionSpaces)
+      .find((s) => s.id === targetSpaceId);
+    if (targetSpace?.shadowOccupant) {
+      // Shadow slot already filled — fizzle.
+      return { kind: 'done', patch: {} };
+    }
+    const caster = ctx.state.players.find(
+      (p) => p.id === ctx.triggeringPlayerId,
     );
+    const officeMages =
+      caster?.mages
+        .filter((m) => m.location.kind === 'office' && !m.isWounded)
+        .map((m) => m.id) ?? [];
+    if (officeMages.length === 0) {
+      // Caster has no mage available — fizzle.
+      return { kind: 'done', patch: {} };
+    }
+    return {
+      kind: 'pause',
+      pending: {
+        responderId: ctx.triggeringPlayerId,
+        prompt: { kind: 'choose-target-mage', eligibleMageIds: officeMages },
+        resume: {
+          effectId: 'base.spell.paralocation.l1',
+          context: { step: 'apply', targetMageId, targetSpaceId },
+        },
+        source: ctx.source,
+      },
+    };
   }
-  const shadowed = shadowMageInPlace(
-    ctx.state,
-    ctx.resumeAnswer.mageId,
-    ctx.triggeringPlayerId,
-  );
-  return {
-    kind: 'open-reaction',
-    patch: shadowed.patch,
-    window: {
-      triggerEvent: shadowed.triggerEvent,
-      pendingResponderIds: buildReactionQueue(ctx.state, ctx.triggeringPlayerId),
-      reactedPlayerIds: [],
-      afterResume: { effectId: 'base.system.noop', context: {} },
-      source: ctx.source,
-    },
-  };
+
+  // Step 3: place the caster's mage in the shadow slot.
+  if (step === 'apply') {
+    if (ctx.resumeAnswer.kind !== 'mage-chosen') {
+      throw new Error('paralocation apply expected mage-chosen');
+    }
+    const targetMageId = ctx.resumeContext?.['targetMageId'];
+    const targetSpaceId = ctx.resumeContext?.['targetSpaceId'];
+    if (
+      typeof targetMageId !== 'string' ||
+      typeof targetSpaceId !== 'string'
+    ) {
+      throw new Error('paralocation apply: missing context fields');
+    }
+    const placerMageId = ctx.resumeAnswer.mageId;
+    const patch = placeOfficeMageAsShadow(
+      ctx.state,
+      ctx.triggeringPlayerId,
+      placerMageId,
+      targetSpaceId,
+    );
+    const event = buildMageShadowedEvent(
+      { ...ctx.state, ...patch },
+      targetMageId,
+      ctx.triggeringPlayerId,
+    );
+    return {
+      kind: 'open-reaction',
+      patch,
+      window: {
+        triggerEvent: event,
+        pendingResponderIds: buildReactionQueue(ctx.state, ctx.triggeringPlayerId),
+        reactedPlayerIds: [],
+        afterResume: { effectId: 'base.system.noop', context: {} },
+        source: ctx.source,
+      },
+    };
+  }
+
+  throw new Error(`paralocation unexpected step ${String(step)}`);
 });
 
 // ============================================================================

@@ -495,68 +495,33 @@ export function healMageToSpace(
 }
 
 /**
- * Flags the targeted placed mage as shadowing IN PLACE — it stays where it
- * is (base or shadow position) but its `isShadowing` flag becomes true,
- * suppressing its color-based ability and removing it from default
- * targeting. Used by Paralocation and Rennel Pedrigor.
- *
- * The original occupant is NOT moved or removed — the slot keeps its
- * existing base/shadow layout, just with an updated flag. Returns a
- * `mage-shadowed` trigger event so reaction windows (Mystic Amulet etc.)
- * can fire.
+ * Builds a `mage-shadowed` trigger event for the slot of `targetMageId`
+ * without mutating any state. Callers use this in conjunction with
+ * `placeOfficeMageAsShadow` to actually place the shadowing mage; the
+ * target itself is never moved or flagged — per the shadow-system rules,
+ * the original (base) mage is unaffected by being shadowed.
  */
-export function shadowMageInPlace(
+export function buildMageShadowedEvent(
   state: GameState,
   targetMageId: OwnedMageId,
   byPlayerId: PlayerId,
-): { patch: GameStatePatch; triggerEvent: ReactionTriggerEvent } {
+): ReactionTriggerEvent {
   const lookup = findMageOwner(state, targetMageId);
-  if (!lookup) throw new Error(`shadowMageInPlace: mage ${targetMageId} not found`);
+  if (!lookup) {
+    throw new Error(`buildMageShadowedEvent: mage ${targetMageId} not found`);
+  }
   const { player: owner, mage } = lookup;
   if (mage.location.kind !== 'action-space') {
-    throw new Error(`shadowMageInPlace: ${targetMageId} is not on a slot`);
+    throw new Error(
+      `buildMageShadowedEvent: ${targetMageId} is not on a slot`,
+    );
   }
-  const fromLookup = findMageSlotPosition(state, targetMageId);
-  if (!fromLookup) {
-    throw new Error(`shadowMageInPlace: ${targetMageId} not found in any slot`);
-  }
-  const spaceId = fromLookup.spaceId;
   return {
-    patch: {
-      players: state.players.map((p) =>
-        p.id !== owner.id
-          ? p
-          : {
-              ...p,
-              mages: p.mages.map((m) =>
-                m.id !== targetMageId ? m : { ...m, isShadowing: true },
-              ),
-            },
-      ),
-      rooms: state.rooms.map((r) => ({
-        ...r,
-        actionSpaces: r.actionSpaces.map((s) => {
-          if (s.id !== spaceId) return s;
-          if (fromLookup.position === 'base' && s.occupant) {
-            return { ...s, occupant: { ...s.occupant, isShadowing: true } };
-          }
-          if (fromLookup.position === 'shadow' && s.shadowOccupant) {
-            return {
-              ...s,
-              shadowOccupant: { ...s.shadowOccupant, isShadowing: true },
-            };
-          }
-          return s;
-        }),
-      })),
-    },
-    triggerEvent: {
-      kind: 'mage-shadowed',
-      mageId: targetMageId,
-      ownerId: owner.id,
-      byPlayerId,
-      spaceId,
-    },
+    kind: 'mage-shadowed',
+    mageId: targetMageId,
+    ownerId: owner.id,
+    byPlayerId,
+    spaceId: mage.location.spaceId,
   };
 }
 
