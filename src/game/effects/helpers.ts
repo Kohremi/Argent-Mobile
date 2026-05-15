@@ -19,6 +19,7 @@ import type {
   ReactionTriggerEvent,
   ResolutionSource,
   Room,
+  SupporterCard,
   SupporterCardId,
   VaultCard,
   VaultCardId,
@@ -525,6 +526,19 @@ export function lookupVaultCardDef(
   return null;
 }
 
+export function lookupSupporterCardDef(
+  state: GameState,
+  cardId: SupporterCardId,
+): SupporterCard | null {
+  for (const packId of state.activePackIds) {
+    const pack = getPack(packId);
+    if (!pack) continue;
+    const found = pack.supporters.find((s) => s.id === cardId);
+    if (found) return found;
+  }
+  return null;
+}
+
 export function findActionSpace(
   state: GameState,
   spaceId: ActionSpaceId,
@@ -618,7 +632,8 @@ export function applyVaultPurchase(
 
 /**
  * Returns vault tableau cards the given player can currently afford. Used to
- * filter the `choose-vault-card` prompt at the Vault room slot.
+ * filter the `choose-vault-card` prompt at "Gain a Buy" slots — the player
+ * must pay the card's gold cost, so insolvent options are filtered out.
  */
 export function affordableVaultCards(
   state: GameState,
@@ -693,6 +708,56 @@ export function applyGainMark(
  * patch that moves the card and pulls it from the tableau (no payment, like
  * vault drafts). Throws if the card isn't in the tableau.
  */
+/**
+ * Performs a "Swap N Gold for a {color} Mage from the supply" trade. Returns
+ * the patch on success, or `null` if any precondition fails (insufficient gold,
+ * empty pool of that color, or the player is already at the 2-per-color cap).
+ *
+ * The cap matches the DRAFT_MAGE rule in `handleDraftMage` — no player may
+ * own more than 2 of a single color, including leader color.
+ */
+export function applyGoldForMageSwap(
+  state: GameState,
+  playerId: PlayerId,
+  color: MageColor,
+  goldCost: number,
+): GameStatePatch | null {
+  const player = findPlayer(state, playerId);
+  if (!player) return null;
+  if (player.resources.gold < goldCost) return null;
+  const pool = state.mageDraftPool[color] ?? 0;
+  if (pool <= 0) return null;
+  const ownedOfColor = player.mages.filter((m) => m.color === color).length;
+  if (ownedOfColor >= 2) return null;
+  const seq = state.nextSequenceId;
+  return {
+    nextSequenceId: seq + 1,
+    mageDraftPool: { ...state.mageDraftPool, [color]: pool - 1 },
+    players: state.players.map((p) =>
+      p.id !== playerId
+        ? p
+        : {
+            ...p,
+            resources: {
+              ...p.resources,
+              gold: p.resources.gold - goldCost,
+            },
+            mages: [
+              ...p.mages,
+              {
+                id: `m-${seq}`,
+                cardId: MAGE_CARD_BY_COLOR[color],
+                color,
+                location: { kind: 'office' as const, playerId },
+                isShadowing: false,
+                isWounded: false,
+              },
+            ],
+          },
+    ),
+  };
+}
+
 export function applySupporterDraft(
   state: GameState,
   playerId: PlayerId,
@@ -701,11 +766,23 @@ export function applySupporterDraft(
   if (!state.supporterTableau.includes(cardId)) {
     throw new Error(`supporter draft: ${cardId} not in supporter tableau`);
   }
+  // Familiars (passive timing) can't be played as actions — they go straight
+  // to the discard pile, where they still count for endgame scoring.
+  const card = lookupSupporterCardDef(state, cardId);
+  const isPassive = card?.timing === 'passive';
   return {
     players: state.players.map((p) =>
       p.id !== playerId
         ? p
-        : { ...p, supporters: [...p.supporters, cardId] },
+        : isPassive
+          ? {
+              ...p,
+              personalDiscard: [
+                ...p.personalDiscard,
+                { kind: 'supporter' as const, cardId },
+              ],
+            }
+          : { ...p, supporters: [...p.supporters, cardId] },
     ),
     supporterTableau: state.supporterTableau.filter((c) => c !== cardId),
   };

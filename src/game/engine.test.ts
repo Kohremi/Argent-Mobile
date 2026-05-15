@@ -3781,31 +3781,38 @@ describe('Library A slot 2 (merit, 1 MB): INT + Research', () => {
   });
 });
 
-describe('Library A slot 3 (regular): Buy + Research', () => {
-  it('prompts to buy or skip, then spawns Research', () => {
+describe('Library A slot 3 (regular): Gain a Buy + Research', () => {
+  it('prompts Buy/Skip, then choose-vault-card (clickable tableau), then deducts gold and spawns Research', () => {
     let s = setupRoomSlotTest('Library', 'A', 'base.room.library.a.slot-3');
     s = setVaultTableau(s, ['base.vault.mana-elixir']); // 2g
     s = setGold(s, 'p1', 2);
     s = driveToResolution(s);
-    const buyPrompt = topPending(s);
-    expect(buyPrompt.prompt.kind).toBe('choose-from-options');
-    if (buyPrompt.prompt.kind === 'choose-from-options') {
-      const optionIds = buyPrompt.prompt.options.map((o) => o.id).sort();
-      expect(optionIds).toEqual([
-        'base.vault.mana-elixir',
+    const buyOrSkip = topPending(s);
+    expect(buyOrSkip.prompt.kind).toBe('choose-from-options');
+    if (buyOrSkip.prompt.kind === 'choose-from-options') {
+      expect(buyOrSkip.prompt.options.map((o) => o.id).sort()).toEqual([
+        'buy',
         'skip',
       ]);
     }
     s = applyAction(s, {
       type: 'RESOLVE_PENDING',
-      resolutionId: buyPrompt.id,
-      answer: {
-        kind: 'option-chosen',
-        optionId: 'base.vault.mana-elixir',
-        payload: {},
-      },
+      resolutionId: buyOrSkip.id,
+      answer: { kind: 'option-chosen', optionId: 'buy', payload: {} },
     });
-    // Buy applied; research prompt now on top.
+    const pickCard = topPending(s);
+    expect(pickCard.prompt.kind).toBe('choose-vault-card');
+    if (pickCard.prompt.kind === 'choose-vault-card') {
+      expect(pickCard.prompt.eligibleCardIds).toEqual([
+        'base.vault.mana-elixir',
+      ]);
+    }
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: pickCard.id,
+      answer: { kind: 'card-chosen', cardId: 'base.vault.mana-elixir' },
+    });
+    // Buy deducts gold; research prompt now on top.
     const alice = s.players.find((p) => p.id === 'p1');
     expect(alice?.resources.gold).toBe(0);
     expect(alice?.vaultCards).toHaveLength(1);
@@ -3813,7 +3820,39 @@ describe('Library A slot 3 (regular): Buy + Research', () => {
     expect(researchPrompt.prompt.kind).toBe('choose-from-options');
   });
 
+  it('Skip option routes straight to Research with no purchase', () => {
+    let s = setupRoomSlotTest('Library', 'A', 'base.room.library.a.slot-3');
+    s = setVaultTableau(s, ['base.vault.mana-elixir']); // 2g
+    s = setGold(s, 'p1', 2);
+    s = driveToResolution(s);
+    const buyOrSkip = topPending(s);
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: buyOrSkip.id,
+      answer: { kind: 'option-chosen', optionId: 'skip', payload: {} },
+    });
+    const alice = s.players.find((p) => p.id === 'p1');
+    expect(alice?.resources.gold).toBe(2);
+    expect(alice?.vaultCards).toHaveLength(0);
+    expect(topPending(s).prompt.kind).toBe('choose-from-options');
+  });
+
   it('skips straight to Research when nothing is affordable', () => {
+    let s = setupRoomSlotTest('Library', 'A', 'base.room.library.a.slot-3');
+    s = setVaultTableau(s, ['base.vault.mana-elixir']); // 2g
+    s = setGold(s, 'p1', 0); // Can't afford anything.
+    s = driveToResolution(s);
+    const top = topPending(s);
+    expect(top.prompt.kind).toBe('choose-from-options');
+    if (top.prompt.kind === 'choose-from-options') {
+      expect(top.prompt.options.map((o) => o.id).sort()).toEqual([
+        'discard',
+        'spend',
+      ]);
+    }
+  });
+
+  it('skips straight to Research when the vault tableau is empty', () => {
     let s = setupRoomSlotTest('Library', 'A', 'base.room.library.a.slot-3');
     s = setVaultTableau(s, []);
     s = driveToResolution(s);

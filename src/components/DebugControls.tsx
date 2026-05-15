@@ -25,6 +25,75 @@ import type {
   VaultCard,
 } from '../game/types';
 
+/**
+ * Direct-on-board selection driven by the top pending prompt. When set, the
+ * relevant panel highlights eligible items and dispatches RESOLVE_PENDING on
+ * click — replacing the menu of ID buttons that used to sit in the banner.
+ */
+type SelectionMode =
+  | { kind: 'mage'; eligibleIds: Set<string>; onSelect: (id: string) => void }
+  | {
+      kind: 'action-space';
+      eligibleIds: Set<string>;
+      onSelect: (id: string) => void;
+    }
+  | {
+      kind: 'vault-card';
+      eligibleIds: Set<string>;
+      onSelect: (id: string) => void;
+    }
+  | {
+      kind: 'supporter-card';
+      eligibleIds: Set<string>;
+      onSelect: (id: string) => void;
+    }
+  | { kind: 'voter'; eligibleIds: Set<string>; onSelect: (id: string) => void };
+
+function deriveSelectionMode(
+  pending: PendingResolution | undefined,
+  dispatch: (action: GameAction) => void,
+): SelectionMode | null {
+  if (!pending) return null;
+  const { prompt } = pending;
+  const resolve = (answer: ResolutionAnswer) => {
+    dispatch({ type: 'RESOLVE_PENDING', resolutionId: pending.id, answer });
+  };
+  switch (prompt.kind) {
+    case 'choose-target-mage':
+      return {
+        kind: 'mage',
+        eligibleIds: new Set(prompt.eligibleMageIds),
+        onSelect: (id) => resolve({ kind: 'mage-chosen', mageId: id }),
+      };
+    case 'choose-target-action-space':
+      return {
+        kind: 'action-space',
+        eligibleIds: new Set(prompt.eligibleSpaceIds),
+        onSelect: (id) => resolve({ kind: 'space-chosen', spaceId: id }),
+      };
+    case 'choose-vault-card':
+      return {
+        kind: 'vault-card',
+        eligibleIds: new Set(prompt.eligibleCardIds),
+        onSelect: (id) => resolve({ kind: 'card-chosen', cardId: id }),
+      };
+    case 'choose-supporter-card':
+      return {
+        kind: 'supporter-card',
+        eligibleIds: new Set(prompt.eligibleCardIds),
+        onSelect: (id) => resolve({ kind: 'card-chosen', cardId: id }),
+      };
+    case 'choose-voter':
+      return {
+        kind: 'voter',
+        eligibleIds: new Set(prompt.eligibleVoterIds),
+        onSelect: (id) => resolve({ kind: 'voter-chosen', voterId: id }),
+      };
+    default:
+      return null;
+  }
+}
+
 const INJECTABLE_MAGE_COLORS: MageColor[] = [
   'red',
   'blue',
@@ -393,6 +462,7 @@ export function DebugControls() {
   }
 
   const top = state.pendingResolutionStack[state.pendingResolutionStack.length - 1];
+  const selectionMode = deriveSelectionMode(top, dispatch);
   const responderId = top?.responderId;
   const errandsActiveId =
     state.phase.kind === 'errands'
@@ -448,7 +518,14 @@ export function DebugControls() {
         </div>
       </header>
 
-      {top && <PendingPanel state={state} pending={top} dispatch={dispatch} />}
+      {top && (
+        <PendingPanel
+          state={state}
+          pending={top}
+          dispatch={dispatch}
+          hasBoardSelection={selectionMode !== null}
+        />
+      )}
 
       {state.activeReactionWindows.length > 0 && (
         <ReactionWindowsPanel state={state} />
@@ -467,6 +544,7 @@ export function DebugControls() {
               patchState={patchState}
               selectedMageId={effectiveSelectedMage?.id ?? null}
               onSelectMage={setPlacementMageId}
+              selectionMode={selectionMode}
             />
           ))}
         </div>
@@ -477,6 +555,7 @@ export function DebugControls() {
         selectedMage={effectiveSelectedMage}
         dispatch={dispatch}
         onPlaced={() => setPlacementMageId(null)}
+        selectionMode={selectionMode}
       />
 
       <BellTowerPanel state={state} dispatch={dispatch} />
@@ -507,9 +586,9 @@ export function DebugControls() {
         </p>
       </section>
 
-      <TableauPanel state={state} />
+      <TableauPanel state={state} selectionMode={selectionMode} />
 
-      <VoterTableauPanel state={state} />
+      <VoterTableauPanel state={state} selectionMode={selectionMode} />
     </div>
   );
 }
@@ -536,10 +615,12 @@ function PendingPanel({
   state,
   pending,
   dispatch,
+  hasBoardSelection,
 }: {
   state: GameState;
   pending: PendingResolution;
   dispatch: (action: GameAction) => void;
+  hasBoardSelection: boolean;
 }) {
   const responder = state.players.find((p) => p.id === pending.responderId);
   const responderLabel = responder
@@ -561,12 +642,18 @@ function PendingPanel({
           </p>
         )}
       </div>
-      <PromptControls
-        prompt={pending.prompt}
-        state={state}
-        pending={pending}
-        dispatch={dispatch}
-      />
+      {hasBoardSelection ? (
+        <p className="text-xs text-amber-200/90 italic">
+          Click a highlighted target on the board to choose.
+        </p>
+      ) : (
+        <PromptControls
+          prompt={pending.prompt}
+          state={state}
+          pending={pending}
+          dispatch={dispatch}
+        />
+      )}
     </section>
   );
 }
@@ -826,6 +913,7 @@ function PlayerCard({
   patchState,
   selectedMageId,
   onSelectMage,
+  selectionMode,
 }: {
   state: GameState;
   player: Player;
@@ -834,7 +922,9 @@ function PlayerCard({
   patchState: (fn: (s: GameState) => GameState) => void;
   selectedMageId: string | null;
   onSelectMage: (id: string | null) => void;
+  selectionMode: SelectionMode | null;
 }) {
+  const mageMode = selectionMode?.kind === 'mage' ? selectionMode : null;
   const isErrandsActive =
     state.phase.kind === 'errands' &&
     state.players[state.phase.activePlayerIndex]?.id === player.id;
@@ -917,8 +1007,14 @@ function PlayerCard({
             const budgetOpen = colorIsPurple
               ? !fastActionUsed
               : !actionUsed;
-            const clickable = placeable && budgetOpen;
-            const isSelected = selectedMageId === m.id;
+            const mageTargetable = mageMode?.eligibleIds.has(m.id) ?? false;
+            // Prompt-driven targeting wins over placement selection: an
+            // active prompt blocks normal play anyway, and the eligibility
+            // filter already screens for the right mages.
+            const clickable = mageMode
+              ? mageTargetable
+              : placeable && budgetOpen;
+            const isSelected = !mageMode && selectedMageId === m.id;
             const dimReason = !inOffice
               ? m.location.kind === 'action-space'
                 ? 'on a slot'
@@ -939,21 +1035,33 @@ function PlayerCard({
                 key={m.id}
                 type="button"
                 disabled={!clickable}
-                onClick={() => onSelectMage(isSelected ? null : m.id)}
+                onClick={() => {
+                  if (mageMode) {
+                    mageMode.onSelect(m.id);
+                    return;
+                  }
+                  onSelectMage(isSelected ? null : m.id);
+                }}
                 title={
-                  clickable
-                    ? isSelected
-                      ? 'Selected — click again to deselect'
-                      : `Place this ${m.color} mage`
-                    : (dimReason ?? m.color)
+                  mageMode
+                    ? mageTargetable
+                      ? 'click to target this mage'
+                      : 'not a legal target'
+                    : clickable
+                      ? isSelected
+                        ? 'Selected — click again to deselect'
+                        : `Place this ${m.color} mage`
+                      : (dimReason ?? m.color)
                 }
                 className={clsx(
                   'rounded p-0.5 transition-all',
                   isSelected
                     ? 'ring-2 ring-amber-400 bg-amber-400/10'
-                    : clickable
-                      ? 'hover:ring-2 hover:ring-amber-400/40 hover:bg-slate-800'
-                      : 'opacity-40 cursor-not-allowed',
+                    : mageMode && mageTargetable
+                      ? 'ring-2 ring-amber-400 hover:bg-amber-400/20'
+                      : clickable
+                        ? 'hover:ring-2 hover:ring-amber-400/40 hover:bg-slate-800'
+                        : 'opacity-40 cursor-not-allowed',
                 )}
               >
                 <MageIcon color={m.color} size={28} />
@@ -1366,7 +1474,15 @@ const PLAYER_COLOR_BG: Record<string, string> = {
   orange: 'bg-orange-500',
 };
 
-function VoterTableauPanel({ state }: { state: GameState }) {
+function VoterTableauPanel({
+  state,
+  selectionMode,
+}: {
+  state: GameState;
+  selectionMode: SelectionMode | null;
+}) {
+  const voterMode =
+    selectionMode?.kind === 'voter' ? selectionMode : null;
   // Per-player peeked voters: lets the active player reveal a face-down
   // voter they've marked. Resets on page reload (intentional — it's a UI
   // memory aid, not authoritative game state).
@@ -1428,10 +1544,21 @@ function VoterTableauPanel({ state }: { state: GameState }) {
                 (activeId !== null &&
                   peekedFor(activeId).has(v.id) &&
                   playerHasMark(activeId, v.id));
+              const voterEligible =
+                voterMode?.eligibleIds.has(v.id) ?? false;
               return (
                 <tr
                   key={v.id}
-                  className="border-t border-slate-800 align-top"
+                  className={clsx(
+                    'border-t border-slate-800 align-top',
+                    voterMode && voterEligible && 'ring-2 ring-amber-400 cursor-pointer hover:bg-amber-400/10',
+                    voterMode && !voterEligible && 'opacity-50',
+                  )}
+                  onClick={
+                    voterMode && voterEligible
+                      ? () => voterMode.onSelect(v.id)
+                      : undefined
+                  }
                 >
                   <td className="px-2 py-1.5">
                     {revealedNow ? (
@@ -1520,7 +1647,17 @@ function VoterTableauPanel({ state }: { state: GameState }) {
   );
 }
 
-function TableauPanel({ state }: { state: GameState }) {
+function TableauPanel({
+  state,
+  selectionMode,
+}: {
+  state: GameState;
+  selectionMode: SelectionMode | null;
+}) {
+  const vaultMode =
+    selectionMode?.kind === 'vault-card' ? selectionMode : null;
+  const supporterMode =
+    selectionMode?.kind === 'supporter-card' ? selectionMode : null;
   return (
     <section className="rounded border border-slate-700 bg-slate-900 p-3">
       <h2 className="text-sm font-medium mb-2">Tableaus</h2>
@@ -1586,11 +1723,9 @@ function TableauPanel({ state }: { state: GameState }) {
               if (!card) {
                 return <li key={`${cid}-${i}`}>{cid}</li>;
               }
-              return (
-                <li
-                  key={`${cid}-${i}`}
-                  className="rounded bg-slate-950/40 px-2 py-1"
-                >
+              const eligible = vaultMode?.eligibleIds.has(cid) ?? false;
+              const body = (
+                <>
                   <div className="flex items-baseline gap-1.5 flex-wrap">
                     <span className="font-medium text-slate-200">
                       {card.name}
@@ -1611,6 +1746,30 @@ function TableauPanel({ state }: { state: GameState }) {
                       {card.description}
                     </div>
                   )}
+                </>
+              );
+              if (vaultMode && eligible) {
+                return (
+                  <li key={`${cid}-${i}`}>
+                    <button
+                      type="button"
+                      onClick={() => vaultMode.onSelect(cid)}
+                      className="w-full text-left rounded px-2 py-1 bg-slate-950/40 ring-2 ring-amber-400 hover:bg-amber-400/15 hover:ring-amber-300 cursor-pointer"
+                    >
+                      {body}
+                    </button>
+                  </li>
+                );
+              }
+              return (
+                <li
+                  key={`${cid}-${i}`}
+                  className={clsx(
+                    'rounded bg-slate-950/40 px-2 py-1',
+                    vaultMode && !eligible && 'opacity-50',
+                  )}
+                >
+                  {body}
                 </li>
               );
             })}
@@ -1629,11 +1788,9 @@ function TableauPanel({ state }: { state: GameState }) {
               if (!card) {
                 return <li key={`${cid}-${i}`}>{cid}</li>;
               }
-              return (
-                <li
-                  key={`${cid}-${i}`}
-                  className="rounded bg-slate-950/40 px-2 py-1"
-                >
+              const eligible = supporterMode?.eligibleIds.has(cid) ?? false;
+              const body = (
+                <>
                   <div className="flex items-baseline gap-1.5 flex-wrap">
                     <span className="font-medium text-slate-200">
                       {card.name}
@@ -1655,6 +1812,30 @@ function TableauPanel({ state }: { state: GameState }) {
                       {card.description}
                     </div>
                   )}
+                </>
+              );
+              if (supporterMode && eligible) {
+                return (
+                  <li key={`${cid}-${i}`}>
+                    <button
+                      type="button"
+                      onClick={() => supporterMode.onSelect(cid)}
+                      className="w-full text-left rounded px-2 py-1 bg-slate-950/40 ring-2 ring-amber-400 hover:bg-amber-400/15 hover:ring-amber-300 cursor-pointer"
+                    >
+                      {body}
+                    </button>
+                  </li>
+                );
+              }
+              return (
+                <li
+                  key={`${cid}-${i}`}
+                  className={clsx(
+                    'rounded bg-slate-950/40 px-2 py-1',
+                    supporterMode && !eligible && 'opacity-50',
+                  )}
+                >
+                  {body}
                 </li>
               );
             })}
@@ -2209,7 +2390,14 @@ function MageDraftPoolPanel({ state }: { state: GameState }) {
  * "move from infirmary" effects (Heal, Chain of Healing, Amelioration, Rheye
  * Cal's spell, etc.) will need to pick from this set.
  */
-function InfirmaryRoster({ state }: { state: GameState }) {
+function InfirmaryRoster({
+  state,
+  selectionMode,
+}: {
+  state: GameState;
+  selectionMode: SelectionMode | null;
+}) {
+  const mageMode = selectionMode?.kind === 'mage' ? selectionMode : null;
   const wounded: { mage: OwnedMage; ownerId: string; ownerName: string }[] = [];
   for (const p of state.players) {
     for (const m of p.mages) {
@@ -2225,18 +2413,42 @@ function InfirmaryRoster({ state }: { state: GameState }) {
   }
   return (
     <ul className="space-y-1">
-      {wounded.map(({ mage, ownerId, ownerName }) => (
-        <li
-          key={mage.id}
-          className="rounded bg-slate-950/40 px-1.5 py-1 text-[11px] leading-snug flex items-center gap-1.5"
-        >
-          <MageIcon color={mage.color} size={14} />
-          <span className="capitalize text-slate-200">{mage.color}</span>
-          <span className="text-slate-500">({mage.id.slice(-8)})</span>
-          <span className="text-slate-400">— {ownerName}</span>
-          <span className="text-slate-600 text-[10px]">{ownerId}</span>
-        </li>
-      ))}
+      {wounded.map(({ mage, ownerId, ownerName }) => {
+        const eligible = mageMode?.eligibleIds.has(mage.id) ?? false;
+        const body = (
+          <>
+            <MageIcon color={mage.color} size={14} />
+            <span className="capitalize text-slate-200">{mage.color}</span>
+            <span className="text-slate-500">({mage.id.slice(-8)})</span>
+            <span className="text-slate-400">— {ownerName}</span>
+            <span className="text-slate-600 text-[10px]">{ownerId}</span>
+          </>
+        );
+        if (mageMode && eligible) {
+          return (
+            <li key={mage.id}>
+              <button
+                type="button"
+                onClick={() => mageMode.onSelect(mage.id)}
+                className="w-full text-left rounded px-1.5 py-1 text-[11px] leading-snug bg-slate-950/40 ring-2 ring-amber-400 hover:bg-amber-400/20 cursor-pointer flex items-center gap-1.5"
+              >
+                {body}
+              </button>
+            </li>
+          );
+        }
+        return (
+          <li
+            key={mage.id}
+            className={clsx(
+              'rounded bg-slate-950/40 px-1.5 py-1 text-[11px] leading-snug flex items-center gap-1.5',
+              mageMode && !eligible && 'opacity-50',
+            )}
+          >
+            {body}
+          </li>
+        );
+      })}
     </ul>
   );
 }
@@ -2246,15 +2458,20 @@ function RoomsPanel({
   selectedMage,
   dispatch,
   onPlaced,
+  selectionMode,
 }: {
   state: GameState;
   selectedMage: OwnedMage | null;
   dispatch: (action: GameAction) => void;
   onPlaced: () => void;
+  selectionMode: SelectionMode | null;
 }) {
   const ownerOfSelected = selectedMage
     ? state.players.find((p) => p.mages.some((m) => m.id === selectedMage.id))
     : null;
+  const mageMode = selectionMode?.kind === 'mage' ? selectionMode : null;
+  const spaceMode =
+    selectionMode?.kind === 'action-space' ? selectionMode : null;
 
   return (
     <section>
@@ -2306,7 +2523,7 @@ function RoomsPanel({
                 </p>
               )}
               {room.cannotBePlacedInDirectly ? (
-                <InfirmaryRoster state={state} />
+                <InfirmaryRoster state={state} selectionMode={selectionMode} />
               ) : room.actionSpaces.length === 0 ? (
                 <p className="text-[10px] text-slate-500 italic">
                   no action spaces (or specials handled elsewhere)
@@ -2325,6 +2542,63 @@ function RoomsPanel({
                     const isArsMagna =
                       selectedMage !== null &&
                       isArsMagnaPlacement(state, selectedMage, s);
+                    const spaceEligible = spaceMode?.eligibleIds.has(s.id) ?? false;
+                    const occupantMageEligible =
+                      s.occupant !== null &&
+                      (mageMode?.eligibleIds.has(s.occupant.mageId) ?? false);
+                    const occupantBlock = s.occupant ? (
+                      <div
+                        className={clsx(
+                          'text-[10px]',
+                          s.occupant ? 'text-amber-300' : 'text-slate-500',
+                        )}
+                      >
+                        <span className="inline-flex items-center gap-1">
+                          occupied by{' '}
+                          {occupantMageEligible && mageMode ? (
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                mageMode.onSelect(s.occupant!.mageId);
+                              }}
+                              className="inline-flex items-center gap-1 rounded ring-2 ring-amber-400 hover:bg-amber-400/20 px-1 py-0.5"
+                              title="click to target this mage"
+                            >
+                              <MageIcon
+                                color={
+                                  state.players
+                                    .find((p) => p.id === s.occupant?.ownerId)
+                                    ?.mages.find(
+                                      (m) => m.id === s.occupant?.mageId,
+                                    )?.color ?? 'off-white'
+                                }
+                                size={12}
+                              />
+                              {s.occupant.ownerId}
+                              {s.occupant.isShadowing ? ' (shadow)' : ''}
+                            </button>
+                          ) : (
+                            <>
+                              <MageIcon
+                                color={
+                                  state.players
+                                    .find((p) => p.id === s.occupant?.ownerId)
+                                    ?.mages.find(
+                                      (m) => m.id === s.occupant?.mageId,
+                                    )?.color ?? 'off-white'
+                                }
+                                size={12}
+                              />
+                              {s.occupant.ownerId}
+                              {s.occupant.isShadowing ? ' (shadow)' : ''}
+                            </>
+                          )}
+                        </span>
+                      </div>
+                    ) : (
+                      <div className="text-[10px] text-slate-500">empty</div>
+                    );
                     const slotBody = (
                       <>
                         <div className="flex items-baseline gap-2">
@@ -2350,34 +2624,25 @@ function RoomsPanel({
                         {s.description && (
                           <div className="text-slate-300/90">{s.description}</div>
                         )}
-                        <div
-                          className={clsx(
-                            'text-[10px]',
-                            s.occupant ? 'text-amber-300' : 'text-slate-500',
-                          )}
-                        >
-                          {s.occupant ? (
-                            <span className="inline-flex items-center gap-1">
-                              occupied by{' '}
-                              <MageIcon
-                                color={
-                                  state.players
-                                    .find((p) => p.id === s.occupant?.ownerId)
-                                    ?.mages.find(
-                                      (m) => m.id === s.occupant?.mageId,
-                                    )?.color ?? 'off-white'
-                                }
-                                size={12}
-                              />
-                              {s.occupant.ownerId}
-                              {s.occupant.isShadowing ? ' (shadow)' : ''}
-                            </span>
-                          ) : (
-                            'empty'
-                          )}
-                        </div>
+                        {occupantBlock}
                       </>
                     );
+                    // Prompt-driven slot click takes priority over the
+                    // PLACE_WORKER two-step (a prompt blocks normal play
+                    // anyway, so selectedMage would be null here).
+                    if (spaceMode && spaceEligible) {
+                      return (
+                        <li key={s.id}>
+                          <button
+                            type="button"
+                            onClick={() => spaceMode.onSelect(s.id)}
+                            className="w-full text-left text-[11px] leading-snug rounded px-1.5 py-1 bg-slate-950/40 text-slate-300 ring-2 ring-amber-400 hover:bg-amber-400/15 hover:ring-amber-300 cursor-pointer"
+                          >
+                            {slotBody}
+                          </button>
+                        </li>
+                      );
+                    }
                     if (isPlaceable && selectedMage) {
                       return (
                         <li key={s.id}>
@@ -2425,6 +2690,7 @@ function RoomsPanel({
                             ? 'bg-amber-400/10 text-amber-200'
                             : 'bg-slate-950/40 text-slate-300',
                           selectedMage && !isPlaceable && !s.occupant && 'opacity-50',
+                          spaceMode && !spaceEligible && 'opacity-50',
                         )}
                       >
                         {slotBody}

@@ -5,6 +5,7 @@ import { getEffect, registerEffect } from './registry';
 import {
   affordableVaultCards,
   applyGainMark,
+  applyGoldForMageSwap,
   applyInfirmaryBonusPatch,
   applySecretSupporterDraw,
   applySupporterDraft,
@@ -34,6 +35,7 @@ import type {
   EffectResult,
   GameState,
   GameStatePatch,
+  MageColor,
   OwnedMage,
   OwnedMageId,
   PendingResolutionInput,
@@ -106,12 +108,23 @@ registerEffect('base.room.library-a.slot-2', (ctx: EffectContext): EffectResult 
   throw new Error('library-a.slot-2 should not be re-invoked (research handles its own resume)');
 });
 
-/** Slot 3 (regular): Draft a Vault Card AND Gain 1 Research. */
+/**
+ * Slot 3 (regular): Gain a Buy AND Gain 1 Research.
+ *
+ * "Gain a Buy" = the player MAY purchase a vault card at its gold cost
+ * (unlike "Draft", which is free). Flow:
+ *   1. If no affordable card → skip Buy, go to Research.
+ *   2. Otherwise prompt Buy/Skip (small in-banner choice).
+ *   3. On Buy → `choose-vault-card` (clickable tableau, filtered to
+ *      affordable). On card-chosen → applyVaultPurchase + Research.
+ *   4. On Skip → Research only.
+ */
 registerEffect('base.room.library-a.slot-3', (ctx: EffectContext): EffectResult => {
+  const step = ctx.resumeContext?.['step'];
   if (!ctx.resumeAnswer) {
     const affordable = affordableVaultCards(ctx.state, ctx.triggeringPlayerId);
     if (affordable.length === 0) {
-      // No vault card is affordable to draft — skip straight to the research step.
+      // Nothing affordable — skip Buy entirely, go to Research.
       return {
         kind: 'pause',
         pending: spawnResearchPrompt(ctx.triggeringPlayerId, ctx.source),
@@ -124,38 +137,70 @@ registerEffect('base.room.library-a.slot-3', (ctx: EffectContext): EffectResult 
         prompt: {
           kind: 'choose-from-options',
           options: [
-            { id: 'skip', label: 'Skip the Draft', payload: {} },
-            ...affordable.map((cid) => ({
-              id: cid,
-              label: `Draft ${cid}`,
-              payload: {},
-            })),
+            { id: 'buy', label: 'Gain a Buy', payload: {} },
+            { id: 'skip', label: 'Skip the Buy', payload: {} },
           ],
         },
         resume: {
           effectId: 'base.room.library-a.slot-3',
-          context: { step: 'after-buy' },
+          context: { step: 'buy-or-skip' },
         },
         source: ctx.source,
       },
     };
   }
-  const step = ctx.resumeContext?.['step'];
-  if (step === 'after-buy') {
+  if (step === 'buy-or-skip') {
     if (ctx.resumeAnswer.kind !== 'option-chosen') {
-      throw new Error('library-a.slot-3 after-buy expected option-chosen');
+      throw new Error('library-a.slot-3 buy-or-skip expected option-chosen');
     }
-    let working = ctx.state;
-    if (ctx.resumeAnswer.optionId !== 'skip') {
-      working = {
-        ...working,
-        ...applyVaultPurchase(
-          working,
-          ctx.triggeringPlayerId,
-          ctx.resumeAnswer.optionId,
-        ),
+    if (ctx.resumeAnswer.optionId === 'skip') {
+      return {
+        kind: 'pause',
+        pending: spawnResearchPrompt(ctx.triggeringPlayerId, ctx.source),
       };
     }
+    if (ctx.resumeAnswer.optionId !== 'buy') {
+      throw new Error(
+        `library-a.slot-3 buy-or-skip unknown option: ${ctx.resumeAnswer.optionId}`,
+      );
+    }
+    const affordable = affordableVaultCards(ctx.state, ctx.triggeringPlayerId);
+    if (affordable.length === 0) {
+      // Affordability could shift between prompts (reactions, etc.); guard
+      // by routing straight to research.
+      return {
+        kind: 'pause',
+        pending: spawnResearchPrompt(ctx.triggeringPlayerId, ctx.source),
+      };
+    }
+    return {
+      kind: 'pause',
+      pending: {
+        responderId: ctx.triggeringPlayerId,
+        prompt: {
+          kind: 'choose-vault-card',
+          eligibleCardIds: affordable,
+        },
+        resume: {
+          effectId: 'base.room.library-a.slot-3',
+          context: { step: 'pick-card' },
+        },
+        source: ctx.source,
+      },
+    };
+  }
+  if (step === 'pick-card') {
+    if (ctx.resumeAnswer.kind !== 'card-chosen') {
+      throw new Error('library-a.slot-3 pick-card expected card-chosen');
+    }
+    const working = {
+      ...ctx.state,
+      ...applyVaultPurchase(
+        ctx.state,
+        ctx.triggeringPlayerId,
+        ctx.resumeAnswer.cardId,
+      ),
+    };
     return {
       kind: 'pause',
       patch: { players: working.players, vaultTableau: working.vaultTableau },
@@ -1441,6 +1486,432 @@ registerEffect(
     );
   },
 );
+
+// ---------------------------------------------------------------------------
+// Multi-grant loop helpers (Gain N Marks, Gain N Research).
+//
+// Each loop is driven by the calling effect re-invoking itself with a
+// {remaining} resume context. Apply-this-tick logic lives in the helper so
+// callers stay declarative.
+// ---------------------------------------------------------------------------
+
+function marksLoop(
+  ctx: EffectContext,
+  total: number,
+  selfEffectId: string,
+): EffectResult {
+  const remaining =
+    (ctx.resumeContext?.['remaining'] as number | undefined) ?? total;
+  // If we arrived back here with a voter chosen, apply it BEFORE deciding
+  // whether to ask for the next mark.
+  let working = ctx.state;
+  let appliedRemaining = remaining;
+  if (ctx.resumeAnswer?.kind === 'voter-chosen') {
+    working = {
+      ...working,
+      ...applyGainMark(working, ctx.triggeringPlayerId, ctx.resumeAnswer.voterId),
+    };
+    appliedRemaining = remaining - 1;
+  }
+  if (appliedRemaining <= 0) {
+    return { kind: 'done', patch: { players: working.players } };
+  }
+  const prompt = spawnGainMarkPrompt(working, ctx.triggeringPlayerId, ctx.source);
+  if (prompt === null) {
+    // No more eligible voters — emit what we already applied and stop.
+    return { kind: 'done', patch: { players: working.players } };
+  }
+  return {
+    kind: 'pause',
+    patch: { players: working.players },
+    pending: {
+      ...prompt,
+      resume: {
+        effectId: selfEffectId,
+        context: { remaining: appliedRemaining },
+      },
+    },
+  };
+}
+
+function researchLoop(
+  ctx: EffectContext,
+  total: number,
+  selfEffectId: string,
+  restriction?: string,
+): EffectResult {
+  const remaining =
+    (ctx.resumeContext?.['remaining'] as number | undefined) ?? total;
+  // Spend / discard semantics are a TODO at the system level; for now we
+  // record the choice and move on.
+  let nextRemaining = remaining;
+  if (ctx.resumeAnswer?.kind === 'option-chosen') {
+    nextRemaining = remaining - 1;
+  }
+  if (nextRemaining <= 0) {
+    return { kind: 'done', patch: {} };
+  }
+  const indexLabel = `${total - nextRemaining + 1} of ${total}`;
+  const restrictNote = restriction ? ` (restricted: ${restriction})` : '';
+  return {
+    kind: 'pause',
+    pending: {
+      responderId: ctx.triggeringPlayerId,
+      prompt: {
+        kind: 'choose-from-options',
+        options: [
+          {
+            id: 'spend',
+            label: `Spend 1 Research (${indexLabel})${restrictNote} (TODO)`,
+            payload: {},
+          },
+          {
+            id: 'discard',
+            label: `Discard 1 Research (${indexLabel})`,
+            payload: {},
+          },
+        ],
+      },
+      resume: {
+        effectId: selfEffectId,
+        context: { remaining: nextRemaining },
+      },
+      source: ctx.source,
+    },
+  };
+}
+
+/** Alumis — Gain 2 Marks. */
+registerEffect('base.supporter.alumis', (ctx): EffectResult =>
+  marksLoop(ctx, 2, 'base.supporter.alumis'),
+);
+
+/** Rixia Van Sorrel — Gain 1 Research. */
+registerEffect('base.supporter.rixia-van-sorrel', (ctx): EffectResult =>
+  researchLoop(ctx, 1, 'base.supporter.rixia-van-sorrel'),
+);
+
+/** Welsie Acktern — Gain 2 Research. */
+registerEffect('base.supporter.welsie-acktern', (ctx): EffectResult =>
+  researchLoop(ctx, 2, 'base.supporter.welsie-acktern'),
+);
+
+/** Batrov Wargrave — Gain 3 Research. */
+registerEffect('base.supporter.batrov-wargrave', (ctx): EffectResult =>
+  researchLoop(ctx, 3, 'base.supporter.batrov-wargrave'),
+);
+
+/** Adelaide Chivers — Gain 2 Research, Planar (Purple) Spells only. */
+registerEffect('base.supporter.adelaide-chivers', (ctx): EffectResult =>
+  researchLoop(
+    ctx,
+    2,
+    'base.supporter.adelaide-chivers',
+    'Planar Studies (Purple) Spells only',
+  ),
+);
+
+/** Jaimes Kalin — Gain 2 Research, Natural Magick (Green) Spells only. */
+registerEffect('base.supporter.jaimes-kalin', (ctx): EffectResult =>
+  researchLoop(
+    ctx,
+    2,
+    'base.supporter.jaimes-kalin',
+    'Natural Magick (Green) Spells only',
+  ),
+);
+
+/** Jance Eylon — Gain 2 Research, Mysticism (Grey) Spells only. */
+registerEffect('base.supporter.jance-eylon', (ctx): EffectResult =>
+  researchLoop(
+    ctx,
+    2,
+    'base.supporter.jance-eylon',
+    'Mysticism (Grey) Spells only',
+  ),
+);
+
+/** Kas Karrowary — Gain 2 Research, Divinity (Blue) Spells only. */
+registerEffect('base.supporter.kas-karrowary', (ctx): EffectResult =>
+  researchLoop(
+    ctx,
+    2,
+    'base.supporter.kas-karrowary',
+    'Divinity (Blue) Spells only',
+  ),
+);
+
+/** Vellimoor Cantz — Gain 2 Research, Sorcery (Red) Spells only. */
+registerEffect('base.supporter.vellimoor-cantz', (ctx): EffectResult =>
+  researchLoop(
+    ctx,
+    2,
+    'base.supporter.vellimoor-cantz',
+    'Sorcery (Red) Spells only',
+  ),
+);
+
+// ---------------------------------------------------------------------------
+// Mage-manipulation supporters — direct analogs of the leader spells, with
+// the same eligibility filters (green-immune; opposing-blue exempt only for
+// spells, but supporter cards are still exemption-aware because the helpers
+// were originally written for spells — confirm with the rulebook later if
+// the supporter cards should ignore blue immunity).
+// ---------------------------------------------------------------------------
+
+/** Andros DuValt — Banish a Mage. (Fast Action) */
+registerEffect('base.supporter.andros-duvalt', (ctx): EffectResult => {
+  if (!ctx.resumeAnswer) {
+    const targets = buildBanishTargets(ctx.state, ctx.triggeringPlayerId);
+    if (targets.length === 0) return { kind: 'done', patch: {} };
+    return {
+      kind: 'pause',
+      pending: {
+        responderId: ctx.triggeringPlayerId,
+        prompt: { kind: 'choose-target-mage', eligibleMageIds: targets },
+        resume: { effectId: 'base.supporter.andros-duvalt', context: {} },
+        source: ctx.source,
+      },
+    };
+  }
+  if (ctx.resumeAnswer.kind !== 'mage-chosen') {
+    throw new Error(
+      `andros-duvalt expected mage-chosen, got ${ctx.resumeAnswer.kind}`,
+    );
+  }
+  const banished = banishMage(
+    ctx.state,
+    ctx.resumeAnswer.mageId,
+    ctx.triggeringPlayerId,
+  );
+  return {
+    kind: 'open-reaction',
+    patch: banished.patch,
+    window: {
+      triggerEvent: banished.triggerEvent,
+      pendingResponderIds: buildReactionQueue(ctx.state, ctx.triggeringPlayerId),
+      reactedPlayerIds: [],
+      afterResume: { effectId: 'base.system.noop', context: {} },
+      source: ctx.source,
+    },
+  };
+});
+
+/** Letum Conspicere — Wound a Mage. (Fast Action) */
+registerEffect('base.supporter.letum-conspicere', (ctx): EffectResult => {
+  if (!ctx.resumeAnswer) {
+    const targets = buildBurnTargets(ctx.state, ctx.triggeringPlayerId);
+    if (targets.length === 0) return { kind: 'done', patch: {} };
+    return {
+      kind: 'pause',
+      pending: {
+        responderId: ctx.triggeringPlayerId,
+        prompt: { kind: 'choose-target-mage', eligibleMageIds: targets },
+        resume: { effectId: 'base.supporter.letum-conspicere', context: {} },
+        source: ctx.source,
+      },
+    };
+  }
+  if (ctx.resumeAnswer.kind !== 'mage-chosen') {
+    throw new Error(
+      `letum-conspicere expected mage-chosen, got ${ctx.resumeAnswer.kind}`,
+    );
+  }
+  const wound = woundMage(
+    ctx.state,
+    ctx.resumeAnswer.mageId,
+    ctx.triggeringPlayerId,
+  );
+  return {
+    kind: 'open-reaction',
+    patch: wound.patch,
+    window: {
+      triggerEvent: wound.triggerEvent,
+      pendingResponderIds: buildReactionQueue(ctx.state, ctx.triggeringPlayerId),
+      reactedPlayerIds: [],
+      afterResume: { effectId: 'base.system.noop', context: {} },
+      source: ctx.source,
+    },
+  };
+});
+
+/** Rennel Pedrigor — Shadow an opponent's Mage. (Fast Action) */
+registerEffect('base.supporter.rennel-pedrigor', (ctx): EffectResult => {
+  if (!ctx.resumeAnswer) {
+    const targets: string[] = [];
+    for (const p of ctx.state.players) {
+      if (p.id === ctx.triggeringPlayerId) continue;
+      for (const m of p.mages) {
+        if (
+          m.location.kind === 'action-space' &&
+          !m.isWounded &&
+          !m.isShadowing
+        ) {
+          targets.push(m.id);
+        }
+      }
+    }
+    if (targets.length === 0) return { kind: 'done', patch: {} };
+    return {
+      kind: 'pause',
+      pending: {
+        responderId: ctx.triggeringPlayerId,
+        prompt: { kind: 'choose-target-mage', eligibleMageIds: targets },
+        resume: { effectId: 'base.supporter.rennel-pedrigor', context: {} },
+        source: ctx.source,
+      },
+    };
+  }
+  if (ctx.resumeAnswer.kind !== 'mage-chosen') {
+    throw new Error(
+      `rennel-pedrigor expected mage-chosen, got ${ctx.resumeAnswer.kind}`,
+    );
+  }
+  return {
+    kind: 'done',
+    patch: shadowMageInPlace(ctx.state, ctx.resumeAnswer.mageId),
+  };
+});
+
+// ---------------------------------------------------------------------------
+// One-shot Gold→Mage swap supporters. Each fizzles silently if the player
+// can't pay 3 Gold, the supply for that color is empty, or the player is
+// already at the 2-per-color cap.
+// ---------------------------------------------------------------------------
+
+function goldForMageSupporter(
+  ctx: EffectContext,
+  color: MageColor,
+): EffectResult {
+  const patch = applyGoldForMageSwap(
+    ctx.state,
+    ctx.triggeringPlayerId,
+    color,
+    3,
+  );
+  if (patch === null) return { kind: 'done', patch: {} };
+  return { kind: 'done', patch };
+}
+
+/** Arec Russel Zane — Swap 3 Gold for a Sorcery (Red) Mage. */
+registerEffect('base.supporter.arec-russel-zane', (ctx): EffectResult =>
+  goldForMageSupporter(ctx, 'red'),
+);
+
+/** Kavri Shi Shorec — Swap 3 Gold for a Divinity (Blue) Mage. */
+registerEffect('base.supporter.kavri-shi-shorec', (ctx): EffectResult =>
+  goldForMageSupporter(ctx, 'blue'),
+);
+
+/** Lesandra Machan — Swap 3 Gold for a Mysticism (Grey) Mage. */
+registerEffect('base.supporter.lesandra-machan', (ctx): EffectResult =>
+  goldForMageSupporter(ctx, 'grey'),
+);
+
+/** Pendros Schalla — Swap 3 Gold for a Natural Magick (Green) Mage. */
+registerEffect('base.supporter.pendros-schalla', (ctx): EffectResult =>
+  goldForMageSupporter(ctx, 'green'),
+);
+
+/** Wilhelm Barts — Swap 3 Gold for a Planar Studies (Purple) Mage. */
+registerEffect('base.supporter.wilhelm-barts', (ctx): EffectResult =>
+  goldForMageSupporter(ctx, 'purple'),
+);
+
+/**
+ * Yinsei Arlington — Move a Mage into another slot in the same room.
+ * Two-step: pick mage → pick destination in same room.
+ */
+registerEffect('base.supporter.yinsei-arlington', (ctx): EffectResult => {
+  const step = ctx.resumeContext?.['step'];
+  if (!ctx.resumeAnswer) {
+    const targets: string[] = [];
+    for (const p of ctx.state.players) {
+      for (const m of p.mages) {
+        if (m.location.kind === 'action-space' && !m.isWounded) {
+          targets.push(m.id);
+        }
+      }
+    }
+    if (targets.length === 0) return { kind: 'done', patch: {} };
+    return {
+      kind: 'pause',
+      pending: {
+        responderId: ctx.triggeringPlayerId,
+        prompt: { kind: 'choose-target-mage', eligibleMageIds: targets },
+        resume: {
+          effectId: 'base.supporter.yinsei-arlington',
+          context: { step: 'pick-slot' },
+        },
+        source: ctx.source,
+      },
+    };
+  }
+  if (step === 'pick-slot') {
+    if (ctx.resumeAnswer.kind !== 'mage-chosen') {
+      throw new Error('yinsei-arlington pick-slot expected mage-chosen');
+    }
+    const targetMageId = ctx.resumeAnswer.mageId;
+    const targetMage = ctx.state.players
+      .flatMap((p) => p.mages)
+      .find((m) => m.id === targetMageId);
+    if (!targetMage || targetMage.location.kind !== 'action-space') {
+      throw new Error('yinsei-arlington: target is no longer on a slot');
+    }
+    const fromSpaceId = targetMage.location.spaceId;
+    const room = findRoomBySpaceId(ctx.state, fromSpaceId);
+    if (!room) throw new Error('yinsei-arlington: room for target not found');
+    const openSlots = room.actionSpaces
+      .filter((s) => !s.occupant && s.id !== fromSpaceId)
+      .map((s) => s.id);
+    if (openSlots.length === 0) return { kind: 'done', patch: {} };
+    return {
+      kind: 'pause',
+      pending: {
+        responderId: ctx.triggeringPlayerId,
+        prompt: {
+          kind: 'choose-target-action-space',
+          eligibleSpaceIds: openSlots,
+        },
+        resume: {
+          effectId: 'base.supporter.yinsei-arlington',
+          context: { step: 'apply', targetMageId },
+        },
+        source: ctx.source,
+      },
+    };
+  }
+  if (step === 'apply') {
+    if (ctx.resumeAnswer.kind !== 'space-chosen') {
+      throw new Error('yinsei-arlington apply expected space-chosen');
+    }
+    const targetMageId = ctx.resumeContext?.['targetMageId'];
+    if (typeof targetMageId !== 'string') {
+      throw new Error('yinsei-arlington apply: missing targetMageId');
+    }
+    const moved = moveMageToSpace(
+      ctx.state,
+      targetMageId,
+      ctx.resumeAnswer.spaceId,
+      ctx.triggeringPlayerId,
+    );
+    return {
+      kind: 'open-reaction',
+      patch: moved.patch,
+      window: {
+        triggerEvent: moved.triggerEvent,
+        pendingResponderIds: buildReactionQueue(
+          ctx.state,
+          ctx.triggeringPlayerId,
+        ),
+        reactedPlayerIds: [],
+        afterResume: { effectId: 'base.system.noop', context: {} },
+        source: ctx.source,
+      },
+    };
+  }
+  throw new Error(`yinsei-arlington unexpected step ${String(step)}`);
+});
 
 // ============================================================================
 // System effects shared by multiple spells / abilities.

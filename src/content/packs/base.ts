@@ -1034,7 +1034,7 @@ const supporters: SupporterCard[] = [
     timing: 'action',
     effectId: 'base.supporter.jaimes-kalin',
     description:
-      'Gain 2 Research. Use this research only on Nature (Green) spells.',
+      'Gain 2 Research. Use this research only on Natural Magick (Green) Spells.',
   },
   {
     id: 'base.supporter.jance-eylon',
@@ -1157,7 +1157,7 @@ const supporters: SupporterCard[] = [
     department: 'natural-magick',
     timing: 'action',
     effectId: 'base.supporter.pendros-schalla',
-    description: 'Swap 3 Gold for a Natural (Green) Mage from the supply.',
+    description: 'Swap 3 Gold for a Natural Magick (Green) Mage from the supply.',
   },
   {
     id: 'base.supporter.quan-gon-kall',
@@ -1460,7 +1460,7 @@ const councilChamberB: Room = {
 // Library Side A — per the room file:
 //   Slot 1 (merit, 1 MB): Gain 1 WIS AND Draft a Vault Card
 //   Slot 2 (merit, 1 MB): Gain 1 INT AND gain 1 Research
-//   Slot 3 (regular):     Draft a Vault Card AND Gain 1 Research
+//   Slot 3 (regular):     Gain a Buy AND Gain 1 Research
 //   Slot 4 (regular):     Choose 1 of: 1 INT / 1 WIS / 1 Research
 
 const librarySlot1: ActionSpace = {
@@ -1492,7 +1492,7 @@ const librarySlot3: ActionSpace = {
     index: 2,
     effectId: 'base.room.library-a.slot-3',
   }),
-  description: 'Draft a Vault Card and Gain a Research.',
+  description: 'Gain a Buy and Gain 1 Research.',
 };
 
 const librarySlot4: ActionSpace = {
