@@ -2995,6 +2995,57 @@ describe('PLAY_VAULT_CARD', () => {
       'base.vault.spirits',
     ]);
   });
+
+  it('Mana Elixir: next spell costs 0 mana, flag clears after use', () => {
+    let s = setupVaultPlay('base.vault.mana-elixir');
+    // Alice owns Burn (1 mana cost L1) and zero mana — she normally can't cast.
+    s = addMage(s, 'p1', {
+      id: 'alice-mage-1',
+      cardId: 'base.mage.divinity',
+      color: 'blue',
+    });
+    s = addOwnedSpell(s, 'p1', 'base.spell.burn');
+    // Play Mana Elixir (fast-action). Flag should set.
+    s = applyAction(s, {
+      type: 'PLAY_VAULT_CARD',
+      playerId: 'p1',
+      vaultCardId: 'base.vault.mana-elixir',
+    });
+    let alice = s.players.find((p) => p.id === 'p1');
+    expect(alice?.nextSpellFreeMana).toBe(true);
+    expect(alice?.resources.mana).toBe(0);
+    // Cast Burn with 0 mana — should succeed thanks to the flag.
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.burn',
+      level: 1,
+    });
+    alice = s.players.find((p) => p.id === 'p1');
+    // Flag consumed.
+    expect(alice?.nextSpellFreeMana).toBe(false);
+    // Mana still 0 (the L1 cost of 1 was waived, not subtracted from -1).
+    expect(alice?.resources.mana).toBe(0);
+    // Spell exhausted.
+    expect(alice?.ownedSpells[0]?.exhausted).toBe(true);
+  });
+
+  it('Mana Elixir flag clears at end of turn even if no spell is cast', () => {
+    let s = setupVaultPlay('base.vault.mana-elixir');
+    s = applyAction(s, {
+      type: 'PLAY_VAULT_CARD',
+      playerId: 'p1',
+      vaultCardId: 'base.vault.mana-elixir',
+    });
+    expect(
+      s.players.find((p) => p.id === 'p1')?.nextSpellFreeMana,
+    ).toBe(true);
+    // End the turn without using the buff.
+    s = applyAction(s, { type: 'PASS_TURN', playerId: 'p1' });
+    expect(
+      s.players.find((p) => p.id === 'p1')?.nextSpellFreeMana,
+    ).toBe(false);
+  });
 });
 
 // ============================================================================

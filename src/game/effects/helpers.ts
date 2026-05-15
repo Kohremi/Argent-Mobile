@@ -159,21 +159,57 @@ export function buildReactionQueue(
  *   - Blue (Divinity) Mages owned by an opponent are immune to rival spells.
  *     Blue Mages owned by the caster are NOT immune (you can target your own).
  */
-export function buildBurnTargets(
+/**
+ * Targeting filter for harmful effects (wound / banish / move).
+ *
+ * Per the rulebook (as confirmed by the user):
+ *  - Green mages are universally immune to harmful targeting while NOT
+ *    shadowing. While shadowing, a green mage loses its color ability and
+ *    is targetable.
+ *  - Blue mages are immune to OPPONENTS' Spells (including legendary /
+ *    unique spells), but NOT to supporters, vault cards, or mage abilities.
+ *    A caster can target their own blue mages with spells. While shadowing,
+ *    a blue mage loses its color ability.
+ *  - Shadowing mages are not targetable by default; an effect must opt in
+ *    via `includesShadows` to reach them. When included, the shadow's color
+ *    protection no longer applies.
+ */
+export function buildHarmfulMageTargets(
   state: GameState,
   casterId: PlayerId,
+  opts: { source: 'spell' | 'non-spell'; includesShadows?: boolean },
 ): OwnedMageId[] {
   const targets: OwnedMageId[] = [];
   for (const p of state.players) {
     for (const m of p.mages) {
       if (m.location.kind !== 'action-space') continue;
       if (m.isWounded) continue;
+      if (m.isShadowing) {
+        if (!opts.includesShadows) continue;
+        // Shadowing mage loses its color ability — no protections apply.
+        targets.push(m.id);
+        continue;
+      }
       if (m.color === 'green') continue;
-      if (m.color === 'blue' && p.id !== casterId) continue;
+      if (
+        m.color === 'blue' &&
+        opts.source === 'spell' &&
+        p.id !== casterId
+      ) {
+        continue;
+      }
       targets.push(m.id);
     }
   }
   return targets;
+}
+
+/** Spell-source targets (Burn, Flash of Light, etc.). */
+export function buildBurnTargets(
+  state: GameState,
+  casterId: PlayerId,
+): OwnedMageId[] {
+  return buildHarmfulMageTargets(state, casterId, { source: 'spell' });
 }
 
 /**
@@ -294,6 +330,18 @@ export function buildBanishTargets(
   casterId: PlayerId,
 ): OwnedMageId[] {
   return buildBurnTargets(state, casterId);
+}
+
+/**
+ * Non-spell-source targets (supporter cards, vault cards, mage abilities).
+ * Same shape as spell targets but does NOT filter opposing blue mages —
+ * blue's spell immunity does not apply outside of spells.
+ */
+export function buildNonSpellHarmfulTargets(
+  state: GameState,
+  casterId: PlayerId,
+): OwnedMageId[] {
+  return buildHarmfulMageTargets(state, casterId, { source: 'non-spell' });
 }
 
 /**

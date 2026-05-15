@@ -848,9 +848,12 @@ function handleCastSpell(state: GameState, action: CastSpellAction): GameState {
     }
   }
 
-  if (player.resources.mana < levelDef.manaCost) {
+  // Mana Elixir (and similar) waive the cost of the very next spell this
+  // turn. If the flag is set, the mana check is skipped and the cost zeros.
+  const effectiveManaCost = player.nextSpellFreeMana ? 0 : levelDef.manaCost;
+  if (player.resources.mana < effectiveManaCost) {
     throw new Error(
-      `CAST_SPELL: insufficient mana (need ${levelDef.manaCost}, have ${player.resources.mana})`,
+      `CAST_SPELL: insufficient mana (need ${effectiveManaCost}, have ${player.resources.mana})`,
     );
   }
   if (levelDef.timing === 'reaction') {
@@ -867,7 +870,7 @@ function handleCastSpell(state: GameState, action: CastSpellAction): GameState {
     'CAST_SPELL',
   );
 
-  // Spend mana, exhaust spell.
+  // Spend mana, exhaust spell, consume the free-mana buff if it was set.
   let next: GameState = {
     ...state,
     players: state.players.map((p) =>
@@ -875,10 +878,11 @@ function handleCastSpell(state: GameState, action: CastSpellAction): GameState {
         ? p
         : {
             ...p,
-            resources: { ...p.resources, mana: p.resources.mana - levelDef.manaCost },
+            resources: { ...p.resources, mana: p.resources.mana - effectiveManaCost },
             ownedSpells: p.ownedSpells.map((s) =>
               s.cardId !== action.spellCardId ? s : { ...s, exhausted: true },
             ),
+            nextSpellFreeMana: false,
           },
     ),
   };
@@ -1767,22 +1771,33 @@ function processErrandsAdvance(state: GameState): GameState {
   if (state.phase.kind !== 'errands') {
     throw new Error('processErrandsAdvance: not in errands phase');
   }
+  // The active player's "next spell free" buff (Mana Elixir etc.) expires
+  // unconditionally when their turn ends, used or not.
+  const errandsPhase = state.phase;
+  const outgoingId = state.players[errandsPhase.activePlayerIndex]?.id;
+  const players = outgoingId
+    ? state.players.map((p) =>
+        p.id !== outgoingId ? p : { ...p, nextSpellFreeMana: false },
+      )
+    : state.players;
   if (state.bellTower.available.length === 0) {
     return {
       ...state,
+      players,
       phase: {
         kind: 'resolution',
-        round: state.phase.round,
+        round: errandsPhase.round,
         pendingRoomIndex: 0,
         pendingSpaceIndex: 0,
       },
     };
   }
-  const next = (state.phase.activePlayerIndex + 1) % state.players.length;
+  const next = (errandsPhase.activePlayerIndex + 1) % state.players.length;
   return {
     ...state,
+    players,
     phase: {
-      ...state.phase,
+      ...errandsPhase,
       activePlayerIndex: next,
       actionUsed: false,
       fastActionUsed: false,

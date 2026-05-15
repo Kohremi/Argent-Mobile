@@ -15,6 +15,7 @@ import {
   buildArsMagnaTargets,
   buildBanishTargets,
   buildBurnTargets,
+  buildNonSpellHarmfulTargets,
   buildReactionQueue,
   bumpInfluencePatch,
   checkInfirmaryBonusApplies,
@@ -1659,10 +1660,13 @@ registerEffect('base.supporter.vellimoor-cantz', (ctx): EffectResult =>
 // the supporter cards should ignore blue immunity).
 // ---------------------------------------------------------------------------
 
-/** Andros DuValt — Banish a Mage. (Fast Action) */
+/** Andros DuValt — Banish a Mage. (Fast Action, supporter source.) */
 registerEffect('base.supporter.andros-duvalt', (ctx): EffectResult => {
   if (!ctx.resumeAnswer) {
-    const targets = buildBanishTargets(ctx.state, ctx.triggeringPlayerId);
+    const targets = buildNonSpellHarmfulTargets(
+      ctx.state,
+      ctx.triggeringPlayerId,
+    );
     if (targets.length === 0) return { kind: 'done', patch: {} };
     return {
       kind: 'pause',
@@ -1697,10 +1701,13 @@ registerEffect('base.supporter.andros-duvalt', (ctx): EffectResult => {
   };
 });
 
-/** Letum Conspicere — Wound a Mage. (Fast Action) */
+/** Letum Conspicere — Wound a Mage. (Fast Action, supporter source.) */
 registerEffect('base.supporter.letum-conspicere', (ctx): EffectResult => {
   if (!ctx.resumeAnswer) {
-    const targets = buildBurnTargets(ctx.state, ctx.triggeringPlayerId);
+    const targets = buildNonSpellHarmfulTargets(
+      ctx.state,
+      ctx.triggeringPlayerId,
+    );
     if (targets.length === 0) return { kind: 'done', patch: {} };
     return {
       kind: 'pause',
@@ -1817,6 +1824,268 @@ registerEffect('base.supporter.pendros-schalla', (ctx): EffectResult =>
 registerEffect('base.supporter.wilhelm-barts', (ctx): EffectResult =>
   goldForMageSupporter(ctx, 'purple'),
 );
+
+// ---------------------------------------------------------------------------
+// Multi-tap "Swap X Gold for Y, up to N times" supporters. Each loop runs
+// the same Yes/No prompt against a `remaining` counter; the affirmative
+// branch either applies an immediate resource swap or pauses on a sub-prompt
+// (e.g. voter pick for Mark).
+// ---------------------------------------------------------------------------
+
+function swapLoop(
+  ctx: EffectContext,
+  selfEffectId: string,
+  cfg: {
+    label: string;
+    goldCost: number;
+    /** Direct resource gain branch (no sub-prompt). */
+    immediateGain?: (state: GameState) => GameStatePatch;
+    /** Pause-for-sub-prompt branch (used by Mark loops). */
+    subPrompt?: (
+      state: GameState,
+      playerId: PlayerId,
+      source: ResolutionSource,
+    ) => PendingResolutionInput | null;
+    /** Apply after a sub-prompt resolves; receives the resume answer. */
+    applySubAnswer?: (
+      state: GameState,
+      playerId: PlayerId,
+      answer: NonNullable<EffectContext['resumeAnswer']>,
+    ) => GameStatePatch;
+    total: number;
+  },
+): EffectResult {
+  const step = ctx.resumeContext?.['step'];
+  const remaining =
+    (ctx.resumeContext?.['remaining'] as number | undefined) ?? cfg.total;
+
+  // Apply sub-prompt answer (Mark voter, etc.) then loop back to "ask".
+  if (step === 'sub-apply') {
+    if (!ctx.resumeAnswer || !cfg.applySubAnswer) {
+      throw new Error(`${selfEffectId}: sub-apply missing answer`);
+    }
+    const patch = cfg.applySubAnswer(
+      ctx.state,
+      ctx.triggeringPlayerId,
+      ctx.resumeAnswer,
+    );
+    return askForNextSwap(
+      { ...ctx, state: { ...ctx.state, ...patch } },
+      selfEffectId,
+      cfg,
+      remaining,
+    );
+  }
+
+  // Top-level Swap / Stop choice.
+  if (step === 'ask') {
+    if (ctx.resumeAnswer?.kind !== 'option-chosen') {
+      throw new Error(`${selfEffectId}: ask expected option-chosen`);
+    }
+    if (ctx.resumeAnswer.optionId === 'stop') {
+      return { kind: 'done', patch: {} };
+    }
+    if (ctx.resumeAnswer.optionId !== 'swap') {
+      throw new Error(
+        `${selfEffectId}: ask got unknown option ${ctx.resumeAnswer.optionId}`,
+      );
+    }
+    const player = ctx.state.players.find(
+      (p) => p.id === ctx.triggeringPlayerId,
+    );
+    if (!player || player.resources.gold < cfg.goldCost) {
+      // Can't afford — bail.
+      return { kind: 'done', patch: {} };
+    }
+    const deductedState: GameState = {
+      ...ctx.state,
+      players: ctx.state.players.map((p) =>
+        p.id !== ctx.triggeringPlayerId
+          ? p
+          : {
+              ...p,
+              resources: {
+                ...p.resources,
+                gold: p.resources.gold - cfg.goldCost,
+              },
+            },
+      ),
+    };
+    // Immediate-gain branch: apply, then loop back to "ask".
+    if (cfg.immediateGain) {
+      const gained: GameState = {
+        ...deductedState,
+        ...cfg.immediateGain(deductedState),
+      };
+      return askForNextSwap(
+        { ...ctx, state: gained },
+        selfEffectId,
+        cfg,
+        remaining - 1,
+      );
+    }
+    // Sub-prompt branch (e.g. voter pick).
+    if (cfg.subPrompt) {
+      const subPending = cfg.subPrompt(
+        deductedState,
+        ctx.triggeringPlayerId,
+        ctx.source,
+      );
+      if (subPending === null) {
+        // Sub-prompt unavailable (no eligible target); refund and stop.
+        return { kind: 'done', patch: {} };
+      }
+      return {
+        kind: 'pause',
+        patch: { players: deductedState.players },
+        pending: {
+          ...subPending,
+          resume: {
+            effectId: selfEffectId,
+            context: { step: 'sub-apply', remaining: remaining - 1 },
+          },
+        },
+      };
+    }
+    throw new Error(`${selfEffectId}: cfg missing immediateGain/subPrompt`);
+  }
+
+  // First entry (no step yet) — open the loop with an "ask".
+  return askForNextSwap(ctx, selfEffectId, cfg, remaining);
+}
+
+function askForNextSwap(
+  ctx: EffectContext,
+  selfEffectId: string,
+  cfg: { label: string; goldCost: number; total: number },
+  remaining: number,
+): EffectResult {
+  if (remaining <= 0) return { kind: 'done', patch: { players: ctx.state.players } };
+  const player = ctx.state.players.find(
+    (p) => p.id === ctx.triggeringPlayerId,
+  );
+  if (!player || player.resources.gold < cfg.goldCost) {
+    return { kind: 'done', patch: { players: ctx.state.players } };
+  }
+  const indexLabel = `${cfg.total - remaining + 1} of ${cfg.total}`;
+  return {
+    kind: 'pause',
+    patch: { players: ctx.state.players },
+    pending: {
+      responderId: ctx.triggeringPlayerId,
+      prompt: {
+        kind: 'choose-from-options',
+        options: [
+          { id: 'swap', label: `${cfg.label} (${indexLabel})`, payload: {} },
+          { id: 'stop', label: 'Stop swapping', payload: {} },
+        ],
+      },
+      resume: {
+        effectId: selfEffectId,
+        context: { step: 'ask', remaining },
+      },
+      source: ctx.source,
+    },
+  };
+}
+
+/** Hai of Noirwood — Swap 2 Gold for a Mark, up to 3 times. */
+registerEffect('base.supporter.hai-of-noirwood', (ctx): EffectResult =>
+  swapLoop(ctx, 'base.supporter.hai-of-noirwood', {
+    label: 'Swap 2 Gold for a Mark',
+    goldCost: 2,
+    total: 3,
+    subPrompt: (state, playerId, source) =>
+      spawnGainMarkPrompt(state, playerId, source),
+    applySubAnswer: (state, playerId, answer) => {
+      if (answer.kind !== 'voter-chosen') {
+        throw new Error('hai-of-noirwood expected voter-chosen');
+      }
+      return applyGainMark(state, playerId, answer.voterId);
+    },
+  }),
+);
+
+/** Lynssara Yuuno — Swap 2 Gold for 1 IP, up to 4 times. */
+registerEffect('base.supporter.lynssara-yuuno', (ctx): EffectResult =>
+  swapLoop(ctx, 'base.supporter.lynssara-yuuno', {
+    label: 'Swap 2 Gold for 1 IP',
+    goldCost: 2,
+    total: 4,
+    immediateGain: (state) =>
+      bumpInfluencePatch(state, ctx.triggeringPlayerId, 1),
+  }),
+);
+
+/** Raffique Van Anzel — Swap 2 Gold for 1 Research, up to 4 times. */
+registerEffect('base.supporter.raffique-van-anzel', (ctx): EffectResult =>
+  swapLoop(ctx, 'base.supporter.raffique-van-anzel', {
+    label: 'Swap 2 Gold for 1 Research',
+    goldCost: 2,
+    total: 4,
+    // Research is a transient resource (the spend/discard step lives on its
+    // own prompt). For now we treat the gain as no-op since the research
+    // system is still a TODO; the gold cost is real, the research tick is
+    // pending future research-system work.
+    immediateGain: () => ({}),
+  }),
+);
+
+/** Tanis Trilives — Swap 1 Gold for 1 Mana, up to 5 times. */
+registerEffect('base.supporter.tanis-trilives', (ctx): EffectResult =>
+  swapLoop(ctx, 'base.supporter.tanis-trilives', {
+    label: 'Swap 1 Gold for 1 Mana',
+    goldCost: 1,
+    total: 5,
+    immediateGain: (state) =>
+      gainResourcePatch(state, ctx.triggeringPlayerId, 'mana', 1),
+  }),
+);
+
+/**
+ * Luras Wythe-Cariolis — Choose a Voter. Each player may place a Mark on
+ * that Voter if they have not already done so. Per user guidance: assume
+ * all non-caster players opt in (a free Mark is never refused).
+ */
+registerEffect('base.supporter.luras-wythe-cariolis', (ctx): EffectResult => {
+  if (!ctx.resumeAnswer) {
+    // Voter must be one the CASTER doesn't already have marked, since the
+    // caster also gets a Mark. (Other players are filtered per-player below.)
+    const eligible = eligibleVotersForMark(ctx.state, ctx.triggeringPlayerId);
+    if (eligible.length === 0) return { kind: 'done', patch: {} };
+    return {
+      kind: 'pause',
+      pending: {
+        responderId: ctx.triggeringPlayerId,
+        prompt: {
+          kind: 'choose-voter',
+          eligibleVoterIds: eligible.map((v) => v.id),
+        },
+        resume: {
+          effectId: 'base.supporter.luras-wythe-cariolis',
+          context: {},
+        },
+        source: ctx.source,
+      },
+    };
+  }
+  if (ctx.resumeAnswer.kind !== 'voter-chosen') {
+    throw new Error('luras-wythe-cariolis expected voter-chosen');
+  }
+  const voterId = ctx.resumeAnswer.voterId;
+  let working = ctx.state;
+  for (const p of ctx.state.players) {
+    const alreadyMarked = working.voterMarks.some(
+      (m) => m.voterId === voterId && m.playerId === p.id,
+    );
+    if (alreadyMarked) continue;
+    working = { ...working, ...applyGainMark(working, p.id, voterId) };
+  }
+  return {
+    kind: 'done',
+    patch: { players: working.players, voterMarks: working.voterMarks },
+  };
+});
 
 /**
  * Yinsei Arlington — Move a Mage into another slot in the same room.
@@ -2333,3 +2602,726 @@ registerEffect(
     };
   },
 );
+
+/** Mana Elixir (consumable, fast-action) — The next Spell you play this
+ *  turn costs no Mana. Sets the player's `nextSpellFreeMana` flag, which
+ *  CAST_SPELL consumes and processErrandsAdvance clears at turn end. */
+registerEffect('base.vault.mana-elixir', (ctx): EffectResult => ({
+  kind: 'done',
+  patch: {
+    players: ctx.state.players.map((p) =>
+      p.id !== ctx.triggeringPlayerId
+        ? p
+        : { ...p, nextSpellFreeMana: true },
+    ),
+  },
+}));
+
+/**
+ * Endless Coin Purse (treasure, action) — Gain 1 Gold. Gain a Buy.
+ * Step 1: grant 1 gold. Step 2: prompt Buy/Skip, then route the Buy through
+ * a `choose-vault-card` filtered to affordable cards.
+ */
+registerEffect('base.vault.endless-coin-purse', (ctx): EffectResult => {
+  const step = ctx.resumeContext?.['step'];
+  if (!ctx.resumeAnswer) {
+    // First entry: grant 1 Gold, then ask Buy/Skip.
+    const goldGained = {
+      ...ctx.state,
+      ...gainResourcePatch(ctx.state, ctx.triggeringPlayerId, 'gold', 1),
+    };
+    const affordable = affordableVaultCards(goldGained, ctx.triggeringPlayerId);
+    if (affordable.length === 0) {
+      return { kind: 'done', patch: { players: goldGained.players } };
+    }
+    return {
+      kind: 'pause',
+      patch: { players: goldGained.players },
+      pending: {
+        responderId: ctx.triggeringPlayerId,
+        prompt: {
+          kind: 'choose-from-options',
+          options: [
+            { id: 'buy', label: 'Gain a Buy', payload: {} },
+            { id: 'skip', label: 'Skip the Buy', payload: {} },
+          ],
+        },
+        resume: {
+          effectId: 'base.vault.endless-coin-purse',
+          context: { step: 'buy-or-skip' },
+        },
+        source: ctx.source,
+      },
+    };
+  }
+  if (step === 'buy-or-skip') {
+    if (ctx.resumeAnswer.kind !== 'option-chosen') {
+      throw new Error('endless-coin-purse buy-or-skip expected option-chosen');
+    }
+    if (ctx.resumeAnswer.optionId === 'skip') {
+      return { kind: 'done', patch: {} };
+    }
+    if (ctx.resumeAnswer.optionId !== 'buy') {
+      throw new Error(
+        `endless-coin-purse unknown option ${ctx.resumeAnswer.optionId}`,
+      );
+    }
+    const affordable = affordableVaultCards(ctx.state, ctx.triggeringPlayerId);
+    if (affordable.length === 0) return { kind: 'done', patch: {} };
+    return {
+      kind: 'pause',
+      pending: {
+        responderId: ctx.triggeringPlayerId,
+        prompt: { kind: 'choose-vault-card', eligibleCardIds: affordable },
+        resume: {
+          effectId: 'base.vault.endless-coin-purse',
+          context: { step: 'pick-card' },
+        },
+        source: ctx.source,
+      },
+    };
+  }
+  if (step === 'pick-card') {
+    if (ctx.resumeAnswer.kind !== 'card-chosen') {
+      throw new Error('endless-coin-purse pick-card expected card-chosen');
+    }
+    return {
+      kind: 'done',
+      patch: applyVaultPurchase(
+        ctx.state,
+        ctx.triggeringPlayerId,
+        ctx.resumeAnswer.cardId,
+      ),
+    };
+  }
+  throw new Error(`endless-coin-purse unexpected step ${String(step)}`);
+});
+
+/**
+ * Sealed Jar (consumable, fast-action) — Gain 7 Gold OR draw a Vault Card.
+ * "Draw" = take the top of the vault deck (random unseen card).
+ */
+registerEffect('base.vault.sealed-jar', (ctx): EffectResult => {
+  if (!ctx.resumeAnswer) {
+    return {
+      kind: 'pause',
+      pending: {
+        responderId: ctx.triggeringPlayerId,
+        prompt: {
+          kind: 'choose-from-options',
+          options: [
+            { id: 'gold', label: 'Gain 7 Gold', payload: {} },
+            { id: 'draw', label: 'Draw a Vault Card', payload: {} },
+          ],
+        },
+        resume: { effectId: 'base.vault.sealed-jar', context: {} },
+        source: ctx.source,
+      },
+    };
+  }
+  if (ctx.resumeAnswer.kind !== 'option-chosen') {
+    throw new Error('sealed-jar expected option-chosen');
+  }
+  if (ctx.resumeAnswer.optionId === 'gold') {
+    return {
+      kind: 'done',
+      patch: gainResourcePatch(ctx.state, ctx.triggeringPlayerId, 'gold', 7),
+    };
+  }
+  if (ctx.resumeAnswer.optionId === 'draw') {
+    return {
+      kind: 'done',
+      patch: drawTopOfVaultDeck(ctx.state, ctx.triggeringPlayerId, 1),
+    };
+  }
+  throw new Error(`sealed-jar unknown option ${ctx.resumeAnswer.optionId}`);
+});
+
+/**
+ * Bottled Memories (consumable, fast-action) — Refresh an exhausted Spell.
+ * Prompts for one of the caster's exhausted spells; clears `exhausted`.
+ */
+registerEffect('base.vault.bottled-memories', (ctx): EffectResult => {
+  if (!ctx.resumeAnswer) {
+    const player = ctx.state.players.find(
+      (p) => p.id === ctx.triggeringPlayerId,
+    );
+    const exhausted =
+      player?.ownedSpells.filter((s) => s.exhausted).map((s) => s.cardId) ?? [];
+    if (exhausted.length === 0) return { kind: 'done', patch: {} };
+    return {
+      kind: 'pause',
+      pending: {
+        responderId: ctx.triggeringPlayerId,
+        // Spell-from-list is a choose-from-options here because we don't
+        // have a dedicated "pick from owned spells" prompt yet — the IDs
+        // come from the caster's own office.
+        prompt: {
+          kind: 'choose-from-options',
+          options: exhausted.map((cid) => ({
+            id: cid,
+            label: `Refresh ${cid}`,
+            payload: {},
+          })),
+        },
+        resume: { effectId: 'base.vault.bottled-memories', context: {} },
+        source: ctx.source,
+      },
+    };
+  }
+  if (ctx.resumeAnswer.kind !== 'option-chosen') {
+    throw new Error('bottled-memories expected option-chosen');
+  }
+  const targetCardId = ctx.resumeAnswer.optionId;
+  return {
+    kind: 'done',
+    patch: {
+      players: ctx.state.players.map((p) =>
+        p.id !== ctx.triggeringPlayerId
+          ? p
+          : {
+              ...p,
+              ownedSpells: p.ownedSpells.map((s) =>
+                s.cardId !== targetCardId ? s : { ...s, exhausted: false },
+              ),
+            },
+      ),
+    },
+  };
+});
+
+/**
+ * Healing Drops (consumable, action) — Move a Mage from the Infirmary to
+ * an open slot of your choice. Identical pattern to Bless (the leader
+ * spell); reuses the same prompt chain.
+ */
+registerEffect('base.vault.healing-drops', (ctx): EffectResult => {
+  const step = ctx.resumeContext?.['step'];
+  if (!ctx.resumeAnswer) {
+    const infirmaryMages: string[] = [];
+    for (const p of ctx.state.players) {
+      for (const m of p.mages) {
+        if (m.location.kind === 'infirmary') infirmaryMages.push(m.id);
+      }
+    }
+    if (infirmaryMages.length === 0) return { kind: 'done', patch: {} };
+    return {
+      kind: 'pause',
+      pending: {
+        responderId: ctx.triggeringPlayerId,
+        prompt: { kind: 'choose-target-mage', eligibleMageIds: infirmaryMages },
+        resume: {
+          effectId: 'base.vault.healing-drops',
+          context: { step: 'pick-slot' },
+        },
+        source: ctx.source,
+      },
+    };
+  }
+  if (step === 'pick-slot') {
+    if (ctx.resumeAnswer.kind !== 'mage-chosen') {
+      throw new Error('healing-drops pick-slot expected mage-chosen');
+    }
+    const targetMageId = ctx.resumeAnswer.mageId;
+    const openSlots: string[] = [];
+    for (const r of ctx.state.rooms) {
+      if (r.cannotBePlacedInDirectly) continue;
+      for (const s of r.actionSpaces) {
+        if (!s.occupant) openSlots.push(s.id);
+      }
+    }
+    if (openSlots.length === 0) return { kind: 'done', patch: {} };
+    return {
+      kind: 'pause',
+      pending: {
+        responderId: ctx.triggeringPlayerId,
+        prompt: {
+          kind: 'choose-target-action-space',
+          eligibleSpaceIds: openSlots,
+        },
+        resume: {
+          effectId: 'base.vault.healing-drops',
+          context: { step: 'apply', targetMageId },
+        },
+        source: ctx.source,
+      },
+    };
+  }
+  if (step === 'apply') {
+    if (ctx.resumeAnswer.kind !== 'space-chosen') {
+      throw new Error('healing-drops apply expected space-chosen');
+    }
+    const targetMageId = ctx.resumeContext?.['targetMageId'];
+    if (typeof targetMageId !== 'string') {
+      throw new Error('healing-drops apply: missing targetMageId');
+    }
+    return {
+      kind: 'done',
+      patch: healMageToSpace(ctx.state, targetMageId, ctx.resumeAnswer.spaceId),
+    };
+  }
+  throw new Error(`healing-drops unexpected step ${String(step)}`);
+});
+
+/**
+ * Liquid Lightning (consumable, fast-action) — Place a Mage. Player picks
+ * one of their office mages and an open action space; the mage is placed.
+ *
+ * Note: this bypasses normal Action-budget gating (Liquid Lightning IS the
+ * placement) and any per-room placement-limit checks; matches the card text.
+ */
+registerEffect('base.vault.liquid-lightning', (ctx): EffectResult => {
+  const step = ctx.resumeContext?.['step'];
+  if (!ctx.resumeAnswer) {
+    const player = ctx.state.players.find(
+      (p) => p.id === ctx.triggeringPlayerId,
+    );
+    const officeMages =
+      player?.mages
+        .filter((m) => m.location.kind === 'office' && !m.isWounded)
+        .map((m) => m.id) ?? [];
+    if (officeMages.length === 0) return { kind: 'done', patch: {} };
+    return {
+      kind: 'pause',
+      pending: {
+        responderId: ctx.triggeringPlayerId,
+        prompt: { kind: 'choose-target-mage', eligibleMageIds: officeMages },
+        resume: {
+          effectId: 'base.vault.liquid-lightning',
+          context: { step: 'pick-slot' },
+        },
+        source: ctx.source,
+      },
+    };
+  }
+  if (step === 'pick-slot') {
+    if (ctx.resumeAnswer.kind !== 'mage-chosen') {
+      throw new Error('liquid-lightning pick-slot expected mage-chosen');
+    }
+    const targetMageId = ctx.resumeAnswer.mageId;
+    const openSlots: string[] = [];
+    for (const r of ctx.state.rooms) {
+      if (r.cannotBePlacedInDirectly) continue;
+      for (const s of r.actionSpaces) {
+        if (!s.occupant) openSlots.push(s.id);
+      }
+    }
+    if (openSlots.length === 0) return { kind: 'done', patch: {} };
+    return {
+      kind: 'pause',
+      pending: {
+        responderId: ctx.triggeringPlayerId,
+        prompt: {
+          kind: 'choose-target-action-space',
+          eligibleSpaceIds: openSlots,
+        },
+        resume: {
+          effectId: 'base.vault.liquid-lightning',
+          context: { step: 'apply', targetMageId },
+        },
+        source: ctx.source,
+      },
+    };
+  }
+  if (step === 'apply') {
+    if (ctx.resumeAnswer.kind !== 'space-chosen') {
+      throw new Error('liquid-lightning apply expected space-chosen');
+    }
+    const targetMageId = ctx.resumeContext?.['targetMageId'];
+    if (typeof targetMageId !== 'string') {
+      throw new Error('liquid-lightning apply: missing targetMageId');
+    }
+    return {
+      kind: 'done',
+      patch: placeOfficeMageOnSpace(
+        ctx.state,
+        ctx.triggeringPlayerId,
+        targetMageId,
+        ctx.resumeAnswer.spaceId,
+      ),
+    };
+  }
+  throw new Error(`liquid-lightning unexpected step ${String(step)}`);
+});
+
+/**
+ * Wound + place — shared registration for Bottled Rage and Spellblade.
+ *
+ * "Wound a Mage, then place one of yours into its slot." Step 1: pick wound
+ * target (non-spell harmful filter). Step 2: pick one of your office mages
+ * to place into the now-empty slot.
+ */
+function woundAndPlaceEffect(selfEffectId: string) {
+  return (ctx: EffectContext): EffectResult => {
+    const step = ctx.resumeContext?.['step'];
+    if (!ctx.resumeAnswer) {
+      const targets = buildNonSpellHarmfulTargets(
+        ctx.state,
+        ctx.triggeringPlayerId,
+      );
+      if (targets.length === 0) return { kind: 'done', patch: {} };
+      return {
+        kind: 'pause',
+        pending: {
+          responderId: ctx.triggeringPlayerId,
+          prompt: { kind: 'choose-target-mage', eligibleMageIds: targets },
+          resume: { effectId: selfEffectId, context: { step: 'pick-placer' } },
+          source: ctx.source,
+        },
+      };
+    }
+    if (step === 'pick-placer') {
+      if (ctx.resumeAnswer.kind !== 'mage-chosen') {
+        throw new Error(`${selfEffectId} pick-placer expected mage-chosen`);
+      }
+      const woundTarget = ctx.resumeAnswer.mageId;
+      const targetMage = ctx.state.players
+        .flatMap((p) => p.mages)
+        .find((m) => m.id === woundTarget);
+      if (!targetMage || targetMage.location.kind !== 'action-space') {
+        throw new Error(`${selfEffectId}: wound target no longer on a slot`);
+      }
+      const slotId = targetMage.location.spaceId;
+      const wound = woundMage(
+        ctx.state,
+        woundTarget,
+        ctx.triggeringPlayerId,
+      );
+      const afterWound: GameState = { ...ctx.state, ...wound.patch };
+      const placer = afterWound.players.find(
+        (p) => p.id === ctx.triggeringPlayerId,
+      );
+      const officeMages =
+        placer?.mages
+          .filter((m) => m.location.kind === 'office' && !m.isWounded)
+          .map((m) => m.id) ?? [];
+      if (officeMages.length === 0) {
+        // No mage to place — wound still happens; open reaction window.
+        return {
+          kind: 'open-reaction',
+          patch: wound.patch,
+          window: {
+            triggerEvent: wound.triggerEvent,
+            pendingResponderIds: buildReactionQueue(
+              ctx.state,
+              ctx.triggeringPlayerId,
+            ),
+            reactedPlayerIds: [],
+            afterResume: { effectId: 'base.system.noop', context: {} },
+            source: ctx.source,
+          },
+        };
+      }
+      return {
+        kind: 'pause',
+        patch: wound.patch,
+        pending: {
+          responderId: ctx.triggeringPlayerId,
+          prompt: { kind: 'choose-target-mage', eligibleMageIds: officeMages },
+          resume: {
+            effectId: selfEffectId,
+            context: { step: 'apply-place', slotId, woundTarget },
+          },
+          source: ctx.source,
+        },
+      };
+    }
+    if (step === 'apply-place') {
+      if (ctx.resumeAnswer.kind !== 'mage-chosen') {
+        throw new Error(`${selfEffectId} apply-place expected mage-chosen`);
+      }
+      const slotId = ctx.resumeContext?.['slotId'];
+      if (typeof slotId !== 'string') {
+        throw new Error(`${selfEffectId}: missing slotId`);
+      }
+      const placePatch = placeOfficeMageOnSpace(
+        ctx.state,
+        ctx.triggeringPlayerId,
+        ctx.resumeAnswer.mageId,
+        slotId,
+      );
+      // We synthesize a generic "mage-moved" trigger isn't quite right for
+      // the wound (the wound trigger already fired earlier). For now we
+      // just close out without opening another reaction window — the wound
+      // reaction would have fired between the two steps if we wanted it.
+      return { kind: 'done', patch: placePatch };
+    }
+    throw new Error(`${selfEffectId} unexpected step ${String(step)}`);
+  };
+}
+
+registerEffect('base.vault.bottled-rage', woundAndPlaceEffect('base.vault.bottled-rage'));
+registerEffect('base.vault.spellblade', woundAndPlaceEffect('base.vault.spellblade'));
+
+/**
+ * Force Gloves (consumable, action) — Spend 2 Mana to banish a Mage. Do
+ * this any number of times. Loop terminates when player stops or runs out
+ * of mana / targets.
+ */
+registerEffect('base.vault.force-gloves', (ctx): EffectResult =>
+  manaRepeatLoop(ctx, 'base.vault.force-gloves', {
+    manaCost: 2,
+    label: 'Spend 2 Mana: Banish a Mage',
+    apply: (state, playerId, targetMageId) =>
+      banishMage(state, targetMageId, playerId),
+  }),
+);
+
+/**
+ * Malefic Torch (consumable, action) — Spend 2 Mana to wound a Mage.
+ * Repeat any number of times. Same shape as Force Gloves.
+ */
+registerEffect('base.vault.malefic-torch', (ctx): EffectResult =>
+  manaRepeatLoop(ctx, 'base.vault.malefic-torch', {
+    manaCost: 2,
+    label: 'Spend 2 Mana: Wound a Mage',
+    apply: (state, playerId, targetMageId) =>
+      woundMage(state, targetMageId, playerId),
+  }),
+);
+
+/**
+ * Unbreakable Box (consumable, action) — Spend 6 Mana to gain the top 3
+ * cards of the Vault Deck. One-shot. Fizzles if player lacks 6 mana.
+ */
+registerEffect('base.vault.unbreakable-box', (ctx): EffectResult => {
+  const player = ctx.state.players.find(
+    (p) => p.id === ctx.triggeringPlayerId,
+  );
+  if (!player || player.resources.mana < 6) {
+    return { kind: 'done', patch: {} };
+  }
+  const drawn = drawTopOfVaultDeck(ctx.state, ctx.triggeringPlayerId, 3);
+  return {
+    kind: 'done',
+    patch: {
+      ...drawn,
+      players: (drawn.players ?? ctx.state.players).map((p) =>
+        p.id !== ctx.triggeringPlayerId
+          ? p
+          : { ...p, resources: { ...p.resources, mana: p.resources.mana - 6 } },
+      ),
+    },
+  };
+});
+
+/**
+ * The Contract (consumable, fast-action) — Gain 3 Research. Use this
+ * Research on spells of a single chosen type. Research currently a TODO;
+ * we surface the type-restriction note in the prompt label only.
+ */
+registerEffect('base.vault.the-contract', (ctx): EffectResult =>
+  researchLoop(
+    ctx,
+    3,
+    'base.vault.the-contract',
+    'spells of a single chosen type',
+  ),
+);
+
+// ---------------------------------------------------------------------------
+// Helpers for vault effects.
+// ---------------------------------------------------------------------------
+
+function placeOfficeMageOnSpace(
+  state: GameState,
+  playerId: PlayerId,
+  mageId: string,
+  spaceId: string,
+): GameStatePatch {
+  const player = state.players.find((p) => p.id === playerId);
+  if (!player) throw new Error('placeOfficeMageOnSpace: player not found');
+  const mage = player.mages.find((m) => m.id === mageId);
+  if (!mage) throw new Error('placeOfficeMageOnSpace: mage not in office');
+  if (mage.location.kind !== 'office') {
+    throw new Error('placeOfficeMageOnSpace: mage not in office');
+  }
+  return {
+    players: state.players.map((p) =>
+      p.id !== playerId
+        ? p
+        : {
+            ...p,
+            mages: p.mages.map((m) =>
+              m.id !== mageId
+                ? m
+                : { ...m, location: { kind: 'action-space' as const, spaceId } },
+            ),
+          },
+    ),
+    rooms: state.rooms.map((r) => ({
+      ...r,
+      actionSpaces: r.actionSpaces.map((s) =>
+        s.id !== spaceId
+          ? s
+          : {
+              ...s,
+              occupant: {
+                mageId,
+                ownerId: playerId,
+                isShadowing: false,
+              },
+            },
+      ),
+    })),
+  };
+}
+
+function drawTopOfVaultDeck(
+  state: GameState,
+  playerId: PlayerId,
+  n: number,
+): GameStatePatch {
+  const taken = state.vaultDeck.slice(0, n);
+  if (taken.length === 0) return {};
+  return {
+    vaultDeck: state.vaultDeck.slice(taken.length),
+    players: state.players.map((p) =>
+      p.id !== playerId
+        ? p
+        : {
+            ...p,
+            vaultCards: [
+              ...p.vaultCards,
+              ...taken.map((cardId) => ({ cardId, exhausted: false })),
+            ],
+          },
+    ),
+  };
+}
+
+/**
+ * "Spend N mana to {do something} any number of times" loop. Each iteration:
+ *  - Stop / Spend choice. Stop → done.
+ *  - On Spend: deduct mana, prompt for target, apply, open reaction window.
+ *  - After reaction window resolves, loop back to Stop/Spend.
+ */
+function manaRepeatLoop(
+  ctx: EffectContext,
+  selfEffectId: string,
+  cfg: {
+    manaCost: number;
+    label: string;
+    apply: (
+      state: GameState,
+      playerId: PlayerId,
+      targetMageId: string,
+    ) => { patch: GameStatePatch; triggerEvent: ReactionTriggerEvent };
+  },
+): EffectResult {
+  const step = ctx.resumeContext?.['step'];
+
+  if (step === 'pick-target') {
+    if (ctx.resumeAnswer?.kind !== 'mage-chosen') {
+      throw new Error(`${selfEffectId} pick-target expected mage-chosen`);
+    }
+    // Deduct mana, apply, open reaction window with continuation back to
+    // the loop's ask step.
+    const deducted: GameState = {
+      ...ctx.state,
+      players: ctx.state.players.map((p) =>
+        p.id !== ctx.triggeringPlayerId
+          ? p
+          : {
+              ...p,
+              resources: {
+                ...p.resources,
+                mana: p.resources.mana - cfg.manaCost,
+              },
+            },
+      ),
+    };
+    const applied = cfg.apply(
+      deducted,
+      ctx.triggeringPlayerId,
+      ctx.resumeAnswer.mageId,
+    );
+    const mergedPatch: GameStatePatch = {
+      ...applied.patch,
+      players: applied.patch.players ?? deducted.players,
+    };
+    return {
+      kind: 'open-reaction',
+      patch: mergedPatch,
+      window: {
+        triggerEvent: applied.triggerEvent,
+        pendingResponderIds: buildReactionQueue(
+          ctx.state,
+          ctx.triggeringPlayerId,
+        ),
+        reactedPlayerIds: [],
+        afterResume: { effectId: selfEffectId, context: { step: 'ask' } },
+        source: ctx.source,
+      },
+    };
+  }
+
+  if (step === 'ask') {
+    if (ctx.resumeAnswer?.kind !== 'option-chosen') {
+      // Reaction-resume path: no ctx.resumeAnswer; just present the ask.
+      return askManaRepeat(ctx, selfEffectId, cfg);
+    }
+    if (ctx.resumeAnswer.optionId === 'stop') {
+      return { kind: 'done', patch: {} };
+    }
+    if (ctx.resumeAnswer.optionId !== 'spend') {
+      throw new Error(`${selfEffectId} unknown option ${ctx.resumeAnswer.optionId}`);
+    }
+    return promptTargetForManaRepeat(ctx, selfEffectId, cfg);
+  }
+
+  // First entry — open the loop.
+  return askManaRepeat(ctx, selfEffectId, cfg);
+}
+
+function askManaRepeat(
+  ctx: EffectContext,
+  selfEffectId: string,
+  cfg: { manaCost: number; label: string },
+): EffectResult {
+  const player = ctx.state.players.find(
+    (p) => p.id === ctx.triggeringPlayerId,
+  );
+  if (!player || player.resources.mana < cfg.manaCost) {
+    return { kind: 'done', patch: {} };
+  }
+  return {
+    kind: 'pause',
+    pending: {
+      responderId: ctx.triggeringPlayerId,
+      prompt: {
+        kind: 'choose-from-options',
+        options: [
+          { id: 'spend', label: cfg.label, payload: {} },
+          { id: 'stop', label: 'Stop', payload: {} },
+        ],
+      },
+      resume: { effectId: selfEffectId, context: { step: 'ask' } },
+      source: ctx.source,
+    },
+  };
+}
+
+function promptTargetForManaRepeat(
+  ctx: EffectContext,
+  selfEffectId: string,
+  _cfg: { manaCost: number; label: string },
+): EffectResult {
+  const targets = buildNonSpellHarmfulTargets(
+    ctx.state,
+    ctx.triggeringPlayerId,
+  );
+  if (targets.length === 0) return { kind: 'done', patch: {} };
+  return {
+    kind: 'pause',
+    pending: {
+      responderId: ctx.triggeringPlayerId,
+      prompt: { kind: 'choose-target-mage', eligibleMageIds: targets },
+      resume: {
+        effectId: selfEffectId,
+        context: { step: 'pick-target' },
+      },
+      source: ctx.source,
+    },
+  };
+}
