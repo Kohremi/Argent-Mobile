@@ -602,10 +602,36 @@ registerEffect('base.vault.invisibility-cloak.react', (ctx): EffectResult => {
 });
 
 /**
+ * Resolves the destination slot for a "reposition your mage" reaction:
+ *   1. Honor `reactionContext.destinationSpaceId` if the UI supplied one
+ *      AND it points to an empty (non-shadow-placement) base slot in a
+ *      placeable room — this is the "any open slot on the board" path.
+ *   2. Fall back to the trigger's original slot id otherwise.
+ *   3. Return null if neither yields a valid destination (the reaction
+ *      then fizzles silently).
+ */
+function resolveReactionDestination(
+  state: GameState,
+  event: ReactionTriggerEvent,
+  reactionContext: SerializableContext | undefined,
+): string | null {
+  const requested = reactionContext?.['destinationSpaceId'];
+  if (typeof requested === 'string') {
+    const found = state.rooms
+      .find((r) => !r.cannotBePlacedInDirectly && r.actionSpaces.some((s) => s.id === requested))
+      ?.actionSpaces.find((s) => s.id === requested);
+    if (found && !found.occupant) return requested;
+  }
+  return originalSpaceFromEvent(event);
+}
+
+/**
  * Shield Potion (consumable, reaction) — place the mage at an empty slot
- * "instead" of the harmful event. Until reactions support sub-prompts the
- * slot is taken to be the trigger's original slot (which IS empty post-
- * event for wound/banish/move). Card consumed.
+ * "instead" of the harmful event. The UI may surface a slot picker (the
+ * reaction option is flagged `requiresSlotPick`); the picked slot id
+ * arrives in `reactionContext.destinationSpaceId`. Falls back to the
+ * trigger's original slot if the UI didn't supply one or the supplied
+ * slot is invalid. Card consumed.
  */
 registerEffect('base.vault.shield-potion.react', (ctx): EffectResult => {
   const raw = ctx.resumeContext?.['triggerEvent'];
@@ -623,15 +649,19 @@ registerEffect('base.vault.shield-potion.react', (ctx): EffectResult => {
   if (event.ownerId !== ctx.triggeringPlayerId) {
     throw new Error('Shield Potion: only protects your own Mage');
   }
-  const originalSpaceId = originalSpaceFromEvent(event);
-  if (!originalSpaceId) return { kind: 'done', patch: {} };
+  const destinationSpaceId = resolveReactionDestination(
+    ctx.state,
+    event,
+    ctx.resumeContext,
+  );
+  if (!destinationSpaceId) return { kind: 'done', patch: {} };
   return {
     kind: 'done',
     patch: applyReactionReposition(ctx.state, {
       mageId: event.mageId,
       ownerId: event.ownerId,
       reactorId: ctx.triggeringPlayerId,
-      destinationSpaceId: originalSpaceId,
+      destinationSpaceId,
       asShadow: false,
       cardId: 'base.vault.shield-potion',
       disposal: 'consumable',
@@ -641,7 +671,9 @@ registerEffect('base.vault.shield-potion.react', (ctx): EffectResult => {
 
 /**
  * Ancient Armor (treasure, reaction) — "after" an opponent wounds or
- * moves your Mage, reposition (default: original slot). Card exhausts.
+ * moves your Mage, move your Mage to any open slot on the board. The UI
+ * collects the slot id via `requiresSlotPick`; if absent the reaction
+ * falls back to the trigger's original slot. Card exhausts.
  */
 registerEffect('base.vault.ancient-armor.react', (ctx): EffectResult => {
   const raw = ctx.resumeContext?.['triggerEvent'];
@@ -658,15 +690,19 @@ registerEffect('base.vault.ancient-armor.react', (ctx): EffectResult => {
   if (event.byPlayerId === event.ownerId) {
     throw new Error('Ancient Armor: trigger must be from an opponent');
   }
-  const originalSpaceId = originalSpaceFromEvent(event);
-  if (!originalSpaceId) return { kind: 'done', patch: {} };
+  const destinationSpaceId = resolveReactionDestination(
+    ctx.state,
+    event,
+    ctx.resumeContext,
+  );
+  if (!destinationSpaceId) return { kind: 'done', patch: {} };
   return {
     kind: 'done',
     patch: applyReactionReposition(ctx.state, {
       mageId: event.mageId,
       ownerId: event.ownerId,
       reactorId: ctx.triggeringPlayerId,
-      destinationSpaceId: originalSpaceId,
+      destinationSpaceId,
       asShadow: false,
       cardId: 'base.vault.ancient-armor',
       disposal: 'exhaust',
@@ -676,7 +712,9 @@ registerEffect('base.vault.ancient-armor.react', (ctx): EffectResult => {
 
 /**
  * Mystic Amulet (treasure, reaction) — "after" an opponent banishes or
- * shadows your Mage, reposition (default: original slot). Card exhausts.
+ * shadows your Mage, move your Mage to any open slot on the board. UI
+ * supplies the slot id via `requiresSlotPick`; falls back to original
+ * slot if absent. Card exhausts.
  */
 registerEffect('base.vault.mystic-amulet.react', (ctx): EffectResult => {
   const raw = ctx.resumeContext?.['triggerEvent'];
@@ -693,15 +731,19 @@ registerEffect('base.vault.mystic-amulet.react', (ctx): EffectResult => {
   if (event.byPlayerId === event.ownerId) {
     throw new Error('Mystic Amulet: trigger must be from an opponent');
   }
-  const originalSpaceId = originalSpaceFromEvent(event);
-  if (!originalSpaceId) return { kind: 'done', patch: {} };
+  const destinationSpaceId = resolveReactionDestination(
+    ctx.state,
+    event,
+    ctx.resumeContext,
+  );
+  if (!destinationSpaceId) return { kind: 'done', patch: {} };
   return {
     kind: 'done',
     patch: applyReactionReposition(ctx.state, {
       mageId: event.mageId,
       ownerId: event.ownerId,
       reactorId: ctx.triggeringPlayerId,
-      destinationSpaceId: originalSpaceId,
+      destinationSpaceId,
       asShadow: false,
       cardId: 'base.vault.mystic-amulet',
       disposal: 'exhaust',

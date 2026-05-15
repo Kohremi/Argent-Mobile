@@ -439,6 +439,13 @@ export function DebugControls() {
   // early returns. Two-step placement: click a mage in the active player's
   // inventory to select it, then click an eligible space to place it.
   const [placementMageId, setPlacementMageId] = useState<string | null>(null);
+  // When a reaction option needs a slot pick (Shield Potion etc.), we hold
+  // its effectId here while the player clicks a slot on the board. The
+  // current top-of-stack pending resolution id is captured so we know which
+  // reaction window to resolve when the player completes the pick.
+  const [reactionAwaitingSlot, setReactionAwaitingSlot] = useState<
+    { resolutionId: string; effectId: string } | null
+  >(null);
 
   if (!state) return null;
 
@@ -462,7 +469,49 @@ export function DebugControls() {
   }
 
   const top = state.pendingResolutionStack[state.pendingResolutionStack.length - 1];
-  const selectionMode = deriveSelectionMode(top, dispatch);
+  // Clear the awaiting-slot state if the underlying prompt has changed
+  // out from under us (e.g. the reaction was resolved another way, or the
+  // window closed). React reads stale state safely; we just won't expose
+  // the override in this render.
+  const reactionSlotActive =
+    reactionAwaitingSlot !== null &&
+    top !== undefined &&
+    top.id === reactionAwaitingSlot.resolutionId &&
+    top.prompt.kind === 'reaction-window';
+
+  // Override the normal SelectionMode while a reaction is awaiting a slot
+  // pick: highlight all open base slots, and on click submit the reaction
+  // with destinationSpaceId in reactionContext.
+  let selectionMode = deriveSelectionMode(top, dispatch);
+  if (reactionSlotActive && reactionAwaitingSlot && top) {
+    const openSlots = new Set<string>();
+    for (const r of state.rooms) {
+      if (r.cannotBePlacedInDirectly) continue;
+      for (const s of r.actionSpaces) {
+        if (!s.occupant) openSlots.add(s.id);
+      }
+    }
+    selectionMode = {
+      kind: 'action-space',
+      eligibleIds: openSlots,
+      onSelect: (id) => {
+        dispatch({
+          type: 'RESOLVE_PENDING',
+          resolutionId: reactionAwaitingSlot.resolutionId,
+          answer: {
+            kind: 'reaction-played',
+            effectId: reactionAwaitingSlot.effectId,
+            reactionContext: { destinationSpaceId: id },
+          },
+        });
+        setReactionAwaitingSlot(null);
+      },
+    };
+  } else if (reactionAwaitingSlot !== null && !reactionSlotActive) {
+    // Lazily clear stale state on next render. (Setting state mid-render
+    // would warn; we tolerate one render with stale state.)
+    queueMicrotask(() => setReactionAwaitingSlot(null));
+  }
   const responderId = top?.responderId;
   const errandsActiveId =
     state.phase.kind === 'errands'
@@ -524,6 +573,8 @@ export function DebugControls() {
           pending={top}
           dispatch={dispatch}
           hasBoardSelection={selectionMode !== null}
+          reactionAwaitingSlot={reactionAwaitingSlot}
+          onReactionAwaitingSlot={setReactionAwaitingSlot}
         />
       )}
 
@@ -616,16 +667,25 @@ function PendingPanel({
   pending,
   dispatch,
   hasBoardSelection,
+  reactionAwaitingSlot,
+  onReactionAwaitingSlot,
 }: {
   state: GameState;
   pending: PendingResolution;
   dispatch: (action: GameAction) => void;
   hasBoardSelection: boolean;
+  reactionAwaitingSlot: { resolutionId: string; effectId: string } | null;
+  onReactionAwaitingSlot: (
+    s: { resolutionId: string; effectId: string } | null,
+  ) => void;
 }) {
   const responder = state.players.find((p) => p.id === pending.responderId);
   const responderLabel = responder
     ? playerDisplayName(state, responder)
     : pending.responderId;
+  const slotPickActive =
+    reactionAwaitingSlot !== null &&
+    reactionAwaitingSlot.resolutionId === pending.id;
   return (
     <section className="rounded-lg border border-amber-500/60 bg-amber-500/10 p-4 space-y-3">
       <div>
@@ -642,7 +702,21 @@ function PendingPanel({
           </p>
         )}
       </div>
-      {hasBoardSelection ? (
+      {slotPickActive ? (
+        <div className="space-y-2">
+          <p className="text-xs text-amber-200/90 italic">
+            Click an open slot on the board to land your mage there, or
+            cancel.
+          </p>
+          <button
+            type="button"
+            onClick={() => onReactionAwaitingSlot(null)}
+            className="px-3 py-1.5 rounded bg-slate-700 hover:bg-slate-600 text-sm"
+          >
+            Cancel reaction
+          </button>
+        </div>
+      ) : hasBoardSelection ? (
         <p className="text-xs text-amber-200/90 italic">
           Click a highlighted target on the board to choose.
         </p>
@@ -652,6 +726,7 @@ function PendingPanel({
           state={state}
           pending={pending}
           dispatch={dispatch}
+          onReactionAwaitingSlot={onReactionAwaitingSlot}
         />
       )}
     </section>
@@ -663,11 +738,15 @@ function PromptControls({
   state,
   pending,
   dispatch,
+  onReactionAwaitingSlot,
 }: {
   prompt: PendingPrompt;
   state: GameState;
   pending: PendingResolution;
   dispatch: (action: GameAction) => void;
+  onReactionAwaitingSlot: (
+    s: { resolutionId: string; effectId: string } | null,
+  ) => void;
 }) {
   const resolve = (answer: ResolutionAnswer) => {
     dispatch({
@@ -879,16 +958,35 @@ function PromptControls({
               <button
                 key={o.effectId}
                 type="button"
-                onClick={() =>
+                onClick={() => {
+                  if (o.requiresSlotPick) {
+                    // Two-step: collect the slot pick on the board, then
+                    // submit reaction-played with destinationSpaceId.
+                    onReactionAwaitingSlot({
+                      resolutionId: pending.id,
+                      effectId: o.effectId,
+                    });
+                    return;
+                  }
                   resolve({
                     kind: 'reaction-played',
                     effectId: o.effectId,
                     reactionContext: {},
-                  })
-                }
+                  });
+                }}
                 className="px-3 py-1.5 rounded bg-amber-500 text-slate-950 hover:bg-amber-400"
+                title={
+                  o.requiresSlotPick
+                    ? 'Then pick an open slot on the board'
+                    : undefined
+                }
               >
                 {o.label}
+                {o.requiresSlotPick && (
+                  <span className="ml-1 text-[10px] uppercase tracking-wide text-slate-700">
+                    pick slot
+                  </span>
+                )}
               </button>
             ))}
           </div>

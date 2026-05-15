@@ -571,6 +571,14 @@ export interface ReactionOption {
   /** Effect id to invoke if the player chooses this reaction. */
   effectId: EffectId;
   label: string;
+  /**
+   * When true, the UI must collect an `actionSpaceId` from the player BEFORE
+   * submitting `reaction-played` — the chosen slot id should land in
+   * `reactionContext.destinationSpaceId`. Used by Shield Potion / Ancient
+   * Armor / Mystic Amulet so the player can pick "any open slot on the
+   * board" instead of being locked to the trigger's original slot.
+   */
+  requiresSlotPick?: boolean;
 }
 
 export type PendingPrompt =

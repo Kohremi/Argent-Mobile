@@ -658,6 +658,7 @@ export function buildReactionOptionsFor(
   sourceId: string;
   effectId: string;
   label: string;
+  requiresSlotPick?: boolean;
 }[] {
   const responder = findPlayer(state, responderId);
   if (!responder) return [];
@@ -724,6 +725,7 @@ export function buildReactionOptionsFor(
       sourceId: 'base.vault.shield-potion',
       effectId: 'base.vault.shield-potion.react',
       label: 'Play Shield Potion',
+      requiresSlotPick: true,
     });
   }
 
@@ -738,6 +740,7 @@ export function buildReactionOptionsFor(
       sourceId: 'base.vault.ancient-armor',
       effectId: 'base.vault.ancient-armor.react',
       label: 'Use Ancient Armor',
+      requiresSlotPick: true,
     });
   }
 
@@ -752,6 +755,7 @@ export function buildReactionOptionsFor(
       sourceId: 'base.vault.mystic-amulet',
       effectId: 'base.vault.mystic-amulet.react',
       label: 'Use Mystic Amulet',
+      requiresSlotPick: true,
     });
   }
 

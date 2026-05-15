@@ -2376,6 +2376,101 @@ describe('Reaction vault cards', () => {
       .find((sp) => sp.id === 'base.room.library.a.slot-1');
     expect(slot?.shadowOccupant?.mageId).toBe('alice-mage-2');
   });
+
+  it('Reaction options flag requiresSlotPick on Shield Potion / Ancient Armor / Mystic Amulet', () => {
+    let s = setupReactionTest({ reactionCard: 'base.vault.shield-potion' });
+    // Stack Bob with Ancient Armor too so we can observe both flags at once.
+    s = addVaultCard(s, 'p2', 'base.vault.ancient-armor');
+    s = driveBurnToReactionPrompt(s);
+    const reactionPrompt = topPending(s);
+    if (reactionPrompt.prompt.kind !== 'reaction-window') {
+      throw new Error('expected reaction-window');
+    }
+    const byId = new Map(
+      reactionPrompt.prompt.reactionOptions.map((o) => [o.sourceId, o]),
+    );
+    expect(byId.get('base.vault.shield-potion')?.requiresSlotPick).toBe(true);
+    expect(byId.get('base.vault.ancient-armor')?.requiresSlotPick).toBe(true);
+  });
+
+  it('Shield Potion: with reactionContext.destinationSpaceId, mage lands on the chosen empty slot', () => {
+    let s = setupReactionTest({ reactionCard: 'base.vault.shield-potion' });
+    s = driveBurnToReactionPrompt(s);
+    const reactionPrompt = topPending(s);
+    // Pick slot 4 (an empty slot, distinct from the original slot-1).
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: reactionPrompt.id,
+      answer: {
+        kind: 'reaction-played',
+        effectId: 'base.vault.shield-potion.react',
+        reactionContext: {
+          destinationSpaceId: 'base.room.library.a.slot-4',
+        },
+      },
+    });
+    const bobMage = findMageById(s, 'bob-mage-1');
+    expect(bobMage.isWounded).toBe(false);
+    expect(bobMage.isShadowing).toBe(false);
+    expect(bobMage.location).toEqual({
+      kind: 'action-space',
+      spaceId: 'base.room.library.a.slot-4',
+    });
+    const slots = s.rooms.flatMap((r) => r.actionSpaces);
+    expect(
+      slots.find((sp) => sp.id === 'base.room.library.a.slot-1')?.occupant ??
+        null,
+    ).toBeNull();
+    expect(
+      slots.find((sp) => sp.id === 'base.room.library.a.slot-4')?.occupant
+        ?.mageId,
+    ).toBe('bob-mage-1');
+  });
+
+  it('Ancient Armor: with reactionContext.destinationSpaceId, mage lands on the chosen empty slot', () => {
+    let s = setupReactionTest({ reactionCard: 'base.vault.ancient-armor' });
+    s = driveBurnToReactionPrompt(s);
+    const reactionPrompt = topPending(s);
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: reactionPrompt.id,
+      answer: {
+        kind: 'reaction-played',
+        effectId: 'base.vault.ancient-armor.react',
+        reactionContext: {
+          destinationSpaceId: 'base.room.library.a.slot-3',
+        },
+      },
+    });
+    const bobMage = findMageById(s, 'bob-mage-1');
+    expect(bobMage.location).toEqual({
+      kind: 'action-space',
+      spaceId: 'base.room.library.a.slot-3',
+    });
+  });
+
+  it('Shield Potion: an invalid destinationSpaceId is rejected (falls back to original slot)', () => {
+    let s = setupReactionTest({ reactionCard: 'base.vault.shield-potion' });
+    s = driveBurnToReactionPrompt(s);
+    const reactionPrompt = topPending(s);
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: reactionPrompt.id,
+      answer: {
+        kind: 'reaction-played',
+        effectId: 'base.vault.shield-potion.react',
+        reactionContext: {
+          destinationSpaceId: 'no-such-slot',
+        },
+      },
+    });
+    const bobMage = findMageById(s, 'bob-mage-1');
+    // Falls back to slot-1 (original).
+    expect(bobMage.location).toEqual({
+      kind: 'action-space',
+      spaceId: 'base.room.library.a.slot-1',
+    });
+  });
 });
 
 // ============================================================================
