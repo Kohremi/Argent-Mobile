@@ -2296,7 +2296,7 @@ describe('Leader spells (unique single-level)', () => {
     return s;
   }
 
-  it('Trance: gains 2 mana, no prompt, action consumed', () => {
+  it('Trance: gains 2 mana, action consumed, then surfaces the Mysticism place opportunity (caster has a grey mage)', () => {
     let s = setupLeaderTest();
     s = addMage(s, 'p1', {
       id: 'alice-mage-1',
@@ -2310,10 +2310,136 @@ describe('Leader spells (unique single-level)', () => {
       spellCardId: 'base.spell.trance',
       level: 1,
     });
-    expect(s.pendingResolutionStack).toHaveLength(0);
-    const alice = s.players.find((p) => p.id === 'p1');
+    // Trance resolves fully (Alice +2 mana, spell exhausted), then the
+    // grey-mage place opportunity pops as a Yes/No prompt.
+    let alice = s.players.find((p) => p.id === 'p1');
     expect(alice?.resources.mana).toBe(2);
     expect(alice?.ownedSpells[0]?.exhausted).toBe(true);
+    const opportunity = topPending(s);
+    expect(opportunity.prompt.kind).toBe('choose-from-options');
+    if (opportunity.prompt.kind === 'choose-from-options') {
+      expect(opportunity.prompt.options.map((o) => o.id).sort()).toEqual([
+        'place',
+        'skip',
+      ]);
+    }
+    // Player declines the placement.
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: opportunity.id,
+      answer: { kind: 'option-chosen', optionId: 'skip', payload: {} },
+    });
+    expect(s.pendingResolutionStack).toHaveLength(0);
+    alice = s.players.find((p) => p.id === 'p1');
+    expect(alice?.mages[0]?.location).toEqual({
+      kind: 'office',
+      playerId: 'p1',
+    });
+  });
+
+  it('Mysticism place opportunity: choosing Place lets the caster put a grey mage on an open slot', () => {
+    let s = setupLeaderTest();
+    s = addMage(s, 'p1', {
+      id: 'alice-mage-1',
+      cardId: 'base.mage.mysticism',
+      color: 'grey',
+    });
+    s = addOwnedSpell(s, 'p1', 'base.spell.trance');
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.trance',
+      level: 1,
+    });
+    // Only one grey mage → effect skips the mage-pick prompt and goes
+    // straight to slot picking.
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'option-chosen', optionId: 'place', payload: {} },
+    });
+    const slotPrompt = topPending(s);
+    expect(slotPrompt.prompt.kind).toBe('choose-target-action-space');
+    if (slotPrompt.prompt.kind === 'choose-target-action-space') {
+      expect(slotPrompt.prompt.eligibleSpaceIds).toContain(
+        'base.room.library.a.slot-4',
+      );
+    }
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: slotPrompt.id,
+      answer: { kind: 'space-chosen', spaceId: 'base.room.library.a.slot-4' },
+    });
+    // Mage placed on the chosen slot.
+    const alice = s.players.find((p) => p.id === 'p1');
+    const placed = alice?.mages.find((m) => m.id === 'alice-mage-1');
+    expect(placed?.location).toEqual({
+      kind: 'action-space',
+      spaceId: 'base.room.library.a.slot-4',
+    });
+    const slot = s.rooms
+      .flatMap((r) => r.actionSpaces)
+      .find((sp) => sp.id === 'base.room.library.a.slot-4');
+    expect(slot?.occupant?.mageId).toBe('alice-mage-1');
+    expect(s.pendingResolutionStack).toHaveLength(0);
+  });
+
+  it('Mysticism place opportunity: not offered when caster has no grey mages', () => {
+    let s = setupLeaderTest();
+    s = addMage(s, 'p1', {
+      id: 'alice-mage-1',
+      cardId: 'base.mage.divinity',
+      color: 'blue',
+    });
+    s = addOwnedSpell(s, 'p1', 'base.spell.trance');
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.trance',
+      level: 1,
+    });
+    // No grey mage → no place-opportunity prompt.
+    expect(s.pendingResolutionStack).toHaveLength(0);
+    expect(s.players.find((p) => p.id === 'p1')?.resources.mana).toBe(2);
+  });
+
+  it('Mysticism place opportunity: not offered for fast-action spells', () => {
+    // Flash of Light is a fast-action; the grey ability should NOT fire.
+    let s = setupLeaderTest();
+    s = addMage(s, 'p1', {
+      id: 'alice-mage-1',
+      cardId: 'base.mage.mysticism',
+      color: 'grey',
+    });
+    s = addMage(s, 'p2', {
+      id: 'bob-mage-1',
+      cardId: 'base.mage.sorcery',
+      color: 'red',
+    });
+    s = placeMageOnSpace(s, 'p2', 'bob-mage-1', 'base.room.library.a.slot-1');
+    s = setMana(s, 'p1', 1);
+    s = addOwnedSpell(s, 'p1', 'base.spell.flash-of-light');
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.flash-of-light',
+      level: 1,
+    });
+    // Flash of Light's target prompt is on the stack, but NO grey-place
+    // opportunity below it.
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'mage-chosen', mageId: 'bob-mage-1' },
+    });
+    // Reaction window for Bob.
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'reaction-passed' },
+    });
+    // Stack should be empty (no grey opportunity for fast-action cast).
+    expect(s.pendingResolutionStack).toHaveLength(0);
   });
 
   it('Living Image: adds an off-white mage and decrements the supply', () => {

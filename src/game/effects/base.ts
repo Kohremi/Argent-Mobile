@@ -2528,6 +2528,133 @@ registerEffect('base.supporter.yinsei-arlington', (ctx): EffectResult => {
  *  follow-up step (the action's only job was to fire its trigger). */
 registerEffect('base.system.noop', () => ({ kind: 'done', patch: {} }));
 
+/**
+ * Grey (Mysticism) mage ability — when a player casts a spell as a
+ * (full) Action, they MAY place one of their grey office mages onto any
+ * open base slot. The opportunity fires AFTER the spell resolves: the
+ * engine pushes a Yes/No pending at the bottom of the stack before
+ * invoking the spell effect, so the spell's own prompts / reactions /
+ * follow-ups resolve first.
+ *
+ * Steps: 'choose' (Yes/No) → 'pick-mage' (which grey, if multiple) →
+ * 'pick-slot' (which open base slot) → 'apply'.
+ */
+registerEffect(
+  'base.system.mysticism-place-after-cast',
+  (ctx): EffectResult => {
+    const step = ctx.resumeContext?.['step'];
+    if (step === 'choose') {
+      if (ctx.resumeAnswer?.kind !== 'option-chosen') {
+        throw new Error(
+          'mysticism-place-after-cast choose expected option-chosen',
+        );
+      }
+      if (ctx.resumeAnswer.optionId === 'skip') {
+        return { kind: 'done', patch: {} };
+      }
+      if (ctx.resumeAnswer.optionId !== 'place') {
+        throw new Error(
+          `mysticism-place-after-cast unknown option ${ctx.resumeAnswer.optionId}`,
+        );
+      }
+      const player = ctx.state.players.find(
+        (p) => p.id === ctx.triggeringPlayerId,
+      );
+      const greyMages =
+        player?.mages
+          .filter(
+            (m) =>
+              m.color === 'grey' &&
+              m.location.kind === 'office' &&
+              !m.isWounded,
+          )
+          .map((m) => m.id) ?? [];
+      if (greyMages.length === 0) return { kind: 'done', patch: {} };
+      // Single grey → skip the mage-pick prompt and go straight to slot.
+      if (greyMages.length === 1) {
+        return openSlotPrompt(ctx, greyMages[0] as string);
+      }
+      return {
+        kind: 'pause',
+        pending: {
+          responderId: ctx.triggeringPlayerId,
+          prompt: { kind: 'choose-target-mage', eligibleMageIds: greyMages },
+          resume: {
+            effectId: 'base.system.mysticism-place-after-cast',
+            context: { step: 'pick-slot' },
+          },
+          source: ctx.source,
+        },
+      };
+    }
+    if (step === 'pick-slot') {
+      if (ctx.resumeAnswer?.kind !== 'mage-chosen') {
+        throw new Error(
+          'mysticism-place-after-cast pick-slot expected mage-chosen',
+        );
+      }
+      return openSlotPrompt(ctx, ctx.resumeAnswer.mageId);
+    }
+    if (step === 'apply') {
+      if (ctx.resumeAnswer?.kind !== 'space-chosen') {
+        throw new Error(
+          'mysticism-place-after-cast apply expected space-chosen',
+        );
+      }
+      const placerMageId = ctx.resumeContext?.['placerMageId'];
+      if (typeof placerMageId !== 'string') {
+        throw new Error(
+          'mysticism-place-after-cast apply: missing placerMageId',
+        );
+      }
+      // Place onto the BASE position of the chosen slot. No merit cost
+      // (mage abilities bypass it) and no per-room-cap enforcement, mirroring
+      // the Ars Magna treatment.
+      return {
+        kind: 'done',
+        patch: placeOfficeMageOnSpace(
+          ctx.state,
+          ctx.triggeringPlayerId,
+          placerMageId,
+          ctx.resumeAnswer.spaceId,
+        ),
+      };
+    }
+    throw new Error(
+      `mysticism-place-after-cast unexpected step ${String(step)}`,
+    );
+  },
+);
+
+function openSlotPrompt(
+  ctx: EffectContext,
+  placerMageId: string,
+): EffectResult {
+  const openSlots: string[] = [];
+  for (const r of ctx.state.rooms) {
+    if (r.cannotBePlacedInDirectly) continue;
+    for (const s of r.actionSpaces) {
+      if (!s.occupant) openSlots.push(s.id);
+    }
+  }
+  if (openSlots.length === 0) return { kind: 'done', patch: {} };
+  return {
+    kind: 'pause',
+    pending: {
+      responderId: ctx.triggeringPlayerId,
+      prompt: {
+        kind: 'choose-target-action-space',
+        eligibleSpaceIds: openSlots,
+      },
+      resume: {
+        effectId: 'base.system.mysticism-place-after-cast',
+        context: { step: 'apply', placerMageId },
+      },
+      source: ctx.source,
+    },
+  };
+}
+
 // ============================================================================
 // Faction leader (unique) spells
 //

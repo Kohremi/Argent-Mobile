@@ -956,17 +956,61 @@ function handleCastSpell(state: GameState, action: CastSpellAction): GameState {
     ),
   };
 
-  // Invoke the spell's effect.
-  if (!hasEffect(levelDef.effectId)) {
-    return next; // Effect unregistered → just paid the cost, no further behavior.
-  }
-  const effect = getEffect(levelDef.effectId);
   const source: ResolutionSource = {
     kind: 'spell',
     id: action.spellCardId,
     triggeringPlayerId: action.playerId,
     description: `${cardDef.name} L${action.level}`,
   };
+
+  // Grey (Mysticism) mage ability: when a player casts a spell as a full
+  // Action AND has at least one unwounded grey mage in office, they MAY
+  // place one onto an open base slot. The opportunity comes AFTER the
+  // spell fully resolves, so we push the Yes/No pending at the bottom of
+  // the stack now — the spell's own prompts / reactions go on top and pop
+  // first; this prompt fires last.
+  if (levelDef.timing === 'action') {
+    const caster = next.players.find((p) => p.id === action.playerId);
+    const hasGreyInOffice =
+      caster?.mages.some(
+        (m) =>
+          m.color === 'grey' &&
+          m.location.kind === 'office' &&
+          !m.isWounded,
+      ) ?? false;
+    if (hasGreyInOffice) {
+      next = pushPending(next, {
+        responderId: action.playerId,
+        prompt: {
+          kind: 'choose-from-options',
+          options: [
+            {
+              id: 'place',
+              label: 'Place a Grey (Mysticism) Mage on an open slot',
+              payload: {},
+            },
+            { id: 'skip', label: 'Skip', payload: {} },
+          ],
+        },
+        resume: {
+          effectId: 'base.system.mysticism-place-after-cast',
+          context: { step: 'choose' },
+        },
+        source: {
+          kind: 'mage-power',
+          id: 'base.mage.mysticism.place-after-cast',
+          triggeringPlayerId: action.playerId,
+          description: 'Mysticism Mage — place after Action Spell',
+        },
+      });
+    }
+  }
+
+  // Invoke the spell's effect.
+  if (!hasEffect(levelDef.effectId)) {
+    return next; // Effect unregistered → just paid the cost, no further behavior.
+  }
+  const effect = getEffect(levelDef.effectId);
   const ctx: EffectContext = {
     state: next,
     source,
