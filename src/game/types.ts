@@ -349,6 +349,16 @@ export interface ActionSpace {
   index: number;
   slotType: ActionSpaceSlotType;
   occupant: WorkerOccupancy | null;
+  /**
+   * Optional shadow occupant. Only fillable via effects that explicitly
+   * "shadow a mage" (Paralocation, Shadow Potion, Phase Steppers / Invisibility
+   * Cloak reactions, etc.) — never via normal PLACE_WORKER. During the
+   * resolution phase, the shadow occupant resolves AFTER the base occupant
+   * (if any). A mage occupying a shadow position loses its color-based
+   * ability and is not targetable by default (only by effects that explicitly
+   * target shadowing mages).
+   */
+  shadowOccupant?: WorkerOccupancy | null;
   effectId: EffectId;
   costToActivate?: ActionSpaceCost;
   /** Human-readable summary of the slot's reward, sourced from the room file. */
@@ -487,6 +497,12 @@ export type GamePhase =
       round: RoundNumber;
       pendingRoomIndex: number;
       pendingSpaceIndex: number;
+      /**
+       * Per-slot position pointer. A slot can carry both a base and a shadow
+       * occupant; both resolve, base first. Defaults to 'base' (omitted ==
+       * 'base' for backward compatibility with serialized state).
+       */
+      pendingSlotPosition?: 'base' | 'shadow';
     }
   | { kind: 'mid-game-scoring'; round: RoundNumber }
   | { kind: 'final-scoring' }

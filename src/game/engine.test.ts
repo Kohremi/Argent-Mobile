@@ -2577,10 +2577,19 @@ describe('Leader spells (unique single-level)', () => {
       kind: 'action-space',
       spaceId: 'base.room.library.a.slot-1',
     });
+    // Under the shadow-system rules, Paralocation moves the targeted mage
+    // from the slot's base position into its shadow position. The base
+    // becomes empty (available for a future placement); the shadow holds
+    // the targeted mage.
     const slot = s.rooms
       .flatMap((r) => r.actionSpaces)
       .find((sp) => sp.id === 'base.room.library.a.slot-1');
-    expect(slot?.occupant?.isShadowing).toBe(true);
+    expect(slot?.occupant).toBeNull();
+    expect(slot?.shadowOccupant).toEqual({
+      mageId: 'bob-mage-1',
+      ownerId: 'p2',
+      isShadowing: true,
+    });
     expect(s.pendingResolutionStack).toHaveLength(0);
   });
 });
@@ -3365,6 +3374,64 @@ describe('PLAY_VAULT_CARD', () => {
       s.players.find((p) => p.id === 'p1')?.nextSpellFreeMana,
     ).toBe(false);
   });
+
+  it('Shadow Potion: place one of your office mages onto a slot already occupied by another mage', () => {
+    let s = setupVaultPlay('base.vault.shadow-potion');
+    s = forceLibrarySideA(s);
+    // Alice's office mage that will shadow.
+    s = addMage(s, 'p1', {
+      id: 'alice-mage-1',
+      cardId: 'base.mage.divinity',
+      color: 'blue',
+    });
+    // Bob's mage on the slot — this is what Alice will shadow.
+    s = addMage(s, 'p2', {
+      id: 'bob-mage-1',
+      cardId: 'base.mage.sorcery',
+      color: 'red',
+    });
+    s = placeMageOnSpace(s, 'p2', 'bob-mage-1', 'base.room.library.a.slot-1');
+    s = applyAction(s, {
+      type: 'PLAY_VAULT_CARD',
+      playerId: 'p1',
+      vaultCardId: 'base.vault.shadow-potion',
+    });
+    // Prompt 1: pick the placer (Alice's office mage).
+    const pickMage = topPending(s);
+    expect(pickMage.prompt.kind).toBe('choose-target-mage');
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: pickMage.id,
+      answer: { kind: 'mage-chosen', mageId: 'alice-mage-1' },
+    });
+    // Prompt 2: pick the slot to shadow.
+    const pickSlot = topPending(s);
+    expect(pickSlot.prompt.kind).toBe('choose-target-action-space');
+    if (pickSlot.prompt.kind === 'choose-target-action-space') {
+      expect(pickSlot.prompt.eligibleSpaceIds).toContain(
+        'base.room.library.a.slot-1',
+      );
+    }
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: pickSlot.id,
+      answer: { kind: 'space-chosen', spaceId: 'base.room.library.a.slot-1' },
+    });
+    // Alice's mage now occupies the slot's shadow position. Bob remains in
+    // the base position. Both will resolve in turn (base first).
+    const slot = s.rooms
+      .flatMap((r) => r.actionSpaces)
+      .find((sp) => sp.id === 'base.room.library.a.slot-1');
+    expect(slot?.occupant?.mageId).toBe('bob-mage-1');
+    expect(slot?.shadowOccupant?.mageId).toBe('alice-mage-1');
+    expect(slot?.shadowOccupant?.isShadowing).toBe(true);
+    const aliceMage = findMageById(s, 'alice-mage-1');
+    expect(aliceMage.isShadowing).toBe(true);
+    expect(aliceMage.location).toEqual({
+      kind: 'action-space',
+      spaceId: 'base.room.library.a.slot-1',
+    });
+  });
 });
 
 // ============================================================================
@@ -3560,7 +3627,11 @@ describe('Ars Magna (Sorcery Mage power)', () => {
     expect(vault.actionSpaces[2]?.occupant?.mageId).toBe('alice-red');
   });
 
-  it('Phase Steppers reaction prevents the slot takeover', () => {
+  it('Phase Steppers shadows Bob, Alice still takes the base slot (both occupants resolve)', () => {
+    // Under the shadow-system rules, Phase Steppers no longer "prevents the
+    // takeover" — it lands Bob in the slot's SHADOW position, leaving the
+    // base position empty. Alice's red mage still takes the base via Ars
+    // Magna's place-after-wound step. Both occupants will resolve.
     let s = setupArsMagnaTest({ bobColor: 'red', bobHasPhaseSteppers: true });
     s = applyAction(s, {
       type: 'USE_ABILITY',
@@ -3573,7 +3644,6 @@ describe('Ars Magna (Sorcery Mage power)', () => {
       resolutionId: topPending(s).id,
       answer: { kind: 'mage-chosen', mageId: 'bob-mage' },
     });
-    // Reaction window with Phase Steppers offered.
     const reactionPrompt = topPending(s);
     expect(reactionPrompt.prompt.kind).toBe('reaction-window');
 
@@ -3587,7 +3657,7 @@ describe('Ars Magna (Sorcery Mage power)', () => {
       },
     });
 
-    // Bob's mage shadowed back to the slot.
+    // Bob's mage shadows the slot.
     const bobMage = findMageById(s, 'bob-mage');
     expect(bobMage.isWounded).toBe(false);
     expect(bobMage.isShadowing).toBe(true);
@@ -3595,11 +3665,18 @@ describe('Ars Magna (Sorcery Mage power)', () => {
       kind: 'action-space',
       spaceId: 'base.room.vault.a.slot-3',
     });
-    // Red mage stays in office; mana already spent stays gone.
+    // Alice's red mage takes the base position of the same slot.
     const aliceRed = findMageById(s, 'alice-red');
-    expect(aliceRed.location).toEqual({ kind: 'office', playerId: 'p1' });
+    expect(aliceRed.location).toEqual({
+      kind: 'action-space',
+      spaceId: 'base.room.vault.a.slot-3',
+    });
+    const slot = s.rooms
+      .flatMap((r) => r.actionSpaces)
+      .find((sp) => sp.id === 'base.room.vault.a.slot-3');
+    expect(slot?.occupant?.ownerId).toBe('p1');
+    expect(slot?.shadowOccupant?.ownerId).toBe('p2');
     expect(s.players.find((p) => p.id === 'p1')?.resources.mana).toBe(4);
-    // Window closed and stack empty.
     expect(s.activeReactionWindows).toHaveLength(0);
     expect(s.pendingResolutionStack).toHaveLength(0);
   });
@@ -3776,7 +3853,7 @@ describe('Ars Magna (Sorcery Mage power)', () => {
     ).toThrow(/already occupied/);
   });
 
-  it('Phase Steppers reverts an Ars Magna placement; red mage stays in office', () => {
+  it('Phase Steppers shadows Bob during Ars Magna placement; Alice still takes the base slot', () => {
     let s = setupArsMagnaTest({ bobColor: 'red', bobHasPhaseSteppers: true });
     s = applyAction(s, {
       type: 'PLACE_WORKER',
@@ -3784,15 +3861,10 @@ describe('Ars Magna (Sorcery Mage power)', () => {
       mageId: 'alice-red',
       actionSpaceId: 'base.room.vault.a.slot-3',
     });
-    // Bob plays Phase Steppers in response.
     const reactionPrompt = topPending(s);
     if (reactionPrompt.prompt.kind !== 'reaction-window') {
       throw new Error('expected reaction-window prompt');
     }
-    const phaseSteppers = reactionPrompt.prompt.reactionOptions.find(
-      (o) => o.effectId === 'base.vault.phase-steppers.react',
-    );
-    expect(phaseSteppers).toBeTruthy();
     s = applyAction(s, {
       type: 'RESOLVE_PENDING',
       resolutionId: reactionPrompt.id,
@@ -3802,18 +3874,20 @@ describe('Ars Magna (Sorcery Mage power)', () => {
         reactionContext: {},
       },
     });
-    // Bob's mage is back on the slot (shadowing); Alice's red mage stays in
-    // office and never made it onto the board.
+    // Bob shadows the slot; Alice's red lands on the base.
     const bobMage = findMageById(s, 'bob-mage');
     expect(bobMage.isWounded).toBe(false);
-    expect(bobMage.location).toEqual({
+    expect(bobMage.isShadowing).toBe(true);
+    const aliceMage = findMageById(s, 'alice-red');
+    expect(aliceMage.location).toEqual({
       kind: 'action-space',
       spaceId: 'base.room.vault.a.slot-3',
     });
-    const aliceMage = findMageById(s, 'alice-red');
-    expect(aliceMage.location).toEqual({ kind: 'office', playerId: 'p1' });
-    // Mana still spent — the cost is paid up front even if the placement
-    // doesn't stick.
+    const slot = s.rooms
+      .flatMap((r) => r.actionSpaces)
+      .find((sp) => sp.id === 'base.room.vault.a.slot-3');
+    expect(slot?.occupant?.ownerId).toBe('p1');
+    expect(slot?.shadowOccupant?.ownerId).toBe('p2');
     expect(s.players.find((p) => p.id === 'p1')?.resources.mana).toBe(4);
   });
 
@@ -4273,6 +4347,93 @@ describe('Training Fields A', () => {
     );
     s = driveToResolution(s);
     expect(s.players.find((p) => p.id === 'p1')?.resources.wisdom).toBe(1);
+  });
+
+  it('base + shadow occupants both resolve, base reward fires before shadow reward', () => {
+    let s = setupRoomSlotTest(
+      'Training Fields',
+      'A',
+      'base.room.training-fields.a.slot-2', // grants 1 INT
+    );
+    // Inject Bob's mage into the SHADOW slot directly (simulating a prior
+    // Shadow-Potion / Paralocation result). zero Bob's resources so the
+    // delta is observable.
+    s = zeroPlayerResources(s, 'p2');
+    s = addMage(s, 'p2', {
+      id: 'bob-shadow',
+      cardId: 'base.mage.sorcery',
+      color: 'red',
+    });
+    s = setMeritBadges(s, 'p2', 5);
+    const spaceId = 'base.room.training-fields.a.slot-2';
+    s = mapPlayer(s, 'p2', (p) => ({
+      ...p,
+      mages: p.mages.map((m) =>
+        m.id !== 'bob-shadow'
+          ? m
+          : {
+              ...m,
+              isShadowing: true,
+              location: { kind: 'action-space' as const, spaceId },
+            },
+      ),
+    }));
+    s = {
+      ...s,
+      rooms: s.rooms.map((r) => ({
+        ...r,
+        actionSpaces: r.actionSpaces.map((sp) =>
+          sp.id !== spaceId
+            ? sp
+            : {
+                ...sp,
+                shadowOccupant: {
+                  mageId: 'bob-shadow',
+                  ownerId: 'p2',
+                  isShadowing: true,
+                },
+              },
+        ),
+      })),
+    };
+    // Drive to resolution. The first reward prompt is for Alice (base).
+    s = applyAction(s, { type: 'ADVANCE_PHASE' }); // round-setup → errands
+    s = applyAction(s, { type: 'ADVANCE_PHASE' }); // errands → resolution
+    s = applyAction(s, { type: 'ADVANCE_PHASE' }); // pump → first prompt
+    let top = topPending(s);
+    expect(top.responderId).toBe('p1'); // base resolves first
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: top.id,
+      answer: { kind: 'option-chosen', optionId: 'reward', payload: {} },
+    });
+    // After Alice's INT grant, shadow prompt for Bob.
+    top = topPending(s);
+    expect(top.responderId).toBe('p2'); // shadow resolves second
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: top.id,
+      answer: { kind: 'option-chosen', optionId: 'reward', payload: {} },
+    });
+    const alice = s.players.find((p) => p.id === 'p1');
+    const bob = s.players.find((p) => p.id === 'p2');
+    expect(alice?.resources.intelligence).toBe(1);
+    expect(bob?.resources.intelligence).toBe(1);
+    // Both mages return to office; the slot is now empty.
+    expect(findMageById(s, 'alice-mage-1').location).toEqual({
+      kind: 'office',
+      playerId: 'p1',
+    });
+    expect(findMageById(s, 'bob-shadow').location).toEqual({
+      kind: 'office',
+      playerId: 'p2',
+    });
+    expect(findMageById(s, 'bob-shadow').isShadowing).toBe(false);
+    const slot = s.rooms
+      .flatMap((r) => r.actionSpaces)
+      .find((sp) => sp.id === spaceId);
+    expect(slot?.occupant).toBeNull();
+    expect(slot?.shadowOccupant).toBeNull();
   });
 });
 

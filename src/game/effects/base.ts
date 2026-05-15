@@ -26,6 +26,7 @@ import {
   gainResourcesPatch,
   healMageToSpace,
   moveMageToSpace,
+  placeOfficeMageAsShadow,
   shadowMageInPlace,
   woundMage,
 } from './helpers';
@@ -46,6 +47,7 @@ import type {
   ResolutionSource,
   ResumeContinuation,
   SerializableContext,
+  WorkerOccupancy,
 } from '../types';
 
 const PHASE_STEPPERS_ID = 'base.vault.phase-steppers';
@@ -521,15 +523,22 @@ function applyReactionReposition(
     return updated;
   });
 
+  // Cards that ask the mage to "shadow" the slot (Phase Steppers / Invisibility
+  // Cloak) land the mage in the slot's shadowOccupant; non-shadowing reactions
+  // (Shield Potion / Ancient Armor / Mystic Amulet) replace the base occupant.
+  const occupancy: WorkerOccupancy = {
+    mageId,
+    ownerId,
+    isShadowing: asShadow,
+  };
   const rooms = state.rooms.map((r) => ({
     ...r,
     actionSpaces: r.actionSpaces.map((s) =>
       s.id !== destinationSpaceId
         ? s
-        : {
-            ...s,
-            occupant: { mageId, ownerId, isShadowing: asShadow },
-          },
+        : asShadow
+          ? { ...s, shadowOccupant: occupancy }
+          : { ...s, occupant: occupancy },
     ),
   }));
 
@@ -3410,6 +3419,91 @@ function tryPlaceForWoundPlace(
 
 registerEffect('base.vault.bottled-rage', woundAndPlaceEffect('base.vault.bottled-rage'));
 registerEffect('base.vault.spellblade', woundAndPlaceEffect('base.vault.spellblade'));
+
+/**
+ * Shadow Potion (consumable, action) — Shadow a slot with one of your Mages.
+ *
+ * Pick one of your office mages, pick a slot whose base position holds an
+ * existing mage (you can only shadow a slot that has someone in it), and
+ * place your mage in that slot's shadow position. Your shadow mage will
+ * resolve AFTER the base mage during the resolution phase. While shadowing,
+ * your mage loses its color-based ability and isn't targetable by default.
+ */
+registerEffect('base.vault.shadow-potion', (ctx): EffectResult => {
+  const step = ctx.resumeContext?.['step'];
+  if (!ctx.resumeAnswer) {
+    // Step 1: pick the placer (one of your office mages).
+    const player = ctx.state.players.find(
+      (p) => p.id === ctx.triggeringPlayerId,
+    );
+    const officeMages =
+      player?.mages
+        .filter((m) => m.location.kind === 'office' && !m.isWounded)
+        .map((m) => m.id) ?? [];
+    if (officeMages.length === 0) return { kind: 'done', patch: {} };
+    return {
+      kind: 'pause',
+      pending: {
+        responderId: ctx.triggeringPlayerId,
+        prompt: { kind: 'choose-target-mage', eligibleMageIds: officeMages },
+        resume: {
+          effectId: 'base.vault.shadow-potion',
+          context: { step: 'pick-slot' },
+        },
+        source: ctx.source,
+      },
+    };
+  }
+  if (step === 'pick-slot') {
+    // Step 2: pick a slot whose base is occupied and shadow is empty.
+    if (ctx.resumeAnswer.kind !== 'mage-chosen') {
+      throw new Error('shadow-potion pick-slot expected mage-chosen');
+    }
+    const placerMageId = ctx.resumeAnswer.mageId;
+    const eligibleSpaces: string[] = [];
+    for (const r of ctx.state.rooms) {
+      if (r.cannotBePlacedInDirectly) continue;
+      for (const s of r.actionSpaces) {
+        if (s.occupant && !s.shadowOccupant) eligibleSpaces.push(s.id);
+      }
+    }
+    if (eligibleSpaces.length === 0) return { kind: 'done', patch: {} };
+    return {
+      kind: 'pause',
+      pending: {
+        responderId: ctx.triggeringPlayerId,
+        prompt: {
+          kind: 'choose-target-action-space',
+          eligibleSpaceIds: eligibleSpaces,
+        },
+        resume: {
+          effectId: 'base.vault.shadow-potion',
+          context: { step: 'apply', placerMageId },
+        },
+        source: ctx.source,
+      },
+    };
+  }
+  if (step === 'apply') {
+    if (ctx.resumeAnswer.kind !== 'space-chosen') {
+      throw new Error('shadow-potion apply expected space-chosen');
+    }
+    const placerMageId = ctx.resumeContext?.['placerMageId'];
+    if (typeof placerMageId !== 'string') {
+      throw new Error('shadow-potion apply: missing placerMageId');
+    }
+    return {
+      kind: 'done',
+      patch: placeOfficeMageAsShadow(
+        ctx.state,
+        ctx.triggeringPlayerId,
+        placerMageId,
+        ctx.resumeAnswer.spaceId,
+      ),
+    };
+  }
+  throw new Error(`shadow-potion unexpected step ${String(step)}`);
+});
 
 /**
  * Force Gloves (consumable, action) — Spend 2 Mana to banish a Mage. Do

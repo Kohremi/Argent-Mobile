@@ -2546,58 +2546,73 @@ function RoomsPanel({
                     const occupantMageEligible =
                       s.occupant !== null &&
                       (mageMode?.eligibleIds.has(s.occupant.mageId) ?? false);
-                    const occupantBlock = s.occupant ? (
-                      <div
-                        className={clsx(
-                          'text-[10px]',
-                          s.occupant ? 'text-amber-300' : 'text-slate-500',
-                        )}
-                      >
+                    const shadowOccupant = s.shadowOccupant ?? null;
+                    const shadowMageEligible =
+                      shadowOccupant !== null &&
+                      (mageMode?.eligibleIds.has(shadowOccupant.mageId) ?? false);
+                    const renderOccupantLine = (
+                      occ: NonNullable<typeof s.occupant>,
+                      isShadow: boolean,
+                      clickable: boolean,
+                    ) => {
+                      const color =
+                        state.players
+                          .find((p) => p.id === occ.ownerId)
+                          ?.mages.find((m) => m.id === occ.mageId)?.color ??
+                        'off-white';
+                      const label = (
+                        <>
+                          <MageIcon color={color} size={12} />
+                          {occ.ownerId}
+                          {isShadow ? ' (shadow)' : ''}
+                        </>
+                      );
+                      if (clickable && mageMode) {
+                        return (
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              mageMode.onSelect(occ.mageId);
+                            }}
+                            className="inline-flex items-center gap-1 rounded ring-2 ring-amber-400 hover:bg-amber-400/20 px-1 py-0.5"
+                            title="click to target this mage"
+                          >
+                            {label}
+                          </button>
+                        );
+                      }
+                      return (
                         <span className="inline-flex items-center gap-1">
-                          occupied by{' '}
-                          {occupantMageEligible && mageMode ? (
-                            <button
-                              type="button"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                mageMode.onSelect(s.occupant!.mageId);
-                              }}
-                              className="inline-flex items-center gap-1 rounded ring-2 ring-amber-400 hover:bg-amber-400/20 px-1 py-0.5"
-                              title="click to target this mage"
-                            >
-                              <MageIcon
-                                color={
-                                  state.players
-                                    .find((p) => p.id === s.occupant?.ownerId)
-                                    ?.mages.find(
-                                      (m) => m.id === s.occupant?.mageId,
-                                    )?.color ?? 'off-white'
-                                }
-                                size={12}
-                              />
-                              {s.occupant.ownerId}
-                              {s.occupant.isShadowing ? ' (shadow)' : ''}
-                            </button>
-                          ) : (
-                            <>
-                              <MageIcon
-                                color={
-                                  state.players
-                                    .find((p) => p.id === s.occupant?.ownerId)
-                                    ?.mages.find(
-                                      (m) => m.id === s.occupant?.mageId,
-                                    )?.color ?? 'off-white'
-                                }
-                                size={12}
-                              />
-                              {s.occupant.ownerId}
-                              {s.occupant.isShadowing ? ' (shadow)' : ''}
-                            </>
-                          )}
+                          {label}
                         </span>
+                      );
+                    };
+                    const occupantBlock = (
+                      <div className="text-[10px] space-y-0.5">
+                        {s.occupant ? (
+                          <div className="text-amber-300 flex items-center gap-1">
+                            <span className="text-slate-500">base:</span>
+                            {renderOccupantLine(
+                              s.occupant,
+                              false,
+                              occupantMageEligible,
+                            )}
+                          </div>
+                        ) : (
+                          <div className="text-slate-500">base: empty</div>
+                        )}
+                        {shadowOccupant && (
+                          <div className="text-purple-300 flex items-center gap-1">
+                            <span className="text-slate-500">shadow:</span>
+                            {renderOccupantLine(
+                              shadowOccupant,
+                              true,
+                              shadowMageEligible,
+                            )}
+                          </div>
+                        )}
                       </div>
-                    ) : (
-                      <div className="text-[10px] text-slate-500">empty</div>
                     );
                     const slotBody = (
                       <>

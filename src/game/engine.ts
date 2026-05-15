@@ -20,6 +20,7 @@ import {
   woundMage,
 } from './effects/helpers';
 import type {
+  ActionSpace,
   BellTowerCard,
   BellTowerCardId,
   BuyVaultCardAction,
@@ -55,6 +56,7 @@ import type {
   RoundNumber,
   SerializableContext,
   UseAbilityAction,
+  WorkerOccupancy,
 } from './types';
 
 // Side-effect import: triggers effect registration.
@@ -369,8 +371,10 @@ function pumpResolutionPhase(state: GameState): GameState {
         continue;
       }
       const space = room.actionSpaces[phase.pendingSpaceIndex];
-      if (!space || !space.occupant) {
-        curr = advanceResolutionPointer(curr, false);
+      const position = phase.pendingSlotPosition ?? 'base';
+      const occupant = currentOccupantAt(space, position);
+      if (!space || !occupant) {
+        curr = advanceSlotPosition(curr, space);
         continue;
       }
       curr = completeCurrentSpaceResolution(curr);
@@ -381,8 +385,10 @@ function pumpResolutionPhase(state: GameState): GameState {
       continue;
     }
     const space = room.actionSpaces[phase.pendingSpaceIndex];
-    if (!space || !space.occupant) {
-      curr = advanceResolutionPointer(curr, false);
+    const position = phase.pendingSlotPosition ?? 'base';
+    const occupant = currentOccupantAt(space, position);
+    if (!space || !occupant) {
+      curr = advanceSlotPosition(curr, space);
       continue;
     }
 
@@ -393,12 +399,47 @@ function pumpResolutionPhase(state: GameState): GameState {
     }
 
     // Push the forfeit-or-reward prompt and pause. The resume effect will
-    // either deduct the merit cost and invoke the slot's real effect, or
-    // grant the player 1 IP and skip the effect.
-    curr = pushResolutionChoicePrompt(curr, room, space, space.occupant.ownerId);
+    // either deduct the merit cost (base position only) and invoke the slot's
+    // real effect, or grant the player 1 IP and skip the effect.
+    curr = pushResolutionChoicePrompt(
+      curr,
+      room,
+      space,
+      occupant.ownerId,
+      position,
+    );
     return curr;
   }
   throw new Error('pumpResolutionPhase: hit iteration cap');
+}
+
+function currentOccupantAt(
+  space: ActionSpace | undefined,
+  position: 'base' | 'shadow',
+): WorkerOccupancy | null {
+  if (!space) return null;
+  return position === 'base' ? space.occupant : (space.shadowOccupant ?? null);
+}
+
+/**
+ * Moves the position pointer forward when the current slot+position has no
+ * occupant: base with no shadow → next slot; base with shadow → shadow;
+ * shadow → next slot. `bumpRoom` advances past the current room entirely.
+ */
+function advanceSlotPosition(
+  state: GameState,
+  space: ActionSpace | undefined,
+): GameState {
+  if (state.phase.kind !== 'resolution') return state;
+  const phase = state.phase;
+  const position = phase.pendingSlotPosition ?? 'base';
+  if (position === 'base' && space?.shadowOccupant) {
+    return {
+      ...state,
+      phase: { ...phase, pendingSlotPosition: 'shadow' },
+    };
+  }
+  return advanceResolutionPointer(state, false);
 }
 
 /** Advances pointer by one space (`bumpRoom` true skips the rest of the room). */
@@ -408,14 +449,24 @@ function advanceResolutionPointer(state: GameState, bumpRoom: boolean): GameStat
   return {
     ...state,
     phase: bumpRoom
-      ? { ...phase, pendingRoomIndex: phase.pendingRoomIndex + 1, pendingSpaceIndex: 0 }
-      : { ...phase, pendingSpaceIndex: phase.pendingSpaceIndex + 1 },
+      ? {
+          ...phase,
+          pendingRoomIndex: phase.pendingRoomIndex + 1,
+          pendingSpaceIndex: 0,
+          pendingSlotPosition: 'base',
+        }
+      : {
+          ...phase,
+          pendingSpaceIndex: phase.pendingSpaceIndex + 1,
+          pendingSlotPosition: 'base',
+        },
   };
 }
 
 /**
- * Returns the resolution-pointer space's mage to its owner's office, clears
- * occupant, advances the pointer.
+ * Returns the resolution-pointer space's mage (at the current position) to
+ * its owner's office, clears the right occupant, advances the pointer
+ * (base → shadow if shadow exists, otherwise next slot; shadow → next slot).
  */
 function completeCurrentSpaceResolution(state: GameState): GameState {
   if (state.phase.kind !== 'resolution') return state;
@@ -423,16 +474,23 @@ function completeCurrentSpaceResolution(state: GameState): GameState {
   const room = state.rooms[phase.pendingRoomIndex];
   if (!room) return state;
   const space = room.actionSpaces[phase.pendingSpaceIndex];
-  if (!space || !space.occupant) return advanceResolutionPointer(state, false);
+  const position = phase.pendingSlotPosition ?? 'base';
+  const occupant = currentOccupantAt(space, position);
+  if (!space || !occupant) return advanceSlotPosition(state, space);
 
-  const occupant = space.occupant;
+  const advancingToShadow = position === 'base' && space.shadowOccupant != null;
+
   const updatedRooms = state.rooms.map((r, ri) =>
     ri !== phase.pendingRoomIndex
       ? r
       : {
           ...r,
           actionSpaces: r.actionSpaces.map((s, si) =>
-            si !== phase.pendingSpaceIndex ? s : { ...s, occupant: null },
+            si !== phase.pendingSpaceIndex
+              ? s
+              : position === 'base'
+                ? { ...s, occupant: null }
+                : { ...s, shadowOccupant: null },
           ),
         },
   );
@@ -457,7 +515,13 @@ function completeCurrentSpaceResolution(state: GameState): GameState {
     ...state,
     rooms: updatedRooms,
     players: updatedPlayers,
-    phase: { ...phase, pendingSpaceIndex: phase.pendingSpaceIndex + 1 },
+    phase: advancingToShadow
+      ? { ...phase, pendingSlotPosition: 'shadow' }
+      : {
+          ...phase,
+          pendingSpaceIndex: phase.pendingSpaceIndex + 1,
+          pendingSlotPosition: 'base',
+        },
   };
 }
 
@@ -690,13 +754,18 @@ function pushResolutionChoicePrompt(
   room: Room,
   space: GameState['rooms'][number]['actionSpaces'][number],
   playerId: string,
+  position: 'base' | 'shadow' = 'base',
 ): GameState {
   const player = state.players.find((p) => p.id === playerId);
   if (!player) {
     throw new Error(`pushResolutionChoicePrompt: player ${playerId} not found`);
   }
+  // Shadow occupants don't pay the slot's merit cost — they didn't get there
+  // via normal merit placement.
   const meritCost =
-    space.slotType === 'merit' ? (space.costToActivate?.meritBadges ?? 0) : 0;
+    position === 'base' && space.slotType === 'merit'
+      ? (space.costToActivate?.meritBadges ?? 0)
+      : 0;
   const canAffordReward =
     meritCost === 0 || player.resources.meritBadges >= meritCost;
 

@@ -213,6 +213,46 @@ export function buildBurnTargets(
 }
 
 /**
+ * Looks up a mage's slot position (base vs shadow) given its current
+ * spaceId. Returns null if the mage isn't on a slot. Used by wound /
+ * banish / move helpers so they clear the right occupant slot.
+ */
+export function findMageSlotPosition(
+  state: GameState,
+  mageId: OwnedMageId,
+): { spaceId: ActionSpaceId; position: 'base' | 'shadow' } | null {
+  for (const r of state.rooms) {
+    for (const s of r.actionSpaces) {
+      if (s.occupant?.mageId === mageId) {
+        return { spaceId: s.id, position: 'base' };
+      }
+      if (s.shadowOccupant?.mageId === mageId) {
+        return { spaceId: s.id, position: 'shadow' };
+      }
+    }
+  }
+  return null;
+}
+
+/** Clears the specified position on the matching space. */
+function clearSpaceOccupant(
+  rooms: Room[],
+  spaceId: ActionSpaceId,
+  position: 'base' | 'shadow',
+): Room[] {
+  return rooms.map((r) => ({
+    ...r,
+    actionSpaces: r.actionSpaces.map((s) =>
+      s.id !== spaceId
+        ? s
+        : position === 'base'
+          ? { ...s, occupant: null }
+          : { ...s, shadowOccupant: null },
+    ),
+  }));
+}
+
+/**
  * Computes a Burn L1 wound: returns the patch (mage moved to infirmary, slot
  * cleared, isWounded set) and the ReactionTriggerEvent to attach to the
  * window the engine will open.
@@ -226,6 +266,7 @@ export function woundMage(
   if (!lookup) throw new Error(`woundMage: mage ${targetMageId} not found`);
   const { player: owner, mage } = lookup;
 
+  const slotLookup = findMageSlotPosition(state, targetMageId);
   const originalSpaceId =
     mage.location.kind === 'action-space' ? mage.location.spaceId : null;
 
@@ -247,13 +288,8 @@ export function woundMage(
         },
   );
 
-  const rooms: Room[] = originalSpaceId
-    ? state.rooms.map((r) => ({
-        ...r,
-        actionSpaces: r.actionSpaces.map((s) =>
-          s.id !== originalSpaceId ? s : { ...s, occupant: null },
-        ),
-      }))
+  const rooms: Room[] = slotLookup
+    ? clearSpaceOccupant(state.rooms, slotLookup.spaceId, slotLookup.position)
     : state.rooms;
 
   return {
@@ -282,6 +318,7 @@ export function banishMage(
   const lookup = findMageOwner(state, targetMageId);
   if (!lookup) throw new Error(`banishMage: mage ${targetMageId} not found`);
   const { player: owner, mage } = lookup;
+  const slotLookup = findMageSlotPosition(state, targetMageId);
   const originalSpaceId =
     mage.location.kind === 'action-space' ? mage.location.spaceId : null;
   const players = state.players.map((p) =>
@@ -301,13 +338,8 @@ export function banishMage(
           ),
         },
   );
-  const rooms: Room[] = originalSpaceId
-    ? state.rooms.map((r) => ({
-        ...r,
-        actionSpaces: r.actionSpaces.map((s) =>
-          s.id !== originalSpaceId ? s : { ...s, occupant: null },
-        ),
-      }))
+  const rooms: Room[] = slotLookup
+    ? clearSpaceOccupant(state.rooms, slotLookup.spaceId, slotLookup.position)
     : state.rooms;
   return {
     patch: { players, rooms },
@@ -362,11 +394,17 @@ export function moveMageToSpace(
   if (mage.location.kind !== 'action-space') {
     throw new Error(`moveMageToSpace: ${targetMageId} is not on a slot`);
   }
-  const fromSpaceId = mage.location.spaceId;
+  const fromLookup = findMageSlotPosition(state, targetMageId);
+  if (!fromLookup) {
+    throw new Error(`moveMageToSpace: ${targetMageId} not found in any slot`);
+  }
+  const fromSpaceId = fromLookup.spaceId;
+  // Moved mages drop their shadowing state — they land in the base position
+  // of the target slot.
   const occupancy: WorkerOccupancy = {
     mageId: targetMageId,
     ownerId: owner.id,
-    isShadowing: mage.isShadowing,
+    isShadowing: false,
   };
   const players = state.players.map((p) =>
     p.id !== owner.id
@@ -376,14 +414,22 @@ export function moveMageToSpace(
           mages: p.mages.map((m) =>
             m.id !== targetMageId
               ? m
-              : { ...m, location: { kind: 'action-space' as const, spaceId: toSpaceId } },
+              : {
+                  ...m,
+                  isShadowing: false,
+                  location: { kind: 'action-space' as const, spaceId: toSpaceId },
+                },
           ),
         },
   );
   const rooms = state.rooms.map((r) => ({
     ...r,
     actionSpaces: r.actionSpaces.map((s) => {
-      if (s.id === fromSpaceId) return { ...s, occupant: null };
+      if (s.id === fromSpaceId) {
+        return fromLookup.position === 'base'
+          ? { ...s, occupant: null }
+          : { ...s, shadowOccupant: null };
+      }
       if (s.id === toSpaceId) return { ...s, occupant: occupancy };
       return s;
     }),
@@ -449,10 +495,13 @@ export function healMageToSpace(
 }
 
 /**
- * Flags a placed mage as shadowing its current slot (and the slot occupant
- * follows). Used by Paralocation. Does NOT vacate the slot — the mage stays
- * put, just marked as shadowing. Returns a `mage-shadowed` trigger event so
- * the caller can open a reaction window (Mystic Amulet etc.).
+ * Moves the targeted placed mage from a slot's BASE position into its SHADOW
+ * position on the same slot. The base position becomes empty; the shadow
+ * gets the mage. Per the shadow-system rules: while shadowing the mage
+ * loses its color-based ability and is not targetable by default. The slot
+ * will fire its effect for the shadow occupant AFTER the base resolves
+ * (if a new base mage ends up there) or alone if base stays empty. Returns
+ * a `mage-shadowed` trigger event for reaction windows (Mystic Amulet etc.).
  */
 export function shadowMageInPlace(
   state: GameState,
@@ -465,7 +514,30 @@ export function shadowMageInPlace(
   if (mage.location.kind !== 'action-space') {
     throw new Error(`shadowMageInPlace: ${targetMageId} is not on a slot`);
   }
-  const spaceId = mage.location.spaceId;
+  const fromLookup = findMageSlotPosition(state, targetMageId);
+  if (!fromLookup) {
+    throw new Error(`shadowMageInPlace: ${targetMageId} not found in any slot`);
+  }
+  if (fromLookup.position !== 'base') {
+    // Already shadowing — no-op patch but still fire the event so reactions
+    // see the source action.
+    return {
+      patch: {},
+      triggerEvent: {
+        kind: 'mage-shadowed',
+        mageId: targetMageId,
+        ownerId: owner.id,
+        byPlayerId,
+        spaceId: fromLookup.spaceId,
+      },
+    };
+  }
+  const spaceId = fromLookup.spaceId;
+  const shadowOccupancy: WorkerOccupancy = {
+    mageId: targetMageId,
+    ownerId: owner.id,
+    isShadowing: true,
+  };
   return {
     patch: {
       players: state.players.map((p) =>
@@ -481,9 +553,9 @@ export function shadowMageInPlace(
       rooms: state.rooms.map((r) => ({
         ...r,
         actionSpaces: r.actionSpaces.map((s) =>
-          s.id !== spaceId || !s.occupant
+          s.id !== spaceId
             ? s
-            : { ...s, occupant: { ...s.occupant, isShadowing: true } },
+            : { ...s, occupant: null, shadowOccupant: shadowOccupancy },
         ),
       })),
     },
@@ -494,6 +566,110 @@ export function shadowMageInPlace(
       byPlayerId,
       spaceId,
     },
+  };
+}
+
+/**
+ * Places one of a player's office mages into a slot's SHADOW position.
+ * Used by Shadow Potion and Phase Steppers / Invisibility Cloak reactions.
+ * Throws if the mage isn't in the player's office or the shadow slot is
+ * already occupied. Pre-existing base occupant is left alone — the slot
+ * now has both positions filled.
+ */
+export function placeOfficeMageAsShadow(
+  state: GameState,
+  ownerId: PlayerId,
+  mageId: OwnedMageId,
+  spaceId: ActionSpaceId,
+): GameStatePatch {
+  const player = findPlayer(state, ownerId);
+  if (!player) throw new Error(`placeOfficeMageAsShadow: player ${ownerId} not found`);
+  const mage = player.mages.find((m) => m.id === mageId);
+  if (!mage) throw new Error(`placeOfficeMageAsShadow: mage ${mageId} not in owner`);
+  if (mage.location.kind !== 'office') {
+    throw new Error(`placeOfficeMageAsShadow: mage ${mageId} not in office`);
+  }
+  const targetSpace = state.rooms
+    .flatMap((r) => r.actionSpaces)
+    .find((s) => s.id === spaceId);
+  if (!targetSpace) {
+    throw new Error(`placeOfficeMageAsShadow: space ${spaceId} not found`);
+  }
+  if (targetSpace.shadowOccupant) {
+    throw new Error(`placeOfficeMageAsShadow: shadow slot already occupied`);
+  }
+  const occupancy: WorkerOccupancy = {
+    mageId,
+    ownerId,
+    isShadowing: true,
+  };
+  return {
+    players: state.players.map((p) =>
+      p.id !== ownerId
+        ? p
+        : {
+            ...p,
+            mages: p.mages.map((m) =>
+              m.id !== mageId
+                ? m
+                : {
+                    ...m,
+                    isShadowing: true,
+                    location: { kind: 'action-space' as const, spaceId },
+                  },
+            ),
+          },
+    ),
+    rooms: state.rooms.map((r) => ({
+      ...r,
+      actionSpaces: r.actionSpaces.map((s) =>
+        s.id !== spaceId ? s : { ...s, shadowOccupant: occupancy },
+      ),
+    })),
+  };
+}
+
+/**
+ * Places an arbitrary mage (sourced from anywhere — usually post-wound) into
+ * a slot's shadow position. Used by Phase Steppers / Invisibility Cloak when
+ * reverting a wound to a "shadow at original slot" state. Clears the mage's
+ * `isWounded` flag along the way.
+ */
+export function placeAnyMageAsShadow(
+  state: GameState,
+  mageId: OwnedMageId,
+  ownerId: PlayerId,
+  spaceId: ActionSpaceId,
+): GameStatePatch {
+  const occupancy: WorkerOccupancy = {
+    mageId,
+    ownerId,
+    isShadowing: true,
+  };
+  return {
+    players: state.players.map((p) =>
+      p.id !== ownerId
+        ? p
+        : {
+            ...p,
+            mages: p.mages.map((m) =>
+              m.id !== mageId
+                ? m
+                : {
+                    ...m,
+                    isWounded: false,
+                    isShadowing: true,
+                    location: { kind: 'action-space' as const, spaceId },
+                  },
+            ),
+          },
+    ),
+    rooms: state.rooms.map((r) => ({
+      ...r,
+      actionSpaces: r.actionSpaces.map((s) =>
+        s.id !== spaceId ? s : { ...s, shadowOccupant: occupancy },
+      ),
+    })),
   };
 }
 
