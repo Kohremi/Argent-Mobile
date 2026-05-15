@@ -10,15 +10,21 @@ import {
   applySupporterDraft,
   applyVaultDraft,
   applyVaultPurchase,
+  banishMage,
   buildArsMagnaTargets,
+  buildBanishTargets,
   buildBurnTargets,
   buildReactionQueue,
   bumpInfluencePatch,
   checkInfirmaryBonusApplies,
   eligibleVotersForMark,
   findActionSpace,
+  findRoomBySpaceId,
   gainResourcePatch,
   gainResourcesPatch,
+  healMageToSpace,
+  moveMageToSpace,
+  shadowMageInPlace,
   woundMage,
 } from './helpers';
 import type {
@@ -28,6 +34,7 @@ import type {
   EffectResult,
   GameState,
   GameStatePatch,
+  OwnedMage,
   OwnedMageId,
   PendingResolutionInput,
   Player,
@@ -1434,6 +1441,330 @@ registerEffect(
     );
   },
 );
+
+// ============================================================================
+// System effects shared by multiple spells / abilities.
+// ============================================================================
+
+/** No-op effect used as `afterResume` when a reaction window has no
+ *  follow-up step (the action's only job was to fire its trigger). */
+registerEffect('base.system.noop', () => ({ kind: 'done', patch: {} }));
+
+// ============================================================================
+// Faction leader (unique) spells
+//
+// Each candidate's starter spell. One level only, castable from turn 1 (no
+// research required). Exhausted after cast; refreshed at round-setup.
+// ============================================================================
+
+/** Byron Krane — Trance: gain 2 mana. */
+registerEffect('base.spell.trance.l1', (ctx): EffectResult => ({
+  kind: 'done',
+  patch: gainResourcePatch(ctx.state, ctx.triggeringPlayerId, 'mana', 2),
+}));
+
+/** Trias Blackwind — Living Image: place a neutral mage from the supply
+ *  into the caster's office. Fizzles silently if the supply is empty. */
+registerEffect('base.spell.living-image.l1', (ctx): EffectResult => {
+  const poolNow = ctx.state.mageDraftPool['off-white'] ?? 0;
+  if (poolNow === 0) {
+    return { kind: 'done', patch: {} };
+  }
+  const seq = ctx.state.nextSequenceId;
+  const newMage: OwnedMage = {
+    id: `m-${seq}`,
+    cardId: 'base.mage.neutral',
+    color: 'off-white',
+    location: { kind: 'office', playerId: ctx.triggeringPlayerId },
+    isShadowing: false,
+    isWounded: false,
+  };
+  return {
+    kind: 'done',
+    patch: {
+      nextSequenceId: seq + 1,
+      mageDraftPool: {
+        ...ctx.state.mageDraftPool,
+        'off-white': poolNow - 1,
+      },
+      players: ctx.state.players.map((p) =>
+        p.id !== ctx.triggeringPlayerId
+          ? p
+          : { ...p, mages: [...p.mages, newMage] },
+      ),
+    },
+  };
+});
+
+/** Larimore Burman — Flash of Light: prompt for a banish target, then
+ *  banish + open reaction window. */
+registerEffect('base.spell.flash-of-light.l1', (ctx): EffectResult => {
+  if (!ctx.resumeAnswer) {
+    const targets = buildBanishTargets(ctx.state, ctx.triggeringPlayerId);
+    if (targets.length === 0) {
+      // No legal targets — spell fizzles (cost already paid by CAST_SPELL).
+      return { kind: 'done', patch: {} };
+    }
+    return {
+      kind: 'pause',
+      pending: {
+        responderId: ctx.triggeringPlayerId,
+        prompt: { kind: 'choose-target-mage', eligibleMageIds: targets },
+        resume: {
+          effectId: 'base.spell.flash-of-light.l1',
+          context: { step: 'apply' },
+        },
+        source: ctx.source,
+      },
+    };
+  }
+  if (ctx.resumeAnswer.kind !== 'mage-chosen') {
+    throw new Error(
+      `flash-of-light expected mage-chosen, got ${ctx.resumeAnswer.kind}`,
+    );
+  }
+  const banished = banishMage(
+    ctx.state,
+    ctx.resumeAnswer.mageId,
+    ctx.triggeringPlayerId,
+  );
+  return {
+    kind: 'open-reaction',
+    patch: banished.patch,
+    window: {
+      triggerEvent: banished.triggerEvent,
+      pendingResponderIds: buildReactionQueue(
+        ctx.state,
+        ctx.triggeringPlayerId,
+      ),
+      reactedPlayerIds: [],
+      afterResume: { effectId: 'base.system.noop', context: {} },
+      source: ctx.source,
+    },
+  };
+});
+
+/** Rheye Cal — Bless: move a wounded mage from the Infirmary to any open
+ *  action space. Prompts: pick infirmary mage → pick open slot. */
+registerEffect('base.spell.bless.l1', (ctx): EffectResult => {
+  const step = ctx.resumeContext?.['step'];
+  if (!ctx.resumeAnswer) {
+    const infirmaryMages: string[] = [];
+    for (const p of ctx.state.players) {
+      for (const m of p.mages) {
+        if (m.location.kind === 'infirmary') infirmaryMages.push(m.id);
+      }
+    }
+    if (infirmaryMages.length === 0) {
+      return { kind: 'done', patch: {} };
+    }
+    return {
+      kind: 'pause',
+      pending: {
+        responderId: ctx.triggeringPlayerId,
+        prompt: {
+          kind: 'choose-target-mage',
+          eligibleMageIds: infirmaryMages,
+        },
+        resume: {
+          effectId: 'base.spell.bless.l1',
+          context: { step: 'pick-slot' },
+        },
+        source: ctx.source,
+      },
+    };
+  }
+  if (step === 'pick-slot') {
+    if (ctx.resumeAnswer.kind !== 'mage-chosen') {
+      throw new Error('bless pick-slot expected mage-chosen');
+    }
+    const targetMageId = ctx.resumeAnswer.mageId;
+    const openSlots: string[] = [];
+    for (const r of ctx.state.rooms) {
+      if (r.cannotBePlacedInDirectly) continue;
+      for (const s of r.actionSpaces) {
+        if (!s.occupant) openSlots.push(s.id);
+      }
+    }
+    if (openSlots.length === 0) {
+      return { kind: 'done', patch: {} };
+    }
+    return {
+      kind: 'pause',
+      pending: {
+        responderId: ctx.triggeringPlayerId,
+        prompt: {
+          kind: 'choose-target-action-space',
+          eligibleSpaceIds: openSlots,
+        },
+        resume: {
+          effectId: 'base.spell.bless.l1',
+          context: { step: 'apply', targetMageId },
+        },
+        source: ctx.source,
+      },
+    };
+  }
+  if (step === 'apply') {
+    if (ctx.resumeAnswer.kind !== 'space-chosen') {
+      throw new Error('bless apply expected space-chosen');
+    }
+    const targetMageId = ctx.resumeContext?.['targetMageId'];
+    if (typeof targetMageId !== 'string') {
+      throw new Error('bless apply: missing targetMageId');
+    }
+    return {
+      kind: 'done',
+      patch: healMageToSpace(
+        ctx.state,
+        targetMageId,
+        ctx.resumeAnswer.spaceId,
+      ),
+    };
+  }
+  throw new Error(`bless: unexpected step ${String(step)}`);
+});
+
+/** Exhufern Le Marigras — Strength of Earth: move an opponent's mage to
+ *  another open slot in the SAME room. Prompts: pick opponent mage →
+ *  pick open slot in that room → open reaction window for the move. */
+registerEffect('base.spell.strength-of-earth.l1', (ctx): EffectResult => {
+  const step = ctx.resumeContext?.['step'];
+  if (!ctx.resumeAnswer) {
+    const targets: string[] = [];
+    for (const p of ctx.state.players) {
+      if (p.id === ctx.triggeringPlayerId) continue;
+      for (const m of p.mages) {
+        if (m.location.kind === 'action-space' && !m.isWounded) {
+          targets.push(m.id);
+        }
+      }
+    }
+    if (targets.length === 0) {
+      return { kind: 'done', patch: {} };
+    }
+    return {
+      kind: 'pause',
+      pending: {
+        responderId: ctx.triggeringPlayerId,
+        prompt: { kind: 'choose-target-mage', eligibleMageIds: targets },
+        resume: {
+          effectId: 'base.spell.strength-of-earth.l1',
+          context: { step: 'pick-slot' },
+        },
+        source: ctx.source,
+      },
+    };
+  }
+  if (step === 'pick-slot') {
+    if (ctx.resumeAnswer.kind !== 'mage-chosen') {
+      throw new Error('strength-of-earth pick-slot expected mage-chosen');
+    }
+    const targetMageId = ctx.resumeAnswer.mageId;
+    const targetMage = ctx.state.players
+      .flatMap((p) => p.mages)
+      .find((m) => m.id === targetMageId);
+    if (!targetMage || targetMage.location.kind !== 'action-space') {
+      throw new Error('strength-of-earth: target is no longer on a slot');
+    }
+    const fromSpaceId = targetMage.location.spaceId;
+    const room = findRoomBySpaceId(ctx.state, fromSpaceId);
+    if (!room) throw new Error('strength-of-earth: room for target not found');
+    const openSlots = room.actionSpaces
+      .filter((s) => !s.occupant && s.id !== fromSpaceId)
+      .map((s) => s.id);
+    if (openSlots.length === 0) {
+      // No other open slot in the same room — spell fizzles.
+      return { kind: 'done', patch: {} };
+    }
+    return {
+      kind: 'pause',
+      pending: {
+        responderId: ctx.triggeringPlayerId,
+        prompt: {
+          kind: 'choose-target-action-space',
+          eligibleSpaceIds: openSlots,
+        },
+        resume: {
+          effectId: 'base.spell.strength-of-earth.l1',
+          context: { step: 'apply', targetMageId },
+        },
+        source: ctx.source,
+      },
+    };
+  }
+  if (step === 'apply') {
+    if (ctx.resumeAnswer.kind !== 'space-chosen') {
+      throw new Error('strength-of-earth apply expected space-chosen');
+    }
+    const targetMageId = ctx.resumeContext?.['targetMageId'];
+    if (typeof targetMageId !== 'string') {
+      throw new Error('strength-of-earth apply: missing targetMageId');
+    }
+    const moved = moveMageToSpace(
+      ctx.state,
+      targetMageId,
+      ctx.resumeAnswer.spaceId,
+      ctx.triggeringPlayerId,
+    );
+    return {
+      kind: 'open-reaction',
+      patch: moved.patch,
+      window: {
+        triggerEvent: moved.triggerEvent,
+        pendingResponderIds: buildReactionQueue(
+          ctx.state,
+          ctx.triggeringPlayerId,
+        ),
+        reactedPlayerIds: [],
+        afterResume: { effectId: 'base.system.noop', context: {} },
+        source: ctx.source,
+      },
+    };
+  }
+  throw new Error(`strength-of-earth: unexpected step ${String(step)}`);
+});
+
+/** Xal Ezra — Paralocation: shadow an opponent's mage on its current slot.
+ *  The slot remains occupied but the occupant is now flagged as shadowing. */
+registerEffect('base.spell.paralocation.l1', (ctx): EffectResult => {
+  if (!ctx.resumeAnswer) {
+    const targets: string[] = [];
+    for (const p of ctx.state.players) {
+      if (p.id === ctx.triggeringPlayerId) continue;
+      for (const m of p.mages) {
+        if (
+          m.location.kind === 'action-space' &&
+          !m.isWounded &&
+          !m.isShadowing
+        ) {
+          targets.push(m.id);
+        }
+      }
+    }
+    if (targets.length === 0) {
+      return { kind: 'done', patch: {} };
+    }
+    return {
+      kind: 'pause',
+      pending: {
+        responderId: ctx.triggeringPlayerId,
+        prompt: { kind: 'choose-target-mage', eligibleMageIds: targets },
+        resume: { effectId: 'base.spell.paralocation.l1', context: {} },
+        source: ctx.source,
+      },
+    };
+  }
+  if (ctx.resumeAnswer.kind !== 'mage-chosen') {
+    throw new Error(
+      `paralocation expected mage-chosen, got ${ctx.resumeAnswer.kind}`,
+    );
+  }
+  return {
+    kind: 'done',
+    patch: shadowMageInPlace(ctx.state, ctx.resumeAnswer.mageId),
+  };
+});
 
 // ============================================================================
 // Vault cards — simple resource-gain and prompt-based effects.

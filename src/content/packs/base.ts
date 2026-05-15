@@ -135,101 +135,96 @@ const burnSpell: SpellCard = {
 // regular spell deck. Each leader's player owns their unique spell at game
 // start; opponents can't acquire it through normal play.
 //
-// Per the room file, the L1 effect is the "real" spell (use once per round —
-// enforced by the OwnedSpell.exhausted flag, refreshed at round-setup).
-// L2/L3 are stub upgrades; effects unregistered.
+// Each is a UNIQUE single-level spell — there is no L2 / L3 to research and
+// `intPlaced` is set at candidate allocation so they're castable from turn 1.
+// Exhaustion still applies: one cast per round, refreshed at round-setup.
 // ============================================================================
 
 function leaderSpell(args: {
   id: string;
   name: string;
   department: Department;
-  l1ManaCost: number;
-  l1Timing: 'action' | 'fast-action';
+  manaCost: number;
+  timing: 'action' | 'fast-action';
+  description: string;
 }): SpellCard {
   return {
     id: args.id,
     name: args.name,
     sourcePackId: PACK_ID,
     department: args.department,
+    unique: true,
     levels: [
       {
         level: 1,
         title: args.name,
-        manaCost: args.l1ManaCost,
+        manaCost: args.manaCost,
         effectId: `${args.id}.l1`,
-        timing: args.l1Timing,
-      },
-      {
-        level: 2,
-        title: `${args.name} II`,
-        manaCost: args.l1ManaCost + 1,
-        effectId: `${args.id}.l2`,
-        timing: args.l1Timing,
-      },
-      {
-        level: 3,
-        title: `${args.name} III`,
-        manaCost: args.l1ManaCost + 2,
-        effectId: `${args.id}.l3`,
-        timing: args.l1Timing,
+        timing: args.timing,
+        description: args.description,
       },
     ],
   };
 }
 
-/** Larimore Burman — 1 Mana, fast action: banish a Mage. */
+/** Larimore Burman — Sorcery faction leader. */
 const flashOfLight: SpellCard = leaderSpell({
   id: 'base.spell.flash-of-light',
   name: 'Flash of Light',
   department: 'sorcery',
-  l1ManaCost: 1,
-  l1Timing: 'fast-action',
+  manaCost: 1,
+  timing: 'fast-action',
+  description: 'Banish a Mage.',
 });
 
-/** Trias Blackwind — 1 Mana, action: place a neutral mage from supply. */
+/** Trias Blackwind — Students faction leader. */
 const livingImage: SpellCard = leaderSpell({
   id: 'base.spell.living-image',
   name: 'Living Image',
   department: 'students',
-  l1ManaCost: 1,
-  l1Timing: 'action',
+  manaCost: 1,
+  timing: 'action',
+  description: 'Place a Neutral Mage from the supply into your Office.',
 });
 
-/** Byron Krane — Free, action: gain 2 mana. */
+/** Byron Krane — Mysticism faction leader. */
 const trance: SpellCard = leaderSpell({
   id: 'base.spell.trance',
   name: 'Trance',
   department: 'mysticism',
-  l1ManaCost: 0,
-  l1Timing: 'action',
+  manaCost: 0,
+  timing: 'action',
+  description: 'Gain 2 Mana.',
 });
 
-/** Exhufern Le Marigras — 1 Mana, action: move opponent's mage in same room. */
+/** Exhufern Le Marigras — Natural Magick faction leader. */
 const strengthOfEarth: SpellCard = leaderSpell({
   id: 'base.spell.strength-of-earth',
   name: 'Strength of Earth',
   department: 'natural-magick',
-  l1ManaCost: 1,
-  l1Timing: 'action',
+  manaCost: 1,
+  timing: 'action',
+  description: "Move an opponent's Mage to another open slot in the same room.",
 });
 
-/** Rheye Cal — 1 Mana, fast action: move a Mage from infirmary to a slot. */
+/** Rheye Cal — Divinity faction leader. */
 const bless: SpellCard = leaderSpell({
   id: 'base.spell.bless',
   name: 'Bless',
   department: 'divinity',
-  l1ManaCost: 1,
-  l1Timing: 'fast-action',
+  manaCost: 1,
+  timing: 'fast-action',
+  description: 'Move a Mage from the Infirmary to an open slot of your choice.',
 });
 
-/** Xal Ezra — 1 Mana, action: shadow an opponent's mage. */
+/** Xal Ezra — Planar Studies faction leader. */
 const paralocation: SpellCard = leaderSpell({
   id: 'base.spell.paralocation',
   name: 'Paralocation',
   department: 'planar-studies',
-  l1ManaCost: 1,
-  l1Timing: 'action',
+  manaCost: 1,
+  timing: 'action',
+  description: "Shadow an opponent's Mage on its current slot.",
 });
 
 // ============================================================================

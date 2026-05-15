@@ -827,20 +827,26 @@ function handleCastSpell(state: GameState, action: CastSpellAction): GameState {
   const owned = player.ownedSpells.find((s) => s.cardId === action.spellCardId);
   if (!owned) throw new Error(`CAST_SPELL: player does not own ${action.spellCardId}`);
   if (owned.exhausted) throw new Error(`CAST_SPELL: spell is exhausted`);
-  if (action.level === 1 && !owned.intPlaced) {
-    throw new Error(`CAST_SPELL: spell L1 not researched`);
-  }
-  if (action.level === 2 && !owned.wisPlacedLevel2) {
-    throw new Error(`CAST_SPELL: spell L2 not researched`);
-  }
-  if (action.level === 3 && !owned.wisPlacedLevel3) {
-    throw new Error(`CAST_SPELL: spell L3 not researched`);
-  }
 
   const cardDef = lookupSpellCardDef(state, action.spellCardId);
   if (!cardDef) throw new Error(`CAST_SPELL: spell card ${action.spellCardId} not in active packs`);
   const levelDef = cardDef.levels[action.level - 1];
   if (!levelDef) throw new Error(`CAST_SPELL: invalid level ${action.level}`);
+
+  // Unique (leader) spells have no L2/L3 to research; their L1 is always
+  // available since `intPlaced` is set at candidate allocation. Regular
+  // spell books still gate on the research flags.
+  if (!cardDef.unique) {
+    if (action.level === 1 && !owned.intPlaced) {
+      throw new Error(`CAST_SPELL: spell L1 not researched`);
+    }
+    if (action.level === 2 && !owned.wisPlacedLevel2) {
+      throw new Error(`CAST_SPELL: spell L2 not researched`);
+    }
+    if (action.level === 3 && !owned.wisPlacedLevel3) {
+      throw new Error(`CAST_SPELL: spell L3 not researched`);
+    }
+  }
 
   if (player.resources.mana < levelDef.manaCost) {
     throw new Error(

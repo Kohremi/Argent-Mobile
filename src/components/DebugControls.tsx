@@ -1002,12 +1002,20 @@ function PlayerCard({
                   <span className="text-[10px] uppercase tracking-wide text-slate-500">
                     {card.department}
                   </span>
+                  {card.unique && (
+                    <span
+                      className="text-[10px] uppercase tracking-wide text-amber-300"
+                      title="Faction leader spell — single-level, no research needed"
+                    >
+                      unique
+                    </span>
+                  )}
                   {s.exhausted && (
                     <span className="text-[10px] uppercase tracking-wide text-slate-500">
                       exhausted
                     </span>
                   )}
-                  {researched.length > 0 && (
+                  {!card.unique && researched.length > 0 && (
                     <span className="text-[10px] uppercase tracking-wide text-emerald-300/70">
                       researched: {researched.join(',')}
                     </span>
@@ -1539,6 +1547,11 @@ function TableauPanel({ state }: { state: GameState }) {
                     <span className="text-[10px] uppercase tracking-wide text-slate-500">
                       {card.department}
                     </span>
+                    {card.unique && (
+                      <span className="text-[10px] uppercase tracking-wide text-amber-300">
+                        unique
+                      </span>
+                    )}
                   </div>
                   <ul className="text-[11px] text-slate-400 space-y-0.5 mt-0.5">
                     {card.levels.map((lv) => (

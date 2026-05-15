@@ -2033,6 +2033,334 @@ describe('Burn L1 + Phase Steppers vertical slice', () => {
 });
 
 // ============================================================================
+// Leader (unique) spells — Trance, Living Image, Flash of Light, Bless,
+// Strength of Earth, Paralocation.
+// ============================================================================
+
+describe('Leader spells (unique single-level)', () => {
+  /** Common setup: Library A in play, both players zeroed, Alice as the
+   *  active caster. Caller adds mages/spells/mana on top. */
+  function setupLeaderTest(): GameState {
+    let s = initGame(TWO_PLAYER_CONFIG);
+    s = forceLibrarySideA(s);
+    s = zeroPlayerResources(s, 'p1');
+    s = zeroPlayerResources(s, 'p2');
+    s = {
+      ...s,
+      firstPlayerIndex: 0,
+      phase: {
+        kind: 'errands',
+        round: 1,
+        activePlayerIndex: 0,
+        actionUsed: false,
+        fastActionUsed: false,
+      },
+    };
+    return s;
+  }
+
+  it('Trance: gains 2 mana, no prompt, action consumed', () => {
+    let s = setupLeaderTest();
+    s = addMage(s, 'p1', {
+      id: 'alice-mage-1',
+      cardId: 'base.mage.mysticism',
+      color: 'grey',
+    });
+    s = addOwnedSpell(s, 'p1', 'base.spell.trance');
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.trance',
+      level: 1,
+    });
+    expect(s.pendingResolutionStack).toHaveLength(0);
+    const alice = s.players.find((p) => p.id === 'p1');
+    expect(alice?.resources.mana).toBe(2);
+    expect(alice?.ownedSpells[0]?.exhausted).toBe(true);
+  });
+
+  it('Living Image: adds an off-white mage and decrements the supply', () => {
+    let s = setupLeaderTest();
+    // Caster mage is intentionally NOT off-white so the new off-white mage
+    // is easy to identify in the assertions below.
+    s = addMage(s, 'p1', {
+      id: 'alice-mage-1',
+      cardId: 'base.mage.divinity',
+      color: 'blue',
+    });
+    s = setMana(s, 'p1', 1);
+    s = addOwnedSpell(s, 'p1', 'base.spell.living-image');
+    const poolBefore = s.mageDraftPool['off-white'];
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.living-image',
+      level: 1,
+    });
+    expect(s.pendingResolutionStack).toHaveLength(0);
+    expect(s.mageDraftPool['off-white']).toBe(poolBefore - 1);
+    const alice = s.players.find((p) => p.id === 'p1');
+    const newMage = alice?.mages.find((m) => m.color === 'off-white');
+    expect(newMage).toBeTruthy();
+    expect(newMage?.location).toEqual({ kind: 'office', playerId: 'p1' });
+  });
+
+  it('Living Image: fizzles silently when the off-white supply is empty', () => {
+    let s = setupLeaderTest();
+    s = addMage(s, 'p1', {
+      id: 'alice-mage-1',
+      cardId: 'base.mage.divinity',
+      color: 'blue',
+    });
+    s = setMana(s, 'p1', 1);
+    s = addOwnedSpell(s, 'p1', 'base.spell.living-image');
+    s = { ...s, mageDraftPool: { ...s.mageDraftPool, 'off-white': 0 } };
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.living-image',
+      level: 1,
+    });
+    // Spell paid + exhausted, but no new mage and no prompt.
+    expect(s.pendingResolutionStack).toHaveLength(0);
+    const alice = s.players.find((p) => p.id === 'p1');
+    expect(alice?.resources.mana).toBe(0);
+    expect(alice?.mages.filter((m) => m.color === 'off-white')).toHaveLength(0);
+    expect(alice?.ownedSpells[0]?.exhausted).toBe(true);
+  });
+
+  it('Flash of Light: prompts for target, banishes mage, opens reaction window', () => {
+    let s = setupLeaderTest();
+    s = addMage(s, 'p1', {
+      id: 'alice-mage-1',
+      cardId: 'base.mage.sorcery',
+      color: 'red',
+    });
+    s = addMage(s, 'p2', {
+      id: 'bob-mage-1',
+      cardId: 'base.mage.sorcery',
+      color: 'red',
+    });
+    s = placeMageOnSpace(s, 'p2', 'bob-mage-1', 'base.room.library.a.slot-1');
+    s = setMana(s, 'p1', 1);
+    s = addOwnedSpell(s, 'p1', 'base.spell.flash-of-light');
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.flash-of-light',
+      level: 1,
+    });
+    const targetPrompt = topPending(s);
+    expect(targetPrompt.prompt.kind).toBe('choose-target-mage');
+    if (targetPrompt.prompt.kind === 'choose-target-mage') {
+      expect(targetPrompt.prompt.eligibleMageIds).toEqual(['bob-mage-1']);
+    }
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: targetPrompt.id,
+      answer: { kind: 'mage-chosen', mageId: 'bob-mage-1' },
+    });
+    const bobMage = findMageById(s, 'bob-mage-1');
+    expect(bobMage.location.kind).toBe('banished');
+    expect(bobMage.isWounded).toBe(false);
+    // The slot is vacated.
+    const slot = s.rooms
+      .flatMap((r) => r.actionSpaces)
+      .find((sp) => sp.id === 'base.room.library.a.slot-1');
+    expect(slot?.occupant).toBeNull();
+    // Reaction window open with Bob as responder.
+    expect(s.activeReactionWindows).toHaveLength(1);
+    const reactionPrompt = topPending(s);
+    expect(reactionPrompt.prompt.kind).toBe('reaction-window');
+    expect(reactionPrompt.responderId).toBe('p2');
+  });
+
+  it('Bless: moves an infirmary mage to a chosen open slot and clears the wound', () => {
+    let s = setupLeaderTest();
+    s = addMage(s, 'p1', {
+      id: 'alice-mage-1',
+      cardId: 'base.mage.divinity',
+      color: 'blue',
+    });
+    // Alice's wounded mage in the infirmary (heal target).
+    s = addMage(s, 'p1', {
+      id: 'alice-wounded',
+      cardId: 'base.mage.divinity',
+      color: 'blue',
+    });
+    s = mapPlayer(s, 'p1', (p) => ({
+      ...p,
+      mages: p.mages.map((m) =>
+        m.id !== 'alice-wounded'
+          ? m
+          : { ...m, isWounded: true, location: { kind: 'infirmary' } },
+      ),
+    }));
+    s = setMana(s, 'p1', 1);
+    s = addOwnedSpell(s, 'p1', 'base.spell.bless');
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.bless',
+      level: 1,
+    });
+    // Prompt 1: pick infirmary mage.
+    const pickMage = topPending(s);
+    expect(pickMage.prompt.kind).toBe('choose-target-mage');
+    if (pickMage.prompt.kind === 'choose-target-mage') {
+      expect(pickMage.prompt.eligibleMageIds).toContain('alice-wounded');
+    }
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: pickMage.id,
+      answer: { kind: 'mage-chosen', mageId: 'alice-wounded' },
+    });
+    // Prompt 2: pick open slot.
+    const pickSlot = topPending(s);
+    expect(pickSlot.prompt.kind).toBe('choose-target-action-space');
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: pickSlot.id,
+      answer: { kind: 'space-chosen', spaceId: 'base.room.library.a.slot-4' },
+    });
+    // Mage healed onto the chosen slot.
+    const healed = findMageById(s, 'alice-wounded');
+    expect(healed.isWounded).toBe(false);
+    expect(healed.location).toEqual({
+      kind: 'action-space',
+      spaceId: 'base.room.library.a.slot-4',
+    });
+    expect(s.pendingResolutionStack).toHaveLength(0);
+  });
+
+  it('Bless: fizzles silently when no mages are in any infirmary', () => {
+    let s = setupLeaderTest();
+    s = addMage(s, 'p1', {
+      id: 'alice-mage-1',
+      cardId: 'base.mage.divinity',
+      color: 'blue',
+    });
+    s = setMana(s, 'p1', 1);
+    s = addOwnedSpell(s, 'p1', 'base.spell.bless');
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.bless',
+      level: 1,
+    });
+    expect(s.pendingResolutionStack).toHaveLength(0);
+  });
+
+  it('Strength of Earth: moves an opponent mage to another slot in the same room and opens a reaction window', () => {
+    let s = setupLeaderTest();
+    s = addMage(s, 'p1', {
+      id: 'alice-mage-1',
+      cardId: 'base.mage.natural-magick',
+      color: 'green',
+    });
+    s = addMage(s, 'p2', {
+      id: 'bob-mage-1',
+      cardId: 'base.mage.sorcery',
+      color: 'red',
+    });
+    s = placeMageOnSpace(s, 'p2', 'bob-mage-1', 'base.room.library.a.slot-1');
+    s = setMana(s, 'p1', 1);
+    s = addOwnedSpell(s, 'p1', 'base.spell.strength-of-earth');
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.strength-of-earth',
+      level: 1,
+    });
+    // Prompt 1: pick opponent mage.
+    const pickMage = topPending(s);
+    expect(pickMage.prompt.kind).toBe('choose-target-mage');
+    if (pickMage.prompt.kind === 'choose-target-mage') {
+      expect(pickMage.prompt.eligibleMageIds).toEqual(['bob-mage-1']);
+    }
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: pickMage.id,
+      answer: { kind: 'mage-chosen', mageId: 'bob-mage-1' },
+    });
+    // Prompt 2: open slots in same room (Library). The originating slot
+    // should be excluded.
+    const pickSlot = topPending(s);
+    expect(pickSlot.prompt.kind).toBe('choose-target-action-space');
+    if (pickSlot.prompt.kind === 'choose-target-action-space') {
+      expect(pickSlot.prompt.eligibleSpaceIds).not.toContain(
+        'base.room.library.a.slot-1',
+      );
+      for (const id of pickSlot.prompt.eligibleSpaceIds) {
+        expect(id.startsWith('base.room.library.a.')).toBe(true);
+      }
+    }
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: pickSlot.id,
+      answer: { kind: 'space-chosen', spaceId: 'base.room.library.a.slot-3' },
+    });
+    const moved = findMageById(s, 'bob-mage-1');
+    expect(moved.location).toEqual({
+      kind: 'action-space',
+      spaceId: 'base.room.library.a.slot-3',
+    });
+    // Old slot vacated, new slot occupied.
+    const slots = s.rooms.flatMap((r) => r.actionSpaces);
+    expect(slots.find((sp) => sp.id === 'base.room.library.a.slot-1')?.occupant).toBeNull();
+    expect(slots.find((sp) => sp.id === 'base.room.library.a.slot-3')?.occupant).toEqual({
+      mageId: 'bob-mage-1',
+      ownerId: 'p2',
+      isShadowing: false,
+    });
+    // Reaction window opens for the move; Bob (owner) is queued.
+    expect(s.activeReactionWindows).toHaveLength(1);
+    expect(topPending(s).prompt.kind).toBe('reaction-window');
+  });
+
+  it('Paralocation: flags an opponent mage as shadowing without vacating the slot', () => {
+    let s = setupLeaderTest();
+    s = addMage(s, 'p1', {
+      id: 'alice-mage-1',
+      cardId: 'base.mage.planar-studies',
+      color: 'purple',
+    });
+    s = addMage(s, 'p2', {
+      id: 'bob-mage-1',
+      cardId: 'base.mage.sorcery',
+      color: 'red',
+    });
+    s = placeMageOnSpace(s, 'p2', 'bob-mage-1', 'base.room.library.a.slot-1');
+    s = setMana(s, 'p1', 1);
+    s = addOwnedSpell(s, 'p1', 'base.spell.paralocation');
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.paralocation',
+      level: 1,
+    });
+    const pickMage = topPending(s);
+    expect(pickMage.prompt.kind).toBe('choose-target-mage');
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: pickMage.id,
+      answer: { kind: 'mage-chosen', mageId: 'bob-mage-1' },
+    });
+    const bob = findMageById(s, 'bob-mage-1');
+    expect(bob.isShadowing).toBe(true);
+    expect(bob.location).toEqual({
+      kind: 'action-space',
+      spaceId: 'base.room.library.a.slot-1',
+    });
+    const slot = s.rooms
+      .flatMap((r) => r.actionSpaces)
+      .find((sp) => sp.id === 'base.room.library.a.slot-1');
+    expect(slot?.occupant?.isShadowing).toBe(true);
+    expect(s.pendingResolutionStack).toHaveLength(0);
+  });
+});
+
+// ============================================================================
 // PLACE_WORKER smoke test
 // ============================================================================
 
@@ -2587,9 +2915,10 @@ describe('PLAY_VAULT_CARD', () => {
   it('the base pack ships 26 spell books (25 from the sheet + the Burn vertical-slice card)', () => {
     // 25 regular base game spell books + Burn (used by the engine tests).
     expect(baseGamePack.spells).toHaveLength(26);
-    // Each book has three levels with names + costs + timings + effect ids.
+    // Every deck spell book is a regular three-level spell book.
     for (const book of baseGamePack.spells) {
       expect(book.levels).toHaveLength(3);
+      expect(book.unique).not.toBe(true);
       for (const lvl of book.levels) {
         expect(lvl.title).toBeTruthy();
         expect(lvl.effectId).toBeTruthy();
@@ -2600,10 +2929,16 @@ describe('PLAY_VAULT_CARD', () => {
 
   it('the base pack ships 11 legendary spell books (6 candidate starters + 5 from the sheet)', () => {
     expect(baseGamePack.legendarySpells).toHaveLength(11);
-    // Each candidate's starter must appear in the legendary list.
+    // Each candidate's starter must appear in the legendary list AND be
+    // marked unique with a single level.
     const ids = new Set(baseGamePack.legendarySpells.map((s) => s.id));
     for (const cand of baseGamePack.candidates) {
       expect(ids.has(cand.starterSpellId)).toBe(true);
+      const starter = baseGamePack.legendarySpells.find(
+        (s) => s.id === cand.starterSpellId,
+      )!;
+      expect(starter.unique).toBe(true);
+      expect(starter.levels).toHaveLength(1);
     }
   });
 

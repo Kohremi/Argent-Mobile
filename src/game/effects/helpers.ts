@@ -22,6 +22,7 @@ import type {
   SupporterCardId,
   VaultCard,
   VaultCardId,
+  WorkerOccupancy,
 } from '../types';
 
 export function findPlayer(state: GameState, playerId: PlayerId): Player | null {
@@ -228,6 +229,227 @@ export function woundMage(
       originalSpaceId,
     },
   };
+}
+
+/**
+ * Banishes a mage: moves it to `{ kind: 'banished' }`, clears the slot it
+ * was on, and produces a `mage-banished` reaction trigger. Unlike wounding,
+ * banished mages do NOT go to the Infirmary and do NOT grant an Infirmary
+ * bonus to their owner.
+ */
+export function banishMage(
+  state: GameState,
+  targetMageId: OwnedMageId,
+  byPlayerId: PlayerId,
+): { patch: GameStatePatch; triggerEvent: ReactionTriggerEvent } {
+  const lookup = findMageOwner(state, targetMageId);
+  if (!lookup) throw new Error(`banishMage: mage ${targetMageId} not found`);
+  const { player: owner, mage } = lookup;
+  const originalSpaceId =
+    mage.location.kind === 'action-space' ? mage.location.spaceId : null;
+  const players = state.players.map((p) =>
+    p.id !== owner.id
+      ? p
+      : {
+          ...p,
+          mages: p.mages.map((m) =>
+            m.id !== targetMageId
+              ? m
+              : {
+                  ...m,
+                  isWounded: false,
+                  isShadowing: false,
+                  location: { kind: 'banished' as const },
+                },
+          ),
+        },
+  );
+  const rooms: Room[] = originalSpaceId
+    ? state.rooms.map((r) => ({
+        ...r,
+        actionSpaces: r.actionSpaces.map((s) =>
+          s.id !== originalSpaceId ? s : { ...s, occupant: null },
+        ),
+      }))
+    : state.rooms;
+  return {
+    patch: { players, rooms },
+    triggerEvent: {
+      kind: 'mage-banished',
+      mageId: targetMageId,
+      ownerId: owner.id,
+      byPlayerId,
+      originalSpaceId,
+    },
+  };
+}
+
+/**
+ * Banish-targets list — same filter as Burn (target on a slot, not wounded,
+ * not green, opposing blues are immune to rival spells).
+ */
+export function buildBanishTargets(
+  state: GameState,
+  casterId: PlayerId,
+): OwnedMageId[] {
+  return buildBurnTargets(state, casterId);
+}
+
+/**
+ * Moves a placed mage from its current action space to another action space.
+ * Returns the patch + a `mage-moved` reaction trigger. The caller must
+ * validate that the target space is empty and (for in-room moves) that the
+ * rooms match. Throws if the mage is not on a slot.
+ */
+export function moveMageToSpace(
+  state: GameState,
+  targetMageId: OwnedMageId,
+  toSpaceId: ActionSpaceId,
+  byPlayerId: PlayerId,
+): { patch: GameStatePatch; triggerEvent: ReactionTriggerEvent } {
+  const lookup = findMageOwner(state, targetMageId);
+  if (!lookup) throw new Error(`moveMageToSpace: mage ${targetMageId} not found`);
+  const { player: owner, mage } = lookup;
+  if (mage.location.kind !== 'action-space') {
+    throw new Error(`moveMageToSpace: ${targetMageId} is not on a slot`);
+  }
+  const fromSpaceId = mage.location.spaceId;
+  const occupancy: WorkerOccupancy = {
+    mageId: targetMageId,
+    ownerId: owner.id,
+    isShadowing: mage.isShadowing,
+  };
+  const players = state.players.map((p) =>
+    p.id !== owner.id
+      ? p
+      : {
+          ...p,
+          mages: p.mages.map((m) =>
+            m.id !== targetMageId
+              ? m
+              : { ...m, location: { kind: 'action-space' as const, spaceId: toSpaceId } },
+          ),
+        },
+  );
+  const rooms = state.rooms.map((r) => ({
+    ...r,
+    actionSpaces: r.actionSpaces.map((s) => {
+      if (s.id === fromSpaceId) return { ...s, occupant: null };
+      if (s.id === toSpaceId) return { ...s, occupant: occupancy };
+      return s;
+    }),
+  }));
+  return {
+    patch: { players, rooms },
+    triggerEvent: {
+      kind: 'mage-moved',
+      mageId: targetMageId,
+      ownerId: owner.id,
+      fromSpaceId,
+      toSpaceId,
+      byPlayerId,
+    },
+  };
+}
+
+/**
+ * Moves a wounded mage from the Infirmary to an empty action space. Clears
+ * `isWounded`. No reaction trigger fires for heals.
+ */
+export function healMageToSpace(
+  state: GameState,
+  targetMageId: OwnedMageId,
+  toSpaceId: ActionSpaceId,
+): GameStatePatch {
+  const lookup = findMageOwner(state, targetMageId);
+  if (!lookup) throw new Error(`healMageToSpace: mage ${targetMageId} not found`);
+  const { player: owner, mage } = lookup;
+  if (mage.location.kind !== 'infirmary') {
+    throw new Error(`healMageToSpace: ${targetMageId} is not in the infirmary`);
+  }
+  const occupancy: WorkerOccupancy = {
+    mageId: targetMageId,
+    ownerId: owner.id,
+    isShadowing: false,
+  };
+  return {
+    players: state.players.map((p) =>
+      p.id !== owner.id
+        ? p
+        : {
+            ...p,
+            mages: p.mages.map((m) =>
+              m.id !== targetMageId
+                ? m
+                : {
+                    ...m,
+                    isWounded: false,
+                    isShadowing: false,
+                    location: { kind: 'action-space' as const, spaceId: toSpaceId },
+                  },
+            ),
+          },
+    ),
+    rooms: state.rooms.map((r) => ({
+      ...r,
+      actionSpaces: r.actionSpaces.map((s) =>
+        s.id === toSpaceId ? { ...s, occupant: occupancy } : s,
+      ),
+    })),
+  };
+}
+
+/**
+ * Flags a placed mage as shadowing its current slot (and the slot occupant
+ * follows). Used by Paralocation. Does NOT vacate the slot — the mage stays
+ * put, just marked as shadowing.
+ */
+export function shadowMageInPlace(
+  state: GameState,
+  targetMageId: OwnedMageId,
+): GameStatePatch {
+  const lookup = findMageOwner(state, targetMageId);
+  if (!lookup) throw new Error(`shadowMageInPlace: mage ${targetMageId} not found`);
+  const { player: owner, mage } = lookup;
+  if (mage.location.kind !== 'action-space') {
+    throw new Error(`shadowMageInPlace: ${targetMageId} is not on a slot`);
+  }
+  const spaceId = mage.location.spaceId;
+  return {
+    players: state.players.map((p) =>
+      p.id !== owner.id
+        ? p
+        : {
+            ...p,
+            mages: p.mages.map((m) =>
+              m.id !== targetMageId ? m : { ...m, isShadowing: true },
+            ),
+          },
+    ),
+    rooms: state.rooms.map((r) => ({
+      ...r,
+      actionSpaces: r.actionSpaces.map((s) =>
+        s.id !== spaceId || !s.occupant
+          ? s
+          : { ...s, occupant: { ...s.occupant, isShadowing: true } },
+      ),
+    })),
+  };
+}
+
+/**
+ * Finds the room (and the specific space inside it) for a given space id.
+ * Used by spell effects that need to constrain a follow-up choice to the
+ * same room (e.g., Strength of Earth: move-in-same-room).
+ */
+export function findRoomBySpaceId(
+  state: GameState,
+  spaceId: ActionSpaceId,
+): Room | null {
+  for (const r of state.rooms) {
+    if (r.actionSpaces.some((s) => s.id === spaceId)) return r;
+  }
+  return null;
 }
 
 /**

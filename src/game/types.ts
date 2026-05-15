@@ -218,8 +218,18 @@ export interface SpellCard {
   name: string;
   sourcePackId: PackId;
   department: Department;
-  /** Exactly three levels per rulebook. */
-  levels: [SpellLevel, SpellLevel, SpellLevel];
+  /**
+   * Most Spell Books have three levels per rulebook. Unique candidate
+   * starter spells ("leader spells") have only one level — no L2/L3
+   * research is possible.
+   */
+  levels: SpellLevel[];
+  /**
+   * True for candidate-starter "leader" spells: a single-level book that
+   * doesn't consume INT/WIS research and is bound to the candidate's
+   * player (never enters the regular spell deck, never re-researched).
+   */
+  unique?: boolean;
 }
 
 export type VaultCardType = 'treasure' | 'consumable';
