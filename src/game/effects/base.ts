@@ -5,9 +5,13 @@ import { getEffect, registerEffect } from './registry';
 import { computeFinalScoring, playerOwnsWildSupporter } from '../scoring';
 import {
   affordableVaultCards,
+  applyAddWisToSpell,
+  applyDiscardOwnedSpell,
+  applyDraftSpell,
   applyGainMark,
   applyGoldForMageSwap,
   applyInfirmaryBonusPatch,
+  applyMoveWisBetweenSpells,
   applySecretSupporterDraw,
   applySupporterDraft,
   applyVaultDraft,
@@ -29,6 +33,7 @@ import {
   healMageToSpace,
   moveMageToSpace,
   placeOfficeMageAsShadow,
+  spellLabel,
   woundMage,
 } from './helpers';
 import type {
@@ -104,10 +109,20 @@ registerEffect('base.room.library-a.slot-1', (ctx: EffectContext): EffectResult 
 /** Slot 2 (merit, costs 1 MB): Gain 1 INT AND gain 1 Research. */
 registerEffect('base.room.library-a.slot-2', (ctx: EffectContext): EffectResult => {
   if (!ctx.resumeAnswer) {
+    // Apply the +INT patch first, then build the research prompt against
+    // the post-grant state so the player can see the new INT as an
+    // available option (e.g. 'draft a Spell').
+    const intPatch = gainResourcePatch(
+      ctx.state,
+      ctx.triggeringPlayerId,
+      'intelligence',
+      1,
+    );
+    const afterInt: GameState = { ...ctx.state, ...intPatch };
     return {
       kind: 'pause',
-      patch: gainResourcePatch(ctx.state, ctx.triggeringPlayerId, 'intelligence', 1),
-      pending: spawnResearchPrompt(ctx.triggeringPlayerId, ctx.source),
+      patch: intPatch,
+      pending: spawnResearchPrompt(afterInt, ctx.triggeringPlayerId, ctx.source),
     };
   }
   throw new Error('library-a.slot-2 should not be re-invoked (research handles its own resume)');
@@ -132,7 +147,7 @@ registerEffect('base.room.library-a.slot-3', (ctx: EffectContext): EffectResult 
       // Nothing affordable — skip Buy entirely, go to Research.
       return {
         kind: 'pause',
-        pending: spawnResearchPrompt(ctx.triggeringPlayerId, ctx.source),
+        pending: spawnResearchPrompt(ctx.state, ctx.triggeringPlayerId, ctx.source),
       };
     }
     return {
@@ -161,7 +176,7 @@ registerEffect('base.room.library-a.slot-3', (ctx: EffectContext): EffectResult 
     if (ctx.resumeAnswer.optionId === 'skip') {
       return {
         kind: 'pause',
-        pending: spawnResearchPrompt(ctx.triggeringPlayerId, ctx.source),
+        pending: spawnResearchPrompt(ctx.state, ctx.triggeringPlayerId, ctx.source),
       };
     }
     if (ctx.resumeAnswer.optionId !== 'buy') {
@@ -175,7 +190,7 @@ registerEffect('base.room.library-a.slot-3', (ctx: EffectContext): EffectResult 
       // by routing straight to research.
       return {
         kind: 'pause',
-        pending: spawnResearchPrompt(ctx.triggeringPlayerId, ctx.source),
+        pending: spawnResearchPrompt(ctx.state, ctx.triggeringPlayerId, ctx.source),
       };
     }
     return {
@@ -209,7 +224,7 @@ registerEffect('base.room.library-a.slot-3', (ctx: EffectContext): EffectResult 
     return {
       kind: 'pause',
       patch: { players: working.players, vaultTableau: working.vaultTableau },
-      pending: spawnResearchPrompt(ctx.triggeringPlayerId, ctx.source),
+      pending: spawnResearchPrompt(ctx.state, ctx.triggeringPlayerId, ctx.source),
     };
   }
   throw new Error(`library-a.slot-3 unexpected step ${String(step)}`);
@@ -249,7 +264,7 @@ registerEffect('base.room.library-a.slot-4', (ctx: EffectContext): EffectResult 
     case 'research':
       return {
         kind: 'pause',
-        pending: spawnResearchPrompt(playerId, ctx.source),
+        pending: spawnResearchPrompt(ctx.state, playerId, ctx.source),
       };
     default:
       throw new Error(`library-a.slot-4 unknown option: ${ctx.resumeAnswer.optionId}`);
@@ -257,38 +272,398 @@ registerEffect('base.room.library-a.slot-4', (ctx: EffectContext): EffectResult 
 });
 
 /**
- * Research is transient — the player must spend it immediately to learn a
- * new spell from the tableau OR upgrade an existing spell. The full prompt
- * (with target spells/levels) is deferred; for now we present a simple
- * confirm/discard so the OR-choice slice can be tested end-to-end.
+ * Research is transient — the player spends it immediately on one of four
+ * actions (or discards it):
+ *   - draft    : draft a new Spell from the tableau using 1 unspent INT
+ *   - move-int : discard a learned Spell (refund its INT + any WIS) and
+ *                draft a new Spell with that INT
+ *   - add-wis  : place 1 unspent WIS onto a learned Spell to unlock its
+ *                next level (L2, then L3)
+ *   - move-wis : move 1 WIS from one owned Spell's L2/L3 slot to another
  *
- * TODO: replace with real "learn from tableau / upgrade owned" branching.
+ * Each option is only listed when its prerequisites are satisfied so
+ * players never see actions they can't take. 'discard' is always
+ * available.
  */
 function spawnResearchPrompt(
+  state: GameState,
   playerId: string,
   source: ResolutionSource,
 ): PendingResolutionInput {
+  const player = state.players.find((p) => p.id === playerId);
+  const intPool = player?.resources.intelligence ?? 0;
+  const wisPool = player?.resources.wisdom ?? 0;
+  const learned = player?.ownedSpells.filter((s) => s.intPlaced) ?? [];
+  const upgradable = learned.filter(
+    (s) => !(s.wisPlacedLevel2 && s.wisPlacedLevel3),
+  );
+  const withWis = learned.filter(
+    (s) => s.wisPlacedLevel2 || s.wisPlacedLevel3,
+  );
+  const tableauNonEmpty = state.spellTableau.length > 0;
+
+  const options: ChoiceOption[] = [];
+  if (tableauNonEmpty && intPool >= 1) {
+    options.push({
+      id: 'draft',
+      label: 'Draft a Spell from the tableau (spend 1 INT)',
+      payload: {},
+    });
+  }
+  if (tableauNonEmpty && learned.length > 0) {
+    options.push({
+      id: 'move-int',
+      label: 'Discard a learned Spell; draft a new one (move INT)',
+      payload: {},
+    });
+  }
+  if (wisPool >= 1 && upgradable.length > 0) {
+    options.push({
+      id: 'add-wis',
+      label: 'Place 1 WIS to unlock the next level of an owned Spell',
+      payload: {},
+    });
+  }
+  if (withWis.length > 0 && upgradable.length > 0) {
+    // Move-WIS is viable iff at least one owned spell carries WIS AND at
+    // least one other owned spell has an open L2/L3 slot. Tighter
+    // source/dest disjoint check happens in the move-wis effect.
+    const someOtherUpgradable = upgradable.some(
+      (s) => !(s.wisPlacedLevel2 && s.wisPlacedLevel3 && s.cardId === withWis[0]?.cardId),
+    );
+    if (someOtherUpgradable) {
+      options.push({
+        id: 'move-wis',
+        label: 'Move 1 WIS from one of your Spells to another',
+        payload: {},
+      });
+    }
+  }
+  options.push({ id: 'discard', label: 'Discard 1 Research', payload: {} });
+
   return {
     responderId: playerId,
     prompt: {
       kind: 'choose-from-options',
-      options: [
-        {
-          id: 'spend',
-          label: 'Spend 1 Research (TODO: choose Spell to learn or upgrade)',
-          payload: {},
-        },
-        { id: 'discard', label: 'Discard 1 Research', payload: {} },
-      ],
+      options,
     },
     resume: { effectId: 'base.system.spend-research', context: {} },
     source,
   };
 }
 
-registerEffect('base.system.spend-research', (_ctx) => {
-  // TODO: implement learn-from-tableau / upgrade-owned-spell branching.
-  return { kind: 'done', patch: {} };
+/**
+ * Router for the research-spend prompt. Dispatches to a per-action effect
+ * (each a multi-step prompt chain) based on the chosen option, or fizzles
+ * if the option is no longer viable (e.g. INT pool went to 0 between
+ * prompt spawn and resolution).
+ */
+registerEffect('base.system.spend-research', (ctx): EffectResult => {
+  if (ctx.resumeAnswer?.kind !== 'option-chosen') {
+    throw new Error(
+      `spend-research expected option-chosen, got ${ctx.resumeAnswer?.kind}`,
+    );
+  }
+  const optionId = ctx.resumeAnswer.optionId;
+  if (optionId === 'discard') return { kind: 'done', patch: {} };
+  // Re-evaluate prerequisites and forward to the action-specific chain.
+  const player = ctx.state.players.find(
+    (p) => p.id === ctx.triggeringPlayerId,
+  );
+  if (!player) return { kind: 'done', patch: {} };
+
+  if (optionId === 'draft') {
+    if (player.resources.intelligence < 1) return { kind: 'done', patch: {} };
+    if (ctx.state.spellTableau.length === 0) return { kind: 'done', patch: {} };
+    return {
+      kind: 'pause',
+      pending: {
+        responderId: ctx.triggeringPlayerId,
+        prompt: {
+          kind: 'choose-from-options',
+          options: ctx.state.spellTableau.map((cid) => ({
+            id: cid,
+            label: `Draft ${spellLabel(ctx.state, cid)}`,
+            payload: {},
+          })),
+        },
+        resume: {
+          effectId: 'base.system.research-draft',
+          context: {},
+        },
+        source: ctx.source,
+      },
+    };
+  }
+  if (optionId === 'move-int') {
+    const learned = player.ownedSpells.filter((s) => s.intPlaced);
+    if (learned.length === 0) return { kind: 'done', patch: {} };
+    if (ctx.state.spellTableau.length === 0) return { kind: 'done', patch: {} };
+    return {
+      kind: 'pause',
+      pending: {
+        responderId: ctx.triggeringPlayerId,
+        prompt: {
+          kind: 'choose-from-options',
+          options: learned.map((s) => ({
+            id: s.cardId,
+            label: `Discard ${spellLabel(ctx.state, s.cardId)}`,
+            payload: {},
+          })),
+        },
+        resume: {
+          effectId: 'base.system.research-move-int',
+          context: { step: 'pick-dest' },
+        },
+        source: ctx.source,
+      },
+    };
+  }
+  if (optionId === 'add-wis') {
+    if (player.resources.wisdom < 1) return { kind: 'done', patch: {} };
+    const upgradable = player.ownedSpells.filter(
+      (s) => s.intPlaced && !(s.wisPlacedLevel2 && s.wisPlacedLevel3),
+    );
+    if (upgradable.length === 0) return { kind: 'done', patch: {} };
+    return {
+      kind: 'pause',
+      pending: {
+        responderId: ctx.triggeringPlayerId,
+        prompt: {
+          kind: 'choose-from-options',
+          options: upgradable.map((s) => ({
+            id: s.cardId,
+            label: `${spellLabel(ctx.state, s.cardId)} → ${
+              s.wisPlacedLevel2 ? 'L3' : 'L2'
+            }`,
+            payload: {},
+          })),
+        },
+        resume: {
+          effectId: 'base.system.research-add-wis',
+          context: {},
+        },
+        source: ctx.source,
+      },
+    };
+  }
+  if (optionId === 'move-wis') {
+    const withWis = player.ownedSpells.filter(
+      (s) => s.wisPlacedLevel2 || s.wisPlacedLevel3,
+    );
+    const destCandidates = player.ownedSpells.filter(
+      (s) =>
+        s.intPlaced &&
+        !(s.wisPlacedLevel2 && s.wisPlacedLevel3) &&
+        // Source and destination must differ; but if source loses its only
+        // WIS, the same card cannot also be the dest (filter applied at
+        // step 'pick-dest' once source is chosen).
+        true,
+    );
+    if (withWis.length === 0 || destCandidates.length === 0) {
+      return { kind: 'done', patch: {} };
+    }
+    return {
+      kind: 'pause',
+      pending: {
+        responderId: ctx.triggeringPlayerId,
+        prompt: {
+          kind: 'choose-from-options',
+          options: withWis.map((s) => ({
+            id: s.cardId,
+            label: `Take WIS from ${spellLabel(ctx.state, s.cardId)}`,
+            payload: {},
+          })),
+        },
+        resume: {
+          effectId: 'base.system.research-move-wis',
+          context: { step: 'pick-dest' },
+        },
+        source: ctx.source,
+      },
+    };
+  }
+  throw new Error(`spend-research: unknown optionId ${optionId}`);
+});
+
+/** Spell-research action: draft a tableau spell using 1 INT. */
+registerEffect('base.system.research-draft', (ctx): EffectResult => {
+  if (ctx.resumeAnswer?.kind !== 'option-chosen') {
+    throw new Error('research-draft expected option-chosen');
+  }
+  const spellCardId = ctx.resumeAnswer.optionId;
+  const player = ctx.state.players.find(
+    (p) => p.id === ctx.triggeringPlayerId,
+  );
+  if (!player || player.resources.intelligence < 1) {
+    return { kind: 'done', patch: {} };
+  }
+  if (!ctx.state.spellTableau.includes(spellCardId)) {
+    return { kind: 'done', patch: {} };
+  }
+  return {
+    kind: 'done',
+    patch: applyDraftSpell(ctx.state, ctx.triggeringPlayerId, spellCardId),
+  };
+});
+
+/**
+ * Spell-research action: discard a learned spell (refunding its INT + any
+ * placed WIS) and immediately draft a new tableau spell with the moved
+ * INT. Two steps: pick source (already done before this resume; comes in
+ * resumeAnswer with step='pick-dest'); next prompt is pick destination
+ * from tableau; final step applies both.
+ */
+registerEffect('base.system.research-move-int', (ctx): EffectResult => {
+  const step = ctx.resumeContext?.['step'];
+  if (step === 'pick-dest') {
+    if (ctx.resumeAnswer?.kind !== 'option-chosen') {
+      throw new Error('research-move-int pick-dest expected option-chosen');
+    }
+    const sourceCardId = ctx.resumeAnswer.optionId;
+    // Refill the tableau snapshot AFTER the source is discarded — but we
+    // need to present tableau options now, before the apply. Just use the
+    // current tableau; the actual draft uses post-discard state.
+    if (ctx.state.spellTableau.length === 0) return { kind: 'done', patch: {} };
+    return {
+      kind: 'pause',
+      pending: {
+        responderId: ctx.triggeringPlayerId,
+        prompt: {
+          kind: 'choose-from-options',
+          options: ctx.state.spellTableau.map((cid) => ({
+            id: cid,
+            label: `Draft ${spellLabel(ctx.state, cid)}`,
+            payload: {},
+          })),
+        },
+        resume: {
+          effectId: 'base.system.research-move-int',
+          context: { step: 'apply', sourceCardId },
+        },
+        source: ctx.source,
+      },
+    };
+  }
+  if (step === 'apply') {
+    if (ctx.resumeAnswer?.kind !== 'option-chosen') {
+      throw new Error('research-move-int apply expected option-chosen');
+    }
+    const destCardId = ctx.resumeAnswer.optionId;
+    const sourceCardId = ctx.resumeContext?.['sourceCardId'];
+    if (typeof sourceCardId !== 'string') {
+      throw new Error('research-move-int apply: missing sourceCardId');
+    }
+    const discardPatch = applyDiscardOwnedSpell(
+      ctx.state,
+      ctx.triggeringPlayerId,
+      sourceCardId,
+    );
+    const afterDiscard: GameState = { ...ctx.state, ...discardPatch };
+    if (!afterDiscard.spellTableau.includes(destCardId)) {
+      return { kind: 'done', patch: discardPatch };
+    }
+    const draftPatch = applyDraftSpell(
+      afterDiscard,
+      ctx.triggeringPlayerId,
+      destCardId,
+    );
+    return {
+      kind: 'done',
+      patch: { ...discardPatch, ...draftPatch },
+    };
+  }
+  throw new Error(`research-move-int unexpected step ${String(step)}`);
+});
+
+/** Spell-research action: add 1 WIS to a learned spell (L2 then L3). */
+registerEffect('base.system.research-add-wis', (ctx): EffectResult => {
+  if (ctx.resumeAnswer?.kind !== 'option-chosen') {
+    throw new Error('research-add-wis expected option-chosen');
+  }
+  const spellCardId = ctx.resumeAnswer.optionId;
+  const player = ctx.state.players.find(
+    (p) => p.id === ctx.triggeringPlayerId,
+  );
+  if (!player || player.resources.wisdom < 1) {
+    return { kind: 'done', patch: {} };
+  }
+  const owned = player.ownedSpells.find((s) => s.cardId === spellCardId);
+  if (!owned || !owned.intPlaced) return { kind: 'done', patch: {} };
+  if (owned.wisPlacedLevel2 && owned.wisPlacedLevel3) {
+    return { kind: 'done', patch: {} };
+  }
+  return {
+    kind: 'done',
+    patch: applyAddWisToSpell(ctx.state, ctx.triggeringPlayerId, spellCardId),
+  };
+});
+
+/**
+ * Spell-research action: move 1 WIS from one owned spell's L2/L3 slot to
+ * another's. Two steps: pick source (step='pick-dest' on resume); next
+ * prompt is destination; final step applies.
+ */
+registerEffect('base.system.research-move-wis', (ctx): EffectResult => {
+  const step = ctx.resumeContext?.['step'];
+  if (step === 'pick-dest') {
+    if (ctx.resumeAnswer?.kind !== 'option-chosen') {
+      throw new Error('research-move-wis pick-dest expected option-chosen');
+    }
+    const sourceCardId = ctx.resumeAnswer.optionId;
+    const player = ctx.state.players.find(
+      (p) => p.id === ctx.triggeringPlayerId,
+    );
+    if (!player) return { kind: 'done', patch: {} };
+    const candidates = player.ownedSpells.filter(
+      (s) =>
+        s.cardId !== sourceCardId &&
+        s.intPlaced &&
+        !(s.wisPlacedLevel2 && s.wisPlacedLevel3),
+    );
+    if (candidates.length === 0) return { kind: 'done', patch: {} };
+    return {
+      kind: 'pause',
+      pending: {
+        responderId: ctx.triggeringPlayerId,
+        prompt: {
+          kind: 'choose-from-options',
+          options: candidates.map((s) => ({
+            id: s.cardId,
+            label: `Place WIS on ${spellLabel(ctx.state, s.cardId)} → ${
+              s.wisPlacedLevel2 ? 'L3' : 'L2'
+            }`,
+            payload: {},
+          })),
+        },
+        resume: {
+          effectId: 'base.system.research-move-wis',
+          context: { step: 'apply', sourceCardId },
+        },
+        source: ctx.source,
+      },
+    };
+  }
+  if (step === 'apply') {
+    if (ctx.resumeAnswer?.kind !== 'option-chosen') {
+      throw new Error('research-move-wis apply expected option-chosen');
+    }
+    const destCardId = ctx.resumeAnswer.optionId;
+    const sourceCardId = ctx.resumeContext?.['sourceCardId'];
+    if (typeof sourceCardId !== 'string') {
+      throw new Error('research-move-wis apply: missing sourceCardId');
+    }
+    return {
+      kind: 'done',
+      patch: applyMoveWisBetweenSpells(
+        ctx.state,
+        ctx.triggeringPlayerId,
+        sourceCardId,
+        destCardId,
+      ),
+    };
+  }
+  throw new Error(`research-move-wis unexpected step ${String(step)}`);
 });
 
 // ============================================================================
@@ -1831,6 +2206,16 @@ function marksLoop(
   };
 }
 
+/**
+ * Supporter research grants (e.g. Welsie Acktern → 2 Research). Each tick
+ * presents a simple Spend/Discard prompt. NOTE: today the 'spend' branch
+ * does NOT chain into the full Draft/Move-INT/Add-WIS/Move-WIS research
+ * menu — that requires either (a) an engine extension to push multiple
+ * pendings per pause, or (b) state tracking of "research owed" so the
+ * full menu can fire one tick at a time. Library slots that grant 1
+ * Research at a time DO use the full menu via `spawnResearchPrompt`; the
+ * supporter integration is deferred.
+ */
 function researchLoop(
   ctx: EffectContext,
   total: number,
@@ -1839,8 +2224,6 @@ function researchLoop(
 ): EffectResult {
   const remaining =
     (ctx.resumeContext?.['remaining'] as number | undefined) ?? total;
-  // Spend / discard semantics are a TODO at the system level; for now we
-  // record the choice and move on.
   let nextRemaining = remaining;
   if (ctx.resumeAnswer?.kind === 'option-chosen') {
     nextRemaining = remaining - 1;
@@ -1859,7 +2242,7 @@ function researchLoop(
         options: [
           {
             id: 'spend',
-            label: `Spend 1 Research (${indexLabel})${restrictNote} (TODO)`,
+            label: `Spend 1 Research (${indexLabel})${restrictNote}`,
             payload: {},
           },
           {

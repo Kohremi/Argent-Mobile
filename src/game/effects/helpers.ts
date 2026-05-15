@@ -19,6 +19,7 @@ import type {
   ReactionTriggerEvent,
   ResolutionSource,
   Room,
+  SpellCardId,
   SupporterCard,
   SupporterCardId,
   VaultCard,
@@ -807,6 +808,19 @@ export function lookupSupporterCardDef(
   return null;
 }
 
+/** Returns the card name for a spell id, or the id itself as a fallback. */
+export function spellLabel(state: GameState, spellCardId: SpellCardId): string {
+  for (const packId of state.activePackIds) {
+    const pack = getPack(packId);
+    if (!pack) continue;
+    const found =
+      pack.spells.find((s) => s.id === spellCardId) ??
+      pack.legendarySpells.find((s) => s.id === spellCardId);
+    if (found) return found.name;
+  }
+  return spellCardId;
+}
+
 export function findActionSpace(
   state: GameState,
   spaceId: ActionSpaceId,
@@ -915,6 +929,223 @@ export function affordableVaultCards(
     if (def && def.goldCost <= player.resources.gold) result.push(cardId);
   }
   return result;
+}
+
+// ============================================================================
+// Spell research — spend 1 Research to draft / move-INT / add-WIS / move-WIS.
+// Each helper does the data-model mutation; the prompt-chain plumbing lives
+// in `effects/base.ts` under `spawnResearchPrompt` + `spend-research`.
+// ============================================================================
+
+/**
+ * Drafts a spell from the tableau into the player's office: removes it from
+ * the tableau (refilling from the top of the spell deck), adds it to the
+ * player's ownedSpells with `intPlaced=true`, and deducts 1 INT from their
+ * pool. Throws if the card isn't in the tableau or the player has no INT.
+ */
+export function applyDraftSpell(
+  state: GameState,
+  playerId: PlayerId,
+  spellCardId: SpellCardId,
+): GameStatePatch {
+  const player = findPlayer(state, playerId);
+  if (!player) throw new Error(`applyDraftSpell: player ${playerId} not found`);
+  if (player.resources.intelligence < 1) {
+    throw new Error('applyDraftSpell: player has no INT available');
+  }
+  const idx = state.spellTableau.indexOf(spellCardId);
+  if (idx === -1) {
+    throw new Error(`applyDraftSpell: ${spellCardId} not in spell tableau`);
+  }
+  // Refill the tableau slot from the top of the deck if possible.
+  const top = state.spellDeck[0];
+  const nextDeck = top !== undefined ? state.spellDeck.slice(1) : state.spellDeck;
+  const nextTableau =
+    top !== undefined
+      ? state.spellTableau.map((c, i) => (i === idx ? top : c))
+      : state.spellTableau.filter((_, i) => i !== idx);
+  return {
+    spellDeck: nextDeck,
+    spellTableau: nextTableau,
+    players: state.players.map((p) =>
+      p.id !== playerId
+        ? p
+        : {
+            ...p,
+            resources: {
+              ...p.resources,
+              intelligence: p.resources.intelligence - 1,
+            },
+            ownedSpells: [
+              ...p.ownedSpells,
+              {
+                cardId: spellCardId,
+                intPlaced: true,
+                wisPlacedLevel2: false,
+                wisPlacedLevel3: false,
+                exhausted: false,
+              },
+            ],
+          },
+    ),
+  };
+}
+
+/**
+ * Returns a learned spell from the player's office to the bottom of the
+ * spell deck and refunds any placed WIS to the player's pool. Used by the
+ * "move INT from learned spell to a new spell" research action — the
+ * caller is expected to follow up with `applyDraftSpell` for the new card
+ * (the moved INT is the new spell's L1 INT). Throws if the spell isn't
+ * owned or isn't learned (no INT placed).
+ */
+export function applyDiscardOwnedSpell(
+  state: GameState,
+  playerId: PlayerId,
+  spellCardId: SpellCardId,
+): GameStatePatch {
+  const player = findPlayer(state, playerId);
+  if (!player) {
+    throw new Error(`applyDiscardOwnedSpell: player ${playerId} not found`);
+  }
+  const owned = player.ownedSpells.find((s) => s.cardId === spellCardId);
+  if (!owned) {
+    throw new Error(
+      `applyDiscardOwnedSpell: ${spellCardId} not in player ownedSpells`,
+    );
+  }
+  if (!owned.intPlaced) {
+    throw new Error(`applyDiscardOwnedSpell: ${spellCardId} has no INT placed`);
+  }
+  const wisRefund =
+    (owned.wisPlacedLevel2 ? 1 : 0) + (owned.wisPlacedLevel3 ? 1 : 0);
+  return {
+    // Card cycles to the BOTTOM of the deck (matches Mystic Lantern policy
+    // — no separate spell discard pile).
+    spellDeck: [...state.spellDeck, spellCardId],
+    players: state.players.map((p) =>
+      p.id !== playerId
+        ? p
+        : {
+            ...p,
+            resources: {
+              ...p.resources,
+              // Both INT and WIS return to the pool. The follow-up draft
+              // re-spends 1 INT on the new spell; net INT change is 0.
+              // WIS refund is net positive (player keeps any L2/L3 WIS).
+              intelligence: p.resources.intelligence + 1,
+              wisdom: p.resources.wisdom + wisRefund,
+            },
+            ownedSpells: p.ownedSpells.filter((s) => s.cardId !== spellCardId),
+          },
+    ),
+  };
+}
+
+/**
+ * Places 1 WIS from the player's pool onto a learned spell: L2 if the L2
+ * slot is empty, else L3. Throws if the player has no WIS, the spell
+ * isn't owned, the spell isn't learned, or both L2 and L3 are already
+ * filled.
+ */
+export function applyAddWisToSpell(
+  state: GameState,
+  playerId: PlayerId,
+  spellCardId: SpellCardId,
+): GameStatePatch {
+  const player = findPlayer(state, playerId);
+  if (!player) throw new Error(`applyAddWisToSpell: player ${playerId} not found`);
+  if (player.resources.wisdom < 1) {
+    throw new Error('applyAddWisToSpell: player has no WIS available');
+  }
+  const owned = player.ownedSpells.find((s) => s.cardId === spellCardId);
+  if (!owned) {
+    throw new Error(`applyAddWisToSpell: ${spellCardId} not owned`);
+  }
+  if (!owned.intPlaced) {
+    throw new Error(`applyAddWisToSpell: ${spellCardId} not yet learned (no INT)`);
+  }
+  if (owned.wisPlacedLevel2 && owned.wisPlacedLevel3) {
+    throw new Error(`applyAddWisToSpell: ${spellCardId} already at L3`);
+  }
+  return {
+    players: state.players.map((p) =>
+      p.id !== playerId
+        ? p
+        : {
+            ...p,
+            resources: { ...p.resources, wisdom: p.resources.wisdom - 1 },
+            ownedSpells: p.ownedSpells.map((s) =>
+              s.cardId !== spellCardId
+                ? s
+                : s.wisPlacedLevel2
+                  ? { ...s, wisPlacedLevel3: true }
+                  : { ...s, wisPlacedLevel2: true },
+            ),
+          },
+    ),
+  };
+}
+
+/**
+ * Moves 1 WIS from the source owned spell (taking the L3 placement first
+ * if both L2 and L3 are placed; otherwise L2) to the destination owned
+ * spell (placing on L2 if empty, else L3). No pool change. Throws if
+ * either side is invalid.
+ */
+export function applyMoveWisBetweenSpells(
+  state: GameState,
+  playerId: PlayerId,
+  sourceSpellId: SpellCardId,
+  destSpellId: SpellCardId,
+): GameStatePatch {
+  if (sourceSpellId === destSpellId) {
+    throw new Error('applyMoveWisBetweenSpells: source and destination match');
+  }
+  const player = findPlayer(state, playerId);
+  if (!player) {
+    throw new Error(`applyMoveWisBetweenSpells: player ${playerId} not found`);
+  }
+  const src = player.ownedSpells.find((s) => s.cardId === sourceSpellId);
+  const dst = player.ownedSpells.find((s) => s.cardId === destSpellId);
+  if (!src) {
+    throw new Error(`applyMoveWisBetweenSpells: source ${sourceSpellId} not owned`);
+  }
+  if (!dst) {
+    throw new Error(`applyMoveWisBetweenSpells: dest ${destSpellId} not owned`);
+  }
+  if (!src.wisPlacedLevel2 && !src.wisPlacedLevel3) {
+    throw new Error('applyMoveWisBetweenSpells: source has no WIS to move');
+  }
+  if (!dst.intPlaced) {
+    throw new Error('applyMoveWisBetweenSpells: dest not yet learned');
+  }
+  if (dst.wisPlacedLevel2 && dst.wisPlacedLevel3) {
+    throw new Error('applyMoveWisBetweenSpells: dest already at L3');
+  }
+  return {
+    players: state.players.map((p) =>
+      p.id !== playerId
+        ? p
+        : {
+            ...p,
+            ownedSpells: p.ownedSpells.map((s) => {
+              if (s.cardId === sourceSpellId) {
+                // Take L3 first if present, else L2.
+                return s.wisPlacedLevel3
+                  ? { ...s, wisPlacedLevel3: false }
+                  : { ...s, wisPlacedLevel2: false };
+              }
+              if (s.cardId === destSpellId) {
+                return s.wisPlacedLevel2
+                  ? { ...s, wisPlacedLevel3: true }
+                  : { ...s, wisPlacedLevel2: true };
+              }
+              return s;
+            }),
+          },
+    ),
+  };
 }
 
 // ============================================================================

@@ -1810,7 +1810,7 @@ describe('Library A slot 4 vertical slice', () => {
     expect(alice?.resources.intelligence).toBe(0);
   });
 
-  it('choosing Research spawns a follow-up prompt', () => {
+  it('choosing Research spawns a follow-up prompt (discard-only when no INT/WIS or learned spells)', () => {
     let s = driveToLibraryPrompt(setupLibraryTest());
     const top = topPending(s);
     s = applyAction(s, {
@@ -1822,9 +1822,10 @@ describe('Library A slot 4 vertical slice', () => {
     const followup = topPending(s);
     expect(followup.prompt.kind).toBe('choose-from-options');
     if (followup.prompt.kind === 'choose-from-options') {
+      // Alice has no INT, no WIS, and no learned spells, so only the
+      // discard option is on the menu.
       expect(followup.prompt.options.map((o) => o.id).sort()).toEqual([
         'discard',
-        'spend',
       ]);
     }
   });
@@ -4640,11 +4641,240 @@ describe('Library A slot 2 (merit, 1 MB): INT + Research', () => {
     const top = topPending(s);
     expect(top.prompt.kind).toBe('choose-from-options');
     if (top.prompt.kind === 'choose-from-options') {
+      // Alice now has 1 INT but no learned spells. With a non-empty spell
+      // tableau, both 'draft' (use the INT) and 'discard' are offered.
       expect(top.prompt.options.map((o) => o.id).sort()).toEqual([
         'discard',
-        'spend',
+        'draft',
       ]);
     }
+  });
+});
+
+// ============================================================================
+// Spell research actions — Draft / Move-INT / Add-WIS / Move-WIS / Discard.
+// Driven directly via the existing Library A slot 4 path: pick 'research'
+// from the OR-prompt, then resolve the research sub-prompt.
+// ============================================================================
+
+describe('Spell research actions', () => {
+  function setupResearchTest(opts: {
+    intelligence?: number;
+    wisdom?: number;
+    ownedSpells?: {
+      cardId: string;
+      intPlaced?: boolean;
+      wisPlacedLevel2?: boolean;
+      wisPlacedLevel3?: boolean;
+    }[];
+    spellTableau?: string[];
+  }): GameState {
+    let s = initGame(TWO_PLAYER_CONFIG);
+    s = forceLibrarySideA(s);
+    s = addMage(s, 'p1', {
+      id: 'alice-mage-1',
+      cardId: 'base.mage.mysticism',
+      color: 'grey',
+    });
+    s = placeMageOnSpace(s, 'p1', 'alice-mage-1', 'base.room.library.a.slot-4');
+    s = zeroPlayerResources(s, 'p1');
+    s = { ...s, bellTower: { ...s.bellTower, available: [] } };
+    if (opts.intelligence !== undefined || opts.wisdom !== undefined) {
+      s = mapPlayer(s, 'p1', (p) => ({
+        ...p,
+        resources: {
+          ...p.resources,
+          intelligence: opts.intelligence ?? p.resources.intelligence,
+          wisdom: opts.wisdom ?? p.resources.wisdom,
+        },
+      }));
+    }
+    for (const spec of opts.ownedSpells ?? []) {
+      s = addOwnedSpell(s, 'p1', spec.cardId, {
+        intPlaced: spec.intPlaced ?? true,
+        wisPlacedLevel2: spec.wisPlacedLevel2 ?? false,
+        wisPlacedLevel3: spec.wisPlacedLevel3 ?? false,
+      });
+    }
+    if (opts.spellTableau) {
+      s = { ...s, spellTableau: opts.spellTableau };
+    }
+    return s;
+  }
+
+  function driveToResearchSubPrompt(s: GameState): GameState {
+    let next = applyAction(s, { type: 'ADVANCE_PHASE' }); // → errands
+    next = applyAction(next, { type: 'ADVANCE_PHASE' }); // → resolution
+    next = applyAction(next, { type: 'ADVANCE_PHASE' }); // → forfeit/reward prompt
+    next = takeRewardAtResolution(next); // → 3-way OR prompt
+    // Pick 'research' to surface the research menu.
+    next = applyAction(next, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(next).id,
+      answer: { kind: 'option-chosen', optionId: 'research', payload: {} },
+    });
+    return next;
+  }
+
+  it('Draft: pick a tableau spell with 1 INT → spell joins office at L1, tableau refills, INT deducted', () => {
+    let s = setupResearchTest({
+      intelligence: 1,
+      spellTableau: ['base.spell.burn'],
+    });
+    // Stack a deterministic top of deck so the tableau refills predictably.
+    s = { ...s, spellDeck: ['base.spell.living-image', ...s.spellDeck] };
+    s = driveToResearchSubPrompt(s);
+    // Research menu should include 'draft'.
+    const menu = topPending(s);
+    expect(menu.prompt.kind).toBe('choose-from-options');
+    if (menu.prompt.kind === 'choose-from-options') {
+      expect(menu.prompt.options.map((o) => o.id).sort()).toContain('draft');
+    }
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: menu.id,
+      answer: { kind: 'option-chosen', optionId: 'draft', payload: {} },
+    });
+    // Now the sub-prompt: pick a tableau spell.
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'option-chosen', optionId: 'base.spell.burn', payload: {} },
+    });
+    const alice = s.players.find((p) => p.id === 'p1');
+    expect(alice?.resources.intelligence).toBe(0);
+    const owned = alice?.ownedSpells.find((o) => o.cardId === 'base.spell.burn');
+    expect(owned?.intPlaced).toBe(true);
+    expect(owned?.wisPlacedLevel2).toBe(false);
+    // Tableau refilled from deck top.
+    expect(s.spellTableau).toEqual(['base.spell.living-image']);
+  });
+
+  it('Add-WIS: with 1 WIS and a learned spell, unlocks L2 (the first time) then L3 (second time)', () => {
+    let s = setupResearchTest({
+      wisdom: 1,
+      ownedSpells: [{ cardId: 'base.spell.burn', intPlaced: true }],
+    });
+    s = driveToResearchSubPrompt(s);
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'option-chosen', optionId: 'add-wis', payload: {} },
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'option-chosen', optionId: 'base.spell.burn', payload: {} },
+    });
+    const alice = s.players.find((p) => p.id === 'p1');
+    expect(alice?.resources.wisdom).toBe(0);
+    const owned = alice?.ownedSpells.find((o) => o.cardId === 'base.spell.burn');
+    expect(owned?.wisPlacedLevel2).toBe(true);
+    expect(owned?.wisPlacedLevel3).toBe(false);
+  });
+
+  it('Move-INT: discards a learned spell (refunding its WIS) and drafts a new one with the moved INT', () => {
+    let s = setupResearchTest({
+      // 0 INT + 0 WIS in pool; one learned spell with 1 WIS placed.
+      ownedSpells: [
+        {
+          cardId: 'base.spell.burn',
+          intPlaced: true,
+          wisPlacedLevel2: true,
+        },
+      ],
+      spellTableau: ['base.spell.living-image'],
+    });
+    s = driveToResearchSubPrompt(s);
+    // Pick 'move-int'.
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'option-chosen', optionId: 'move-int', payload: {} },
+    });
+    // Pick source (the learned spell to discard).
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'option-chosen', optionId: 'base.spell.burn', payload: {} },
+    });
+    // Pick destination tableau spell.
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: {
+        kind: 'option-chosen',
+        optionId: 'base.spell.living-image',
+        payload: {},
+      },
+    });
+    const alice = s.players.find((p) => p.id === 'p1');
+    // Burn is gone; Living Image is owned at L1.
+    expect(alice?.ownedSpells.find((o) => o.cardId === 'base.spell.burn')).toBeUndefined();
+    const newSpell = alice?.ownedSpells.find(
+      (o) => o.cardId === 'base.spell.living-image',
+    );
+    expect(newSpell?.intPlaced).toBe(true);
+    // WIS pool got 1 back from Burn's L2.
+    expect(alice?.resources.wisdom).toBe(1);
+    // INT pool net 0 (refund +1 from discard, then -1 to draft the new card).
+    expect(alice?.resources.intelligence).toBe(0);
+  });
+
+  it('Move-WIS: shifts 1 WIS from one owned spell to another', () => {
+    let s = setupResearchTest({
+      ownedSpells: [
+        { cardId: 'base.spell.burn', intPlaced: true, wisPlacedLevel2: true },
+        { cardId: 'base.spell.living-image', intPlaced: true },
+      ],
+    });
+    s = driveToResearchSubPrompt(s);
+    // Pick 'move-wis'.
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'option-chosen', optionId: 'move-wis', payload: {} },
+    });
+    // Pick source.
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'option-chosen', optionId: 'base.spell.burn', payload: {} },
+    });
+    // Pick destination.
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: {
+        kind: 'option-chosen',
+        optionId: 'base.spell.living-image',
+        payload: {},
+      },
+    });
+    const alice = s.players.find((p) => p.id === 'p1');
+    const burn = alice?.ownedSpells.find((o) => o.cardId === 'base.spell.burn');
+    const li = alice?.ownedSpells.find(
+      (o) => o.cardId === 'base.spell.living-image',
+    );
+    expect(burn?.wisPlacedLevel2).toBe(false);
+    expect(li?.wisPlacedLevel2).toBe(true);
+    // Pool unchanged.
+    expect(alice?.resources.wisdom).toBe(0);
+  });
+
+  it('Discard: spend Research with no useful options resolves to done with no state change', () => {
+    let s = setupResearchTest({});
+    s = driveToResearchSubPrompt(s);
+    const menu = topPending(s);
+    if (menu.prompt.kind === 'choose-from-options') {
+      expect(menu.prompt.options.map((o) => o.id)).toEqual(['discard']);
+    }
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: menu.id,
+      answer: { kind: 'option-chosen', optionId: 'discard', payload: {} },
+    });
+    expect(s.pendingResolutionStack).toHaveLength(0);
   });
 });
 
@@ -4712,9 +4942,10 @@ describe('Library A slot 3 (regular): Gain a Buy + Research', () => {
     const top = topPending(s);
     expect(top.prompt.kind).toBe('choose-from-options');
     if (top.prompt.kind === 'choose-from-options') {
+      // Alice has 0 INT, 0 WIS, no learned spells → only 'discard' is on
+      // the Research menu.
       expect(top.prompt.options.map((o) => o.id).sort()).toEqual([
         'discard',
-        'spend',
       ]);
     }
   });
@@ -4728,7 +4959,6 @@ describe('Library A slot 3 (regular): Gain a Buy + Research', () => {
     if (top.prompt.kind === 'choose-from-options') {
       expect(top.prompt.options.map((o) => o.id).sort()).toEqual([
         'discard',
-        'spend',
       ]);
     }
   });

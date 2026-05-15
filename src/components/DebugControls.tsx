@@ -1294,6 +1294,40 @@ function PlayerCard({
                       owned &&
                       canAct &&
                       lv.timing !== 'reaction';
+                    // Per-level INT/WIS box: L1 holds an INT when learned,
+                    // L2/L3 each hold a WIS when the level is unlocked.
+                    // Leader (unique) spells never need research and use a
+                    // dash placeholder.
+                    const tokenKind: 'int' | 'wis' | null = card.unique
+                      ? null
+                      : lv.level === 1
+                        ? 'int'
+                        : 'wis';
+                    const tokenBox = (
+                      <span
+                        className={clsx(
+                          'inline-flex items-center justify-center w-5 h-5 rounded border text-[9px] uppercase tracking-wide font-semibold',
+                          owned
+                            ? lv.level === 1
+                              ? 'border-cyan-300 bg-cyan-500/20 text-cyan-200'
+                              : 'border-violet-300 bg-violet-500/20 text-violet-200'
+                            : 'border-slate-700 bg-slate-950/30 text-slate-700',
+                        )}
+                        title={
+                          card.unique
+                            ? 'Leader spell — no research required'
+                            : owned
+                              ? `${tokenKind === 'int' ? 'INT' : 'WIS'} placed (L${lv.level} unlocked)`
+                              : `L${lv.level} requires ${tokenKind === 'int' ? 'an INT' : 'a WIS'}`
+                        }
+                      >
+                        {card.unique
+                          ? '—'
+                          : owned
+                            ? (tokenKind === 'int' ? 'I' : 'W')
+                            : ''}
+                      </span>
+                    );
                     return (
                       <li
                         key={lv.level}
@@ -1302,6 +1336,7 @@ function PlayerCard({
                           !owned && 'opacity-50',
                         )}
                       >
+                        {tokenBox}
                         <span className="text-slate-500">L{lv.level}</span>
                         <span className="font-medium text-slate-300">
                           {lv.title}
