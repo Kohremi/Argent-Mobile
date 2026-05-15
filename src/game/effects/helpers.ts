@@ -495,13 +495,15 @@ export function healMageToSpace(
 }
 
 /**
- * Moves the targeted placed mage from a slot's BASE position into its SHADOW
- * position on the same slot. The base position becomes empty; the shadow
- * gets the mage. Per the shadow-system rules: while shadowing the mage
- * loses its color-based ability and is not targetable by default. The slot
- * will fire its effect for the shadow occupant AFTER the base resolves
- * (if a new base mage ends up there) or alone if base stays empty. Returns
- * a `mage-shadowed` trigger event for reaction windows (Mystic Amulet etc.).
+ * Flags the targeted placed mage as shadowing IN PLACE — it stays where it
+ * is (base or shadow position) but its `isShadowing` flag becomes true,
+ * suppressing its color-based ability and removing it from default
+ * targeting. Used by Paralocation and Rennel Pedrigor.
+ *
+ * The original occupant is NOT moved or removed — the slot keeps its
+ * existing base/shadow layout, just with an updated flag. Returns a
+ * `mage-shadowed` trigger event so reaction windows (Mystic Amulet etc.)
+ * can fire.
  */
 export function shadowMageInPlace(
   state: GameState,
@@ -518,26 +520,7 @@ export function shadowMageInPlace(
   if (!fromLookup) {
     throw new Error(`shadowMageInPlace: ${targetMageId} not found in any slot`);
   }
-  if (fromLookup.position !== 'base') {
-    // Already shadowing — no-op patch but still fire the event so reactions
-    // see the source action.
-    return {
-      patch: {},
-      triggerEvent: {
-        kind: 'mage-shadowed',
-        mageId: targetMageId,
-        ownerId: owner.id,
-        byPlayerId,
-        spaceId: fromLookup.spaceId,
-      },
-    };
-  }
   const spaceId = fromLookup.spaceId;
-  const shadowOccupancy: WorkerOccupancy = {
-    mageId: targetMageId,
-    ownerId: owner.id,
-    isShadowing: true,
-  };
   return {
     patch: {
       players: state.players.map((p) =>
@@ -552,11 +535,19 @@ export function shadowMageInPlace(
       ),
       rooms: state.rooms.map((r) => ({
         ...r,
-        actionSpaces: r.actionSpaces.map((s) =>
-          s.id !== spaceId
-            ? s
-            : { ...s, occupant: null, shadowOccupant: shadowOccupancy },
-        ),
+        actionSpaces: r.actionSpaces.map((s) => {
+          if (s.id !== spaceId) return s;
+          if (fromLookup.position === 'base' && s.occupant) {
+            return { ...s, occupant: { ...s.occupant, isShadowing: true } };
+          }
+          if (fromLookup.position === 'shadow' && s.shadowOccupant) {
+            return {
+              ...s,
+              shadowOccupant: { ...s.shadowOccupant, isShadowing: true },
+            };
+          }
+          return s;
+        }),
       })),
     },
     triggerEvent: {

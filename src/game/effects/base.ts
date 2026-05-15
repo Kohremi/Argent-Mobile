@@ -523,9 +523,11 @@ function applyReactionReposition(
     return updated;
   });
 
-  // Cards that ask the mage to "shadow" the slot (Phase Steppers / Invisibility
-  // Cloak) land the mage in the slot's shadowOccupant; non-shadowing reactions
-  // (Shield Potion / Ancient Armor / Mystic Amulet) replace the base occupant.
+  // All reaction repositions land the mage on the slot's BASE position
+  // (the original placement). For shadowing reactions (Phase Steppers /
+  // Invisibility Cloak) the occupant is flagged isShadowing=true so the
+  // mage's color ability is suppressed; non-shadowing reactions land it
+  // unflagged.
   const occupancy: WorkerOccupancy = {
     mageId,
     ownerId,
@@ -534,11 +536,7 @@ function applyReactionReposition(
   const rooms = state.rooms.map((r) => ({
     ...r,
     actionSpaces: r.actionSpaces.map((s) =>
-      s.id !== destinationSpaceId
-        ? s
-        : asShadow
-          ? { ...s, shadowOccupant: occupancy }
-          : { ...s, occupant: occupancy },
+      s.id !== destinationSpaceId ? s : { ...s, occupant: occupancy },
     ),
   }));
 

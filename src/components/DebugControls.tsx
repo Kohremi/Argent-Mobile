@@ -2571,11 +2571,18 @@ function RoomsPanel({
                       title: string;
                     }) => {
                       const { isShadow, occupant, onClick, ringClass, title } = args;
-                      const borderClass = isShadow
-                        ? 'border-purple-400/50 border-dashed'
-                        : 'border-slate-500';
+                      // The shadow tile is always rendered with a dashed
+                      // purple border. The base tile is normally solid-slate
+                      // but switches to dashed-purple when its occupant is
+                      // flagged isShadowing (Paralocation / Rennel-applied
+                      // suppression).
+                      const occupantShadowed = occupant?.isShadowing === true;
+                      const borderClass =
+                        isShadow || occupantShadowed
+                          ? 'border-purple-400/50 border-dashed'
+                          : 'border-slate-500';
                       const filledClass = occupant
-                        ? isShadow
+                        ? isShadow || occupantShadowed
                           ? 'bg-purple-500/15'
                           : 'bg-amber-400/15'
                         : 'bg-slate-950/40';
