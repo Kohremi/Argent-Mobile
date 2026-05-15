@@ -644,6 +644,13 @@ export type ReactionTriggerEvent =
       byPlayerId: PlayerId;
     }
   | {
+      kind: 'mage-shadowed';
+      mageId: OwnedMageId;
+      ownerId: PlayerId;
+      byPlayerId: PlayerId;
+      spaceId: ActionSpaceId;
+    }
+  | {
       kind: 'spell-cast';
       spellId: SpellCardId;
       level: 1 | 2 | 3;

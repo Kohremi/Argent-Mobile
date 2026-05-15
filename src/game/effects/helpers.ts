@@ -451,12 +451,14 @@ export function healMageToSpace(
 /**
  * Flags a placed mage as shadowing its current slot (and the slot occupant
  * follows). Used by Paralocation. Does NOT vacate the slot — the mage stays
- * put, just marked as shadowing.
+ * put, just marked as shadowing. Returns a `mage-shadowed` trigger event so
+ * the caller can open a reaction window (Mystic Amulet etc.).
  */
 export function shadowMageInPlace(
   state: GameState,
   targetMageId: OwnedMageId,
-): GameStatePatch {
+  byPlayerId: PlayerId,
+): { patch: GameStatePatch; triggerEvent: ReactionTriggerEvent } {
   const lookup = findMageOwner(state, targetMageId);
   if (!lookup) throw new Error(`shadowMageInPlace: mage ${targetMageId} not found`);
   const { player: owner, mage } = lookup;
@@ -465,24 +467,33 @@ export function shadowMageInPlace(
   }
   const spaceId = mage.location.spaceId;
   return {
-    players: state.players.map((p) =>
-      p.id !== owner.id
-        ? p
-        : {
-            ...p,
-            mages: p.mages.map((m) =>
-              m.id !== targetMageId ? m : { ...m, isShadowing: true },
-            ),
-          },
-    ),
-    rooms: state.rooms.map((r) => ({
-      ...r,
-      actionSpaces: r.actionSpaces.map((s) =>
-        s.id !== spaceId || !s.occupant
-          ? s
-          : { ...s, occupant: { ...s.occupant, isShadowing: true } },
+    patch: {
+      players: state.players.map((p) =>
+        p.id !== owner.id
+          ? p
+          : {
+              ...p,
+              mages: p.mages.map((m) =>
+                m.id !== targetMageId ? m : { ...m, isShadowing: true },
+              ),
+            },
       ),
-    })),
+      rooms: state.rooms.map((r) => ({
+        ...r,
+        actionSpaces: r.actionSpaces.map((s) =>
+          s.id !== spaceId || !s.occupant
+            ? s
+            : { ...s, occupant: { ...s.occupant, isShadowing: true } },
+        ),
+      })),
+    },
+    triggerEvent: {
+      kind: 'mage-shadowed',
+      mageId: targetMageId,
+      ownerId: owner.id,
+      byPlayerId,
+      spaceId,
+    },
   };
 }
 
@@ -520,23 +531,96 @@ export function buildReactionOptionsFor(
   if (!responder) return [];
   const options: ReturnType<typeof buildReactionOptionsFor> = [];
 
-  // Phase Steppers reacts to your own Mage being wounded / banished / moved.
-  const isMageEvent =
-    event.kind === 'mage-wounded' ||
-    event.kind === 'mage-banished' ||
-    event.kind === 'mage-moved';
-  if (isMageEvent && event.ownerId === responderId) {
-    const hasPhaseSteppers = responder.vaultCards.some(
-      (v) => v.cardId === 'base.vault.phase-steppers',
+  const isOwnMageHarmEvent =
+    (event.kind === 'mage-wounded' ||
+      event.kind === 'mage-banished' ||
+      event.kind === 'mage-moved' ||
+      event.kind === 'mage-shadowed') &&
+    event.ownerId === responderId;
+
+  if (!isOwnMageHarmEvent) return options;
+
+  const triggeredByOpponent =
+    'byPlayerId' in event && event.byPlayerId !== event.ownerId;
+
+  const has = (cardId: string, requireRefreshed = false) =>
+    responder.vaultCards.some(
+      (v) => v.cardId === cardId && (!requireRefreshed || !v.exhausted),
     );
-    if (hasPhaseSteppers) {
-      options.push({
-        sourceKind: 'vault-card',
-        sourceId: 'base.vault.phase-steppers',
-        effectId: 'base.vault.phase-steppers.react',
-        label: 'Play Phase Steppers',
-      });
-    }
+
+  // Phase Steppers — consumable, reacts to wound/banish/move regardless of
+  // source. Mage shadows the original slot.
+  if (
+    (event.kind === 'mage-wounded' ||
+      event.kind === 'mage-banished' ||
+      event.kind === 'mage-moved') &&
+    has('base.vault.phase-steppers')
+  ) {
+    options.push({
+      sourceKind: 'vault-card',
+      sourceId: 'base.vault.phase-steppers',
+      effectId: 'base.vault.phase-steppers.react',
+      label: 'Play Phase Steppers',
+    });
+  }
+
+  // Invisibility Cloak — treasure, same trigger as Phase Steppers; requires
+  // a refreshed (non-exhausted) copy in play.
+  if (
+    (event.kind === 'mage-wounded' ||
+      event.kind === 'mage-banished' ||
+      event.kind === 'mage-moved') &&
+    has('base.vault.invisibility-cloak', true)
+  ) {
+    options.push({
+      sourceKind: 'vault-card',
+      sourceId: 'base.vault.invisibility-cloak',
+      effectId: 'base.vault.invisibility-cloak.react',
+      label: 'Use Invisibility Cloak',
+    });
+  }
+
+  // Shield Potion — consumable, wound/banish/move; places at any empty slot.
+  if (
+    (event.kind === 'mage-wounded' ||
+      event.kind === 'mage-banished' ||
+      event.kind === 'mage-moved') &&
+    has('base.vault.shield-potion')
+  ) {
+    options.push({
+      sourceKind: 'vault-card',
+      sourceId: 'base.vault.shield-potion',
+      effectId: 'base.vault.shield-potion.react',
+      label: 'Play Shield Potion',
+    });
+  }
+
+  // Ancient Armor — treasure, wound/move BY AN OPPONENT only.
+  if (
+    triggeredByOpponent &&
+    (event.kind === 'mage-wounded' || event.kind === 'mage-moved') &&
+    has('base.vault.ancient-armor', true)
+  ) {
+    options.push({
+      sourceKind: 'vault-card',
+      sourceId: 'base.vault.ancient-armor',
+      effectId: 'base.vault.ancient-armor.react',
+      label: 'Use Ancient Armor',
+    });
+  }
+
+  // Mystic Amulet — treasure, banish/shadow BY AN OPPONENT only.
+  if (
+    triggeredByOpponent &&
+    (event.kind === 'mage-banished' || event.kind === 'mage-shadowed') &&
+    has('base.vault.mystic-amulet', true)
+  ) {
+    options.push({
+      sourceKind: 'vault-card',
+      sourceId: 'base.vault.mystic-amulet',
+      effectId: 'base.vault.mystic-amulet.react',
+      label: 'Use Mystic Amulet',
+    });
   }
 
   return options;

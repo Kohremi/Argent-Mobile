@@ -409,6 +409,55 @@ function applyPhaseSteppers(
   reactorId: string,
   originalSpaceId: string,
 ) {
+  return applyReactionReposition(state, {
+    mageId,
+    ownerId,
+    reactorId,
+    destinationSpaceId: originalSpaceId,
+    asShadow: true,
+    cardId: PHASE_STEPPERS_ID,
+    disposal: 'consumable',
+  });
+}
+
+/**
+ * Shared "react by repositioning your mage" helper. Used by:
+ *   - Phase Steppers (consumable; shadow at original)
+ *   - Invisibility Cloak (treasure; shadow at original)
+ *   - Shield Potion (consumable; place at original, no shadow)
+ *   - Ancient Armor (treasure; place at original, no shadow)
+ *   - Mystic Amulet (treasure; place at original, no shadow)
+ *
+ * Note: until reactions support sub-prompts, "destinationSpaceId" is always
+ * the trigger's `originalSpaceId` (or `fromSpaceId` for move events). The
+ * "any open slot" choice promised by Shield Potion / Ancient Armor / Mystic
+ * Amulet is deferred to the reaction-sub-prompt refactor.
+ *
+ * `disposal: 'consumable'` moves the card to the reactor's personalDiscard;
+ * `disposal: 'exhaust'` marks the owned vault card exhausted (treasures
+ * refresh at round-setup like spells).
+ */
+function applyReactionReposition(
+  state: GameState,
+  args: {
+    mageId: string;
+    ownerId: string;
+    reactorId: string;
+    destinationSpaceId: string;
+    asShadow: boolean;
+    cardId: string;
+    disposal: 'consumable' | 'exhaust';
+  },
+): { players: Player[]; rooms: GameState['rooms'] } {
+  const {
+    mageId,
+    ownerId,
+    reactorId,
+    destinationSpaceId,
+    asShadow,
+    cardId,
+    disposal,
+  } = args;
   const players = state.players.map((p): Player => {
     let updated = p;
     if (p.id === ownerId) {
@@ -420,25 +469,37 @@ function applyPhaseSteppers(
             : {
                 ...m,
                 isWounded: false,
-                isShadowing: true,
-                location: { kind: 'action-space' as const, spaceId: originalSpaceId },
+                isShadowing: asShadow,
+                location: {
+                  kind: 'action-space' as const,
+                  spaceId: destinationSpaceId,
+                },
               },
         ),
       };
     }
     if (p.id === reactorId) {
-      const idx = updated.vaultCards.findIndex((v) => v.cardId === PHASE_STEPPERS_ID);
+      const idx = updated.vaultCards.findIndex((v) => v.cardId === cardId);
       if (idx === -1) {
-        throw new Error('Phase Steppers: reactor does not own the card');
+        throw new Error(`${cardId}: reactor does not own the card`);
       }
-      updated = {
-        ...updated,
-        vaultCards: updated.vaultCards.filter((_, i) => i !== idx),
-        personalDiscard: [
-          ...updated.personalDiscard,
-          { kind: 'consumable' as const, cardId: PHASE_STEPPERS_ID },
-        ],
-      };
+      if (disposal === 'consumable') {
+        updated = {
+          ...updated,
+          vaultCards: updated.vaultCards.filter((_, i) => i !== idx),
+          personalDiscard: [
+            ...updated.personalDiscard,
+            { kind: 'consumable' as const, cardId },
+          ],
+        };
+      } else {
+        updated = {
+          ...updated,
+          vaultCards: updated.vaultCards.map((v, i) =>
+            i !== idx ? v : { ...v, exhausted: true },
+          ),
+        };
+      }
     }
     return updated;
   });
@@ -446,14 +507,178 @@ function applyPhaseSteppers(
   const rooms = state.rooms.map((r) => ({
     ...r,
     actionSpaces: r.actionSpaces.map((s) =>
-      s.id !== originalSpaceId
+      s.id !== destinationSpaceId
         ? s
-        : { ...s, occupant: { mageId, ownerId, isShadowing: true } },
+        : {
+            ...s,
+            occupant: { mageId, ownerId, isShadowing: asShadow },
+          },
     ),
   }));
 
   return { players, rooms };
 }
+
+/**
+ * Pulls the relevant "place the mage back here" space id from a trigger
+ * event. For wound/banish it's `originalSpaceId`; for move it's the
+ * `fromSpaceId` (the slot the mage was moved out of); for shadow it's the
+ * `spaceId` (still occupied). Returns null if the event has no usable
+ * spaceId (rare — wounded mage that was never on a slot etc.).
+ */
+function originalSpaceFromEvent(event: ReactionTriggerEvent): string | null {
+  if (event.kind === 'mage-wounded' || event.kind === 'mage-banished') {
+    return event.originalSpaceId;
+  }
+  if (event.kind === 'mage-moved') return event.fromSpaceId;
+  if (event.kind === 'mage-shadowed') return event.spaceId;
+  return null;
+}
+
+/**
+ * Invisibility Cloak (treasure, reaction) — reusable Phase Steppers:
+ * mage shadows the original slot instead of being wounded / banished /
+ * moved. Card exhausts (refreshed at round-setup).
+ */
+registerEffect('base.vault.invisibility-cloak.react', (ctx): EffectResult => {
+  const raw = ctx.resumeContext?.['triggerEvent'];
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    throw new Error('Invisibility Cloak: missing triggerEvent');
+  }
+  const event = raw as unknown as ReactionTriggerEvent;
+  if (
+    event.kind !== 'mage-wounded' &&
+    event.kind !== 'mage-banished' &&
+    event.kind !== 'mage-moved'
+  ) {
+    throw new Error(`Invisibility Cloak cannot react to ${event.kind}`);
+  }
+  if (event.ownerId !== ctx.triggeringPlayerId) {
+    throw new Error('Invisibility Cloak: only protects your own Mage');
+  }
+  const originalSpaceId = originalSpaceFromEvent(event);
+  if (!originalSpaceId) return { kind: 'done', patch: {} };
+  return {
+    kind: 'done',
+    patch: applyReactionReposition(ctx.state, {
+      mageId: event.mageId,
+      ownerId: event.ownerId,
+      reactorId: ctx.triggeringPlayerId,
+      destinationSpaceId: originalSpaceId,
+      asShadow: true,
+      cardId: 'base.vault.invisibility-cloak',
+      disposal: 'exhaust',
+    }),
+  };
+});
+
+/**
+ * Shield Potion (consumable, reaction) — place the mage at an empty slot
+ * "instead" of the harmful event. Until reactions support sub-prompts the
+ * slot is taken to be the trigger's original slot (which IS empty post-
+ * event for wound/banish/move). Card consumed.
+ */
+registerEffect('base.vault.shield-potion.react', (ctx): EffectResult => {
+  const raw = ctx.resumeContext?.['triggerEvent'];
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    throw new Error('Shield Potion: missing triggerEvent');
+  }
+  const event = raw as unknown as ReactionTriggerEvent;
+  if (
+    event.kind !== 'mage-wounded' &&
+    event.kind !== 'mage-banished' &&
+    event.kind !== 'mage-moved'
+  ) {
+    throw new Error(`Shield Potion cannot react to ${event.kind}`);
+  }
+  if (event.ownerId !== ctx.triggeringPlayerId) {
+    throw new Error('Shield Potion: only protects your own Mage');
+  }
+  const originalSpaceId = originalSpaceFromEvent(event);
+  if (!originalSpaceId) return { kind: 'done', patch: {} };
+  return {
+    kind: 'done',
+    patch: applyReactionReposition(ctx.state, {
+      mageId: event.mageId,
+      ownerId: event.ownerId,
+      reactorId: ctx.triggeringPlayerId,
+      destinationSpaceId: originalSpaceId,
+      asShadow: false,
+      cardId: 'base.vault.shield-potion',
+      disposal: 'consumable',
+    }),
+  };
+});
+
+/**
+ * Ancient Armor (treasure, reaction) — "after" an opponent wounds or
+ * moves your Mage, reposition (default: original slot). Card exhausts.
+ */
+registerEffect('base.vault.ancient-armor.react', (ctx): EffectResult => {
+  const raw = ctx.resumeContext?.['triggerEvent'];
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    throw new Error('Ancient Armor: missing triggerEvent');
+  }
+  const event = raw as unknown as ReactionTriggerEvent;
+  if (event.kind !== 'mage-wounded' && event.kind !== 'mage-moved') {
+    throw new Error(`Ancient Armor cannot react to ${event.kind}`);
+  }
+  if (event.ownerId !== ctx.triggeringPlayerId) {
+    throw new Error('Ancient Armor: only protects your own Mage');
+  }
+  if (event.byPlayerId === event.ownerId) {
+    throw new Error('Ancient Armor: trigger must be from an opponent');
+  }
+  const originalSpaceId = originalSpaceFromEvent(event);
+  if (!originalSpaceId) return { kind: 'done', patch: {} };
+  return {
+    kind: 'done',
+    patch: applyReactionReposition(ctx.state, {
+      mageId: event.mageId,
+      ownerId: event.ownerId,
+      reactorId: ctx.triggeringPlayerId,
+      destinationSpaceId: originalSpaceId,
+      asShadow: false,
+      cardId: 'base.vault.ancient-armor',
+      disposal: 'exhaust',
+    }),
+  };
+});
+
+/**
+ * Mystic Amulet (treasure, reaction) — "after" an opponent banishes or
+ * shadows your Mage, reposition (default: original slot). Card exhausts.
+ */
+registerEffect('base.vault.mystic-amulet.react', (ctx): EffectResult => {
+  const raw = ctx.resumeContext?.['triggerEvent'];
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    throw new Error('Mystic Amulet: missing triggerEvent');
+  }
+  const event = raw as unknown as ReactionTriggerEvent;
+  if (event.kind !== 'mage-banished' && event.kind !== 'mage-shadowed') {
+    throw new Error(`Mystic Amulet cannot react to ${event.kind}`);
+  }
+  if (event.ownerId !== ctx.triggeringPlayerId) {
+    throw new Error('Mystic Amulet: only protects your own Mage');
+  }
+  if (event.byPlayerId === event.ownerId) {
+    throw new Error('Mystic Amulet: trigger must be from an opponent');
+  }
+  const originalSpaceId = originalSpaceFromEvent(event);
+  if (!originalSpaceId) return { kind: 'done', patch: {} };
+  return {
+    kind: 'done',
+    patch: applyReactionReposition(ctx.state, {
+      mageId: event.mageId,
+      ownerId: event.ownerId,
+      reactorId: ctx.triggeringPlayerId,
+      destinationSpaceId: originalSpaceId,
+      asShadow: false,
+      cardId: 'base.vault.mystic-amulet',
+      disposal: 'exhaust',
+    }),
+  };
+});
 
 // ============================================================================
 // Vault A — three slots per the room file:
@@ -1774,9 +1999,21 @@ registerEffect('base.supporter.rennel-pedrigor', (ctx): EffectResult => {
       `rennel-pedrigor expected mage-chosen, got ${ctx.resumeAnswer.kind}`,
     );
   }
+  const shadowed = shadowMageInPlace(
+    ctx.state,
+    ctx.resumeAnswer.mageId,
+    ctx.triggeringPlayerId,
+  );
   return {
-    kind: 'done',
-    patch: shadowMageInPlace(ctx.state, ctx.resumeAnswer.mageId),
+    kind: 'open-reaction',
+    patch: shadowed.patch,
+    window: {
+      triggerEvent: shadowed.triggerEvent,
+      pendingResponderIds: buildReactionQueue(ctx.state, ctx.triggeringPlayerId),
+      reactedPlayerIds: [],
+      afterResume: { effectId: 'base.system.noop', context: {} },
+      source: ctx.source,
+    },
   };
 });
 
@@ -2500,9 +2737,21 @@ registerEffect('base.spell.paralocation.l1', (ctx): EffectResult => {
       `paralocation expected mage-chosen, got ${ctx.resumeAnswer.kind}`,
     );
   }
+  const shadowed = shadowMageInPlace(
+    ctx.state,
+    ctx.resumeAnswer.mageId,
+    ctx.triggeringPlayerId,
+  );
   return {
-    kind: 'done',
-    patch: shadowMageInPlace(ctx.state, ctx.resumeAnswer.mageId),
+    kind: 'open-reaction',
+    patch: shadowed.patch,
+    window: {
+      triggerEvent: shadowed.triggerEvent,
+      pendingResponderIds: buildReactionQueue(ctx.state, ctx.triggeringPlayerId),
+      reactedPlayerIds: [],
+      afterResume: { effectId: 'base.system.noop', context: {} },
+      source: ctx.source,
+    },
   };
 });
 

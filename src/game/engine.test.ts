@@ -2033,6 +2033,220 @@ describe('Burn L1 + Phase Steppers vertical slice', () => {
 });
 
 // ============================================================================
+// Reaction vault cards — Invisibility Cloak, Shield Potion, Ancient Armor,
+// Mystic Amulet. Each fires from a reaction window in response to a harmful
+// event on the responder's mage. Until the reaction-sub-prompt refactor
+// lands, the "any empty slot" choice is locked to the trigger's original
+// slot id.
+// ============================================================================
+
+describe('Reaction vault cards', () => {
+  function setupReactionTest(opts: { reactionCard: string }): GameState {
+    let s = initGame(TWO_PLAYER_CONFIG);
+    s = forceLibrarySideA(s);
+    s = zeroPlayerResources(s, 'p1');
+    s = zeroPlayerResources(s, 'p2');
+    // Alice (caster) owns Burn + 5 Mana.
+    s = addMage(s, 'p1', {
+      id: 'alice-mage-1',
+      cardId: 'base.mage.divinity',
+      color: 'blue',
+    });
+    s = setMana(s, 'p1', 5);
+    s = addOwnedSpell(s, 'p1', 'base.spell.burn');
+    // Bob has a red mage on the slot + the reaction card to defend it.
+    s = addMage(s, 'p2', {
+      id: 'bob-mage-1',
+      cardId: 'base.mage.sorcery',
+      color: 'red',
+    });
+    s = placeMageOnSpace(s, 'p2', 'bob-mage-1', 'base.room.library.a.slot-1');
+    s = addVaultCard(s, 'p2', opts.reactionCard);
+    s = {
+      ...s,
+      firstPlayerIndex: 0,
+      phase: {
+        kind: 'errands',
+        round: 1,
+        activePlayerIndex: 0,
+        actionUsed: false,
+        fastActionUsed: false,
+      },
+    };
+    return s;
+  }
+
+  function driveBurnToReactionPrompt(s: GameState): GameState {
+    let next = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.burn',
+      level: 1,
+    });
+    next = applyAction(next, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(next).id,
+      answer: { kind: 'mage-chosen', mageId: 'bob-mage-1' },
+    });
+    return next;
+  }
+
+  it('Invisibility Cloak: restores mage to original slot, marks shadowing, exhausts the treasure', () => {
+    let s = setupReactionTest({ reactionCard: 'base.vault.invisibility-cloak' });
+    s = driveBurnToReactionPrompt(s);
+    const reactionPrompt = topPending(s);
+    expect(reactionPrompt.prompt.kind).toBe('reaction-window');
+    if (reactionPrompt.prompt.kind === 'reaction-window') {
+      expect(
+        reactionPrompt.prompt.reactionOptions.map((o) => o.sourceId),
+      ).toContain('base.vault.invisibility-cloak');
+    }
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: reactionPrompt.id,
+      answer: {
+        kind: 'reaction-played',
+        effectId: 'base.vault.invisibility-cloak.react',
+        reactionContext: {},
+      },
+    });
+    const bobMage = findMageById(s, 'bob-mage-1');
+    expect(bobMage.isWounded).toBe(false);
+    expect(bobMage.isShadowing).toBe(true);
+    expect(bobMage.location).toEqual({
+      kind: 'action-space',
+      spaceId: 'base.room.library.a.slot-1',
+    });
+    const bob = s.players.find((p) => p.id === 'p2');
+    // Treasure stays in play, marked exhausted.
+    expect(bob?.vaultCards).toEqual([
+      { cardId: 'base.vault.invisibility-cloak', exhausted: true },
+    ]);
+    expect(bob?.personalDiscard).toEqual([]);
+  });
+
+  it('Shield Potion: places mage at original slot without shadow, consumes the card', () => {
+    let s = setupReactionTest({ reactionCard: 'base.vault.shield-potion' });
+    s = driveBurnToReactionPrompt(s);
+    const reactionPrompt = topPending(s);
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: reactionPrompt.id,
+      answer: {
+        kind: 'reaction-played',
+        effectId: 'base.vault.shield-potion.react',
+        reactionContext: {},
+      },
+    });
+    const bobMage = findMageById(s, 'bob-mage-1');
+    expect(bobMage.isWounded).toBe(false);
+    expect(bobMage.isShadowing).toBe(false);
+    expect(bobMage.location).toEqual({
+      kind: 'action-space',
+      spaceId: 'base.room.library.a.slot-1',
+    });
+    const bob = s.players.find((p) => p.id === 'p2');
+    expect(bob?.vaultCards).toEqual([]);
+    expect(bob?.personalDiscard).toEqual([
+      { kind: 'consumable', cardId: 'base.vault.shield-potion' },
+    ]);
+  });
+
+  it('Ancient Armor: triggers on wound by opponent, repositions, exhausts treasure', () => {
+    let s = setupReactionTest({ reactionCard: 'base.vault.ancient-armor' });
+    s = driveBurnToReactionPrompt(s);
+    const reactionPrompt = topPending(s);
+    if (reactionPrompt.prompt.kind === 'reaction-window') {
+      expect(
+        reactionPrompt.prompt.reactionOptions.map((o) => o.sourceId),
+      ).toContain('base.vault.ancient-armor');
+    }
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: reactionPrompt.id,
+      answer: {
+        kind: 'reaction-played',
+        effectId: 'base.vault.ancient-armor.react',
+        reactionContext: {},
+      },
+    });
+    const bobMage = findMageById(s, 'bob-mage-1');
+    expect(bobMage.isWounded).toBe(false);
+    expect(bobMage.isShadowing).toBe(false);
+    const bob = s.players.find((p) => p.id === 'p2');
+    expect(bob?.vaultCards).toEqual([
+      { cardId: 'base.vault.ancient-armor', exhausted: true },
+    ]);
+  });
+
+  it('Mystic Amulet: triggers on shadow by opponent (Paralocation), clears shadow, exhausts treasure', () => {
+    // Bob has a placed mage + Mystic Amulet; Alice casts Paralocation.
+    let s = initGame(TWO_PLAYER_CONFIG);
+    s = forceLibrarySideA(s);
+    s = zeroPlayerResources(s, 'p1');
+    s = zeroPlayerResources(s, 'p2');
+    s = addMage(s, 'p1', {
+      id: 'alice-mage-1',
+      cardId: 'base.mage.planar-studies',
+      color: 'purple',
+    });
+    s = addMage(s, 'p2', {
+      id: 'bob-mage-1',
+      cardId: 'base.mage.sorcery',
+      color: 'red',
+    });
+    s = placeMageOnSpace(s, 'p2', 'bob-mage-1', 'base.room.library.a.slot-1');
+    s = setMana(s, 'p1', 1);
+    s = addOwnedSpell(s, 'p1', 'base.spell.paralocation');
+    s = addVaultCard(s, 'p2', 'base.vault.mystic-amulet');
+    s = {
+      ...s,
+      firstPlayerIndex: 0,
+      phase: {
+        kind: 'errands',
+        round: 1,
+        activePlayerIndex: 0,
+        actionUsed: false,
+        fastActionUsed: false,
+      },
+    };
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.paralocation',
+      level: 1,
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'mage-chosen', mageId: 'bob-mage-1' },
+    });
+    const reactionPrompt = topPending(s);
+    expect(reactionPrompt.prompt.kind).toBe('reaction-window');
+    if (reactionPrompt.prompt.kind === 'reaction-window') {
+      expect(
+        reactionPrompt.prompt.reactionOptions.map((o) => o.sourceId),
+      ).toContain('base.vault.mystic-amulet');
+    }
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: reactionPrompt.id,
+      answer: {
+        kind: 'reaction-played',
+        effectId: 'base.vault.mystic-amulet.react',
+        reactionContext: {},
+      },
+    });
+    const bobMage = findMageById(s, 'bob-mage-1');
+    expect(bobMage.isShadowing).toBe(false);
+    const bob = s.players.find((p) => p.id === 'p2');
+    expect(bob?.vaultCards).toEqual([
+      { cardId: 'base.vault.mystic-amulet', exhausted: true },
+    ]);
+  });
+});
+
+// ============================================================================
 // Leader (unique) spells — Trance, Living Image, Flash of Light, Bless,
 // Strength of Earth, Paralocation.
 // ============================================================================
@@ -2345,6 +2559,17 @@ describe('Leader spells (unique single-level)', () => {
       type: 'RESOLVE_PENDING',
       resolutionId: pickMage.id,
       answer: { kind: 'mage-chosen', mageId: 'bob-mage-1' },
+    });
+    // Shadow is applied and a reaction window opens for Bob (so he can play
+    // a Mystic Amulet etc. if he had one). Pass the reaction to confirm
+    // shadow state survives the window.
+    const reactionPrompt = topPending(s);
+    expect(reactionPrompt.prompt.kind).toBe('reaction-window');
+    expect(reactionPrompt.responderId).toBe('p2');
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: reactionPrompt.id,
+      answer: { kind: 'reaction-passed' },
     });
     const bob = findMageById(s, 'bob-mage-1');
     expect(bob.isShadowing).toBe(true);
