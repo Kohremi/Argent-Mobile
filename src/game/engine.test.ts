@@ -2979,6 +2979,100 @@ describe('PLAY_SUPPORTER', () => {
   it('the base pack ships all 36 supporter cards', () => {
     expect(baseGamePack.supporters).toHaveLength(36);
   });
+
+  it('Letum Conspicere: wound opens reaction window, then prompts the wounded player for the infirmary bonus', () => {
+    let s = setupSupporterTest('base.supporter.letum-conspicere');
+    s = forceLibrarySideA(s);
+    s = zeroPlayerResources(s, 'p2');
+    s = addMage(s, 'p2', {
+      id: 'bob-mage-1',
+      cardId: 'base.mage.sorcery',
+      color: 'red',
+    });
+    s = placeMageOnSpace(s, 'p2', 'bob-mage-1', 'base.room.library.a.slot-1');
+    // Alice plays Letum (Fast Action): wound target prompt.
+    s = applyAction(s, {
+      type: 'PLAY_SUPPORTER',
+      playerId: 'p1',
+      supporterCardId: 'base.supporter.letum-conspicere',
+    });
+    const targetPrompt = topPending(s);
+    expect(targetPrompt.prompt.kind).toBe('choose-target-mage');
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: targetPrompt.id,
+      answer: { kind: 'mage-chosen', mageId: 'bob-mage-1' },
+    });
+    // Bob's mage is in the infirmary, reaction window opens for Bob.
+    expect(findMageById(s, 'bob-mage-1').location.kind).toBe('infirmary');
+    const reactionPrompt = topPending(s);
+    expect(reactionPrompt.prompt.kind).toBe('reaction-window');
+    expect(reactionPrompt.responderId).toBe('p2');
+    // Bob passes the reaction.
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: reactionPrompt.id,
+      answer: { kind: 'reaction-passed' },
+    });
+    // Window closed → infirmary bonus prompt now on top.
+    expect(s.activeReactionWindows).toHaveLength(0);
+    const bonusPrompt = topPending(s);
+    expect(bonusPrompt.responderId).toBe('p2');
+    expect(bonusPrompt.prompt.kind).toBe('choose-from-options');
+    if (bonusPrompt.prompt.kind === 'choose-from-options') {
+      expect(bonusPrompt.prompt.options.map((o) => o.id).sort()).toEqual([
+        'gold',
+        'ip',
+        'mana',
+      ]);
+    }
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: bonusPrompt.id,
+      answer: { kind: 'option-chosen', optionId: 'gold', payload: {} },
+    });
+    expect(s.pendingResolutionStack).toHaveLength(0);
+    expect(s.players.find((p) => p.id === 'p2')?.resources.gold).toBe(2);
+  });
+
+  it('Letum Conspicere: Phase Steppers reverses the wound, suppressing the infirmary bonus', () => {
+    let s = setupSupporterTest('base.supporter.letum-conspicere');
+    s = forceLibrarySideA(s);
+    s = zeroPlayerResources(s, 'p2');
+    s = addMage(s, 'p2', {
+      id: 'bob-mage-1',
+      cardId: 'base.mage.sorcery',
+      color: 'red',
+    });
+    s = placeMageOnSpace(s, 'p2', 'bob-mage-1', 'base.room.library.a.slot-1');
+    s = addVaultCard(s, 'p2', 'base.vault.phase-steppers');
+    s = applyAction(s, {
+      type: 'PLAY_SUPPORTER',
+      playerId: 'p1',
+      supporterCardId: 'base.supporter.letum-conspicere',
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'mage-chosen', mageId: 'bob-mage-1' },
+    });
+    // Bob plays Phase Steppers.
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: {
+        kind: 'reaction-played',
+        effectId: 'base.vault.phase-steppers.react',
+        reactionContext: {},
+      },
+    });
+    // Mage restored → no infirmary bonus prompt should fire.
+    expect(s.pendingResolutionStack).toHaveLength(0);
+    expect(s.activeReactionWindows).toHaveLength(0);
+    const bob = s.players.find((p) => p.id === 'p2');
+    expect(bob?.resources.gold).toBe(0);
+    expect(findMageById(s, 'bob-mage-1').isWounded).toBe(false);
+  });
 });
 
 // ============================================================================

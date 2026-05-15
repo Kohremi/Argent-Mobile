@@ -342,14 +342,31 @@ registerEffect('base.spell.burn.l1', (ctx: EffectContext): EffectResult => {
 });
 
 /**
- * Post-reaction follow-up for Burn L1.
+ * Generic post-wound check — fires after every wound source's reaction
+ * window closes. If the mage is STILL wounded and STILL in the infirmary
+ * (i.e. no reaction undid the wound, e.g. Phase Steppers), and the wound
+ * was inflicted by an opponent, prompt that owner for their bonus.
  *
- * 1. If the wound stuck and was inflicted by an opponent, the wounded
- *    player picks an Infirmary bonus (2 Gold / 1 Mana / 1 IP). Phase
- *    Steppers reverting the wound suppresses this — `checkInfirmaryBonusApplies`
- *    looks at the post-reaction state.
- * 2. TODO: Mysticism Mage placement bonus when caster is grey.
+ * Wired up via `afterResume: { effectId: 'base.system.post-wound-bonus',
+ * context: { triggerEvent } }` on the open-reaction window.
+ *
+ * Sources that need follow-up steps after the bonus (e.g. Ars Magna places
+ * a mage after the bonus; Bottled Rage places a mage after the bonus;
+ * Malefic Torch loops) use their own .complete effects and call into
+ * `bonusPromptFor` directly so they can supply a custom resume.
  */
+registerEffect('base.system.post-wound-bonus', (ctx) => {
+  const event = readTriggerEvent(ctx);
+  if (event && checkInfirmaryBonusApplies(ctx.state, event)) {
+    return {
+      kind: 'pause',
+      pending: bonusPromptFor(event, ctx.triggeringPlayerId),
+    };
+  }
+  return { kind: 'done', patch: {} };
+});
+
+/** Backwards-compatible alias used by Burn L1's open-reaction window. */
 registerEffect('base.spell.burn.l1.complete', (ctx) => {
   const event = readTriggerEvent(ctx);
   if (event && checkInfirmaryBonusApplies(ctx.state, event)) {
@@ -358,7 +375,7 @@ registerEffect('base.spell.burn.l1.complete', (ctx) => {
       pending: bonusPromptFor(event, ctx.triggeringPlayerId),
     };
   }
-  // TODO: Mysticism placement follow-up.
+  // TODO: Mysticism placement follow-up when caster is grey.
   return { kind: 'done', patch: {} };
 });
 
@@ -1961,7 +1978,10 @@ registerEffect('base.supporter.letum-conspicere', (ctx): EffectResult => {
       triggerEvent: wound.triggerEvent,
       pendingResponderIds: buildReactionQueue(ctx.state, ctx.triggeringPlayerId),
       reactedPlayerIds: [],
-      afterResume: { effectId: 'base.system.noop', context: {} },
+      afterResume: {
+        effectId: 'base.system.post-wound-bonus',
+        context: { triggerEvent: triggerEventToContext(wound.triggerEvent) },
+      },
       source: ctx.source,
     },
   };
@@ -3200,9 +3220,29 @@ registerEffect('base.vault.liquid-lightning', (ctx): EffectResult => {
  * target (non-spell harmful filter). Step 2: pick one of your office mages
  * to place into the now-empty slot.
  */
+/**
+ * Wound + place pattern used by Bottled Rage and Spellblade.
+ *
+ * Sequence:
+ *   1. Player picks the wound target.
+ *   2. Wound applied; reaction window opens.
+ *   3. After window closes (`step: 'after-wound'`):
+ *      - If the wound stuck and was inflicted on an opponent, pause for
+ *        the infirmary bonus prompt and route the bonus answer into
+ *        `step: 'after-bonus'`.
+ *      - Otherwise fall through to `tryPlace`.
+ *   4. `after-bonus`: apply bonus, then `tryPlace`.
+ *   5. `tryPlace`: if the wounded slot is now empty and the player has
+ *      an office mage, prompt for the placer (`step: 'apply-place'`).
+ *      If the slot got reclaimed (Phase Steppers shadow) or the player
+ *      has no office mage, end without placing.
+ *   6. `apply-place`: place the chosen mage onto the wounded slot.
+ */
 function woundAndPlaceEffect(selfEffectId: string) {
   return (ctx: EffectContext): EffectResult => {
     const step = ctx.resumeContext?.['step'];
+
+    // Step 1: present wound target list.
     if (!ctx.resumeAnswer) {
       const targets = buildNonSpellHarmfulTargets(
         ctx.state,
@@ -3214,14 +3254,16 @@ function woundAndPlaceEffect(selfEffectId: string) {
         pending: {
           responderId: ctx.triggeringPlayerId,
           prompt: { kind: 'choose-target-mage', eligibleMageIds: targets },
-          resume: { effectId: selfEffectId, context: { step: 'pick-placer' } },
+          resume: { effectId: selfEffectId, context: { step: 'wound' } },
           source: ctx.source,
         },
       };
     }
-    if (step === 'pick-placer') {
+
+    // Step 2: wound the target and open the reaction window.
+    if (step === 'wound') {
       if (ctx.resumeAnswer.kind !== 'mage-chosen') {
-        throw new Error(`${selfEffectId} pick-placer expected mage-chosen`);
+        throw new Error(`${selfEffectId} wound expected mage-chosen`);
       }
       const woundTarget = ctx.resumeAnswer.mageId;
       const targetMage = ctx.state.players
@@ -3236,45 +3278,72 @@ function woundAndPlaceEffect(selfEffectId: string) {
         woundTarget,
         ctx.triggeringPlayerId,
       );
-      const afterWound: GameState = { ...ctx.state, ...wound.patch };
-      const placer = afterWound.players.find(
-        (p) => p.id === ctx.triggeringPlayerId,
-      );
-      const officeMages =
-        placer?.mages
-          .filter((m) => m.location.kind === 'office' && !m.isWounded)
-          .map((m) => m.id) ?? [];
-      if (officeMages.length === 0) {
-        // No mage to place — wound still happens; open reaction window.
-        return {
-          kind: 'open-reaction',
-          patch: wound.patch,
-          window: {
-            triggerEvent: wound.triggerEvent,
-            pendingResponderIds: buildReactionQueue(
-              ctx.state,
-              ctx.triggeringPlayerId,
-            ),
-            reactedPlayerIds: [],
-            afterResume: { effectId: 'base.system.noop', context: {} },
-            source: ctx.source,
-          },
-        };
-      }
       return {
-        kind: 'pause',
+        kind: 'open-reaction',
         patch: wound.patch,
-        pending: {
-          responderId: ctx.triggeringPlayerId,
-          prompt: { kind: 'choose-target-mage', eligibleMageIds: officeMages },
-          resume: {
+        window: {
+          triggerEvent: wound.triggerEvent,
+          pendingResponderIds: buildReactionQueue(
+            ctx.state,
+            ctx.triggeringPlayerId,
+          ),
+          reactedPlayerIds: [],
+          afterResume: {
             effectId: selfEffectId,
-            context: { step: 'apply-place', slotId, woundTarget },
+            context: {
+              step: 'after-wound',
+              triggerEvent: triggerEventToContext(wound.triggerEvent),
+              slotId,
+            },
           },
           source: ctx.source,
         },
       };
     }
+
+    // Step 3: post-reaction. If the bonus applies, route through after-bonus.
+    if (step === 'after-wound') {
+      const event = readTriggerEvent(ctx);
+      const slotId = ctx.resumeContext?.['slotId'];
+      if (typeof slotId !== 'string') {
+        throw new Error(`${selfEffectId} after-wound: missing slotId`);
+      }
+      if (event && checkInfirmaryBonusApplies(ctx.state, event)) {
+        return {
+          kind: 'pause',
+          pending: bonusPromptFor(event, ctx.triggeringPlayerId, {
+            effectId: selfEffectId,
+            context: {
+              step: 'after-bonus',
+              recipientPlayerId: event.ownerId,
+              slotId,
+            },
+          }),
+        };
+      }
+      return tryPlaceForWoundPlace(ctx, selfEffectId, slotId, ctx.state);
+    }
+
+    // Step 4: apply the bonus the wounded player picked, then attempt the place.
+    if (step === 'after-bonus') {
+      if (ctx.resumeAnswer.kind !== 'option-chosen') {
+        throw new Error(`${selfEffectId} after-bonus expected option-chosen`);
+      }
+      const recipientId = ctx.resumeContext?.['recipientPlayerId'];
+      const slotId = ctx.resumeContext?.['slotId'];
+      if (typeof recipientId !== 'string' || typeof slotId !== 'string') {
+        throw new Error(`${selfEffectId} after-bonus: missing context fields`);
+      }
+      const bonusPatch = applyInfirmaryBonusPatch(
+        ctx.state,
+        recipientId,
+        ctx.resumeAnswer.optionId,
+      );
+      const afterBonus: GameState = { ...ctx.state, ...bonusPatch };
+      return tryPlaceForWoundPlace(ctx, selfEffectId, slotId, afterBonus);
+    }
+
+    // Step 6: place the chosen mage onto the vacated slot.
     if (step === 'apply-place') {
       if (ctx.resumeAnswer.kind !== 'mage-chosen') {
         throw new Error(`${selfEffectId} apply-place expected mage-chosen`);
@@ -3283,19 +3352,59 @@ function woundAndPlaceEffect(selfEffectId: string) {
       if (typeof slotId !== 'string') {
         throw new Error(`${selfEffectId}: missing slotId`);
       }
-      const placePatch = placeOfficeMageOnSpace(
-        ctx.state,
-        ctx.triggeringPlayerId,
-        ctx.resumeAnswer.mageId,
-        slotId,
-      );
-      // We synthesize a generic "mage-moved" trigger isn't quite right for
-      // the wound (the wound trigger already fired earlier). For now we
-      // just close out without opening another reaction window — the wound
-      // reaction would have fired between the two steps if we wanted it.
-      return { kind: 'done', patch: placePatch };
+      const lookup = findActionSpace(ctx.state, slotId);
+      if (!lookup || lookup.space.occupant !== null) {
+        // Slot was reclaimed (e.g. Phase Steppers / Invisibility Cloak).
+        return { kind: 'done', patch: {} };
+      }
+      return {
+        kind: 'done',
+        patch: placeOfficeMageOnSpace(
+          ctx.state,
+          ctx.triggeringPlayerId,
+          ctx.resumeAnswer.mageId,
+          slotId,
+        ),
+      };
     }
+
     throw new Error(`${selfEffectId} unexpected step ${String(step)}`);
+  };
+}
+
+/**
+ * Helper for Bottled Rage / Spellblade's step-5 "try the place". Builds the
+ * placer-pick pause if it's viable; otherwise returns done.
+ */
+function tryPlaceForWoundPlace(
+  ctx: EffectContext,
+  selfEffectId: string,
+  slotId: string,
+  state: GameState,
+): EffectResult {
+  // If the slot got reclaimed during the reaction window (Phase Steppers /
+  // Invisibility Cloak put the mage back), we can't place.
+  const lookup = findActionSpace(state, slotId);
+  if (!lookup || lookup.space.occupant !== null) {
+    return { kind: 'done', patch: {} };
+  }
+  const placer = state.players.find((p) => p.id === ctx.triggeringPlayerId);
+  const officeMages =
+    placer?.mages
+      .filter((m) => m.location.kind === 'office' && !m.isWounded)
+      .map((m) => m.id) ?? [];
+  if (officeMages.length === 0) return { kind: 'done', patch: {} };
+  return {
+    kind: 'pause',
+    pending: {
+      responderId: ctx.triggeringPlayerId,
+      prompt: { kind: 'choose-target-mage', eligibleMageIds: officeMages },
+      resume: {
+        effectId: selfEffectId,
+        context: { step: 'apply-place', slotId },
+      },
+      source: ctx.source,
+    },
   };
 }
 
@@ -3464,8 +3573,9 @@ function manaRepeatLoop(
     if (ctx.resumeAnswer?.kind !== 'mage-chosen') {
       throw new Error(`${selfEffectId} pick-target expected mage-chosen`);
     }
-    // Deduct mana, apply, open reaction window with continuation back to
-    // the loop's ask step.
+    // Deduct mana, apply, open reaction window. After the window closes
+    // we route through step='after-wound' so the infirmary-bonus check
+    // can fire BEFORE looping back to the next ask.
     const deducted: GameState = {
       ...ctx.state,
       players: ctx.state.players.map((p) =>
@@ -3499,10 +3609,59 @@ function manaRepeatLoop(
           ctx.triggeringPlayerId,
         ),
         reactedPlayerIds: [],
-        afterResume: { effectId: selfEffectId, context: { step: 'ask' } },
+        afterResume: {
+          effectId: selfEffectId,
+          context: {
+            step: 'after-wound',
+            triggerEvent: triggerEventToContext(applied.triggerEvent),
+          },
+        },
         source: ctx.source,
       },
     };
+  }
+
+  if (step === 'after-wound') {
+    // Reaction window has closed. If the trigger was a wound that stuck
+    // (mage still in infirmary, wounded by opponent), pause for the
+    // infirmary bonus prompt and route the bonus answer into 'after-bonus'.
+    // For non-wound triggers (banish from Force Gloves), the bonus check
+    // returns false and we fall through to the loop's ask.
+    const event = readTriggerEvent(ctx);
+    if (event && checkInfirmaryBonusApplies(ctx.state, event)) {
+      return {
+        kind: 'pause',
+        pending: bonusPromptFor(event, ctx.triggeringPlayerId, {
+          effectId: selfEffectId,
+          context: {
+            step: 'after-bonus',
+            recipientPlayerId: event.ownerId,
+          },
+        }),
+      };
+    }
+    return askManaRepeat(ctx, selfEffectId, cfg);
+  }
+
+  if (step === 'after-bonus') {
+    if (ctx.resumeAnswer?.kind !== 'option-chosen') {
+      throw new Error(`${selfEffectId} after-bonus expected option-chosen`);
+    }
+    const recipientId = ctx.resumeContext?.['recipientPlayerId'];
+    if (typeof recipientId !== 'string') {
+      throw new Error(`${selfEffectId} after-bonus: missing recipientPlayerId`);
+    }
+    const bonusPatch = applyInfirmaryBonusPatch(
+      ctx.state,
+      recipientId,
+      ctx.resumeAnswer.optionId,
+    );
+    const afterBonus: GameState = { ...ctx.state, ...bonusPatch };
+    return askManaRepeat(
+      { ...ctx, state: afterBonus },
+      selfEffectId,
+      cfg,
+    );
   }
 
   if (step === 'ask') {
