@@ -2550,73 +2550,143 @@ function RoomsPanel({
                     const shadowMageEligible =
                       shadowOccupant !== null &&
                       (mageMode?.eligibleIds.has(shadowOccupant.mageId) ?? false);
-                    const renderOccupantLine = (
-                      occ: NonNullable<typeof s.occupant>,
-                      isShadow: boolean,
-                      clickable: boolean,
-                    ) => {
-                      const color =
-                        state.players
-                          .find((p) => p.id === occ.ownerId)
-                          ?.mages.find((m) => m.id === occ.mageId)?.color ??
-                        'off-white';
-                      const label = (
-                        <>
-                          <MageIcon color={color} size={12} />
-                          {occ.ownerId}
-                          {isShadow ? ' (shadow)' : ''}
-                        </>
+                    const occupantColor = (occ: { ownerId: string; mageId: string }) =>
+                      state.players
+                        .find((p) => p.id === occ.ownerId)
+                        ?.mages.find((m) => m.id === occ.mageId)?.color ??
+                      'off-white';
+                    /**
+                     * Slot tile — one of the two boxes that visually represents
+                     * a slot position. The shadow tile (left) has a dashed
+                     * purple border; the base tile (right) has a solid slate
+                     * border. Mage icon centered when occupied. Clickable if
+                     * the surrounding context (prompt mode / placement mode)
+                     * allows it.
+                     */
+                    const renderSlotTile = (args: {
+                      isShadow: boolean;
+                      occupant: typeof s.occupant;
+                      onClick: (() => void) | undefined;
+                      ringClass: string;
+                      title: string;
+                    }) => {
+                      const { isShadow, occupant, onClick, ringClass, title } = args;
+                      const borderClass = isShadow
+                        ? 'border-purple-400/50 border-dashed'
+                        : 'border-slate-500';
+                      const filledClass = occupant
+                        ? isShadow
+                          ? 'bg-purple-500/15'
+                          : 'bg-amber-400/15'
+                        : 'bg-slate-950/40';
+                      const content = occupant ? (
+                        <div className="flex flex-col items-center gap-0.5">
+                          <MageIcon
+                            color={occupantColor(occupant)}
+                            size={18}
+                          />
+                          <span className="text-[8px] uppercase tracking-wide text-slate-400 leading-none">
+                            {occupant.ownerId}
+                          </span>
+                        </div>
+                      ) : (
+                        <span className="text-[8px] uppercase tracking-wide text-slate-600">
+                          {isShadow ? 'shadow' : 'slot'}
+                        </span>
                       );
-                      if (clickable && mageMode) {
+                      if (onClick) {
                         return (
                           <button
                             type="button"
                             onClick={(e) => {
                               e.stopPropagation();
-                              mageMode.onSelect(occ.mageId);
+                              onClick();
                             }}
-                            className="inline-flex items-center gap-1 rounded ring-2 ring-amber-400 hover:bg-amber-400/20 px-1 py-0.5"
-                            title="click to target this mage"
+                            title={title}
+                            className={clsx(
+                              'w-9 h-9 rounded border-2 flex items-center justify-center transition-colors flex-shrink-0',
+                              borderClass,
+                              filledClass,
+                              ringClass ?? '',
+                              'hover:bg-amber-400/25 cursor-pointer',
+                            )}
                           >
-                            {label}
+                            {content}
                           </button>
                         );
                       }
                       return (
-                        <span className="inline-flex items-center gap-1">
-                          {label}
-                        </span>
+                        <div
+                          title={title}
+                          className={clsx(
+                            'w-9 h-9 rounded border-2 flex items-center justify-center flex-shrink-0',
+                            borderClass,
+                            filledClass,
+                            ringClass ?? '',
+                          )}
+                        >
+                          {content}
+                        </div>
                       );
                     };
-                    const occupantBlock = (
-                      <div className="text-[10px] space-y-0.5">
-                        {s.occupant ? (
-                          <div className="text-amber-300 flex items-center gap-1">
-                            <span className="text-slate-500">base:</span>
-                            {renderOccupantLine(
-                              s.occupant,
-                              false,
-                              occupantMageEligible,
-                            )}
-                          </div>
-                        ) : (
-                          <div className="text-slate-500">base: empty</div>
-                        )}
-                        {shadowOccupant && (
-                          <div className="text-purple-300 flex items-center gap-1">
-                            <span className="text-slate-500">shadow:</span>
-                            {renderOccupantLine(
-                              shadowOccupant,
-                              true,
-                              shadowMageEligible,
-                            )}
-                          </div>
-                        )}
-                      </div>
-                    );
-                    const slotBody = (
-                      <>
-                        <div className="flex items-baseline gap-2">
+
+                    // Base tile click handler: prefer space-prompt selection,
+                    // then PLACE_WORKER placement, then a mage-target click on
+                    // the existing occupant.
+                    const baseClick: (() => void) | undefined =
+                      spaceMode && spaceEligible
+                        ? () => spaceMode.onSelect(s.id)
+                        : isPlaceable && selectedMage
+                          ? () => {
+                              dispatch({
+                                type: 'PLACE_WORKER',
+                                playerId:
+                                  state.players.find((p) =>
+                                    p.mages.some(
+                                      (m) => m.id === selectedMage.id,
+                                    ),
+                                  )?.id ?? '',
+                                mageId: selectedMage.id,
+                                actionSpaceId: s.id,
+                              });
+                              onPlaced();
+                            }
+                          : occupantMageEligible && mageMode
+                            ? () => mageMode.onSelect(s.occupant!.mageId)
+                            : undefined;
+                    const baseRing =
+                      spaceMode && spaceEligible
+                        ? 'ring-2 ring-amber-400'
+                        : isPlaceable && isArsMagna
+                          ? 'ring-2 ring-red-500'
+                          : isPlaceable
+                            ? 'ring-2 ring-amber-400'
+                            : occupantMageEligible && mageMode
+                              ? 'ring-2 ring-amber-400'
+                              : '';
+                    const baseTitle = s.occupant
+                      ? `${s.occupant.ownerId}${s.occupant.isShadowing ? ' (shadow)' : ''}`
+                      : isPlaceable
+                        ? `place ${selectedMage?.color ?? ''} mage here`
+                        : 'empty base slot';
+
+                    // Shadow tile click handler: only active for a mage-target
+                    // prompt when this slot has an eligible shadow occupant.
+                    const shadowClick: (() => void) | undefined =
+                      shadowMageEligible && mageMode && shadowOccupant
+                        ? () => mageMode.onSelect(shadowOccupant.mageId)
+                        : undefined;
+                    const shadowRing =
+                      shadowMageEligible && mageMode
+                        ? 'ring-2 ring-amber-400'
+                        : '';
+                    const shadowTitle = shadowOccupant
+                      ? `${shadowOccupant.ownerId} (shadow)`
+                      : 'shadow slot (only via shadow-specific effects)';
+
+                    const slotInfo = (
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-baseline gap-2 flex-wrap">
                           <span className="font-medium text-slate-200">
                             {slotIndex}
                           </span>
@@ -2637,78 +2707,45 @@ function RoomsPanel({
                           )}
                         </div>
                         {s.description && (
-                          <div className="text-slate-300/90">{s.description}</div>
+                          <div className="text-slate-300/90 mt-0.5">
+                            {s.description}
+                          </div>
                         )}
-                        {occupantBlock}
-                      </>
+                      </div>
                     );
-                    // Prompt-driven slot click takes priority over the
-                    // PLACE_WORKER two-step (a prompt blocks normal play
-                    // anyway, so selectedMage would be null here).
-                    if (spaceMode && spaceEligible) {
-                      return (
-                        <li key={s.id}>
-                          <button
-                            type="button"
-                            onClick={() => spaceMode.onSelect(s.id)}
-                            className="w-full text-left text-[11px] leading-snug rounded px-1.5 py-1 bg-slate-950/40 text-slate-300 ring-2 ring-amber-400 hover:bg-amber-400/15 hover:ring-amber-300 cursor-pointer"
-                          >
-                            {slotBody}
-                          </button>
-                        </li>
-                      );
-                    }
-                    if (isPlaceable && selectedMage) {
-                      return (
-                        <li key={s.id}>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              dispatch({
-                                type: 'PLACE_WORKER',
-                                playerId:
-                                  state.players.find((p) =>
-                                    p.mages.some(
-                                      (m) => m.id === selectedMage.id,
-                                    ),
-                                  )?.id ?? '',
-                                mageId: selectedMage.id,
-                                actionSpaceId: s.id,
-                              });
-                              onPlaced();
-                            }}
-                            className={clsx(
-                              'w-full text-left text-[11px] leading-snug rounded px-1.5 py-1',
-                              'bg-slate-950/40 text-slate-300',
-                              isArsMagna
-                                ? 'ring-2 ring-red-500 hover:bg-red-500/15 hover:ring-red-400'
-                                : 'ring-2 ring-amber-400 hover:bg-amber-400/15 hover:ring-amber-300',
-                              'cursor-pointer',
-                            )}
-                          >
-                            {slotBody}
-                          </button>
-                        </li>
-                      );
-                    }
+
                     return (
                       <li
                         key={s.id}
                         title={
-                          selectedMage && placeBlocked
+                          selectedMage && placeBlocked && !isPlaceable
                             ? `cannot place: ${placeBlocked}`
                             : undefined
                         }
                         className={clsx(
-                          'text-[11px] leading-snug rounded px-1.5 py-1',
-                          s.occupant
-                            ? 'bg-amber-400/10 text-amber-200'
+                          'flex items-center gap-2 text-[11px] leading-snug rounded px-1.5 py-1.5',
+                          s.occupant || shadowOccupant
+                            ? 'bg-amber-400/5'
                             : 'bg-slate-950/40 text-slate-300',
-                          selectedMage && !isPlaceable && !s.occupant && 'opacity-50',
-                          spaceMode && !spaceEligible && 'opacity-50',
+                          selectedMage && !isPlaceable && !s.occupant && 'opacity-60',
+                          spaceMode && !spaceEligible && 'opacity-60',
                         )}
                       >
-                        {slotBody}
+                        {renderSlotTile({
+                          isShadow: true,
+                          occupant: shadowOccupant,
+                          onClick: shadowClick,
+                          ringClass: shadowRing,
+                          title: shadowTitle,
+                        })}
+                        {renderSlotTile({
+                          isShadow: false,
+                          occupant: s.occupant,
+                          onClick: baseClick,
+                          ringClass: baseRing,
+                          title: baseTitle,
+                        })}
+                        {slotInfo}
                       </li>
                     );
                   })}
