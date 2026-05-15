@@ -49,6 +49,32 @@ type SelectionMode =
     }
   | { kind: 'voter'; eligibleIds: Set<string>; onSelect: (id: string) => void };
 
+/**
+ * Active when the top pending is the research-spend menu — the UI hides
+ * that prompt's buttons and instead lets the player drive the action by
+ * clicking elements on the board: a spell tableau card, an INT token, a
+ * WIS token, or the next empty WIS slot. The `source` field tracks the
+ * mid-chain state when the player has clicked an INT/WIS token to start
+ * a move — the destination is captured on the next click.
+ */
+interface ResearchInputMode {
+  resolutionId: string;
+  responderId: string;
+  /** Top-level options the engine has on offer (from the prompt). */
+  availableOptions: Set<string>;
+  /** Player who's spending the Research (display label). */
+  responderLabel: string;
+  /** Player who's spending the Research (for filtering tokens / slots). */
+  /** Set after the player clicks an INT or WIS token. Cleared on cancel. */
+  source: { kind: 'int' | 'wis'; cardId: string } | null;
+  onClickTableauSpell: (cardId: string) => void;
+  onClickIntToken: (cardId: string) => void;
+  onClickWisToken: (cardId: string) => void;
+  onClickEmptyWisSlot: (cardId: string) => void;
+  onDiscard: () => void;
+  onCancelMove: () => void;
+}
+
 function deriveSelectionMode(
   pending: PendingResolution | undefined,
   dispatch: (action: GameAction) => void,
@@ -446,6 +472,13 @@ export function DebugControls() {
   const [reactionAwaitingSlot, setReactionAwaitingSlot] = useState<
     { resolutionId: string; effectId: string } | null
   >(null);
+  // While the player is spending a Research, they may click an INT or WIS
+  // token to start a move; this holds the source card id until they click
+  // the destination (a tableau spell for INT, an empty WIS slot on another
+  // owned spell for WIS).
+  const [researchMoveSource, setResearchMoveSource] = useState<
+    { kind: 'int' | 'wis'; cardId: string } | null
+  >(null);
 
   if (!state) return null;
 
@@ -512,6 +545,100 @@ export function DebugControls() {
     // would warn; we tolerate one render with stale state.)
     queueMicrotask(() => setReactionAwaitingSlot(null));
   }
+
+  // Detect the research-spend menu prompt at the top of the stack. When
+  // present, we hide the engine-level option buttons and let the player
+  // drive the action by clicking elements on the board.
+  const researchMode: ResearchInputMode | null = (() => {
+    if (!top || top.prompt.kind !== 'choose-from-options') return null;
+    if (top.resume.effectId !== 'base.system.spend-research') return null;
+    const availableOptions = new Set(top.prompt.options.map((o) => o.id));
+    const resolutionId = top.id;
+    const responderId = top.responderId;
+    const responderLabel =
+      state.players.find((p) => p.id === responderId)?.name ?? responderId;
+    // Chains a sequence of option-chosen RESOLVE_PENDING dispatches.
+    // Reads fresh state between dispatches so we always target the
+    // current top-of-stack prompt id.
+    const chain = (optionIds: string[]) => {
+      for (const optionId of optionIds) {
+        const fresh = useGameStore.getState().state;
+        if (!fresh) return;
+        const currentTop =
+          fresh.pendingResolutionStack[fresh.pendingResolutionStack.length - 1];
+        if (!currentTop) return;
+        dispatch({
+          type: 'RESOLVE_PENDING',
+          resolutionId: currentTop.id,
+          answer: {
+            kind: 'option-chosen',
+            optionId,
+            payload: {},
+          },
+        });
+      }
+    };
+    return {
+      resolutionId,
+      responderId,
+      availableOptions,
+      responderLabel,
+      source: researchMoveSource,
+      onClickTableauSpell: (cardId: string) => {
+        if (researchMoveSource === null) {
+          if (!availableOptions.has('draft')) return;
+          chain(['draft', cardId]);
+        } else if (researchMoveSource.kind === 'int') {
+          if (!availableOptions.has('move-int')) return;
+          chain(['move-int', researchMoveSource.cardId, cardId]);
+          setResearchMoveSource(null);
+        }
+      },
+      onClickIntToken: (cardId: string) => {
+        if (researchMoveSource !== null) {
+          // If they re-click while a source is set, treat as a cancel +
+          // start a fresh move from this token.
+          setResearchMoveSource({ kind: 'int', cardId });
+          return;
+        }
+        if (!availableOptions.has('move-int')) return;
+        setResearchMoveSource({ kind: 'int', cardId });
+      },
+      onClickWisToken: (cardId: string) => {
+        if (researchMoveSource !== null) {
+          setResearchMoveSource({ kind: 'wis', cardId });
+          return;
+        }
+        if (!availableOptions.has('move-wis')) return;
+        setResearchMoveSource({ kind: 'wis', cardId });
+      },
+      onClickEmptyWisSlot: (cardId: string) => {
+        if (researchMoveSource === null) {
+          if (!availableOptions.has('add-wis')) return;
+          chain(['add-wis', cardId]);
+        } else if (researchMoveSource.kind === 'wis') {
+          if (researchMoveSource.cardId === cardId) {
+            // No-op: can't move a WIS onto its own card.
+            return;
+          }
+          if (!availableOptions.has('move-wis')) return;
+          chain(['move-wis', researchMoveSource.cardId, cardId]);
+          setResearchMoveSource(null);
+        }
+      },
+      onDiscard: () => {
+        chain(['discard']);
+        setResearchMoveSource(null);
+      },
+      onCancelMove: () => setResearchMoveSource(null),
+    };
+  })();
+
+  // Lazily clear move-source if it's stale (different prompt, or no
+  // research prompt at all).
+  if (researchMoveSource !== null && researchMode === null) {
+    queueMicrotask(() => setResearchMoveSource(null));
+  }
   const responderId = top?.responderId;
   const errandsActiveId =
     state.phase.kind === 'errands'
@@ -575,6 +702,7 @@ export function DebugControls() {
           hasBoardSelection={selectionMode !== null}
           reactionAwaitingSlot={reactionAwaitingSlot}
           onReactionAwaitingSlot={setReactionAwaitingSlot}
+          researchMode={researchMode}
         />
       )}
 
@@ -596,6 +724,7 @@ export function DebugControls() {
               selectedMageId={effectiveSelectedMage?.id ?? null}
               onSelectMage={setPlacementMageId}
               selectionMode={selectionMode}
+              researchMode={researchMode}
             />
           ))}
         </div>
@@ -637,7 +766,11 @@ export function DebugControls() {
         </p>
       </section>
 
-      <TableauPanel state={state} selectionMode={selectionMode} />
+      <TableauPanel
+        state={state}
+        selectionMode={selectionMode}
+        researchMode={researchMode}
+      />
 
       <VoterTableauPanel state={state} selectionMode={selectionMode} />
     </div>
@@ -669,6 +802,7 @@ function PendingPanel({
   hasBoardSelection,
   reactionAwaitingSlot,
   onReactionAwaitingSlot,
+  researchMode,
 }: {
   state: GameState;
   pending: PendingResolution;
@@ -678,6 +812,7 @@ function PendingPanel({
   onReactionAwaitingSlot: (
     s: { resolutionId: string; effectId: string } | null,
   ) => void;
+  researchMode: ResearchInputMode | null;
 }) {
   const responder = state.players.find((p) => p.id === pending.responderId);
   const responderLabel = responder
@@ -686,23 +821,67 @@ function PendingPanel({
   const slotPickActive =
     reactionAwaitingSlot !== null &&
     reactionAwaitingSlot.resolutionId === pending.id;
+  const researchActive =
+    researchMode !== null && researchMode.resolutionId === pending.id;
   return (
     <section className="rounded-lg border border-amber-500/60 bg-amber-500/10 p-4 space-y-3">
       <div>
         <h2 className="text-lg font-medium text-amber-100">
-          Pending: {pending.prompt.kind}
+          {researchActive
+            ? `${responderLabel} is spending a Research`
+            : `Pending: ${pending.prompt.kind}`}
         </h2>
-        <p className="text-sm text-slate-300">
-          Responder: <strong>{responderLabel}</strong> · Source:{' '}
-          {pending.source.description}
-        </p>
+        {!researchActive && (
+          <p className="text-sm text-slate-300">
+            Responder: <strong>{responderLabel}</strong> · Source:{' '}
+            {pending.source.description}
+          </p>
+        )}
         {state.pendingResolutionStack.length > 1 && (
           <p className="text-xs text-slate-500">
             (stack depth: {state.pendingResolutionStack.length})
           </p>
         )}
       </div>
-      {slotPickActive ? (
+      {researchActive && researchMode ? (
+        <div className="space-y-2">
+          {researchMode.source === null ? (
+            <p className="text-xs text-amber-200/90 italic">
+              Click a spell in the tableau to learn it, an empty WIS slot
+              to upgrade an owned spell, or an INT / WIS token to start a
+              move.
+            </p>
+          ) : researchMode.source.kind === 'int' ? (
+            <p className="text-xs text-amber-200/90 italic">
+              Moving INT from {researchMode.source.cardId} — click a spell
+              in the tableau as the destination, or cancel.
+            </p>
+          ) : (
+            <p className="text-xs text-amber-200/90 italic">
+              Moving WIS from {researchMode.source.cardId} — click an
+              empty WIS slot on another owned spell, or cancel.
+            </p>
+          )}
+          <div className="flex gap-2">
+            {researchMode.source !== null && (
+              <button
+                type="button"
+                onClick={researchMode.onCancelMove}
+                className="px-3 py-1.5 rounded bg-slate-700 hover:bg-slate-600 text-sm"
+              >
+                Cancel move
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={researchMode.onDiscard}
+              className="px-3 py-1.5 rounded bg-slate-700 hover:bg-slate-600 text-sm"
+            >
+              Discard Research
+            </button>
+          </div>
+        </div>
+      ) : slotPickActive ? (
         <div className="space-y-2">
           <p className="text-xs text-amber-200/90 italic">
             Click an open slot on the board to land your mage there, or
@@ -1066,6 +1245,7 @@ function PlayerCard({
   selectedMageId,
   onSelectMage,
   selectionMode,
+  researchMode,
 }: {
   state: GameState;
   player: Player;
@@ -1075,8 +1255,13 @@ function PlayerCard({
   selectedMageId: string | null;
   onSelectMage: (id: string | null) => void;
   selectionMode: SelectionMode | null;
+  researchMode: ResearchInputMode | null;
 }) {
   const mageMode = selectionMode?.kind === 'mage' ? selectionMode : null;
+  // Research-driven token / slot clicks only apply to the spells owned by
+  // the responder (you can't move an opponent's INT/WIS).
+  const researchTargetsThisPlayer =
+    researchMode !== null && researchMode.responderId === player.id;
   const isErrandsActive =
     state.phase.kind === 'errands' &&
     state.players[state.phase.activePlayerIndex]?.id === player.id;
@@ -1303,7 +1488,88 @@ function PlayerCard({
                       : lv.level === 1
                         ? 'int'
                         : 'wis';
-                    const tokenBox = (
+                    // Determine whether THIS slot/token is clickable in
+                    // the current research-input mode. Only the responder's
+                    // own spells participate; unique spells never do.
+                    let researchClick: (() => void) | undefined;
+                    let researchHint: string | undefined;
+                    if (
+                      researchMode &&
+                      researchTargetsThisPlayer &&
+                      !card.unique &&
+                      !s.exhausted
+                    ) {
+                      const src = researchMode.source;
+                      if (src === null) {
+                        // Idle: clickable if this slot/token can start a
+                        // valid action.
+                        if (
+                          owned &&
+                          tokenKind === 'int' &&
+                          researchMode.availableOptions.has('move-int')
+                        ) {
+                          researchClick = () =>
+                            researchMode.onClickIntToken(s.cardId);
+                          researchHint = 'Move this INT to a new spell';
+                        } else if (
+                          owned &&
+                          tokenKind === 'wis' &&
+                          researchMode.availableOptions.has('move-wis')
+                        ) {
+                          researchClick = () =>
+                            researchMode.onClickWisToken(s.cardId);
+                          researchHint = 'Move this WIS to another spell';
+                        } else if (
+                          !owned &&
+                          tokenKind === 'wis' &&
+                          s.intPlaced &&
+                          ((lv.level === 2) ||
+                            (lv.level === 3 && s.wisPlacedLevel2)) &&
+                          researchMode.availableOptions.has('add-wis')
+                        ) {
+                          researchClick = () =>
+                            researchMode.onClickEmptyWisSlot(s.cardId);
+                          researchHint = `Add WIS to unlock L${lv.level}`;
+                        }
+                      } else if (src.kind === 'wis') {
+                        // Move-WIS in progress — destination must be a
+                        // different owned learned spell's next empty WIS.
+                        if (
+                          !owned &&
+                          tokenKind === 'wis' &&
+                          s.intPlaced &&
+                          ((lv.level === 2) ||
+                            (lv.level === 3 && s.wisPlacedLevel2)) &&
+                          src.cardId !== s.cardId
+                        ) {
+                          researchClick = () =>
+                            researchMode.onClickEmptyWisSlot(s.cardId);
+                          researchHint = `Place moved WIS here (L${lv.level})`;
+                        }
+                      }
+                      // src.kind === 'int' destinations are tableau spells,
+                      // handled in TableauPanel.
+                    }
+                    const tokenBox = researchClick ? (
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          researchClick?.();
+                        }}
+                        title={researchHint}
+                        className={clsx(
+                          'inline-flex items-center justify-center w-5 h-5 rounded border text-[9px] uppercase tracking-wide font-semibold ring-2 ring-amber-400 hover:bg-amber-400/30 cursor-pointer',
+                          owned
+                            ? lv.level === 1
+                              ? 'border-cyan-300 bg-cyan-500/30 text-cyan-200'
+                              : 'border-violet-300 bg-violet-500/30 text-violet-200'
+                            : 'border-amber-400 bg-amber-400/15 text-amber-200',
+                        )}
+                      >
+                        {owned ? (tokenKind === 'int' ? 'I' : 'W') : '+'}
+                      </button>
+                    ) : (
                       <span
                         className={clsx(
                           'inline-flex items-center justify-center w-5 h-5 rounded border text-[9px] uppercase tracking-wide font-semibold',
@@ -1837,14 +2103,26 @@ function VoterTableauPanel({
 function TableauPanel({
   state,
   selectionMode,
+  researchMode,
 }: {
   state: GameState;
   selectionMode: SelectionMode | null;
+  researchMode: ResearchInputMode | null;
 }) {
   const vaultMode =
     selectionMode?.kind === 'vault-card' ? selectionMode : null;
   const supporterMode =
     selectionMode?.kind === 'supporter-card' ? selectionMode : null;
+  // Spell tableau cards become clickable in two research-mode situations:
+  //  1) idle and 'draft' is an available top-level option (learn a new
+  //     spell using 1 INT from the pool),
+  //  2) the player has clicked an INT token to start a move-INT, so this
+  //     pick is the destination tableau spell.
+  const spellResearchClickable =
+    researchMode !== null &&
+    ((researchMode.source === null &&
+      researchMode.availableOptions.has('draft')) ||
+      researchMode.source?.kind === 'int');
   return (
     <section className="rounded border border-slate-700 bg-slate-900 p-3">
       <h2 className="text-sm font-medium mb-2">Tableaus</h2>
@@ -1859,11 +2137,8 @@ function TableauPanel({
               if (!card) {
                 return <li key={`${cid}-${i}`}>{cid}</li>;
               }
-              return (
-                <li
-                  key={`${cid}-${i}`}
-                  className="rounded bg-slate-950/40 px-2 py-1"
-                >
+              const body = (
+                <>
                   <div className="flex items-baseline gap-1.5 flex-wrap">
                     <span className="font-medium text-slate-200">
                       {card.name}
@@ -1892,6 +2167,32 @@ function TableauPanel({
                       </li>
                     ))}
                   </ul>
+                </>
+              );
+              if (spellResearchClickable && researchMode) {
+                return (
+                  <li key={`${cid}-${i}`}>
+                    <button
+                      type="button"
+                      onClick={() => researchMode.onClickTableauSpell(cid)}
+                      className="w-full text-left rounded px-2 py-1 bg-slate-950/40 ring-2 ring-amber-400 hover:bg-amber-400/15 hover:ring-amber-300 cursor-pointer"
+                      title={
+                        researchMode.source === null
+                          ? 'Click to learn this spell (uses 1 INT)'
+                          : 'Click to draft this as the new spell (move INT)'
+                      }
+                    >
+                      {body}
+                    </button>
+                  </li>
+                );
+              }
+              return (
+                <li
+                  key={`${cid}-${i}`}
+                  className="rounded bg-slate-950/40 px-2 py-1"
+                >
+                  {body}
                 </li>
               );
             })}
