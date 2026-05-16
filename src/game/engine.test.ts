@@ -6309,3 +6309,193 @@ describe('Spell wiring — Wave 1 (resource gains / refresh)', () => {
   });
 
 });
+
+// ============================================================================
+// Spell wiring — Wave 2: single-target wound spells
+// ============================================================================
+
+describe('Spell wiring — Wave 2 (single-target wound)', () => {
+  function setupWoundCast(opts: {
+    spellCardId: string;
+    level?: 1 | 2 | 3;
+    casterMana?: number;
+    bobOnSpace?: string;
+    bobColor?: MageColor;
+    aliceHasTargetableMage?: boolean;
+  }): GameState {
+    const level = opts.level ?? 1;
+    let s = initGame(TWO_PLAYER_CONFIG);
+    s = forceLibrarySideA(s);
+    s = zeroPlayerResources(s, 'p1');
+    s = zeroPlayerResources(s, 'p2');
+    s = addOwnedSpell(s, 'p1', opts.spellCardId, {
+      intPlaced: true,
+      wisPlacedLevel2: level >= 2,
+      wisPlacedLevel3: level >= 3,
+    });
+    s = setMana(s, 'p1', opts.casterMana ?? 1);
+    // Bob's target mage (default red on library slot-1).
+    s = addMage(s, 'p2', {
+      id: 'bob-mage',
+      cardId: `base.mage.${opts.bobColor === 'off-white' ? 'neutral' : (opts.bobColor ?? 'red')}`,
+      color: opts.bobColor ?? 'red',
+    });
+    s = placeMageOnSpace(
+      s,
+      'p2',
+      'bob-mage',
+      opts.bobOnSpace ?? 'base.room.library.a.slot-1',
+    );
+    // Alice's own placed mage (for any-mage filter tests).
+    if (opts.aliceHasTargetableMage) {
+      s = addMage(s, 'p1', {
+        id: 'alice-mage',
+        cardId: 'base.mage.sorcery',
+        color: 'red',
+      });
+      s = placeMageOnSpace(s, 'p1', 'alice-mage', 'base.room.library.a.slot-2');
+    }
+    s = {
+      ...s,
+      firstPlayerIndex: 0,
+      phase: {
+        kind: 'errands',
+        round: 1,
+        activePlayerIndex: 0,
+        actionUsed: false,
+        fastActionUsed: false,
+      },
+    };
+    return s;
+  }
+
+  it('Bolt: wounds an opponent mage; surfaces reaction window then infirmary bonus', () => {
+    let s = setupWoundCast({
+      spellCardId: 'base.spell.lightning-and-you',
+      casterMana: 1,
+    });
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.lightning-and-you',
+      level: 1,
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'mage-chosen', mageId: 'bob-mage' },
+    });
+    // Reaction window opens for Bob.
+    const reactionPrompt = topPending(s);
+    expect(reactionPrompt.prompt.kind).toBe('reaction-window');
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: reactionPrompt.id,
+      answer: { kind: 'reaction-passed' },
+    });
+    // Bob wounded; infirmary bonus prompt fires for Bob.
+    expect(findMageById(s, 'bob-mage').isWounded).toBe(true);
+    expect(findMageById(s, 'bob-mage').location.kind).toBe('infirmary');
+    const bonusPrompt = topPending(s);
+    expect(bonusPrompt.responderId).toBe('p2');
+    expect(bonusPrompt.prompt.kind).toBe('choose-from-options');
+  });
+
+  it('Bolt: excludes the caster\'s own mages from the target list', () => {
+    let s = setupWoundCast({
+      spellCardId: 'base.spell.lightning-and-you',
+      casterMana: 1,
+      aliceHasTargetableMage: true,
+    });
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.lightning-and-you',
+      level: 1,
+    });
+    const prompt = topPending(s);
+    expect(prompt.prompt.kind).toBe('choose-target-mage');
+    if (prompt.prompt.kind === 'choose-target-mage') {
+      expect(prompt.prompt.eligibleMageIds).toContain('bob-mage');
+      expect(prompt.prompt.eligibleMageIds).not.toContain('alice-mage');
+    }
+  });
+
+  it('Firebolt: any-mage filter includes the caster\'s own mage', () => {
+    let s = setupWoundCast({
+      spellCardId: 'base.spell.the-gift-of-fire',
+      casterMana: 1,
+      aliceHasTargetableMage: true,
+    });
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.the-gift-of-fire',
+      level: 1,
+    });
+    const prompt = topPending(s);
+    if (prompt.prompt.kind === 'choose-target-mage') {
+      expect(prompt.prompt.eligibleMageIds).toContain('bob-mage');
+      expect(prompt.prompt.eligibleMageIds).toContain('alice-mage');
+    }
+  });
+
+  it('Venom: wounds target but suppresses the Infirmary bonus prompt', () => {
+    let s = setupWoundCast({
+      spellCardId: 'base.spell.the-lamentations-of-sareth',
+      casterMana: 1,
+    });
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.the-lamentations-of-sareth',
+      level: 1,
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'mage-chosen', mageId: 'bob-mage' },
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'reaction-passed' },
+    });
+    // Mage wounded but NO bonus prompt — stack drains.
+    expect(findMageById(s, 'bob-mage').isWounded).toBe(true);
+    expect(s.pendingResolutionStack).toHaveLength(0);
+  });
+
+  it('Wound spells fizzle when no legal target exists', () => {
+    // No mages on the board at all for the opposing side.
+    let s = initGame(TWO_PLAYER_CONFIG);
+    s = forceLibrarySideA(s);
+    s = zeroPlayerResources(s, 'p1');
+    s = addOwnedSpell(s, 'p1', 'base.spell.lightning-and-you', {
+      intPlaced: true,
+    });
+    s = setMana(s, 'p1', 1);
+    s = {
+      ...s,
+      firstPlayerIndex: 0,
+      phase: {
+        kind: 'errands',
+        round: 1,
+        activePlayerIndex: 0,
+        actionUsed: false,
+        fastActionUsed: false,
+      },
+    };
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.lightning-and-you',
+      level: 1,
+    });
+    // No prompt — fizzles silently. Spell is still exhausted + mana spent.
+    expect(s.pendingResolutionStack).toHaveLength(0);
+    const alice = s.players.find((p) => p.id === 'p1');
+    expect(alice?.resources.mana).toBe(0);
+    expect(alice?.ownedSpells[0]?.exhausted).toBe(true);
+  });
+});

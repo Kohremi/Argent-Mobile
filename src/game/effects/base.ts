@@ -5247,3 +5247,134 @@ registerEffect(
     throw new Error(`the-pursuit-of-power.l3 unexpected step ${String(step)}`);
   },
 );
+
+// ============================================================================
+// Spell wiring — Wave 2: single-target wound spells
+// ============================================================================
+//
+// Factory: prompt for a wound target → wound + open reaction window → after
+// the window, route either through the standard Infirmary-bonus prompt
+// (`base.system.post-wound-bonus`) or skip it (`base.system.noop`) when
+// the spell text says "owner gains no Infirmary bonus" (Venom).
+//
+// `targetFilter` controls who's targetable. Two presets cover the data so
+// far: `'opponent-only'` (Bolt) excludes the caster's own mages, `'any-mage'`
+// (Firebolt, Venom) lets the caster wound their own. Both still inherit
+// the spell-source protections (green-immune, opposing-blue-immune,
+// shadow-excluded) via `buildBurnTargets`.
+
+type WoundTargetFilter = 'any-mage' | 'opponent-only';
+
+function buildWoundTargetsFor(
+  state: GameState,
+  casterId: string,
+  filter: WoundTargetFilter,
+): string[] {
+  const all = buildBurnTargets(state, casterId);
+  if (filter === 'any-mage') return all;
+  return all.filter((mageId) => {
+    const lookup = state.players.find((p) =>
+      p.mages.some((m) => m.id === mageId),
+    );
+    return lookup?.id !== casterId;
+  });
+}
+
+function simpleWoundSpell(opts: {
+  selfEffectId: string;
+  targetFilter: WoundTargetFilter;
+  suppressInfirmaryBonus?: boolean;
+}) {
+  const afterResumeId = opts.suppressInfirmaryBonus
+    ? 'base.system.noop'
+    : 'base.system.post-wound-bonus';
+  return (ctx: EffectContext): EffectResult => {
+    if (!ctx.resumeAnswer) {
+      const targets = buildWoundTargetsFor(
+        ctx.state,
+        ctx.triggeringPlayerId,
+        opts.targetFilter,
+      );
+      if (targets.length === 0) return { kind: 'done', patch: {} };
+      return {
+        kind: 'pause',
+        pending: {
+          responderId: ctx.triggeringPlayerId,
+          prompt: { kind: 'choose-target-mage', eligibleMageIds: targets },
+          resume: {
+            effectId: opts.selfEffectId,
+            context: { step: 'apply-wound' },
+          },
+          source: ctx.source,
+        },
+      };
+    }
+    const step = ctx.resumeContext?.['step'];
+    if (step !== 'apply-wound') {
+      throw new Error(
+        `${opts.selfEffectId}: unexpected resume step ${String(step)}`,
+      );
+    }
+    if (ctx.resumeAnswer.kind !== 'mage-chosen') {
+      throw new Error(
+        `${opts.selfEffectId} apply-wound expected mage-chosen, got ${ctx.resumeAnswer.kind}`,
+      );
+    }
+    const wounded = woundMage(
+      ctx.state,
+      ctx.resumeAnswer.mageId,
+      ctx.triggeringPlayerId,
+    );
+    return {
+      kind: 'open-reaction',
+      patch: wounded.patch,
+      window: {
+        triggerEvent: wounded.triggerEvent,
+        pendingResponderIds: buildReactionQueue(
+          ctx.state,
+          ctx.triggeringPlayerId,
+        ),
+        reactedPlayerIds: [],
+        afterResume: {
+          effectId: afterResumeId,
+          context: {
+            triggerEvent: triggerEventToContext(wounded.triggerEvent),
+          },
+        },
+        source: ctx.source,
+      },
+    };
+  };
+}
+
+/** Lightning and You L1 "Bolt" — Wound an opponent's Mage. */
+registerEffect(
+  'base.spell.lightning-and-you.l1',
+  simpleWoundSpell({
+    selfEffectId: 'base.spell.lightning-and-you.l1',
+    targetFilter: 'opponent-only',
+  }),
+);
+
+/** The Gift of Fire L1 "Firebolt" — Wound a Mage (any owner). */
+registerEffect(
+  'base.spell.the-gift-of-fire.l1',
+  simpleWoundSpell({
+    selfEffectId: 'base.spell.the-gift-of-fire.l1',
+    targetFilter: 'any-mage',
+  }),
+);
+
+/**
+ * The Lamentations of Sareth L1 "Venom" — Wound a Mage; its owner gains no
+ * Infirmary bonus. We route afterResume through `base.system.noop` so the
+ * standard post-wound-bonus prompt never surfaces.
+ */
+registerEffect(
+  'base.spell.the-lamentations-of-sareth.l1',
+  simpleWoundSpell({
+    selfEffectId: 'base.spell.the-lamentations-of-sareth.l1',
+    targetFilter: 'any-mage',
+    suppressInfirmaryBonus: true,
+  }),
+);
