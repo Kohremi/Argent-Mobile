@@ -2076,10 +2076,19 @@ registerEffect('base.mage.sorcery.ars-magna.complete', (ctx: EffectContext): Eff
       ctx.resumeAnswer.optionId,
     );
     const afterBonus: GameState = { ...ctx.state, ...bonusPatch };
-    return {
-      kind: 'done',
-      patch: moveRedMagePatch(afterBonus, sourceMageId, targetSpaceId, casterId),
-    };
+    const placePatch = moveRedMagePatch(
+      afterBonus,
+      sourceMageId,
+      targetSpaceId,
+      casterId,
+    );
+    return patchWithMaybeInstantReward(
+      afterBonus,
+      { ...bonusPatch, ...placePatch },
+      targetSpaceId,
+      casterId,
+      'base',
+    );
   }
 
   // First call from afterResume.
@@ -2100,15 +2109,20 @@ registerEffect('base.mage.sorcery.ars-magna.complete', (ctx: EffectContext): Eff
     };
   }
 
-  return {
-    kind: 'done',
-    patch: moveRedMagePatch(
+  // No infirmary bonus needed — apply the placement and route through
+  // the instant-room check (Guilds A etc.).
+  return patchWithMaybeInstantReward(
+    ctx.state,
+    moveRedMagePatch(
       ctx.state,
       sourceMageId,
       targetSpaceId,
       ctx.triggeringPlayerId,
     ),
-  };
+    targetSpaceId,
+    ctx.triggeringPlayerId,
+    'base',
+  );
 });
 
 /**
@@ -2578,6 +2592,23 @@ registerEffect('base.supporter.letum-conspicere', (ctx): EffectResult => {
 registerEffect('base.supporter.rennel-pedrigor', (ctx): EffectResult => {
   const step = ctx.resumeContext?.['step'];
 
+  // step='after-shadow-window' is re-entered from the mage-shadowed
+  // reaction window's afterResume — no resumeAnswer. Handle BEFORE the
+  // first-call short-circuit so the instant-reward check runs.
+  if (step === 'after-shadow-window') {
+    const targetSpaceId = ctx.resumeContext?.['targetSpaceId'];
+    if (typeof targetSpaceId !== 'string') {
+      throw new Error('rennel-pedrigor after-shadow-window: missing targetSpaceId');
+    }
+    return patchWithMaybeInstantReward(
+      ctx.state,
+      {},
+      targetSpaceId,
+      ctx.triggeringPlayerId,
+      'shadow',
+    );
+  }
+
   if (!ctx.resumeAnswer) {
     const targets: string[] = [];
     for (const p of ctx.state.players) {
@@ -2680,7 +2711,10 @@ registerEffect('base.supporter.rennel-pedrigor', (ctx): EffectResult => {
         triggerEvent: event,
         pendingResponderIds: buildReactionQueue(ctx.state, ctx.triggeringPlayerId),
         reactedPlayerIds: [],
-        afterResume: { effectId: 'base.system.noop', context: {} },
+        afterResume: {
+          effectId: 'base.supporter.rennel-pedrigor',
+          context: { step: 'after-shadow-window', targetSpaceId },
+        },
         source: ctx.source,
       },
     };
@@ -3245,21 +3279,14 @@ registerEffect(
         );
       }
       const spaceId = ctx.resumeAnswer.spaceId;
-      // Locate the target room + space so we can update roundPlacements
-      // for the per-room cap AND fire instant-room rewards.
+      // Locate the target room so we can credit roundPlacements (per-room
+      // cap is enforced for subsequent placements via that field).
       const targetRoom = ctx.state.rooms.find((r) =>
         r.actionSpaces.some((s) => s.id === spaceId),
       );
       if (!targetRoom) {
         throw new Error(`mysticism-place-after-cast: room for ${spaceId} not found`);
       }
-      const targetSpace = targetRoom.actionSpaces.find((s) => s.id === spaceId);
-      if (!targetSpace) {
-        throw new Error(`mysticism-place-after-cast: space ${spaceId} not found`);
-      }
-      // Place the mage at the BASE position and credit roundPlacements
-      // for the room so subsequent placements respect the cap (Council
-      // Chamber has max 1 per player per round).
       const placePatch = placeOfficeMageOnSpace(
         ctx.state,
         ctx.triggeringPlayerId,
@@ -3278,22 +3305,13 @@ registerEffect(
         ...placePatch,
         players: updatedPlayers,
       };
-      // Instant rooms resolve their reward at placement time. Match
-      // PLACE_WORKER: pause with the forfeit-or-reward prompt routed
-      // through `base.system.resolution-choice`.
-      if (targetRoom.isInstantRoom && hasEffect(targetSpace.effectId)) {
-        return {
-          kind: 'pause',
-          patch: finalPatch,
-          pending: buildResolutionChoicePromptInput(
-            { ...ctx.state, ...finalPatch },
-            targetRoom,
-            targetSpace,
-            ctx.triggeringPlayerId,
-          ),
-        };
-      }
-      return { kind: 'done', patch: finalPatch };
+      return patchWithMaybeInstantReward(
+        ctx.state,
+        finalPatch,
+        spaceId,
+        ctx.triggeringPlayerId,
+        'base',
+      );
     }
     throw new Error(
       `mysticism-place-after-cast unexpected step ${String(step)}`,
@@ -3331,18 +3349,20 @@ function listEligiblePlacementSlots(
 
 /**
  * Builds the standard forfeit-or-reward PendingResolutionInput for an
- * instant-room placement triggered by a mage power (Mysticism etc.).
+ * instant-room placement triggered by a mage power or shadow effect.
  * Mirrors `pushResolutionChoicePrompt` in `engine.ts` — kept in sync.
+ * Shadow occupants pay no merit cost (matching engine semantics).
  */
 function buildResolutionChoicePromptInput(
   state: GameState,
   room: GameState['rooms'][number],
   space: GameState['rooms'][number]['actionSpaces'][number],
   playerId: string,
+  position: 'base' | 'shadow' = 'base',
 ): PendingResolutionInput {
   const player = state.players.find((p) => p.id === playerId);
   const meritCost =
-    space.slotType === 'merit'
+    position === 'base' && space.slotType === 'merit'
       ? (space.costToActivate?.meritBadges ?? 0)
       : 0;
   const canAffordReward =
@@ -3387,6 +3407,42 @@ function buildResolutionChoicePromptInput(
       description: `${room.name} (${room.side}) — slot ${space.index + 1}`,
     },
   };
+}
+
+/**
+ * If `spaceId` lives in an instant room with a registered slot effect,
+ * returns 'pause' with the forfeit-or-reward prompt for `playerId` (so
+ * the placement fires its bonus). Otherwise returns 'done' with the
+ * original patch unchanged. Used by Ars Magna, Shadow Potion, and the
+ * Paralocation/Rennel after-shadow-window step. Per the rulebook,
+ * MOVE actions don't get instant bonuses — those sites don't call this.
+ */
+function patchWithMaybeInstantReward(
+  state: GameState,
+  patch: GameStatePatch,
+  spaceId: string,
+  playerId: string,
+  position: 'base' | 'shadow' = 'base',
+): EffectResult {
+  const working: GameState = { ...state, ...patch };
+  const room = working.rooms.find((r) =>
+    r.actionSpaces.some((s) => s.id === spaceId),
+  );
+  const space = room?.actionSpaces.find((s) => s.id === spaceId);
+  if (room && space && room.isInstantRoom && hasEffect(space.effectId)) {
+    return {
+      kind: 'pause',
+      patch,
+      pending: buildResolutionChoicePromptInput(
+        working,
+        room,
+        space,
+        playerId,
+        position,
+      ),
+    };
+  }
+  return { kind: 'done', patch };
 }
 
 function openSlotPrompt(
@@ -3702,6 +3758,23 @@ registerEffect('base.spell.strength-of-earth.l1', (ctx): EffectResult => {
 registerEffect('base.spell.paralocation.l1', (ctx): EffectResult => {
   const step = ctx.resumeContext?.['step'];
 
+  // step='after-shadow-window' is re-entered from the mage-shadowed
+  // reaction window's afterResume — no resumeAnswer. Handle BEFORE the
+  // first-call short-circuit so the instant-reward check runs.
+  if (step === 'after-shadow-window') {
+    const targetSpaceId = ctx.resumeContext?.['targetSpaceId'];
+    if (typeof targetSpaceId !== 'string') {
+      throw new Error('paralocation after-shadow-window: missing targetSpaceId');
+    }
+    return patchWithMaybeInstantReward(
+      ctx.state,
+      {},
+      targetSpaceId,
+      ctx.triggeringPlayerId,
+      'shadow',
+    );
+  }
+
   // Step 1: pick the opponent target.
   if (!ctx.resumeAnswer) {
     const targets: string[] = [];
@@ -3813,7 +3886,14 @@ registerEffect('base.spell.paralocation.l1', (ctx): EffectResult => {
         triggerEvent: event,
         pendingResponderIds: buildReactionQueue(ctx.state, ctx.triggeringPlayerId),
         reactedPlayerIds: [],
-        afterResume: { effectId: 'base.system.noop', context: {} },
+        // After the mage-shadowed reaction window closes, re-enter at
+        // step='after-shadow-window' (handled above the resumeAnswer
+        // guard) so the shadow placement can claim any instant-room
+        // reward (Guilds A etc.).
+        afterResume: {
+          effectId: 'base.spell.paralocation.l1',
+          context: { step: 'after-shadow-window', targetSpaceId },
+        },
         source: ctx.source,
       },
     };
@@ -4554,15 +4634,21 @@ registerEffect('base.vault.shadow-potion', (ctx): EffectResult => {
     if (typeof placerMageId !== 'string') {
       throw new Error('shadow-potion apply: missing placerMageId');
     }
-    return {
-      kind: 'done',
-      patch: placeOfficeMageAsShadow(
-        ctx.state,
-        ctx.triggeringPlayerId,
-        placerMageId,
-        ctx.resumeAnswer.spaceId,
-      ),
-    };
+    // Shadow placement counts as "placing a Mage" per the user rules —
+    // instant-room slots fire their reward for the shadow occupant.
+    const placePatch = placeOfficeMageAsShadow(
+      ctx.state,
+      ctx.triggeringPlayerId,
+      placerMageId,
+      ctx.resumeAnswer.spaceId,
+    );
+    return patchWithMaybeInstantReward(
+      ctx.state,
+      placePatch,
+      ctx.resumeAnswer.spaceId,
+      ctx.triggeringPlayerId,
+      'shadow',
+    );
   }
   throw new Error(`shadow-potion unexpected step ${String(step)}`);
 });

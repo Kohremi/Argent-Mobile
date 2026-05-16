@@ -3056,6 +3056,65 @@ describe('Leader spells (unique single-level)', () => {
     });
     expect(s.pendingResolutionStack).toHaveLength(0);
   });
+
+  it('Paralocation: shadowing into an instant room surfaces the slot reward prompt after the shadow-window closes', () => {
+    let s = setupLeaderTest();
+    // Force Guilds A and put Bob's mage onto a non-merit slot.
+    s = forceRoomSide(s, 'Guilds', 'A');
+    s = addMage(s, 'p1', {
+      id: 'alice-mage-1',
+      cardId: 'base.mage.planar-studies',
+      color: 'purple',
+    });
+    s = addMage(s, 'p1', {
+      id: 'alice-mage-2',
+      cardId: 'base.mage.planar-studies',
+      color: 'purple',
+    });
+    s = addMage(s, 'p2', {
+      id: 'bob-mage-1',
+      cardId: 'base.mage.sorcery',
+      color: 'red',
+    });
+    s = placeMageOnSpace(s, 'p2', 'bob-mage-1', 'base.room.guilds.a.slot-2');
+    s = setMana(s, 'p1', 1);
+    s = addOwnedSpell(s, 'p1', 'base.spell.paralocation');
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.paralocation',
+      level: 1,
+    });
+    // Step 1: target Bob's mage.
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'mage-chosen', mageId: 'bob-mage-1' },
+    });
+    // Step 2: pick Alice's shadow placer.
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'mage-chosen', mageId: 'alice-mage-2' },
+    });
+    // Step 3: Bob's mage-shadowed reaction window — pass.
+    const reactionPrompt = topPending(s);
+    expect(reactionPrompt.prompt.kind).toBe('reaction-window');
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: reactionPrompt.id,
+      answer: { kind: 'reaction-passed' },
+    });
+    // Shadow placement is done AND the Guilds A instant reward prompt now
+    // surfaces for the shadowing player (Alice).
+    const slot = s.rooms
+      .flatMap((r) => r.actionSpaces)
+      .find((sp) => sp.id === 'base.room.guilds.a.slot-2');
+    expect(slot?.shadowOccupant?.mageId).toBe('alice-mage-2');
+    const rewardPrompt = topPending(s);
+    expect(rewardPrompt.resume.effectId).toBe('base.system.resolution-choice');
+    expect(rewardPrompt.responderId).toBe('p1');
+  });
 });
 
 // ============================================================================
@@ -3897,6 +3956,48 @@ describe('PLAY_VAULT_CARD', () => {
     });
   });
 
+  it('Shadow Potion: shadowing into an instant room surfaces the slot reward prompt', () => {
+    let s = setupVaultPlay('base.vault.shadow-potion');
+    s = forceRoomSide(s, 'Guilds', 'A');
+    s = addMage(s, 'p1', {
+      id: 'alice-mage-1',
+      cardId: 'base.mage.divinity',
+      color: 'blue',
+    });
+    s = addMage(s, 'p2', {
+      id: 'bob-mage-1',
+      cardId: 'base.mage.sorcery',
+      color: 'red',
+    });
+    s = placeMageOnSpace(s, 'p2', 'bob-mage-1', 'base.room.guilds.a.slot-2');
+    s = applyAction(s, {
+      type: 'PLAY_VAULT_CARD',
+      playerId: 'p1',
+      vaultCardId: 'base.vault.shadow-potion',
+    });
+    // Pick placer.
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'mage-chosen', mageId: 'alice-mage-1' },
+    });
+    // Pick slot.
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'space-chosen', spaceId: 'base.room.guilds.a.slot-2' },
+    });
+    // Shadow placement is done AND the Guilds A instant reward prompt fires
+    // for the shadowing player.
+    const slot = s.rooms
+      .flatMap((r) => r.actionSpaces)
+      .find((sp) => sp.id === 'base.room.guilds.a.slot-2');
+    expect(slot?.shadowOccupant?.mageId).toBe('alice-mage-1');
+    const rewardPrompt = topPending(s);
+    expect(rewardPrompt.resume.effectId).toBe('base.system.resolution-choice');
+    expect(rewardPrompt.responderId).toBe('p1');
+  });
+
   it('Mystic Lantern: peek top 3, gain one as Secret Supporter, others go to the bottom of the deck', () => {
     let s = setupVaultPlay('base.vault.mystic-lantern');
     // Lock the supporter deck order so we know exactly what gets peeked.
@@ -4549,6 +4650,79 @@ describe('Ars Magna (Sorcery Mage power)', () => {
     });
     const alice = s.players.find((p) => p.id === 'p1');
     expect(alice?.roundPlacements).toContain('base.room.council-chamber.a');
+  });
+
+  it('Ars Magna placement into an instant room surfaces the slot reward prompt', () => {
+    let s = setupArsMagnaTest({
+      bobColor: 'red',
+      bobOnSpace: 'base.room.guilds.a.slot-2',
+    });
+    s = forceRoomSide(s, 'Guilds', 'A');
+    // Re-anchor Bob onto Guilds A slot 2 after the side flip.
+    s = mapPlayer(s, 'p2', (p) => ({
+      ...p,
+      mages: p.mages.map((m) =>
+        m.id !== 'bob-mage'
+          ? m
+          : {
+              ...m,
+              location: {
+                kind: 'action-space' as const,
+                spaceId: 'base.room.guilds.a.slot-2',
+              },
+            },
+      ),
+    }));
+    s = {
+      ...s,
+      rooms: s.rooms.map((r) =>
+        r.name !== 'Guilds'
+          ? r
+          : {
+              ...r,
+              actionSpaces: r.actionSpaces.map((sp, i) =>
+                i !== 1
+                  ? sp
+                  : {
+                      ...sp,
+                      occupant: {
+                        mageId: 'bob-mage',
+                        ownerId: 'p2',
+                        isShadowing: false,
+                      },
+                    },
+              ),
+            },
+      ),
+    };
+    s = applyAction(s, {
+      type: 'PLACE_WORKER',
+      playerId: 'p1',
+      mageId: 'alice-red',
+      actionSpaceId: 'base.room.guilds.a.slot-2',
+    });
+    // Pass Bob's reaction window.
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'reaction-passed' },
+    });
+    // Take Infirmary gold for wounded Bob.
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'option-chosen', optionId: 'gold', payload: {} },
+    });
+    // Alice's red mage now sits on the Guilds slot AND the instant-reward
+    // prompt fires for the slot effect.
+    const aliceMage = findMageById(s, 'alice-red');
+    expect(aliceMage.location).toEqual({
+      kind: 'action-space',
+      spaceId: 'base.room.guilds.a.slot-2',
+    });
+    const rewardPrompt = topPending(s);
+    expect(rewardPrompt.resume.effectId).toBe('base.system.resolution-choice');
+    expect(rewardPrompt.responderId).toBe('p1');
   });
 });
 
