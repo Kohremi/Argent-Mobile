@@ -7949,3 +7949,269 @@ describe('Spell wiring — Wave 8 (area effects: Tsunami, Nox)', () => {
     expect(s.pendingResolutionStack).toHaveLength(0);
   });
 });
+
+// ============================================================================
+// Spell wiring — Wave 8b: two-adjacent-room spells (Plague, Fireball, Inferno)
+// ============================================================================
+
+describe('Spell wiring — Wave 8b (two adjacent rooms)', () => {
+  /**
+   * Override the layout so Library A and Vault A end up orthogonally
+   * adjacent at (0,0) and (0,1). The grid otherwise mirrors a 2x4 layout.
+   */
+  function forceLibraryVaultAdjacent(state: GameState): GameState {
+    const libraryIdx = state.rooms.findIndex((r) => r.name === 'Library');
+    const vaultIdx = state.rooms.findIndex((r) => r.name === 'Vault');
+    if (libraryIdx === -1 || vaultIdx === -1) {
+      throw new Error('Library and Vault must both be in play');
+    }
+    const libraryId = state.rooms[libraryIdx]!.id;
+    const vaultId = state.rooms[vaultIdx]!.id;
+    const otherIds = state.rooms
+      .filter((r) => r.id !== libraryId && r.id !== vaultId)
+      .map((r) => r.id);
+    const grid: (string | null)[][] = [
+      [libraryId, vaultId],
+      [otherIds[0] ?? null, otherIds[1] ?? null],
+      [otherIds[2] ?? null, otherIds[3] ?? null],
+      [otherIds[4] ?? null, otherIds[5] ?? null],
+    ];
+    return { ...state, roomLayout: { cols: 2, rows: 4, grid } };
+  }
+
+  function setupBatchSpell(opts: {
+    spellCardId: string;
+    level: 1 | 2 | 3;
+    casterMana: number;
+  }): GameState {
+    let s = initGame(TWO_PLAYER_CONFIG);
+    s = forceLibrarySideA(s);
+    s = forceVaultSideA(s);
+    s = forceLibraryVaultAdjacent(s);
+    s = zeroPlayerResources(s, 'p1');
+    s = zeroPlayerResources(s, 'p2');
+    s = addOwnedSpell(s, 'p1', opts.spellCardId, {
+      intPlaced: true,
+      wisPlacedLevel2: opts.level >= 2,
+      wisPlacedLevel3: opts.level >= 3,
+    });
+    s = setMana(s, 'p1', opts.casterMana);
+    s = {
+      ...s,
+      firstPlayerIndex: 0,
+      phase: {
+        kind: 'errands',
+        round: 1,
+        activePlayerIndex: 0,
+        actionUsed: false,
+        fastActionUsed: false,
+      },
+    };
+    return s;
+  }
+
+  function addPlacedRedMage(
+    s: GameState,
+    ownerId: string,
+    id: string,
+    spaceId: string,
+  ): GameState {
+    let next = addMage(s, ownerId, {
+      id,
+      cardId: 'base.mage.sorcery',
+      color: 'red',
+    });
+    next = placeMageOnSpace(next, ownerId, id, spaceId);
+    return next;
+  }
+
+  it('Plague: wounds one mage in each of two adjacent rooms; bonus prompts fire in turn order', () => {
+    let s = setupBatchSpell({
+      spellCardId: 'base.spell.on-the-weakness-of-flesh',
+      level: 2,
+      casterMana: 1,
+    });
+    s = addPlacedRedMage(s, 'p2', 'bob-lib', 'base.room.library.a.slot-1');
+    s = addPlacedRedMage(s, 'p2', 'bob-vault', 'base.room.vault.a.slot-1');
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.on-the-weakness-of-flesh',
+      level: 2,
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: {
+        kind: 'option-chosen',
+        optionId: 'base.room.library.a',
+        payload: {},
+      },
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'mage-chosen', mageId: 'bob-lib' },
+    });
+    const roomBPrompt = topPending(s);
+    if (roomBPrompt.prompt.kind === 'choose-from-options') {
+      expect(roomBPrompt.prompt.options.map((o) => o.id)).toContain(
+        'base.room.vault.a',
+      );
+    }
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: roomBPrompt.id,
+      answer: {
+        kind: 'option-chosen',
+        optionId: 'base.room.vault.a',
+        payload: {},
+      },
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'mage-chosen', mageId: 'bob-vault' },
+    });
+    expect(findMageById(s, 'bob-lib').isWounded).toBe(true);
+    expect(findMageById(s, 'bob-vault').isWounded).toBe(true);
+    const reactionPrompt = topPending(s);
+    expect(reactionPrompt.prompt.kind).toBe('reaction-window');
+    if (reactionPrompt.prompt.kind === 'reaction-window') {
+      expect(reactionPrompt.prompt.triggerEvents.length).toBe(2);
+    }
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: reactionPrompt.id,
+      answer: { kind: 'reaction-passed' },
+    });
+    // First bonus prompt (Bob).
+    const bonus1 = topPending(s);
+    expect(bonus1.responderId).toBe('p2');
+    expect(bonus1.prompt.kind).toBe('choose-from-options');
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: bonus1.id,
+      answer: { kind: 'option-chosen', optionId: 'gold', payload: {} },
+    });
+    const bonus2 = topPending(s);
+    expect(bonus2.responderId).toBe('p2');
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: bonus2.id,
+      answer: { kind: 'option-chosen', optionId: 'gold', payload: {} },
+    });
+    // 2 bonuses × 2 gold each = 4 gold total for Bob.
+    expect(s.players.find((p) => p.id === 'p2')?.resources.gold).toBe(4);
+    expect(s.pendingResolutionStack).toHaveLength(0);
+  });
+
+  it('Plague: room A list excludes rooms whose adjacent rooms have no targets', () => {
+    let s = setupBatchSpell({
+      spellCardId: 'base.spell.on-the-weakness-of-flesh',
+      level: 2,
+      casterMana: 1,
+    });
+    // Only Library has a target; Vault (its only orthogonal neighbor in
+    // our forced layout column) is empty so Library has no usable neighbor.
+    s = addPlacedRedMage(s, 'p2', 'bob-lib', 'base.room.library.a.slot-1');
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.on-the-weakness-of-flesh',
+      level: 2,
+    });
+    // No eligible room → spell fizzles silently.
+    expect(s.pendingResolutionStack).toHaveLength(0);
+    expect(findMageById(s, 'bob-lib').isWounded).toBe(false);
+  });
+
+  it('Fireball: same shape as Plague', () => {
+    let s = setupBatchSpell({
+      spellCardId: 'base.spell.the-gift-of-fire',
+      level: 2,
+      casterMana: 3,
+    });
+    s = addPlacedRedMage(s, 'p2', 'bob-lib', 'base.room.library.a.slot-1');
+    s = addPlacedRedMage(s, 'p2', 'bob-vault', 'base.room.vault.a.slot-1');
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.the-gift-of-fire',
+      level: 2,
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: {
+        kind: 'option-chosen',
+        optionId: 'base.room.library.a',
+        payload: {},
+      },
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'mage-chosen', mageId: 'bob-lib' },
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: {
+        kind: 'option-chosen',
+        optionId: 'base.room.vault.a',
+        payload: {},
+      },
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'mage-chosen', mageId: 'bob-vault' },
+    });
+    expect(findMageById(s, 'bob-lib').isWounded).toBe(true);
+    expect(findMageById(s, 'bob-vault').isWounded).toBe(true);
+  });
+
+  it('Inferno: wounds ALL woundable mages in two adjacent rooms', () => {
+    let s = setupBatchSpell({
+      spellCardId: 'base.spell.the-gift-of-fire',
+      level: 3,
+      casterMana: 6,
+    });
+    s = addPlacedRedMage(s, 'p2', 'bob-lib-1', 'base.room.library.a.slot-1');
+    s = addPlacedRedMage(s, 'p2', 'bob-lib-2', 'base.room.library.a.slot-2');
+    s = addPlacedRedMage(s, 'p2', 'bob-vault-1', 'base.room.vault.a.slot-1');
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.the-gift-of-fire',
+      level: 3,
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: {
+        kind: 'option-chosen',
+        optionId: 'base.room.library.a',
+        payload: {},
+      },
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: {
+        kind: 'option-chosen',
+        optionId: 'base.room.vault.a',
+        payload: {},
+      },
+    });
+    expect(findMageById(s, 'bob-lib-1').isWounded).toBe(true);
+    expect(findMageById(s, 'bob-lib-2').isWounded).toBe(true);
+    expect(findMageById(s, 'bob-vault-1').isWounded).toBe(true);
+    const reactionPrompt = topPending(s);
+    expect(reactionPrompt.prompt.kind).toBe('reaction-window');
+    if (reactionPrompt.prompt.kind === 'reaction-window') {
+      expect(reactionPrompt.prompt.triggerEvents.length).toBe(3);
+    }
+  });
+});

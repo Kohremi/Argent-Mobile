@@ -4,6 +4,7 @@
 import { getEffect, hasEffect, registerEffect } from './registry';
 import { computeFinalScoring, playerOwnsWildSupporter } from '../scoring';
 import { getPack } from '../../content/registry';
+import { getOrthogonallyAdjacentRoomIds } from '../setup';
 import {
   affordableVaultCards,
   applyAddWisToSpell,
@@ -7180,3 +7181,439 @@ registerEffect('base.spell.the-lamentations-of-sareth.l3', (ctx): EffectResult =
   }
   throw new Error(`${self} unexpected step ${String(step)}`);
 });
+
+// ----------------------------------------------------------------------------
+// batch-post-wound-bonus — fired as the afterResume continuation for batch
+// wound spells (Plague, Pestilence, Fireball, Inferno) once the reaction
+// window resolves. Walks the wound events in pre-sorted order (turn order
+// from next-after-caster, then within-player by wound order) and, for each
+// event whose mage is STILL wounded in the infirmary, surfaces the
+// standard 3-option Infirmary bonus prompt for that mage's owner.
+//
+// Order matters per the rulebook: a player who reacted with Phase Steppers
+// or Invisibility Cloak isn't in the infirmary, so `checkInfirmaryBonusApplies`
+// returns false and they're skipped. Players whose mages were saved get
+// no bonus; players whose mages stuck get their bonus, one per still-
+// wounded mage.
+// ----------------------------------------------------------------------------
+
+function readEventsArray(ctx: EffectContext): ReactionTriggerEvent[] | null {
+  const raw = ctx.resumeContext?.['events'];
+  if (!Array.isArray(raw)) return null;
+  return raw as unknown as ReactionTriggerEvent[];
+}
+
+function eventsArrayToContext(
+  events: ReactionTriggerEvent[],
+): SerializableContext['events'] {
+  return events.map((e) => triggerEventToContext(e)) as unknown as SerializableContext['events'];
+}
+
+/**
+ * Pre-sort wound events by turn order (next-after-caster, then cycling) +
+ * within-player by their wound index. Used by batch spells to order the
+ * Infirmary-bonus queue before handing it to `base.system.batch-post-wound-bonus`.
+ */
+function orderEventsByTurn(
+  state: GameState,
+  casterId: string,
+  events: ReactionTriggerEvent[],
+): ReactionTriggerEvent[] {
+  const turn = buildReactionQueue(state, casterId);
+  const turnRank = new Map(turn.map((pid, i) => [pid, i] as const));
+  const indexed = events.map((e, i) => ({ e, i }));
+  indexed.sort((a, b) => {
+    const ar =
+      'ownerId' in a.e ? (turnRank.get(a.e.ownerId) ?? 9999) : 9999;
+    const br =
+      'ownerId' in b.e ? (turnRank.get(b.e.ownerId) ?? 9999) : 9999;
+    if (ar !== br) return ar - br;
+    return a.i - b.i;
+  });
+  return indexed.map((x) => x.e);
+}
+
+registerEffect('base.system.batch-post-wound-bonus', (ctx): EffectResult => {
+  const events = readEventsArray(ctx);
+  if (!events) {
+    throw new Error('batch-post-wound-bonus: missing `events` in resumeContext');
+  }
+  const startIndex =
+    (ctx.resumeContext?.['queueIndex'] as number | undefined) ?? 0;
+
+  // If we just resolved a bonus prompt, apply the chosen bonus first.
+  let workingState = ctx.state;
+  let nextIndex = startIndex;
+  if (ctx.resumeAnswer && ctx.resumeAnswer.kind === 'option-chosen') {
+    const recipientId = ctx.resumeContext?.['recipientPlayerId'];
+    if (typeof recipientId !== 'string') {
+      throw new Error('batch-post-wound-bonus: missing recipientPlayerId on resume');
+    }
+    const patch = applyInfirmaryBonusPatch(
+      ctx.state,
+      recipientId,
+      ctx.resumeAnswer.optionId,
+    );
+    workingState = { ...ctx.state, ...patch };
+    nextIndex = startIndex + 1;
+  }
+
+  const accumulatedPatch =
+    workingState === ctx.state
+      ? undefined
+      : ({
+          players: workingState.players,
+          rooms: workingState.rooms,
+        } as GameStatePatch);
+
+  // Find the next event whose mage is still wounded + in infirmary by an opponent.
+  while (nextIndex < events.length) {
+    const event = events[nextIndex];
+    if (event && checkInfirmaryBonusApplies(workingState, event)) {
+      return {
+        kind: 'pause',
+        ...(accumulatedPatch ? { patch: accumulatedPatch } : {}),
+        pending: bonusPromptFor(event, ctx.triggeringPlayerId, {
+          effectId: 'base.system.batch-post-wound-bonus',
+          context: {
+            events: eventsArrayToContext(events),
+            queueIndex: nextIndex,
+            recipientPlayerId: event.ownerId,
+          },
+        }),
+      };
+    }
+    nextIndex++;
+  }
+
+  // All events processed.
+  return { kind: 'done', patch: accumulatedPatch ?? {} };
+});
+
+// ----------------------------------------------------------------------------
+// Two-adjacent-rooms × one-mage-each spells (Plague, Fireball)
+// ----------------------------------------------------------------------------
+//
+// Shape:
+//   1. Pick room A (must contain a woundable mage).
+//   2. Pick target mage in room A.
+//   3. Pick room B (orthogonally adjacent to room A AND contains a
+//      woundable mage).
+//   4. Pick target mage in room B.
+//   5. Apply both wounds atomically. Open one batch reaction window with
+//      both events; opponents react in turn order, one reaction per
+//      player. After the window, route through
+//      `base.system.batch-post-wound-bonus` to surface Infirmary-bonus
+//      prompts in turn order for any mage still in the infirmary.
+
+function twoAdjacentRoomsWoundEffect(selfEffectId: string) {
+  return (ctx: EffectContext): EffectResult => {
+    const step = ctx.resumeContext?.['step'];
+
+    // Step 1: pick room A.
+    if (!ctx.resumeAnswer) {
+      const eligibleRoomIds: string[] = [];
+      for (const r of ctx.state.rooms) {
+        if (
+          buildWoundableMagesInRoom(ctx.state, ctx.triggeringPlayerId, r.id)
+            .length === 0
+        ) {
+          continue;
+        }
+        // Room A must have at least one orthogonal neighbor with a
+        // woundable mage — otherwise step 3 has nothing eligible.
+        const neighbors = getOrthogonallyAdjacentRoomIds(
+          ctx.state.roomLayout,
+          r.id,
+        );
+        const hasUsableNeighbor = neighbors.some(
+          (nid) =>
+            buildWoundableMagesInRoom(ctx.state, ctx.triggeringPlayerId, nid)
+              .length > 0,
+        );
+        if (hasUsableNeighbor) eligibleRoomIds.push(r.id);
+      }
+      if (eligibleRoomIds.length === 0) return { kind: 'done', patch: {} };
+      return {
+        kind: 'pause',
+        pending: {
+          responderId: ctx.triggeringPlayerId,
+          prompt: {
+            kind: 'choose-from-options',
+            options: eligibleRoomIds.map((rid) => {
+              const r = ctx.state.rooms.find((rr) => rr.id === rid)!;
+              return { id: rid, label: r.name, payload: {} };
+            }),
+          },
+          resume: { effectId: selfEffectId, context: { step: 'pick-target-a' } },
+          source: ctx.source,
+        },
+      };
+    }
+
+    // Step 2: pick target in room A.
+    if (step === 'pick-target-a') {
+      if (ctx.resumeAnswer.kind !== 'option-chosen') {
+        throw new Error(`${selfEffectId} pick-target-a expected option-chosen`);
+      }
+      const roomA = ctx.resumeAnswer.optionId;
+      const targets = buildWoundableMagesInRoom(
+        ctx.state,
+        ctx.triggeringPlayerId,
+        roomA,
+      );
+      if (targets.length === 0) return { kind: 'done', patch: {} };
+      return {
+        kind: 'pause',
+        pending: {
+          responderId: ctx.triggeringPlayerId,
+          prompt: { kind: 'choose-target-mage', eligibleMageIds: targets },
+          resume: {
+            effectId: selfEffectId,
+            context: { step: 'pick-room-b', roomA },
+          },
+          source: ctx.source,
+        },
+      };
+    }
+
+    // Step 3: pick room B (adjacent to room A, with a target).
+    if (step === 'pick-room-b') {
+      if (ctx.resumeAnswer.kind !== 'mage-chosen') {
+        throw new Error(`${selfEffectId} pick-room-b expected mage-chosen`);
+      }
+      const targetA = ctx.resumeAnswer.mageId;
+      const roomA = ctx.resumeContext?.['roomA'];
+      if (typeof roomA !== 'string') {
+        throw new Error(`${selfEffectId} pick-room-b: missing roomA`);
+      }
+      const neighbors = getOrthogonallyAdjacentRoomIds(
+        ctx.state.roomLayout,
+        roomA,
+      );
+      const eligibleRoomIds = neighbors.filter(
+        (nid) =>
+          buildWoundableMagesInRoom(ctx.state, ctx.triggeringPlayerId, nid)
+            .length > 0,
+      );
+      if (eligibleRoomIds.length === 0) {
+        // No usable neighbor — wound just the room-A target and skip B.
+        return applyBatchWound(ctx, selfEffectId, [targetA]);
+      }
+      return {
+        kind: 'pause',
+        pending: {
+          responderId: ctx.triggeringPlayerId,
+          prompt: {
+            kind: 'choose-from-options',
+            options: eligibleRoomIds.map((rid) => {
+              const r = ctx.state.rooms.find((rr) => rr.id === rid)!;
+              return { id: rid, label: r.name, payload: {} };
+            }),
+          },
+          resume: {
+            effectId: selfEffectId,
+            context: { step: 'pick-target-b', targetA },
+          },
+          source: ctx.source,
+        },
+      };
+    }
+
+    // Step 4: pick target in room B.
+    if (step === 'pick-target-b') {
+      if (ctx.resumeAnswer.kind !== 'option-chosen') {
+        throw new Error(`${selfEffectId} pick-target-b expected option-chosen`);
+      }
+      const roomB = ctx.resumeAnswer.optionId;
+      const targetA = ctx.resumeContext?.['targetA'];
+      if (typeof targetA !== 'string') {
+        throw new Error(`${selfEffectId} pick-target-b: missing targetA`);
+      }
+      const targets = buildWoundableMagesInRoom(
+        ctx.state,
+        ctx.triggeringPlayerId,
+        roomB,
+      );
+      if (targets.length === 0) {
+        return applyBatchWound(ctx, selfEffectId, [targetA]);
+      }
+      return {
+        kind: 'pause',
+        pending: {
+          responderId: ctx.triggeringPlayerId,
+          prompt: { kind: 'choose-target-mage', eligibleMageIds: targets },
+          resume: {
+            effectId: selfEffectId,
+            context: { step: 'apply', targetA },
+          },
+          source: ctx.source,
+        },
+      };
+    }
+
+    // Step 5: apply both wounds.
+    if (step === 'apply') {
+      if (ctx.resumeAnswer.kind !== 'mage-chosen') {
+        throw new Error(`${selfEffectId} apply expected mage-chosen`);
+      }
+      const targetA = ctx.resumeContext?.['targetA'];
+      if (typeof targetA !== 'string') {
+        throw new Error(`${selfEffectId} apply: missing targetA`);
+      }
+      const targetB = ctx.resumeAnswer.mageId;
+      return applyBatchWound(ctx, selfEffectId, [targetA, targetB]);
+    }
+
+    throw new Error(`${selfEffectId} unexpected step ${String(step)}`);
+  };
+}
+
+/**
+ * Helper: wound the given mage list, open the multi-event reaction window,
+ * route the afterResume through `base.system.batch-post-wound-bonus` so
+ * Infirmary bonuses fire in turn order for any mage still wounded.
+ */
+function applyBatchWound(
+  ctx: EffectContext,
+  selfEffectId: string,
+  mageIds: string[],
+): EffectResult {
+  if (mageIds.length === 0) return { kind: 'done', patch: {} };
+  const wounded = woundManyMages(ctx.state, mageIds, ctx.triggeringPlayerId);
+  const reactorQueue = buildBatchReactorQueue(
+    ctx.state,
+    ctx.triggeringPlayerId,
+    wounded.events,
+  );
+  const orderedEvents = orderEventsByTurn(
+    ctx.state,
+    ctx.triggeringPlayerId,
+    wounded.events,
+  );
+  void selfEffectId; // selfEffectId reserved for future per-spell variants.
+  return {
+    kind: 'open-reaction',
+    patch: wounded.patch,
+    window: {
+      triggerEvents: wounded.events,
+      pendingResponderIds: reactorQueue,
+      reactedPlayerIds: [],
+      afterResume: {
+        effectId: 'base.system.batch-post-wound-bonus',
+        context: { events: eventsArrayToContext(orderedEvents) },
+      },
+      source: ctx.source,
+    },
+  };
+}
+
+/** On the Weakness of Flesh L2 "Plague" — Choose two adjacent rooms. Wound one Mage in each. */
+registerEffect(
+  'base.spell.on-the-weakness-of-flesh.l2',
+  twoAdjacentRoomsWoundEffect('base.spell.on-the-weakness-of-flesh.l2'),
+);
+
+/** The Gift of Fire L2 "Fireball" — Choose two adjacent rooms, wound one Mage in each. */
+registerEffect(
+  'base.spell.the-gift-of-fire.l2',
+  twoAdjacentRoomsWoundEffect('base.spell.the-gift-of-fire.l2'),
+);
+
+// ----------------------------------------------------------------------------
+// Two-adjacent-rooms × all-mages spells (Inferno)
+// ----------------------------------------------------------------------------
+
+/**
+ * The Gift of Fire L3 "Inferno" — Wound all Mages in two adjacent rooms.
+ *
+ * Shape:
+ *   1. Pick room A with at least one woundable mage AND a usable neighbor.
+ *   2. Pick room B (orthogonally adjacent to A, ideally with woundable mages).
+ *   3. Wound EVERY woundable mage in both rooms. Open batch reaction +
+ *      bonus continuation.
+ */
+registerEffect('base.spell.the-gift-of-fire.l3', (ctx): EffectResult => {
+  const step = ctx.resumeContext?.['step'];
+  const self = 'base.spell.the-gift-of-fire.l3';
+
+  if (!ctx.resumeAnswer) {
+    const eligibleRoomIds: string[] = [];
+    for (const r of ctx.state.rooms) {
+      if (
+        buildWoundableMagesInRoom(ctx.state, ctx.triggeringPlayerId, r.id)
+          .length === 0
+      ) {
+        continue;
+      }
+      const neighbors = getOrthogonallyAdjacentRoomIds(
+        ctx.state.roomLayout,
+        r.id,
+      );
+      if (neighbors.length === 0) continue;
+      // Inferno is happy to pair with a neighbor even if THAT neighbor has
+      // 0 mages — the spell still wounds everyone in room A. Just need a
+      // neighbor that exists.
+      eligibleRoomIds.push(r.id);
+    }
+    if (eligibleRoomIds.length === 0) return { kind: 'done', patch: {} };
+    return {
+      kind: 'pause',
+      pending: {
+        responderId: ctx.triggeringPlayerId,
+        prompt: {
+          kind: 'choose-from-options',
+          options: eligibleRoomIds.map((rid) => {
+            const r = ctx.state.rooms.find((rr) => rr.id === rid)!;
+            return { id: rid, label: r.name, payload: {} };
+          }),
+        },
+        resume: { effectId: self, context: { step: 'pick-room-b' } },
+        source: ctx.source,
+      },
+    };
+  }
+  if (step === 'pick-room-b') {
+    if (ctx.resumeAnswer.kind !== 'option-chosen') {
+      throw new Error(`${self} pick-room-b expected option-chosen`);
+    }
+    const roomA = ctx.resumeAnswer.optionId;
+    const neighbors = getOrthogonallyAdjacentRoomIds(
+      ctx.state.roomLayout,
+      roomA,
+    );
+    if (neighbors.length === 0) return { kind: 'done', patch: {} };
+    return {
+      kind: 'pause',
+      pending: {
+        responderId: ctx.triggeringPlayerId,
+        prompt: {
+          kind: 'choose-from-options',
+          options: neighbors.map((rid) => {
+            const r = ctx.state.rooms.find((rr) => rr.id === rid)!;
+            return { id: rid, label: r.name, payload: {} };
+          }),
+        },
+        resume: { effectId: self, context: { step: 'apply', roomA } },
+        source: ctx.source,
+      },
+    };
+  }
+  if (step === 'apply') {
+    if (ctx.resumeAnswer.kind !== 'option-chosen') {
+      throw new Error(`${self} apply expected option-chosen`);
+    }
+    const roomA = ctx.resumeContext?.['roomA'];
+    if (typeof roomA !== 'string') {
+      throw new Error(`${self} apply: missing roomA`);
+    }
+    const roomB = ctx.resumeAnswer.optionId;
+    const mageIds = [
+      ...buildWoundableMagesInRoom(ctx.state, ctx.triggeringPlayerId, roomA),
+      ...buildWoundableMagesInRoom(ctx.state, ctx.triggeringPlayerId, roomB),
+    ];
+    return applyBatchWound(ctx, self, mageIds);
+  }
+  throw new Error(`${self} unexpected step ${String(step)}`);
+});
+
