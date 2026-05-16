@@ -1225,7 +1225,8 @@ function ResourceLine({ player }: { player: Player }) {
   let wisSpent = 0;
   for (const s of player.ownedSpells) {
     const isLeaderSpell = s.cardId === player.candidateStartingSpellId;
-    if (s.intPlaced && !isLeaderSpell) intSpent += 1;
+    if (isLeaderSpell) continue;
+    if (s.intPlaced) intSpent += 1;
     if (s.wisPlacedLevel2) wisSpent += 1;
     if (s.wisPlacedLevel3) wisSpent += 1;
   }
