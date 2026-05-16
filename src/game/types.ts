@@ -587,6 +587,17 @@ export interface ReactionOption {
    * board" instead of being locked to the trigger's original slot.
    */
   requiresSlotPick?: boolean;
+  /**
+   * For multi-mage reaction windows (batch wound/banish spells like Plague,
+   * Fireball, Tsunami, etc.), the responder may have several of their mages
+   * affected by the same spell. Each reaction-card×mage pair becomes its
+   * own option; `forMageId` records which mage this option targets. The
+   * engine threads the matching event into the reaction's resumeContext.
+   *
+   * For single-mage windows (Burn, Lightning, etc.) this is unset — the
+   * window's only event is used implicitly.
+   */
+  forMageId?: OwnedMageId;
 }
 
 export type PendingPrompt =
@@ -612,8 +623,14 @@ export type PendingPrompt =
   | { kind: 'choose-voter'; eligibleVoterIds: ConsortiumVoterId[] }
   | {
       kind: 'reaction-window';
-      /** Trigger event embedded directly so the prompt is self-describing. */
-      triggerEvent: ReactionTriggerEvent;
+      /**
+       * Events that triggered this window. For single-mage spells this is
+       * a length-1 array. For batch spells (Plague, Fireball, Tsunami, etc.)
+       * it contains every mage affected by the cast; the prompt's options
+       * include one entry per (reaction card × affected mage) pair so the
+       * responder picks both at once.
+       */
+      triggerEvents: ReactionTriggerEvent[];
       /** Reactions the responder may play; empty list = pass-only window. */
       reactionOptions: ReactionOption[];
       canPass: true;
@@ -632,6 +649,13 @@ export type ResolutionAnswer =
       kind: 'reaction-played';
       effectId: EffectId;
       reactionContext: SerializableContext;
+      /**
+       * For multi-mage reaction windows, identifies which affected mage the
+       * reaction targets — the engine looks up the matching trigger event
+       * and threads it into the reaction's resumeContext. Unset for
+       * single-mage windows (where the only event is used implicitly).
+       */
+      forMageId?: OwnedMageId;
     }
   | { kind: 'reaction-passed' }
   | { kind: 'confirmed' };
@@ -720,7 +744,14 @@ export type ReactionTriggerEvent =
 
 export interface ReactionWindow {
   id: ReactionWindowId;
-  triggerEvent: ReactionTriggerEvent;
+  /**
+   * Events that opened this window. Single-mage actions store a length-1
+   * array; batch spells (Plague, Fireball, Tsunami, Nox, etc.) store one
+   * event per affected mage. Each affected player gets ONE reaction across
+   * the window — when they react they pick which of their affected mages
+   * the reaction targets (via `ReactionOption.forMageId`).
+   */
+  triggerEvents: ReactionTriggerEvent[];
   /** Players still owed a reaction prompt, in turn order from the trigger. */
   pendingResponderIds: PlayerId[];
   /** Players who've already used their one reaction this window. */

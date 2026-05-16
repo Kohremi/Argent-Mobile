@@ -1118,7 +1118,12 @@ function PromptControls({
       return (
         <div className="space-y-2">
           <p className="text-xs text-slate-400">
-            Trigger: {prompt.triggerEvent.kind}
+            Trigger:{' '}
+            {prompt.triggerEvents
+              .map((e) =>
+                'mageId' in e ? `${e.kind} (${e.mageId})` : e.kind,
+              )
+              .join(', ')}
           </p>
           <div className="flex flex-wrap gap-2">
             <button
@@ -1193,8 +1198,9 @@ function ReactionWindowsPanel({ state }: { state: GameState }) {
       </h2>
       {state.activeReactionWindows.map((w) => (
         <p key={w.id} className="text-xs text-slate-300">
-          {w.id}: trigger={w.triggerEvent.kind} · queue=[{w.pendingResponderIds.join(', ')}] ·
-          reacted=[{w.reactedPlayerIds.join(', ')}]
+          {w.id}: triggers=[{w.triggerEvents.map((e) => e.kind).join(', ')}] ·
+          queue=[{w.pendingResponderIds.join(', ')}] · reacted=[
+          {w.reactedPlayerIds.join(', ')}]
         </p>
       ))}
     </section>

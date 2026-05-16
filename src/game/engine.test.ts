@@ -4316,7 +4316,7 @@ describe('BUY_VAULT_CARD action', () => {
     const reactionPrompt = topPending(s);
     expect(reactionPrompt.prompt.kind).toBe('reaction-window');
     if (reactionPrompt.prompt.kind === 'reaction-window') {
-      expect(reactionPrompt.prompt.triggerEvent.kind).toBe('gold-payment-pending');
+      expect(reactionPrompt.prompt.triggerEvents[0]?.kind).toBe('gold-payment-pending');
       const ids = reactionPrompt.prompt.reactionOptions.map((o) => o.sourceId);
       expect(ids).toContain('base.vault.auric-catalyst');
     }

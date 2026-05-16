@@ -288,12 +288,16 @@ function advanceReactionWindow(state: GameState, window: ReactionWindow): GameSt
   if (responderId === undefined) {
     throw new Error('advanceReactionWindow: empty pendingResponderIds');
   }
-  const reactionOptions = buildReactionOptionsFor(state, responderId, window.triggerEvent);
+  const reactionOptions = buildReactionOptionsFor(
+    state,
+    responderId,
+    window.triggerEvents,
+  );
   const promptInput: PendingResolutionInput = {
     responderId,
     prompt: {
       kind: 'reaction-window',
-      triggerEvent: window.triggerEvent,
+      triggerEvents: window.triggerEvents,
       reactionOptions,
       canPass: true,
     },
@@ -670,7 +674,7 @@ function handlePlaceWorker(state: GameState, action: PlaceWorkerAction): GameSta
       kind: 'open-reaction',
       patch: wounded.patch,
       window: {
-        triggerEvent: wounded.triggerEvent,
+        triggerEvents: [wounded.triggerEvent],
         pendingResponderIds: buildReactionQueue(
           stateAfterCosts,
           action.playerId,
@@ -1626,10 +1630,23 @@ function resolveReactionPrompt(
       triggeringPlayerId: responderId,
       description: reactionOption.label,
     };
-    // The reaction effect needs to know what triggered it. We thread the
-    // window's triggerEvent into resumeContext alongside any reactor-supplied
-    // context.
-    const triggerEventValue = window.triggerEvent as unknown as SerializableContext;
+    // Pick the trigger event this reaction targets. For single-mage windows
+    // we use the only event. For multi-mage windows (batch wound/banish
+    // spells) the answer's `forMageId` identifies which event; the option
+    // chosen carried its own `forMageId` too, which we use as a fallback.
+    const targetMageId = answer.forMageId ?? reactionOption.forMageId;
+    const matchedEvent =
+      targetMageId !== undefined
+        ? (window.triggerEvents.find(
+            (e) => 'mageId' in e && e.mageId === targetMageId,
+          ) ?? window.triggerEvents[0])
+        : window.triggerEvents[0];
+    if (!matchedEvent) {
+      throw new Error(
+        `resolveReactionPrompt: no trigger event matched forMageId=${targetMageId}`,
+      );
+    }
+    const triggerEventValue = matchedEvent as unknown as SerializableContext;
     const reactionCtx: EffectContext = {
       state: curr,
       source: reactionSource,

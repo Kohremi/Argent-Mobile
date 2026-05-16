@@ -721,7 +721,7 @@ registerEffect('base.spell.burn.l1', (ctx: EffectContext): EffectResult => {
     kind: 'open-reaction',
     patch: wounded.patch,
     window: {
-      triggerEvent: wounded.triggerEvent,
+      triggerEvents: [wounded.triggerEvent],
       pendingResponderIds: buildReactionQueue(ctx.state, ctx.triggeringPlayerId),
       reactedPlayerIds: [],
       afterResume: {
@@ -1206,12 +1206,14 @@ function spawnVaultBuyReactionWindow(
     kind: 'open-reaction',
     patch: {},
     window: {
-      triggerEvent: {
-        kind: 'gold-payment-pending',
-        payingPlayerId: buyerId,
-        amount: card.goldCost,
-        purpose: 'vault-purchase',
-      },
+      triggerEvents: [
+        {
+          kind: 'gold-payment-pending',
+          payingPlayerId: buyerId,
+          amount: card.goldCost,
+          purpose: 'vault-purchase',
+        },
+      ],
       pendingResponderIds: canReact ? [buyerId] : [],
       reactedPlayerIds: [],
       afterResume,
@@ -2004,7 +2006,7 @@ registerEffect('base.mage.sorcery.ars-magna', (ctx: EffectContext): EffectResult
     kind: 'open-reaction',
     patch: wounded.patch,
     window: {
-      triggerEvent,
+      triggerEvents: [triggerEvent],
       pendingResponderIds: buildReactionQueue(ctx.state, ctx.triggeringPlayerId),
       reactedPlayerIds: [],
       afterResume: {
@@ -2512,7 +2514,7 @@ registerEffect('base.supporter.andros-duvalt', (ctx): EffectResult => {
     kind: 'open-reaction',
     patch: banished.patch,
     window: {
-      triggerEvent: banished.triggerEvent,
+      triggerEvents: [banished.triggerEvent],
       pendingResponderIds: buildReactionQueue(ctx.state, ctx.triggeringPlayerId),
       reactedPlayerIds: [],
       afterResume: { effectId: 'base.system.noop', context: {} },
@@ -2553,7 +2555,7 @@ registerEffect('base.supporter.letum-conspicere', (ctx): EffectResult => {
     kind: 'open-reaction',
     patch: wound.patch,
     window: {
-      triggerEvent: wound.triggerEvent,
+      triggerEvents: [wound.triggerEvent],
       pendingResponderIds: buildReactionQueue(ctx.state, ctx.triggeringPlayerId),
       reactedPlayerIds: [],
       afterResume: {
@@ -2708,7 +2710,7 @@ registerEffect('base.supporter.rennel-pedrigor', (ctx): EffectResult => {
       kind: 'open-reaction',
       patch,
       window: {
-        triggerEvent: event,
+        triggerEvents: [event],
         pendingResponderIds: buildReactionQueue(ctx.state, ctx.triggeringPlayerId),
         reactedPlayerIds: [],
         afterResume: {
@@ -3111,7 +3113,7 @@ registerEffect('base.supporter.yinsei-arlington', (ctx): EffectResult => {
       kind: 'open-reaction',
       patch: moved.patch,
       window: {
-        triggerEvent: moved.triggerEvent,
+        triggerEvents: [moved.triggerEvent],
         pendingResponderIds: buildReactionQueue(
           ctx.state,
           ctx.triggeringPlayerId,
@@ -3553,7 +3555,7 @@ registerEffect('base.spell.flash-of-light.l1', (ctx): EffectResult => {
     kind: 'open-reaction',
     patch: banished.patch,
     window: {
-      triggerEvent: banished.triggerEvent,
+      triggerEvents: [banished.triggerEvent],
       pendingResponderIds: buildReactionQueue(
         ctx.state,
         ctx.triggeringPlayerId,
@@ -3732,7 +3734,7 @@ registerEffect('base.spell.strength-of-earth.l1', (ctx): EffectResult => {
       kind: 'open-reaction',
       patch: moved.patch,
       window: {
-        triggerEvent: moved.triggerEvent,
+        triggerEvents: [moved.triggerEvent],
         pendingResponderIds: buildReactionQueue(
           ctx.state,
           ctx.triggeringPlayerId,
@@ -3910,7 +3912,7 @@ function shadowOpponentMageEffect(selfEffectId: string) {
         kind: 'open-reaction',
         patch,
         window: {
-          triggerEvent: event,
+          triggerEvents: [event],
           pendingResponderIds: buildReactionQueue(
             ctx.state,
             ctx.triggeringPlayerId,
@@ -4487,7 +4489,7 @@ function woundAndPlaceEffect(opts: {
         kind: 'open-reaction',
         patch: wound.patch,
         window: {
-          triggerEvent: wound.triggerEvent,
+          triggerEvents: [wound.triggerEvent],
           pendingResponderIds: buildReactionQueue(
             ctx.state,
             ctx.triggeringPlayerId,
@@ -4950,7 +4952,7 @@ function manaRepeatLoop(
       kind: 'open-reaction',
       patch: mergedPatch,
       window: {
-        triggerEvent: applied.triggerEvent,
+        triggerEvents: [applied.triggerEvent],
         pendingResponderIds: buildReactionQueue(
           ctx.state,
           ctx.triggeringPlayerId,
@@ -5359,7 +5361,7 @@ function simpleWoundSpell(opts: {
       kind: 'open-reaction',
       patch: wounded.patch,
       window: {
-        triggerEvent: wounded.triggerEvent,
+        triggerEvents: [wounded.triggerEvent],
         pendingResponderIds: buildReactionQueue(
           ctx.state,
           ctx.triggeringPlayerId,
@@ -5478,7 +5480,7 @@ function simpleBanishSpell(opts: {
       kind: 'open-reaction',
       patch: banished.patch,
       window: {
-        triggerEvent: banished.triggerEvent,
+        triggerEvents: [banished.triggerEvent],
         pendingResponderIds: buildReactionQueue(
           ctx.state,
           ctx.triggeringPlayerId,
@@ -5611,7 +5613,7 @@ registerEffect('base.spell.on-the-weakness-of-flesh.l1', (ctx): EffectResult => 
       kind: 'open-reaction',
       patch: wounded.patch,
       window: {
-        triggerEvent: wounded.triggerEvent,
+        triggerEvents: [wounded.triggerEvent],
         pendingResponderIds: buildReactionQueue(
           ctx.state,
           ctx.triggeringPlayerId,
@@ -5640,7 +5642,7 @@ registerEffect('base.spell.on-the-weakness-of-flesh.l1', (ctx): EffectResult => 
       kind: 'open-reaction',
       patch: banished.patch,
       window: {
-        triggerEvent: banished.triggerEvent,
+        triggerEvents: [banished.triggerEvent],
         pendingResponderIds: buildReactionQueue(
           ctx.state,
           ctx.triggeringPlayerId,
@@ -5733,7 +5735,7 @@ function banishAndPlaceInSlotEffect(opts: {
         kind: 'open-reaction',
         patch: banished.patch,
         window: {
-          triggerEvent: banished.triggerEvent,
+          triggerEvents: [banished.triggerEvent],
           pendingResponderIds: buildReactionQueue(
             ctx.state,
             ctx.triggeringPlayerId,
@@ -5989,7 +5991,7 @@ registerEffect('base.spell.taming-of-the-storm.l1', (ctx): EffectResult => {
       kind: 'open-reaction',
       patch: moved.patch,
       window: {
-        triggerEvent: moved.triggerEvent,
+        triggerEvents: [moved.triggerEvent],
         pendingResponderIds: buildReactionQueue(
           ctx.state,
           ctx.triggeringPlayerId,
@@ -6120,7 +6122,7 @@ registerEffect('base.spell.lightning-and-you.l2', (ctx): EffectResult => {
       kind: 'open-reaction',
       patch: wound.patch,
       window: {
-        triggerEvent: wound.triggerEvent,
+        triggerEvents: [wound.triggerEvent],
         pendingResponderIds: buildReactionQueue(
           ctx.state,
           ctx.triggeringPlayerId,
@@ -6339,7 +6341,7 @@ registerEffect('base.spell.a-brighter-flame.l3', (ctx): EffectResult => {
       kind: 'open-reaction',
       patch: wound.patch,
       window: {
-        triggerEvent: wound.triggerEvent,
+        triggerEvents: [wound.triggerEvent],
         pendingResponderIds: buildReactionQueue(
           ctx.state,
           ctx.triggeringPlayerId,

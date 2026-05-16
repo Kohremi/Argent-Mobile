@@ -727,135 +727,155 @@ export function findRoomBySpaceId(
   return null;
 }
 
-/**
- * Builds reaction options the engine should offer to a responder for a given
- * trigger event. Today the only base-game reactor is Phase Steppers; expansions
- * will extend this list.
- */
-export function buildReactionOptionsFor(
-  state: GameState,
-  responderId: PlayerId,
-  event: ReactionTriggerEvent,
-): {
+type ReactionOptionShape = {
   sourceKind: 'vault-card' | 'supporter' | 'spell' | 'mage-power';
   sourceId: string;
   effectId: string;
   label: string;
   requiresSlotPick?: boolean;
-}[] {
+  forMageId?: OwnedMageId;
+};
+
+/**
+ * Builds reaction options the engine should offer to a responder for a given
+ * set of trigger events.
+ *
+ * For single-event windows (Burn, Lightning, etc.) pass `[event]`. For
+ * batch wound/banish spells (Plague, Fireball, Tsunami, Nox, Pestilence,
+ * Inferno) pass every affected mage's event — the function returns one
+ * option per (reaction card × affected-mage) pair, tagged with `forMageId`
+ * so the engine can route the chosen reaction to the chosen target.
+ *
+ * `gold-payment-pending` doesn't reference a mage, so its options never
+ * carry `forMageId`.
+ */
+export function buildReactionOptionsFor(
+  state: GameState,
+  responderId: PlayerId,
+  events: ReactionTriggerEvent[],
+): ReactionOptionShape[] {
   const responder = findPlayer(state, responderId);
   if (!responder) return [];
-  const options: ReturnType<typeof buildReactionOptionsFor> = [];
+  const options: ReactionOptionShape[] = [];
 
-  // Auric Catalyst — consumable, fires on the responder's own pending
-  // gold payment. Only the paying player can react (they're reducing
-  // their own cost).
-  if (
-    event.kind === 'gold-payment-pending' &&
-    event.payingPlayerId === responderId &&
-    playerHasAuricCatalyst(responder)
-  ) {
-    options.push({
-      sourceKind: 'vault-card',
-      sourceId: 'base.vault.auric-catalyst',
-      effectId: 'base.vault.auric-catalyst.react',
-      label: 'Play Auric Catalyst (reduce cost to 0)',
-    });
+  // Auric Catalyst is global to the responder; not a per-mage option.
+  for (const event of events) {
+    if (
+      event.kind === 'gold-payment-pending' &&
+      event.payingPlayerId === responderId &&
+      playerHasAuricCatalyst(responder)
+    ) {
+      options.push({
+        sourceKind: 'vault-card',
+        sourceId: 'base.vault.auric-catalyst',
+        effectId: 'base.vault.auric-catalyst.react',
+        label: 'Play Auric Catalyst (reduce cost to 0)',
+      });
+      break; // Only one Auric Catalyst option even with multiple events.
+    }
   }
 
-  const isOwnMageHarmEvent =
-    (event.kind === 'mage-wounded' ||
-      event.kind === 'mage-banished' ||
-      event.kind === 'mage-moved' ||
-      event.kind === 'mage-shadowed') &&
-    event.ownerId === responderId;
-
-  if (!isOwnMageHarmEvent) return options;
-
-  const triggeredByOpponent =
-    'byPlayerId' in event && event.byPlayerId !== event.ownerId;
+  // Per-mage harm reactions. For each event that targets one of the
+  // responder's mages, attach options labeled with the mage id (so the
+  // multi-mage prompt can display "Phase Steppers on alice-mage-2").
+  const ownMageEvents = events.filter(
+    (event) =>
+      (event.kind === 'mage-wounded' ||
+        event.kind === 'mage-banished' ||
+        event.kind === 'mage-moved' ||
+        event.kind === 'mage-shadowed') &&
+      event.ownerId === responderId,
+  );
+  if (ownMageEvents.length === 0) return options;
 
   const has = (cardId: string, requireRefreshed = false) =>
     responder.vaultCards.some(
       (v) => v.cardId === cardId && (!requireRefreshed || !v.exhausted),
     );
+  const hasPhaseSteppers = has('base.vault.phase-steppers');
+  const hasInvisibilityCloak = has('base.vault.invisibility-cloak', true);
+  const hasShieldPotion = has('base.vault.shield-potion');
+  const hasAncientArmor = has('base.vault.ancient-armor', true);
+  const hasMysticAmulet = has('base.vault.mystic-amulet', true);
 
-  // Phase Steppers — consumable, reacts to wound/banish/move regardless of
-  // source. Mage shadows the original slot.
-  if (
-    (event.kind === 'mage-wounded' ||
+  // When this is a single-mage window we omit `forMageId` so the existing
+  // single-event prompt continues to render with unadorned labels.
+  const multi = ownMageEvents.length > 1;
+  const labelSuffix = (mageId: string) => (multi ? ` on ${mageId}` : '');
+
+  for (const event of ownMageEvents) {
+    if (
+      event.kind !== 'mage-wounded' &&
+      event.kind !== 'mage-banished' &&
+      event.kind !== 'mage-moved' &&
+      event.kind !== 'mage-shadowed'
+    ) {
+      continue;
+    }
+    const isWoundBanishOrMove =
+      event.kind === 'mage-wounded' ||
       event.kind === 'mage-banished' ||
-      event.kind === 'mage-moved') &&
-    has('base.vault.phase-steppers')
-  ) {
-    options.push({
-      sourceKind: 'vault-card',
-      sourceId: 'base.vault.phase-steppers',
-      effectId: 'base.vault.phase-steppers.react',
-      label: 'Play Phase Steppers',
-    });
-  }
+      event.kind === 'mage-moved';
+    const triggeredByOpponent =
+      'byPlayerId' in event && event.byPlayerId !== event.ownerId;
+    const mageId = event.mageId;
 
-  // Invisibility Cloak — treasure, same trigger as Phase Steppers; requires
-  // a refreshed (non-exhausted) copy in play.
-  if (
-    (event.kind === 'mage-wounded' ||
-      event.kind === 'mage-banished' ||
-      event.kind === 'mage-moved') &&
-    has('base.vault.invisibility-cloak', true)
-  ) {
-    options.push({
-      sourceKind: 'vault-card',
-      sourceId: 'base.vault.invisibility-cloak',
-      effectId: 'base.vault.invisibility-cloak.react',
-      label: 'Use Invisibility Cloak',
-    });
-  }
-
-  // Shield Potion — consumable, wound/banish/move; places at any empty slot.
-  if (
-    (event.kind === 'mage-wounded' ||
-      event.kind === 'mage-banished' ||
-      event.kind === 'mage-moved') &&
-    has('base.vault.shield-potion')
-  ) {
-    options.push({
-      sourceKind: 'vault-card',
-      sourceId: 'base.vault.shield-potion',
-      effectId: 'base.vault.shield-potion.react',
-      label: 'Play Shield Potion',
-      requiresSlotPick: true,
-    });
-  }
-
-  // Ancient Armor — treasure, wound/move BY AN OPPONENT only.
-  if (
-    triggeredByOpponent &&
-    (event.kind === 'mage-wounded' || event.kind === 'mage-moved') &&
-    has('base.vault.ancient-armor', true)
-  ) {
-    options.push({
-      sourceKind: 'vault-card',
-      sourceId: 'base.vault.ancient-armor',
-      effectId: 'base.vault.ancient-armor.react',
-      label: 'Use Ancient Armor',
-      requiresSlotPick: true,
-    });
-  }
-
-  // Mystic Amulet — treasure, banish/shadow BY AN OPPONENT only.
-  if (
-    triggeredByOpponent &&
-    (event.kind === 'mage-banished' || event.kind === 'mage-shadowed') &&
-    has('base.vault.mystic-amulet', true)
-  ) {
-    options.push({
-      sourceKind: 'vault-card',
-      sourceId: 'base.vault.mystic-amulet',
-      effectId: 'base.vault.mystic-amulet.react',
-      label: 'Use Mystic Amulet',
-      requiresSlotPick: true,
-    });
+    if (isWoundBanishOrMove && hasPhaseSteppers) {
+      options.push({
+        sourceKind: 'vault-card',
+        sourceId: 'base.vault.phase-steppers',
+        effectId: 'base.vault.phase-steppers.react',
+        label: `Play Phase Steppers${labelSuffix(mageId)}`,
+        ...(multi ? { forMageId: mageId } : {}),
+      });
+    }
+    if (isWoundBanishOrMove && hasInvisibilityCloak) {
+      options.push({
+        sourceKind: 'vault-card',
+        sourceId: 'base.vault.invisibility-cloak',
+        effectId: 'base.vault.invisibility-cloak.react',
+        label: `Use Invisibility Cloak${labelSuffix(mageId)}`,
+        ...(multi ? { forMageId: mageId } : {}),
+      });
+    }
+    if (isWoundBanishOrMove && hasShieldPotion) {
+      options.push({
+        sourceKind: 'vault-card',
+        sourceId: 'base.vault.shield-potion',
+        effectId: 'base.vault.shield-potion.react',
+        label: `Play Shield Potion${labelSuffix(mageId)}`,
+        requiresSlotPick: true,
+        ...(multi ? { forMageId: mageId } : {}),
+      });
+    }
+    if (
+      triggeredByOpponent &&
+      (event.kind === 'mage-wounded' || event.kind === 'mage-moved') &&
+      hasAncientArmor
+    ) {
+      options.push({
+        sourceKind: 'vault-card',
+        sourceId: 'base.vault.ancient-armor',
+        effectId: 'base.vault.ancient-armor.react',
+        label: `Use Ancient Armor${labelSuffix(mageId)}`,
+        requiresSlotPick: true,
+        ...(multi ? { forMageId: mageId } : {}),
+      });
+    }
+    if (
+      triggeredByOpponent &&
+      (event.kind === 'mage-banished' || event.kind === 'mage-shadowed') &&
+      hasMysticAmulet
+    ) {
+      options.push({
+        sourceKind: 'vault-card',
+        sourceId: 'base.vault.mystic-amulet',
+        effectId: 'base.vault.mystic-amulet.react',
+        label: `Use Mystic Amulet${labelSuffix(mageId)}`,
+        requiresSlotPick: true,
+        ...(multi ? { forMageId: mageId } : {}),
+      });
+    }
   }
 
   return options;
