@@ -8,16 +8,196 @@ import type {
   MageColor,
   Player,
   Room,
+  RoomId,
+  RoomLayout,
 } from './types';
 import {
   createRngState,
   nextRandom,
   shuffleWithState,
 } from '../utils/rng';
+import type { RngState } from './types';
 import { pickPlayerColor, startingResourceBundle } from '../utils/helpers';
 
 const MIN_PLAYERS = 2;
 const MAX_PLAYERS = 6;
+
+/** Hard cap on grid columns ("3 across" per the rulebook layout). */
+const MAX_GRID_COLS = 3;
+
+/**
+ * Default number of rooms in play, by player count. Overridable via
+ * `GameConfig.numberOfRooms`.
+ */
+function defaultRoomCountForPlayerCount(playerCount: number): number {
+  if (playerCount <= 3) return 8;
+  if (playerCount === 4) return 10;
+  return 12;
+}
+
+/**
+ * Pick a grid (cols × rows) that fits `n` rooms with cols ≤ MAX_GRID_COLS,
+ * minimizing empty cells, then preferring wider grids over taller ones.
+ *
+ * Examples:
+ *   8  → 2 cols × 4 rows (0 empty)
+ *   9  → 3 cols × 3 rows (0 empty)
+ *   10 → 2 cols × 5 rows (0 empty; preferred over 3×4 with 2 empty)
+ *   11 → 3 cols × 4 rows (1 empty)
+ *   12 → 3 cols × 4 rows (0 empty)
+ */
+export function pickGridForRoomCount(n: number): { cols: number; rows: number } {
+  if (n < 1) throw new Error(`pickGridForRoomCount: n must be ≥ 1, got ${n}`);
+  // For very small n (< 4), fall back to a single row — 1×n is fine.
+  if (n < 4) return { cols: n, rows: 1 };
+  // For n ≥ 4, only consider cols ∈ {2, 3}. cols=1 produces a long skinny
+  // column the user explicitly doesn't want. Pick min waste, tiebreak max
+  // cols (visually compact / square-ish).
+  let best: { cols: number; rows: number; waste: number } | null = null;
+  for (let cols = 2; cols <= MAX_GRID_COLS; cols++) {
+    const rows = Math.ceil(n / cols);
+    const waste = cols * rows - n;
+    if (
+      best === null ||
+      waste < best.waste ||
+      (waste === best.waste && cols > best.cols)
+    ) {
+      best = { cols, rows, waste };
+    }
+  }
+  return { cols: best!.cols, rows: best!.rows };
+}
+
+/**
+ * Builds a placeholder Room used to pad the room pool when the requested
+ * room count exceeds the pack's available rooms. Placeholders have no
+ * action spaces and are flagged cannotBePlacedInDirectly so they're skipped
+ * by the placement / resolution flow.
+ */
+function makePlaceholderRoom(index: number, packId: string): Room {
+  return {
+    id: `base.room.placeholder-${index}` as RoomId,
+    name: `Placeholder Room ${index}`,
+    sourcePackId: packId,
+    isUniversityCentral: false,
+    side: 'A',
+    isInstantRoom: false,
+    cannotBePlacedInDirectly: true,
+    cannotBeLocked: true,
+    actionSpaces: [],
+    description: 'Placeholder room — content pending.',
+  };
+}
+
+/**
+ * Builds the in-play room list for this game:
+ *   - All University-Central rooms (Council, Library, Infirmary) on side A.
+ *   - Non-UC rooms (side A) shuffled, then drawn until the total reaches
+ *     `targetCount`.
+ *   - If pool is smaller than `targetCount`, fill the remainder with
+ *     placeholder rooms.
+ * Returns the selected rooms plus the updated RNG state.
+ */
+function selectInPlayRooms(
+  allRoomsSideA: Room[],
+  targetCount: number,
+  rng: RngState,
+  packId: string,
+): { rooms: Room[]; rng: RngState } {
+  const ucRooms = allRoomsSideA.filter((r) => r.isUniversityCentral);
+  const nonUcRooms = allRoomsSideA.filter((r) => !r.isUniversityCentral);
+  if (ucRooms.length > targetCount) {
+    throw new Error(
+      `selectInPlayRooms: targetCount=${targetCount} smaller than number of UC rooms (${ucRooms.length})`,
+    );
+  }
+  const remaining = targetCount - ucRooms.length;
+  const shuffled = shuffleWithState(nonUcRooms, rng);
+  let nextRng = shuffled.state;
+  const picked = shuffled.value.slice(0, Math.min(remaining, nonUcRooms.length));
+  const selected: Room[] = [...ucRooms, ...picked];
+  // Pad with placeholders if pack didn't have enough non-UC rooms.
+  let placeholderIdx = 1;
+  while (selected.length < targetCount) {
+    selected.push(makePlaceholderRoom(placeholderIdx++, packId));
+  }
+  return { rooms: selected, rng: nextRng };
+}
+
+/**
+ * Randomly assigns `rooms` to cells of a `cols × rows` grid. Returns a
+ * 2D array of RoomId-or-null (empty cells fill from the end). Uses the
+ * provided RNG state and returns the post-shuffle state.
+ */
+function placeRoomsInGrid(
+  rooms: Room[],
+  cols: number,
+  rows: number,
+  rng: RngState,
+): { grid: (RoomId | null)[][]; rng: RngState } {
+  const cellCount = cols * rows;
+  if (rooms.length > cellCount) {
+    throw new Error(
+      `placeRoomsInGrid: ${rooms.length} rooms > ${cellCount} cells`,
+    );
+  }
+  // Shuffle cell indices; rooms[i] lands in shuffledCellIndices[i].
+  const cells = Array.from({ length: cellCount }, (_, i) => i);
+  const shuffled = shuffleWithState(cells, rng);
+  const slots: (RoomId | null)[] = new Array(cellCount).fill(null);
+  for (let i = 0; i < rooms.length; i++) {
+    slots[shuffled.value[i]!] = rooms[i]!.id;
+  }
+  const grid: (RoomId | null)[][] = [];
+  for (let r = 0; r < rows; r++) {
+    const row: (RoomId | null)[] = [];
+    for (let c = 0; c < cols; c++) {
+      row.push(slots[r * cols + c]!);
+    }
+    grid.push(row);
+  }
+  return { grid, rng: shuffled.state };
+}
+
+/**
+ * Returns the orthogonally-adjacent rooms (up / down / left / right) of
+ * `roomId` in the game's grid. Empty cells (null) are treated as walls —
+ * adjacency does NOT pass through them. Returns an empty array if the room
+ * isn't in the grid.
+ */
+export function getOrthogonallyAdjacentRoomIds(
+  layout: RoomLayout,
+  roomId: RoomId,
+): RoomId[] {
+  let row = -1;
+  let col = -1;
+  for (let r = 0; r < layout.rows && row === -1; r++) {
+    for (let c = 0; c < layout.cols; c++) {
+      if (layout.grid[r]?.[c] === roomId) {
+        row = r;
+        col = c;
+        break;
+      }
+    }
+  }
+  if (row === -1) return [];
+  const deltas: [number, number][] = [
+    [-1, 0],
+    [1, 0],
+    [0, -1],
+    [0, 1],
+  ];
+  const out: RoomId[] = [];
+  for (const [dr, dc] of deltas) {
+    const nr = row + dr;
+    const nc = col + dc;
+    if (nr < 0 || nr >= layout.rows) continue;
+    if (nc < 0 || nc >= layout.cols) continue;
+    const cell = layout.grid[nr]?.[nc];
+    if (cell != null) out.push(cell);
+  }
+  return out;
+}
 
 /**
  * Validates that every physical room has both A and B definitions in the
@@ -43,11 +223,12 @@ function assertEveryRoomHasBothSides(rooms: Room[]): void {
 /**
  * Builds a fresh, valid GameState from the user's setup choices.
  *
- * Room layout: every room from the active packs is included, on side A. The
- * earlier random "draw N variable rooms" / per-player-count logic was removed
- * — content is now restricted to the rooms in `argent details.txt`, and the
- * user wants every one visible at game start. Side B variants are kept in
- * the data (for the 2p Infirmary B rule and future wiring) but not selected.
+ * Rooms: All UC rooms (Council / Library / Infirmary) are always in play.
+ * Non-UC rooms are shuffled and drawn until the total reaches the requested
+ * room count (default 8 / 10 / 12 by player count). If the pack doesn't
+ * have enough non-UC rooms, placeholder rooms pad the remainder. Selected
+ * rooms are then randomly placed in a cols×rows grid (cols ≤ 3) — the
+ * layout drives orthogonal adjacency for spells like Plague / Fireball.
  */
 export function buildInitialState(config: GameConfig): GameState {
   const { activePackIds, playerNames, rngSeed } = config;
@@ -75,6 +256,22 @@ export function buildInitialState(config: GameConfig): GameState {
 
   let rng = createRngState(rngSeed);
 
+  // ---- Room selection + grid placement ----
+  const targetRoomCount =
+    config.numberOfRooms ?? defaultRoomCountForPlayerCount(playerCount);
+  const allRoomsSideA = allRooms.filter((r) => r.side === 'A');
+  const roomSelection = selectInPlayRooms(
+    allRoomsSideA,
+    targetRoomCount,
+    rng,
+    'base',
+  );
+  rng = roomSelection.rng;
+  const { cols, rows } = pickGridForRoomCount(roomSelection.rooms.length);
+  const grid = placeRoomsInGrid(roomSelection.rooms, cols, rows, rng);
+  rng = grid.rng;
+  const roomLayout: RoomLayout = { cols, rows, grid: grid.grid };
+
   // ---- Players ----
   const players: Player[] = playerNames.map((name, i) => ({
     id: `p${i + 1}`,
@@ -99,8 +296,7 @@ export function buildInitialState(config: GameConfig): GameState {
   rng = firstStep.state;
   const firstPlayerIndex = Math.floor(firstStep.value * playerCount);
 
-  // ---- Rooms — every side-A room from the active packs, in declaration order. ----
-  const rooms: Room[] = allRooms.filter((r) => r.side === 'A');
+  const rooms: Room[] = roomSelection.rooms;
 
   // ---- Voters ----
   let faceDownPool = allVoters.filter((v) => !v.isAlwaysFaceUp);
@@ -163,6 +359,7 @@ export function buildInitialState(config: GameConfig): GameState {
     rngSeed,
     rng,
     rooms,
+    roomLayout,
     voters,
     voterMarks: [],
     spellDeck,

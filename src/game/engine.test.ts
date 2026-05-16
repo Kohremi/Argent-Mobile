@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { applyAction, initGame } from './engine';
 import {
+  getOrthogonallyAdjacentRoomIds,
+  pickGridForRoomCount,
+} from './setup';
+import {
   computeFinalScoring,
   computeVoterWinner,
   scorePlayerForCriterion,
@@ -370,22 +374,89 @@ describe('determinism', () => {
 });
 
 describe('Room layout', () => {
-  it('seats every side-A room from the room file at game start', () => {
+  it('seats every UC room + non-UC rooms (with placeholders padding to count) at game start', () => {
     const s = initGame(FOUR_PLAYER_CONFIG);
-    const expectedSideARoomIds = [
-      'base.room.council-chamber.a',
-      'base.room.library.a',
-      'base.room.infirmary.a',
-      'base.room.training-fields.a',
-      'base.room.courtyard.a',
-      'base.room.catacombs.a',
-      'base.room.guilds.a',
-      'base.room.vault.a',
-    ];
-    const actualIds = s.rooms.map((r) => r.id).sort();
-    expect(actualIds).toEqual([...expectedSideARoomIds].sort());
-    // Every room is on side A (B sides are stubs).
+    // 4-player default = 10 rooms: 8 base + 2 placeholders.
+    expect(s.rooms.length).toBe(10);
+    const ids = new Set(s.rooms.map((r) => r.id));
+    // All 3 UC rooms always in play.
+    expect(ids.has('base.room.council-chamber.a')).toBe(true);
+    expect(ids.has('base.room.library.a')).toBe(true);
+    expect(ids.has('base.room.infirmary.a')).toBe(true);
+    // With 5 non-UC rooms in the base pack + needing 7 more, all 5 are
+    // drawn; the remaining 2 are placeholders.
+    expect(ids.has('base.room.training-fields.a')).toBe(true);
+    expect(ids.has('base.room.courtyard.a')).toBe(true);
+    expect(ids.has('base.room.catacombs.a')).toBe(true);
+    expect(ids.has('base.room.guilds.a')).toBe(true);
+    expect(ids.has('base.room.vault.a')).toBe(true);
+    expect(ids.has('base.room.placeholder-1')).toBe(true);
+    expect(ids.has('base.room.placeholder-2')).toBe(true);
     expect(s.rooms.every((r) => r.side === 'A')).toBe(true);
+  });
+
+  it('uses 8 rooms (no placeholders) for a 2-3 player game', () => {
+    const s = initGame(TWO_PLAYER_CONFIG);
+    expect(s.rooms.length).toBe(8);
+    const ids = new Set(s.rooms.map((r) => r.id));
+    expect(ids.has('base.room.placeholder-1')).toBe(false);
+  });
+
+  it('pickGridForRoomCount: chooses the rulebook-aligned grid shape', () => {
+    expect(pickGridForRoomCount(8)).toEqual({ cols: 2, rows: 4 });
+    expect(pickGridForRoomCount(9)).toEqual({ cols: 3, rows: 3 });
+    expect(pickGridForRoomCount(10)).toEqual({ cols: 2, rows: 5 });
+    expect(pickGridForRoomCount(11)).toEqual({ cols: 3, rows: 4 });
+    expect(pickGridForRoomCount(12)).toEqual({ cols: 3, rows: 4 });
+    // cols capped at 3.
+    expect(pickGridForRoomCount(13).cols).toBeLessThanOrEqual(3);
+    expect(pickGridForRoomCount(13).rows * pickGridForRoomCount(13).cols).toBeGreaterThanOrEqual(13);
+  });
+
+  it('getOrthogonallyAdjacentRoomIds: returns up/down/left/right neighbors, treating null as a wall', () => {
+    // Hand-build a 2x3 layout:
+    //   [A, B, C]
+    //   [D, _, F]
+    const layout = {
+      cols: 3,
+      rows: 2,
+      grid: [
+        ['A', 'B', 'C'],
+        ['D', null, 'F'],
+      ] as (string | null)[][],
+    };
+    // A is at (0,0): right=B, down=D.
+    expect(
+      getOrthogonallyAdjacentRoomIds(layout, 'A').sort(),
+    ).toEqual(['B', 'D']);
+    // B is at (0,1): left=A, right=C, down=null (wall) → just A, C.
+    expect(
+      getOrthogonallyAdjacentRoomIds(layout, 'B').sort(),
+    ).toEqual(['A', 'C']);
+    // C is at (0,2): left=B, down=F.
+    expect(
+      getOrthogonallyAdjacentRoomIds(layout, 'C').sort(),
+    ).toEqual(['B', 'F']);
+    // D is at (1,0): up=A, right=null (wall) → just A.
+    expect(getOrthogonallyAdjacentRoomIds(layout, 'D')).toEqual(['A']);
+    // F is at (1,2): up=C, left=null (wall) → just C.
+    expect(getOrthogonallyAdjacentRoomIds(layout, 'F')).toEqual(['C']);
+    // Unknown roomId → empty.
+    expect(getOrthogonallyAdjacentRoomIds(layout, 'Z')).toEqual([]);
+  });
+
+  it('roomLayout grid lays out exactly the in-play rooms', () => {
+    const s = initGame(TWO_PLAYER_CONFIG);
+    expect(s.roomLayout.cols).toBeGreaterThan(0);
+    expect(s.roomLayout.cols).toBeLessThanOrEqual(3);
+    expect(s.roomLayout.rows).toBeGreaterThan(0);
+    const flat: string[] = [];
+    for (const row of s.roomLayout.grid) {
+      for (const cell of row) {
+        if (cell != null) flat.push(cell);
+      }
+    }
+    expect(flat.sort()).toEqual(s.rooms.map((r) => r.id).sort());
   });
 
   it('every actionable slot has a description', () => {

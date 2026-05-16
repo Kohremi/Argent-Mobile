@@ -779,6 +779,13 @@ export interface GameState {
   rng: RngState;
 
   rooms: Room[];
+  /**
+   * Spatial layout of `rooms` in a 2D grid. Used for orthogonal-adjacency
+   * lookups by spells like Plague / Pestilence / Fireball / Inferno that
+   * target adjacent rooms. The flat `rooms` list keeps stable declaration
+   * order; the grid records where each room was placed at game start.
+   */
+  roomLayout: RoomLayout;
 
   voters: ConsortiumVoter[];
   voterMarks: VoterMark[];
@@ -843,6 +850,27 @@ export interface GameConfig {
    * players are seated with empty candidate state).
    */
   useCandidateDraft?: boolean;
+  /**
+   * Number of rooms in play this game. Defaults to 8 (2-3 players), 10 (4
+   * players), 12 (5+ players). Always ≥ the number of UC rooms in the pack.
+   * If the available room pool is smaller than the requested count, the
+   * remainder is filled with placeholder rooms (no action spaces).
+   */
+  numberOfRooms?: number;
+}
+
+/**
+ * 2-D grid layout for rooms in play. `cols × rows` cells, each holding a
+ * RoomId or null (empty cell). `cols` is the horizontal count ("across") and
+ * is capped at 3 per the rulebook's visual layout. Empty cells break
+ * orthogonal adjacency — `getOrthogonallyAdjacentRoomIds` treats `null` as
+ * a wall, not a passthrough.
+ */
+export interface RoomLayout {
+  cols: number;
+  rows: number;
+  /** grid[row][col] → RoomId or null (empty cell). */
+  grid: (RoomId | null)[][];
 }
 
 export interface PlaceWorkerAction {
