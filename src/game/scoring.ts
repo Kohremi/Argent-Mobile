@@ -1,6 +1,7 @@
 import { getPack } from '../content/registry';
 import type {
   ConsortiumVoter,
+  ConsortiumVoterId,
   Department,
   GameState,
   Player,
@@ -376,24 +377,54 @@ export function computeVoterWinner(
   return computeMostWinner(state, voter, voter.criterion);
 }
 
+/**
+ * Per-voter award computed at end of game. `winnerPlayerId === null` means
+ * the voter abstained (everyone scored 0 for its criterion, or tiebreakers
+ * exhausted without a single leader).
+ */
+export interface VoterAward {
+  voterId: ConsortiumVoterId;
+  voterName: string;
+  votes: number;
+  winnerPlayerId: PlayerId | null;
+}
+
 export interface FinalScoringResult {
   votesPerPlayer: Record<PlayerId, number>;
   archmage: PlayerId | null;
+  voterAwards: VoterAward[];
+  /**
+   * Why the final tiebreaker resolved the way it did. Useful for the UI to
+   * explain "tied on votes, won on Influence" or "tied all the way; no
+   * archmage." Set to 'votes' when a single leader emerges from votes alone.
+   */
+  tiebreaker: 'votes' | 'influence' | 'influence-arrival' | 'none';
 }
 
 /**
- * Sums voter awards per player and applies the game-end tiebreaker (per
- * rulebook: total Influence). If still tied, returns null archmage.
+ * Sums voter awards per player and applies the game-end tiebreaker chain:
+ *   1. Most votes wins outright.
+ *   2. Tied → most total Influence (per rulebook).
+ *   3. Still tied → player who REACHED that Influence value first
+ *      (lowest `influenceArrivalSeq`).
+ *   4. Still tied → no archmage.
  */
 export function computeFinalScoring(state: GameState): FinalScoringResult {
   const votesPerPlayer: Record<PlayerId, number> = {};
   for (const p of state.players) votesPerPlayer[p.id] = 0;
 
+  const voterAwards: VoterAward[] = [];
   for (const voter of state.voters) {
     const winner = computeVoterWinner(state, voter);
     if (winner !== null) {
       votesPerPlayer[winner] = (votesPerPlayer[winner] ?? 0) + voter.votes;
     }
+    voterAwards.push({
+      voterId: voter.id,
+      voterName: voter.name,
+      votes: voter.votes,
+      winnerPlayerId: winner,
+    });
   }
 
   // Find max-votes leaders.
@@ -401,16 +432,23 @@ export function computeFinalScoring(state: GameState): FinalScoringResult {
   for (const v of Object.values(votesPerPlayer)) {
     if (v > maxVotes) maxVotes = v;
   }
-  if (maxVotes === 0) return { votesPerPlayer, archmage: null };
+  if (maxVotes === 0) {
+    return { votesPerPlayer, archmage: null, voterAwards, tiebreaker: 'none' };
+  }
 
   const voteLeaders = state.players.filter(
     (p) => votesPerPlayer[p.id] === maxVotes,
   );
   if (voteLeaders.length === 1) {
-    return { votesPerPlayer, archmage: voteLeaders[0]!.id };
+    return {
+      votesPerPlayer,
+      archmage: voteLeaders[0]!.id,
+      voterAwards,
+      tiebreaker: 'votes',
+    };
   }
 
-  // Game-end tiebreaker: total influence.
+  // Tiebreaker 1: total Influence.
   let bestInfluence = -1;
   let influenceLeaders: Player[] = [];
   for (const p of voteLeaders) {
@@ -422,10 +460,49 @@ export function computeFinalScoring(state: GameState): FinalScoringResult {
     }
   }
   if (influenceLeaders.length === 1) {
-    return { votesPerPlayer, archmage: influenceLeaders[0]!.id };
+    return {
+      votesPerPlayer,
+      archmage: influenceLeaders[0]!.id,
+      voterAwards,
+      tiebreaker: 'influence',
+    };
   }
 
-  return { votesPerPlayer, archmage: null };
+  // Tiebreaker 2: who reached that Influence value first (lowest arrival seq).
+  // Players who never gained Influence (seq === 0) are disqualified.
+  const withArrival = influenceLeaders.filter(
+    (p) => p.influenceArrivalSeq > 0,
+  );
+  if (withArrival.length === 1) {
+    return {
+      votesPerPlayer,
+      archmage: withArrival[0]!.id,
+      voterAwards,
+      tiebreaker: 'influence-arrival',
+    };
+  }
+  if (withArrival.length > 1) {
+    let bestSeq = Infinity;
+    let seqLeaders: Player[] = [];
+    for (const p of withArrival) {
+      if (p.influenceArrivalSeq < bestSeq) {
+        bestSeq = p.influenceArrivalSeq;
+        seqLeaders = [p];
+      } else if (p.influenceArrivalSeq === bestSeq) {
+        seqLeaders.push(p);
+      }
+    }
+    if (seqLeaders.length === 1) {
+      return {
+        votesPerPlayer,
+        archmage: seqLeaders[0]!.id,
+        voterAwards,
+        tiebreaker: 'influence-arrival',
+      };
+    }
+  }
+
+  return { votesPerPlayer, archmage: null, voterAwards, tiebreaker: 'none' };
 }
 
 export function resolveMidGameScoring(state: GameState): GameState {

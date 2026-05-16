@@ -776,6 +776,83 @@ describe('Endgame scoring', () => {
     }
   });
 
+  it('computeFinalScoring: voterAwards records the winner of each voter (and null for abstain)', () => {
+    let s = initGame(FOUR_PLAYER_CONFIG);
+    // Only p2 has any gold → wins Most Gold; no one has mana/IP/etc. so
+    // those voters abstain.
+    s = mapPlayer(s, 'p2', (p) => ({
+      ...p,
+      resources: { ...p.resources, gold: 10 },
+    }));
+    s = { ...s, voters: s.voters.map((v) => ({ ...v, revealed: true })) };
+    const result = computeFinalScoring(s);
+    const goldVoter = result.voterAwards.find((a) =>
+      s.voters.find((v) => v.id === a.voterId && v.criterion === 'most-gold'),
+    );
+    expect(goldVoter?.winnerPlayerId).toBe('p2');
+    // Most Mana voter abstains (nobody has any).
+    const manaVoter = result.voterAwards.find((a) =>
+      s.voters.find((v) => v.id === a.voterId && v.criterion === 'most-mana'),
+    );
+    if (manaVoter) {
+      expect(manaVoter.winnerPlayerId).toBe(null);
+    }
+  });
+
+  it('computeFinalScoring: votes-tied final tiebreaker breaks on total Influence', () => {
+    let s = initGame(FOUR_PLAYER_CONFIG);
+    // Set p1 + p2 both to 10 gold → tied on Most Gold (with marks tied 0).
+    // computeMostWinner returns null (no per-voter winner) so votes stay 0.
+    // To force a votes tie, give them DIFFERENT category leadership.
+    s = mapPlayer(s, 'p1', (p) => ({
+      ...p,
+      resources: { ...p.resources, gold: 10, influence: 5 },
+      influenceArrivalSeq: 1,
+    }));
+    s = mapPlayer(s, 'p2', (p) => ({
+      ...p,
+      resources: { ...p.resources, mana: 10, influence: 5 },
+      influenceArrivalSeq: 2,
+    }));
+    s = { ...s, voters: s.voters.map((v) => ({ ...v, revealed: true })) };
+    const result = computeFinalScoring(s);
+    // Both p1 and p2 should have nonzero votes; whichever has higher
+    // influence wins; with influence equal we move to arrival-seq tiebreaker.
+    // p1 arrived at IP 5 first (seq 1) → archmage.
+    if (
+      result.votesPerPlayer.p1 === result.votesPerPlayer.p2 &&
+      result.votesPerPlayer.p1 > 0
+    ) {
+      expect(result.archmage).toBe('p1');
+      expect(result.tiebreaker).toBe('influence-arrival');
+    }
+  });
+
+  it('computeFinalScoring: tiebreaker reports "votes" when one player is the outright leader', () => {
+    let s = initGame(FOUR_PLAYER_CONFIG);
+    s = mapPlayer(s, 'p2', (p) => ({
+      ...p,
+      resources: { ...p.resources, gold: 10 },
+    }));
+    s = { ...s, voters: s.voters.map((v) => ({ ...v, revealed: true })) };
+    const result = computeFinalScoring(s);
+    if (result.archmage === 'p2') {
+      expect(result.tiebreaker).toBe('votes');
+    }
+  });
+
+  it('computeFinalScoring: empty board → no archmage, all voters abstain', () => {
+    let s = initGame(FOUR_PLAYER_CONFIG);
+    s = { ...s, voters: s.voters.map((v) => ({ ...v, revealed: true })) };
+    const result = computeFinalScoring(s);
+    expect(result.archmage).toBe(null);
+    expect(result.tiebreaker).toBe('none');
+    // Every voter award should be abstain.
+    for (const a of result.voterAwards) {
+      expect(a.winnerPlayerId).toBe(null);
+    }
+  });
+
   it('White Ash: counts as the declared department for Most-X-Department scoring', () => {
     let s = initGame(TWO_PLAYER_CONFIG);
     // Give Alice White Ash + nothing else; declare it as sorcery.

@@ -8,6 +8,7 @@ import clsx from 'clsx';
 import { useGameStore } from '../store/gameStore';
 import { baseGamePack } from '../content/packs/base';
 import { listPacks } from '../content/registry';
+import { computeFinalScoring } from '../game/scoring';
 import { MageIcon, ResourceIcon, type ResourceKind } from './icons';
 import type {
   Candidate,
@@ -693,6 +694,8 @@ export function DebugControls() {
           </button>
         </div>
       </header>
+
+      {state.phase.kind === 'complete' && <FinalScoringPanel state={state} />}
 
       {top && (
         <PendingPanel
@@ -1933,6 +1936,92 @@ const PLAYER_COLOR_BG: Record<string, string> = {
   orange: 'bg-orange-500',
 };
 
+/**
+ * Final scoring header — renders only when the game has reached the
+ * `complete` phase. Surfaces the winner banner, per-player vote totals,
+ * and the tiebreaker that landed the archmage (or explains why no
+ * archmage emerged). The Voters table below adds per-row highlights
+ * to show which player won each voter (or that they abstained).
+ */
+function FinalScoringPanel({ state }: { state: GameState }) {
+  const result = computeFinalScoring(state);
+  const archmage =
+    result.archmage !== null
+      ? state.players.find((p) => p.id === result.archmage)
+      : null;
+  const tiebreakerLabel: Record<typeof result.tiebreaker, string> = {
+    votes: 'Most votes',
+    influence: 'Tied on votes — won on total Influence',
+    'influence-arrival':
+      'Tied on votes and Influence — reached that Influence value first',
+    none: 'Game tied — no Archmage',
+  };
+  return (
+    <section className="rounded-lg border border-amber-400/40 bg-amber-400/5 p-4 space-y-3">
+      <div className="flex items-baseline gap-3 flex-wrap">
+        <h2 className="text-xl font-semibold text-amber-200">Final Scoring</h2>
+        {archmage ? (
+          <div className="flex items-baseline gap-2">
+            <span
+              className={clsx(
+                'inline-block w-3 h-3 rounded-full',
+                PLAYER_COLOR_BG[archmage.color] ?? 'bg-slate-400',
+              )}
+            />
+            <span className="text-lg font-medium">
+              <span className="text-amber-200">{archmage.name}</span> wins as
+              Archmage
+            </span>
+          </div>
+        ) : (
+          <span className="text-lg font-medium text-slate-300">
+            No Archmage — game tied at every tiebreaker
+          </span>
+        )}
+        <span className="text-xs text-slate-400 italic">
+          ({tiebreakerLabel[result.tiebreaker]})
+        </span>
+      </div>
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2">
+        {state.players.map((p) => {
+          const votes = result.votesPerPlayer[p.id] ?? 0;
+          const isWinner = result.archmage === p.id;
+          return (
+            <div
+              key={p.id}
+              className={clsx(
+                'rounded border p-2 flex items-center gap-2',
+                isWinner
+                  ? 'border-amber-400 bg-amber-400/10'
+                  : 'border-slate-700 bg-slate-900',
+              )}
+            >
+              <span
+                className={clsx(
+                  'inline-block w-3 h-3 rounded-full',
+                  PLAYER_COLOR_BG[p.color] ?? 'bg-slate-400',
+                )}
+              />
+              <div className="flex-1 min-w-0">
+                <div className="text-sm font-medium truncate">{p.name}</div>
+                <div className="text-[11px] text-slate-400">
+                  IP {p.resources.influence}
+                  {p.influenceArrivalSeq > 0
+                    ? ` · seq ${p.influenceArrivalSeq}`
+                    : ''}
+                </div>
+              </div>
+              <div className="text-lg font-semibold tabular-nums">
+                {votes}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
 function VoterTableauPanel({
   state,
   selectionMode,
@@ -1965,6 +2054,17 @@ function VoterTableauPanel({
   // mid-game-scoring is a pass-through phase between rounds and must NOT
   // expose face-down voters.
   const scoringRevealed = state.phase.kind === 'complete';
+  // Pre-compute per-voter winners so each row can highlight the awarded
+  // player's column. Only done when the game is complete; mid-game we
+  // don't show would-be winners (voters could still be marked).
+  const voterWinners: Record<string, string | null> = scoringRevealed
+    ? Object.fromEntries(
+        computeFinalScoring(state).voterAwards.map((a) => [
+          a.voterId,
+          a.winnerPlayerId,
+        ]),
+      )
+    : {};
 
   const playerHasMark = (playerId: string, voterId: string) =>
     state.voterMarks.some(
@@ -2045,6 +2145,11 @@ function VoterTableauPanel({
                             {v.description}
                           </div>
                         )}
+                        {scoringRevealed && voterWinners[v.id] === null && (
+                          <div className="text-[10px] uppercase tracking-wide text-slate-500 mt-0.5">
+                            abstained
+                          </div>
+                        )}
                       </div>
                     ) : (
                       <div className="flex items-baseline gap-2 flex-wrap">
@@ -2078,8 +2183,16 @@ function VoterTableauPanel({
                     const marked = playerHasMark(p.id, v.id);
                     const colorClass =
                       PLAYER_COLOR_BG[p.color] ?? 'bg-slate-400';
+                    const wonThisVoter =
+                      scoringRevealed && voterWinners[v.id] === p.id;
                     return (
-                      <td key={p.id} className="px-1 py-1.5 text-center">
+                      <td
+                        key={p.id}
+                        className={clsx(
+                          'px-1 py-1.5 text-center',
+                          wonThisVoter && 'bg-amber-400/10',
+                        )}
+                      >
                         <span
                           className={clsx(
                             'inline-block w-4 h-4 rounded-full border',
@@ -2093,6 +2206,11 @@ function VoterTableauPanel({
                               : `${p.name} has not marked this voter`
                           }
                         />
+                        {wonThisVoter && (
+                          <div className="text-[10px] text-amber-300 font-medium mt-1">
+                            +{v.votes}
+                          </div>
+                        )}
                       </td>
                     );
                   })}
