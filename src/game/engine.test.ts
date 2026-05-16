@@ -7484,6 +7484,175 @@ describe('Spell wiring — Wave 5a (place / move)', () => {
     expect(ipAfter).toBe(ipBefore + 2);
   });
 
+  it('Flicker: shadows an opponent\'s placed mage with caster\'s office mage', () => {
+    let s = initGame(TWO_PLAYER_CONFIG);
+    s = forceLibrarySideA(s);
+    s = zeroPlayerResources(s, 'p1');
+    s = zeroPlayerResources(s, 'p2');
+    s = addOwnedSpell(s, 'p1', 'base.spell.parallel-synchronicity', {
+      intPlaced: true,
+    });
+    s = setMana(s, 'p1', 1);
+    s = addMage(s, 'p1', {
+      id: 'alice-shadow',
+      cardId: 'base.mage.divinity',
+      color: 'blue',
+    });
+    s = addMage(s, 'p2', {
+      id: 'bob-target',
+      cardId: 'base.mage.sorcery',
+      color: 'red',
+    });
+    s = placeMageOnSpace(s, 'p2', 'bob-target', 'base.room.library.a.slot-1');
+    s = {
+      ...s,
+      firstPlayerIndex: 0,
+      phase: {
+        kind: 'errands',
+        round: 1,
+        activePlayerIndex: 0,
+        actionUsed: false,
+        fastActionUsed: false,
+      },
+    };
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.parallel-synchronicity',
+      level: 1,
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'mage-chosen', mageId: 'bob-target' },
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'mage-chosen', mageId: 'alice-shadow' },
+    });
+    // Mage-shadowed reaction window.
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'reaction-passed' },
+    });
+    const slot = s.rooms
+      .flatMap((r) => r.actionSpaces)
+      .find((sp) => sp.id === 'base.room.library.a.slot-1');
+    expect(slot?.occupant?.mageId).toBe('bob-target');
+    expect(slot?.shadowOccupant?.mageId).toBe('alice-shadow');
+    expect(s.pendingResolutionStack).toHaveLength(0);
+  });
+
+  it('Invisibility: shadows an empty slot with caster\'s office mage', () => {
+    let s = initGame(TWO_PLAYER_CONFIG);
+    s = forceLibrarySideA(s);
+    s = zeroPlayerResources(s, 'p1');
+    s = addOwnedSpell(s, 'p1', 'base.spell.indefinite-definitives', {
+      intPlaced: true,
+      wisPlacedLevel2: true,
+    });
+    s = setMana(s, 'p1', 1);
+    s = addMage(s, 'p1', {
+      id: 'alice-hider',
+      cardId: 'base.mage.divinity',
+      color: 'blue',
+    });
+    s = {
+      ...s,
+      firstPlayerIndex: 0,
+      phase: {
+        kind: 'errands',
+        round: 1,
+        activePlayerIndex: 0,
+        actionUsed: false,
+        fastActionUsed: false,
+      },
+    };
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.indefinite-definitives',
+      level: 2,
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'mage-chosen', mageId: 'alice-hider' },
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: {
+        kind: 'space-chosen',
+        spaceId: 'base.room.library.a.slot-1',
+      },
+    });
+    const slot = s.rooms
+      .flatMap((r) => r.actionSpaces)
+      .find((sp) => sp.id === 'base.room.library.a.slot-1');
+    expect(slot?.occupant).toBeNull();
+    expect(slot?.shadowOccupant?.mageId).toBe('alice-hider');
+    expect(s.pendingResolutionStack).toHaveLength(0);
+  });
+
+  it('Doppelganger: shadows one of caster\'s own placed mages', () => {
+    let s = initGame(TWO_PLAYER_CONFIG);
+    s = forceLibrarySideA(s);
+    s = zeroPlayerResources(s, 'p1');
+    s = addOwnedSpell(s, 'p1', 'base.spell.indefinite-definitives', {
+      intPlaced: true,
+      wisPlacedLevel2: true,
+      wisPlacedLevel3: true,
+    });
+    s = setMana(s, 'p1', 2);
+    s = addMage(s, 'p1', {
+      id: 'alice-placed',
+      cardId: 'base.mage.divinity',
+      color: 'blue',
+    });
+    s = addMage(s, 'p1', {
+      id: 'alice-office',
+      cardId: 'base.mage.divinity',
+      color: 'blue',
+    });
+    s = placeMageOnSpace(s, 'p1', 'alice-placed', 'base.room.library.a.slot-1');
+    s = {
+      ...s,
+      firstPlayerIndex: 0,
+      phase: {
+        kind: 'errands',
+        round: 1,
+        activePlayerIndex: 0,
+        actionUsed: false,
+        fastActionUsed: false,
+      },
+    };
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.indefinite-definitives',
+      level: 3,
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'mage-chosen', mageId: 'alice-placed' },
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'mage-chosen', mageId: 'alice-office' },
+    });
+    const slot = s.rooms
+      .flatMap((r) => r.actionSpaces)
+      .find((sp) => sp.id === 'base.room.library.a.slot-1');
+    expect(slot?.occupant?.mageId).toBe('alice-placed');
+    expect(slot?.shadowOccupant?.mageId).toBe('alice-office');
+    expect(s.pendingResolutionStack).toHaveLength(0);
+  });
+
   it('Zephyr: excludes caster\'s own mages from the target list', () => {
     let s = initGame(TWO_PLAYER_CONFIG);
     s = forceLibrarySideA(s);

@@ -3755,168 +3755,184 @@ registerEffect('base.spell.strength-of-earth.l1', (ctx): EffectResult => {
  * reward at resolution; your shadow mage collects the same reward right
  * after. Your shadow mage loses its color-based ability while shadowing.
  */
-registerEffect('base.spell.paralocation.l1', (ctx): EffectResult => {
-  const step = ctx.resumeContext?.['step'];
+/**
+ * Shadow-opponent-mage: caster picks an opponent's placed mage, then picks
+ * one of their own office mages to drop into the slot's shadow position.
+ *
+ * Used by:
+ *  - base.spell.paralocation.l1 (Xal Ezra leader)
+ *  - base.spell.parallel-synchronicity.l1 'Flicker' (Wave 7)
+ *
+ * Caster's per-round cap is respected at target eligibility — shadow
+ * placement counts as a placement.
+ */
+function shadowOpponentMageEffect(selfEffectId: string) {
+  return (ctx: EffectContext): EffectResult => {
+    const step = ctx.resumeContext?.['step'];
 
-  // step='after-shadow-window' is re-entered from the mage-shadowed
-  // reaction window's afterResume — no resumeAnswer. Handle BEFORE the
-  // first-call short-circuit so the instant-reward check runs.
-  if (step === 'after-shadow-window') {
-    const targetSpaceId = ctx.resumeContext?.['targetSpaceId'];
-    if (typeof targetSpaceId !== 'string') {
-      throw new Error('paralocation after-shadow-window: missing targetSpaceId');
-    }
-    return patchWithMaybeInstantReward(
-      ctx.state,
-      {},
-      targetSpaceId,
-      ctx.triggeringPlayerId,
-      'shadow',
-    );
-  }
-
-  // Step 1: pick the opponent target. Exclude targets whose containing
-  // room is at the caster's per-round placement cap (shadow placement
-  // counts as placement).
-  if (!ctx.resumeAnswer) {
-    const targets: string[] = [];
-    for (const p of ctx.state.players) {
-      if (p.id === ctx.triggeringPlayerId) continue;
-      for (const m of p.mages) {
-        if (
-          m.location.kind !== 'action-space' ||
-          m.isWounded ||
-          m.isShadowing
-        ) {
-          continue;
-        }
-        const room = ctx.state.rooms.find((r) =>
-          r.actionSpaces.some(
-            (s) =>
-              s.id ===
-              (m.location as { kind: 'action-space'; spaceId: string }).spaceId,
-          ),
+    // step='after-shadow-window' is re-entered from the mage-shadowed
+    // reaction window's afterResume — no resumeAnswer. Handle BEFORE the
+    // first-call short-circuit so the instant-reward check runs.
+    if (step === 'after-shadow-window') {
+      const targetSpaceId = ctx.resumeContext?.['targetSpaceId'];
+      if (typeof targetSpaceId !== 'string') {
+        throw new Error(
+          `${selfEffectId} after-shadow-window: missing targetSpaceId`,
         );
-        if (
-          room &&
-          isRoomAtPlayerCap(ctx.state, ctx.triggeringPlayerId, room.id)
-        ) {
-          continue;
-        }
-        targets.push(m.id);
       }
-    }
-    if (targets.length === 0) {
-      return { kind: 'done', patch: {} };
-    }
-    return {
-      kind: 'pause',
-      pending: {
-        responderId: ctx.triggeringPlayerId,
-        prompt: { kind: 'choose-target-mage', eligibleMageIds: targets },
-        resume: {
-          effectId: 'base.spell.paralocation.l1',
-          context: { step: 'pick-shadow-mage' },
-        },
-        source: ctx.source,
-      },
-    };
-  }
-
-  // Step 2: pick one of YOUR office mages to place as shadow.
-  if (step === 'pick-shadow-mage') {
-    if (ctx.resumeAnswer.kind !== 'mage-chosen') {
-      throw new Error(
-        `paralocation pick-shadow-mage expected mage-chosen, got ${ctx.resumeAnswer.kind}`,
+      return patchWithMaybeInstantReward(
+        ctx.state,
+        {},
+        targetSpaceId,
+        ctx.triggeringPlayerId,
+        'shadow',
       );
     }
-    const targetMageId = ctx.resumeAnswer.mageId;
-    const targetMage = ctx.state.players
-      .flatMap((p) => p.mages)
-      .find((m) => m.id === targetMageId);
-    if (!targetMage || targetMage.location.kind !== 'action-space') {
-      throw new Error('paralocation: target no longer on a slot');
-    }
-    const targetSpaceId = targetMage.location.spaceId;
-    const targetSpace = ctx.state.rooms
-      .flatMap((r) => r.actionSpaces)
-      .find((s) => s.id === targetSpaceId);
-    if (targetSpace?.shadowOccupant) {
-      // Shadow slot already filled — fizzle.
-      return { kind: 'done', patch: {} };
-    }
-    const caster = ctx.state.players.find(
-      (p) => p.id === ctx.triggeringPlayerId,
-    );
-    const officeMages =
-      caster?.mages
-        .filter((m) => m.location.kind === 'office' && !m.isWounded)
-        .map((m) => m.id) ?? [];
-    if (officeMages.length === 0) {
-      // Caster has no mage available — fizzle.
-      return { kind: 'done', patch: {} };
-    }
-    return {
-      kind: 'pause',
-      pending: {
-        responderId: ctx.triggeringPlayerId,
-        prompt: { kind: 'choose-target-mage', eligibleMageIds: officeMages },
-        resume: {
-          effectId: 'base.spell.paralocation.l1',
-          context: { step: 'apply', targetMageId, targetSpaceId },
-        },
-        source: ctx.source,
-      },
-    };
-  }
 
-  // Step 3: place the caster's mage in the shadow slot.
-  if (step === 'apply') {
-    if (ctx.resumeAnswer.kind !== 'mage-chosen') {
-      throw new Error('paralocation apply expected mage-chosen');
-    }
-    const targetMageId = ctx.resumeContext?.['targetMageId'];
-    const targetSpaceId = ctx.resumeContext?.['targetSpaceId'];
-    if (
-      typeof targetMageId !== 'string' ||
-      typeof targetSpaceId !== 'string'
-    ) {
-      throw new Error('paralocation apply: missing context fields');
-    }
-    const placerMageId = ctx.resumeAnswer.mageId;
-    const patch = placeOfficeMageAsShadow(
-      ctx.state,
-      ctx.triggeringPlayerId,
-      placerMageId,
-      targetSpaceId,
-    );
-    const event = buildMageShadowedEvent(
-      { ...ctx.state, ...patch },
-      targetMageId,
-      ctx.triggeringPlayerId,
-    );
-    return {
-      kind: 'open-reaction',
-      patch,
-      window: {
-        triggerEvent: event,
-        pendingResponderIds: buildReactionQueue(ctx.state, ctx.triggeringPlayerId),
-        reactedPlayerIds: [],
-        // After the mage-shadowed reaction window closes, re-enter at
-        // step='after-shadow-window' (handled above the resumeAnswer
-        // guard) so the shadow placement can claim any instant-room
-        // reward (Guilds A etc.).
-        afterResume: {
-          effectId: 'base.spell.paralocation.l1',
-          context: { step: 'after-shadow-window', targetSpaceId },
+    // Step 1: pick the opponent target. Exclude targets whose containing
+    // room is at the caster's per-round placement cap.
+    if (!ctx.resumeAnswer) {
+      const targets: string[] = [];
+      for (const p of ctx.state.players) {
+        if (p.id === ctx.triggeringPlayerId) continue;
+        for (const m of p.mages) {
+          if (
+            m.location.kind !== 'action-space' ||
+            m.isWounded ||
+            m.isShadowing
+          ) {
+            continue;
+          }
+          const room = ctx.state.rooms.find((r) =>
+            r.actionSpaces.some(
+              (s) =>
+                s.id ===
+                (m.location as { kind: 'action-space'; spaceId: string }).spaceId,
+            ),
+          );
+          if (
+            room &&
+            isRoomAtPlayerCap(ctx.state, ctx.triggeringPlayerId, room.id)
+          ) {
+            continue;
+          }
+          targets.push(m.id);
+        }
+      }
+      if (targets.length === 0) {
+        return { kind: 'done', patch: {} };
+      }
+      return {
+        kind: 'pause',
+        pending: {
+          responderId: ctx.triggeringPlayerId,
+          prompt: { kind: 'choose-target-mage', eligibleMageIds: targets },
+          resume: {
+            effectId: selfEffectId,
+            context: { step: 'pick-shadow-mage' },
+          },
+          source: ctx.source,
         },
-        source: ctx.source,
-      },
-    };
-  }
+      };
+    }
 
-  throw new Error(`paralocation unexpected step ${String(step)}`);
-});
+    // Step 2: pick one of YOUR office mages to place as shadow.
+    if (step === 'pick-shadow-mage') {
+      if (ctx.resumeAnswer.kind !== 'mage-chosen') {
+        throw new Error(
+          `${selfEffectId} pick-shadow-mage expected mage-chosen, got ${ctx.resumeAnswer.kind}`,
+        );
+      }
+      const targetMageId = ctx.resumeAnswer.mageId;
+      const targetMage = ctx.state.players
+        .flatMap((p) => p.mages)
+        .find((m) => m.id === targetMageId);
+      if (!targetMage || targetMage.location.kind !== 'action-space') {
+        throw new Error(`${selfEffectId}: target no longer on a slot`);
+      }
+      const targetSpaceId = targetMage.location.spaceId;
+      const targetSpace = ctx.state.rooms
+        .flatMap((r) => r.actionSpaces)
+        .find((s) => s.id === targetSpaceId);
+      if (targetSpace?.shadowOccupant) {
+        return { kind: 'done', patch: {} };
+      }
+      const caster = ctx.state.players.find(
+        (p) => p.id === ctx.triggeringPlayerId,
+      );
+      const officeMages =
+        caster?.mages
+          .filter((m) => m.location.kind === 'office' && !m.isWounded)
+          .map((m) => m.id) ?? [];
+      if (officeMages.length === 0) {
+        return { kind: 'done', patch: {} };
+      }
+      return {
+        kind: 'pause',
+        pending: {
+          responderId: ctx.triggeringPlayerId,
+          prompt: { kind: 'choose-target-mage', eligibleMageIds: officeMages },
+          resume: {
+            effectId: selfEffectId,
+            context: { step: 'apply', targetMageId, targetSpaceId },
+          },
+          source: ctx.source,
+        },
+      };
+    }
+
+    // Step 3: place the caster's mage in the shadow slot.
+    if (step === 'apply') {
+      if (ctx.resumeAnswer.kind !== 'mage-chosen') {
+        throw new Error(`${selfEffectId} apply expected mage-chosen`);
+      }
+      const targetMageId = ctx.resumeContext?.['targetMageId'];
+      const targetSpaceId = ctx.resumeContext?.['targetSpaceId'];
+      if (
+        typeof targetMageId !== 'string' ||
+        typeof targetSpaceId !== 'string'
+      ) {
+        throw new Error(`${selfEffectId} apply: missing context fields`);
+      }
+      const placerMageId = ctx.resumeAnswer.mageId;
+      const patch = placeOfficeMageAsShadow(
+        ctx.state,
+        ctx.triggeringPlayerId,
+        placerMageId,
+        targetSpaceId,
+      );
+      const event = buildMageShadowedEvent(
+        { ...ctx.state, ...patch },
+        targetMageId,
+        ctx.triggeringPlayerId,
+      );
+      return {
+        kind: 'open-reaction',
+        patch,
+        window: {
+          triggerEvent: event,
+          pendingResponderIds: buildReactionQueue(
+            ctx.state,
+            ctx.triggeringPlayerId,
+          ),
+          reactedPlayerIds: [],
+          afterResume: {
+            effectId: selfEffectId,
+            context: { step: 'after-shadow-window', targetSpaceId },
+          },
+          source: ctx.source,
+        },
+      };
+    }
+
+    throw new Error(`${selfEffectId} unexpected step ${String(step)}`);
+  };
+}
+
+registerEffect(
+  'base.spell.paralocation.l1',
+  shadowOpponentMageEffect('base.spell.paralocation.l1'),
+);
 
 // ============================================================================
 // Vault cards — simple resource-gain and prompt-based effects.
@@ -6649,4 +6665,243 @@ registerEffect('base.spell.rites-of-renewal.l3', (ctx): EffectResult => {
     2,
   );
   return { kind: 'done', patch: { ...ipPatch } };
+});
+
+// ============================================================================
+// Spell wiring — Wave 7: shadow primitives
+// ============================================================================
+//
+// Flicker is mechanically identical to Paralocation: pick an opponent's
+// placed mage → pick one of your office mages → drop yours into the slot's
+// shadow position → open mage-shadowed reaction window → after the window,
+// check for instant-room reward. Shared via `shadowOpponentMageEffect`.
+//
+// Invisibility: pick one of your office mages → pick an empty action space
+// (must have an empty shadow position; cannotBePlacedInDirectly skipped;
+// caster's per-room cap respected) → place as shadow. No mage was shadowed
+// so no reaction window; the shadow placement helper still credits the cap
+// and an instant-room reward fires for the shadow occupant.
+//
+// Doppelganger: pick one of your placed mages → pick one of your office
+// mages → drop the office mage into the picked slot's shadow position. No
+// reaction window opens (self-shadow is not an opponent action and no
+// existing reaction triggers on it).
+//
+// Cut Plane (L1 of Indefinite Definitives) is deferred — it requires
+// converting an opponent's base mage into a shadow at the same slot and
+// placing the caster's mage into the now-empty base, which is a
+// shadow-swap pattern not yet abstracted.
+
+/** Parallel Synchronicity L1 "Flicker" — Shadow an opponent's Mage with one of your Mages. */
+registerEffect(
+  'base.spell.parallel-synchronicity.l1',
+  shadowOpponentMageEffect('base.spell.parallel-synchronicity.l1'),
+);
+
+/** Indefinite Definitives L2 "Invisibility" — Shadow an empty slot. */
+registerEffect('base.spell.indefinite-definitives.l2', (ctx): EffectResult => {
+  const step = ctx.resumeContext?.['step'];
+  const self = 'base.spell.indefinite-definitives.l2';
+
+  if (step === 'after-place') {
+    const targetSpaceId = ctx.resumeContext?.['targetSpaceId'];
+    if (typeof targetSpaceId !== 'string') {
+      throw new Error(`${self} after-place: missing targetSpaceId`);
+    }
+    return patchWithMaybeInstantReward(
+      ctx.state,
+      {},
+      targetSpaceId,
+      ctx.triggeringPlayerId,
+      'shadow',
+    );
+  }
+
+  if (!ctx.resumeAnswer) {
+    const caster = ctx.state.players.find(
+      (p) => p.id === ctx.triggeringPlayerId,
+    );
+    const officeMages =
+      caster?.mages
+        .filter((m) => m.location.kind === 'office' && !m.isWounded)
+        .map((m) => m.id) ?? [];
+    if (officeMages.length === 0) return { kind: 'done', patch: {} };
+    return {
+      kind: 'pause',
+      pending: {
+        responderId: ctx.triggeringPlayerId,
+        prompt: { kind: 'choose-target-mage', eligibleMageIds: officeMages },
+        resume: { effectId: self, context: { step: 'pick-slot' } },
+        source: ctx.source,
+      },
+    };
+  }
+
+  if (step === 'pick-slot') {
+    if (ctx.resumeAnswer.kind !== 'mage-chosen') {
+      throw new Error(`${self} pick-slot expected mage-chosen`);
+    }
+    const placerMageId = ctx.resumeAnswer.mageId;
+    // Empty slots (base unoccupied + shadow unoccupied) in rooms that
+    // accept placement and where the caster isn't at-cap.
+    const emptySlots: string[] = [];
+    for (const r of ctx.state.rooms) {
+      if (r.cannotBePlacedInDirectly) continue;
+      if (isRoomAtPlayerCap(ctx.state, ctx.triggeringPlayerId, r.id)) continue;
+      for (const s of r.actionSpaces) {
+        if (!s.occupant && !s.shadowOccupant) emptySlots.push(s.id);
+      }
+    }
+    if (emptySlots.length === 0) return { kind: 'done', patch: {} };
+    return {
+      kind: 'pause',
+      pending: {
+        responderId: ctx.triggeringPlayerId,
+        prompt: {
+          kind: 'choose-target-action-space',
+          eligibleSpaceIds: emptySlots,
+        },
+        resume: {
+          effectId: self,
+          context: { step: 'apply', placerMageId },
+        },
+        source: ctx.source,
+      },
+    };
+  }
+
+  if (step === 'apply') {
+    if (ctx.resumeAnswer.kind !== 'space-chosen') {
+      throw new Error(`${self} apply expected space-chosen`);
+    }
+    const placerMageId = ctx.resumeContext?.['placerMageId'];
+    if (typeof placerMageId !== 'string') {
+      throw new Error(`${self} apply: missing placerMageId`);
+    }
+    const targetSpaceId = ctx.resumeAnswer.spaceId;
+    const patch = placeOfficeMageAsShadow(
+      ctx.state,
+      ctx.triggeringPlayerId,
+      placerMageId,
+      targetSpaceId,
+    );
+    // No mage was shadowed, so no reaction window. Still check instant-room
+    // reward via the patchWithMaybeInstantReward helper.
+    return patchWithMaybeInstantReward(
+      ctx.state,
+      patch,
+      targetSpaceId,
+      ctx.triggeringPlayerId,
+      'shadow',
+    );
+  }
+
+  throw new Error(`${self} unexpected step ${String(step)}`);
+});
+
+/** Indefinite Definitives L3 "Doppelganger" — Shadow one of your own Mages. */
+registerEffect('base.spell.indefinite-definitives.l3', (ctx): EffectResult => {
+  const step = ctx.resumeContext?.['step'];
+  const self = 'base.spell.indefinite-definitives.l3';
+
+  if (!ctx.resumeAnswer) {
+    // Step 1: pick one of YOUR placed (non-shadow, non-wounded) mages.
+    const caster = ctx.state.players.find(
+      (p) => p.id === ctx.triggeringPlayerId,
+    );
+    const placedOwn =
+      caster?.mages
+        .filter(
+          (m) =>
+            m.location.kind === 'action-space' &&
+            !m.isWounded &&
+            !m.isShadowing,
+        )
+        .filter((m) => {
+          // Only target slots whose shadow position is empty.
+          const space = ctx.state.rooms
+            .flatMap((r) => r.actionSpaces)
+            .find(
+              (s) =>
+                s.id ===
+                (m.location as { kind: 'action-space'; spaceId: string }).spaceId,
+            );
+          return space && !space.shadowOccupant;
+        })
+        .map((m) => m.id) ?? [];
+    if (placedOwn.length === 0) return { kind: 'done', patch: {} };
+    return {
+      kind: 'pause',
+      pending: {
+        responderId: ctx.triggeringPlayerId,
+        prompt: { kind: 'choose-target-mage', eligibleMageIds: placedOwn },
+        resume: { effectId: self, context: { step: 'pick-placer' } },
+        source: ctx.source,
+      },
+    };
+  }
+
+  if (step === 'pick-placer') {
+    if (ctx.resumeAnswer.kind !== 'mage-chosen') {
+      throw new Error(`${self} pick-placer expected mage-chosen`);
+    }
+    const targetMageId = ctx.resumeAnswer.mageId;
+    const targetMage = ctx.state.players
+      .flatMap((p) => p.mages)
+      .find((m) => m.id === targetMageId);
+    if (!targetMage || targetMage.location.kind !== 'action-space') {
+      throw new Error(`${self}: target no longer on a slot`);
+    }
+    const targetSpaceId = targetMage.location.spaceId;
+    const caster = ctx.state.players.find(
+      (p) => p.id === ctx.triggeringPlayerId,
+    );
+    const officeMages =
+      caster?.mages
+        .filter((m) => m.location.kind === 'office' && !m.isWounded)
+        .map((m) => m.id) ?? [];
+    if (officeMages.length === 0) return { kind: 'done', patch: {} };
+    return {
+      kind: 'pause',
+      pending: {
+        responderId: ctx.triggeringPlayerId,
+        prompt: { kind: 'choose-target-mage', eligibleMageIds: officeMages },
+        resume: {
+          effectId: self,
+          context: { step: 'apply', targetSpaceId },
+        },
+        source: ctx.source,
+      },
+    };
+  }
+
+  if (step === 'apply') {
+    if (ctx.resumeAnswer.kind !== 'mage-chosen') {
+      throw new Error(`${self} apply expected mage-chosen`);
+    }
+    const targetSpaceId = ctx.resumeContext?.['targetSpaceId'];
+    if (typeof targetSpaceId !== 'string') {
+      throw new Error(`${self} apply: missing targetSpaceId`);
+    }
+    const placerMageId = ctx.resumeAnswer.mageId;
+    const patch = placeOfficeMageAsShadow(
+      ctx.state,
+      ctx.triggeringPlayerId,
+      placerMageId,
+      targetSpaceId,
+    );
+    // Self-shadow doesn't open a useful reaction window (Mystic Amulet only
+    // triggers when the shadower is an OPPONENT; Phase Steppers doesn't
+    // react to mage-shadowed at all). Skip the window; still check for
+    // instant-room reward.
+    return patchWithMaybeInstantReward(
+      ctx.state,
+      patch,
+      targetSpaceId,
+      ctx.triggeringPlayerId,
+      'shadow',
+    );
+  }
+
+  throw new Error(`${self} unexpected step ${String(step)}`);
 });
