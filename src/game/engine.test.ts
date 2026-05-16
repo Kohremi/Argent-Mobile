@@ -7769,3 +7769,183 @@ describe('Spell wiring — Wave 5a (place / move)', () => {
     }
   });
 });
+
+// ============================================================================
+// Spell wiring — Wave 8: area-effect batch spells
+// ============================================================================
+
+describe('Spell wiring — Wave 8 (area effects: Tsunami, Nox)', () => {
+  function setupBatchSpell(opts: {
+    spellCardId: string;
+    level: 1 | 2 | 3;
+    casterMana: number;
+  }): GameState {
+    let s = initGame(TWO_PLAYER_CONFIG);
+    s = forceLibrarySideA(s);
+    s = zeroPlayerResources(s, 'p1');
+    s = zeroPlayerResources(s, 'p2');
+    s = addOwnedSpell(s, 'p1', opts.spellCardId, {
+      intPlaced: true,
+      wisPlacedLevel2: opts.level >= 2,
+      wisPlacedLevel3: opts.level >= 3,
+    });
+    s = setMana(s, 'p1', opts.casterMana);
+    s = {
+      ...s,
+      firstPlayerIndex: 0,
+      phase: {
+        kind: 'errands',
+        round: 1,
+        activePlayerIndex: 0,
+        actionUsed: false,
+        fastActionUsed: false,
+      },
+    };
+    return s;
+  }
+
+  it('Tsunami: caster picks a room; all banishable mages in it are banished + ONE batch reaction window opens', () => {
+    let s = setupBatchSpell({
+      spellCardId: 'base.spell.book-of-one-hundred-seas',
+      level: 3,
+      casterMana: 4,
+    });
+    s = addMage(s, 'p2', {
+      id: 'bob-mage-a',
+      cardId: 'base.mage.sorcery',
+      color: 'red',
+    });
+    s = addMage(s, 'p2', {
+      id: 'bob-mage-b',
+      cardId: 'base.mage.sorcery',
+      color: 'red',
+    });
+    s = placeMageOnSpace(s, 'p2', 'bob-mage-a', 'base.room.library.a.slot-1');
+    s = placeMageOnSpace(s, 'p2', 'bob-mage-b', 'base.room.library.a.slot-2');
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.book-of-one-hundred-seas',
+      level: 3,
+    });
+    const roomPrompt = topPending(s);
+    expect(roomPrompt.prompt.kind).toBe('choose-from-options');
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: roomPrompt.id,
+      answer: {
+        kind: 'option-chosen',
+        optionId: 'base.room.library.a',
+        payload: {},
+      },
+    });
+    // Both Bob mages should already be banished — reaction window holds
+    // both banish events.
+    expect(findMageById(s, 'bob-mage-a').location.kind).toBe('banished');
+    expect(findMageById(s, 'bob-mage-b').location.kind).toBe('banished');
+    const reactionPrompt = topPending(s);
+    expect(reactionPrompt.prompt.kind).toBe('reaction-window');
+    if (reactionPrompt.prompt.kind === 'reaction-window') {
+      expect(reactionPrompt.prompt.triggerEvents.length).toBe(2);
+    }
+    // Bob passes; no Infirmary bonus follows (banished mages don't go there).
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: reactionPrompt.id,
+      answer: { kind: 'reaction-passed' },
+    });
+    expect(s.pendingResolutionStack).toHaveLength(0);
+  });
+
+  it('Tsunami: multi-mage reaction prompt offers Mystic Amulet labeled per affected mage', () => {
+    let s = setupBatchSpell({
+      spellCardId: 'base.spell.book-of-one-hundred-seas',
+      level: 3,
+      casterMana: 4,
+    });
+    s = addMage(s, 'p2', {
+      id: 'bob-mage-a',
+      cardId: 'base.mage.sorcery',
+      color: 'red',
+    });
+    s = addMage(s, 'p2', {
+      id: 'bob-mage-b',
+      cardId: 'base.mage.sorcery',
+      color: 'red',
+    });
+    s = placeMageOnSpace(s, 'p2', 'bob-mage-a', 'base.room.library.a.slot-1');
+    s = placeMageOnSpace(s, 'p2', 'bob-mage-b', 'base.room.library.a.slot-2');
+    s = addVaultCard(s, 'p2', 'base.vault.mystic-amulet');
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.book-of-one-hundred-seas',
+      level: 3,
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: {
+        kind: 'option-chosen',
+        optionId: 'base.room.library.a',
+        payload: {},
+      },
+    });
+    const reactionPrompt = topPending(s);
+    if (reactionPrompt.prompt.kind === 'reaction-window') {
+      const mysticAmuletOptions = reactionPrompt.prompt.reactionOptions.filter(
+        (o) => o.sourceId === 'base.vault.mystic-amulet',
+      );
+      expect(mysticAmuletOptions).toHaveLength(2);
+      const mageIds = mysticAmuletOptions
+        .map((o) => o.forMageId)
+        .sort();
+      expect(mageIds).toEqual(['bob-mage-a', 'bob-mage-b']);
+    }
+  });
+
+  it('Nox: wound all in a room with NO infirmary bonus prompt', () => {
+    let s = setupBatchSpell({
+      spellCardId: 'base.spell.the-lamentations-of-sareth',
+      level: 3,
+      casterMana: 5,
+    });
+    s = addMage(s, 'p2', {
+      id: 'bob-mage-a',
+      cardId: 'base.mage.sorcery',
+      color: 'red',
+    });
+    s = addMage(s, 'p2', {
+      id: 'bob-mage-b',
+      cardId: 'base.mage.sorcery',
+      color: 'red',
+    });
+    s = placeMageOnSpace(s, 'p2', 'bob-mage-a', 'base.room.library.a.slot-1');
+    s = placeMageOnSpace(s, 'p2', 'bob-mage-b', 'base.room.library.a.slot-2');
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.the-lamentations-of-sareth',
+      level: 3,
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: {
+        kind: 'option-chosen',
+        optionId: 'base.room.library.a',
+        payload: {},
+      },
+    });
+    expect(findMageById(s, 'bob-mage-a').isWounded).toBe(true);
+    expect(findMageById(s, 'bob-mage-b').isWounded).toBe(true);
+    const reactionPrompt = topPending(s);
+    expect(reactionPrompt.prompt.kind).toBe('reaction-window');
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: reactionPrompt.id,
+      answer: { kind: 'reaction-passed' },
+    });
+    expect(s.pendingResolutionStack).toHaveLength(0);
+  });
+});

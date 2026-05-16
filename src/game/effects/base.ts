@@ -6907,3 +6907,276 @@ registerEffect('base.spell.indefinite-definitives.l3', (ctx): EffectResult => {
 
   throw new Error(`${self} unexpected step ${String(step)}`);
 });
+
+// ============================================================================
+// Spell wiring — Wave 8: area-effect batch spells
+// ============================================================================
+//
+// Multi-mage spells (Tsunami, Nox, Plague, Pestilence, Fireball, Inferno)
+// wound or banish multiple mages per cast. Per the rulebook each affected
+// PLAYER (not each affected mage) gets a single reaction across the whole
+// cast, in turn order starting with the next-numbered player after the
+// caster. The reactor picks which of their affected mages to react with.
+//
+// To honor that, we open ONE reaction window carrying ALL events. The
+// engine surfaces the responder queue in turn order; for each responder
+// the multi-event prompt offers (reaction-card × affected-mage) options
+// labeled per mage (see helpers.ts → buildReactionOptionsFor). The
+// engine routes the chosen reaction to the chosen target via the
+// option's `forMageId`.
+//
+// Infirmary bonus is deferred until AFTER the reaction window resolves
+// (so reactions that save a mage from being wounded — Phase Steppers /
+// Invisibility Cloak — suppress the bonus correctly). A separate
+// continuation walks the events in turn order, surfacing a bonus prompt
+// for each mage that's still in the infirmary — added in a follow-up
+// commit when the first "wound-many-with-bonus" spell lands.
+
+function banishManyMages(
+  state: GameState,
+  mageIds: string[],
+  byPlayerId: string,
+): { patch: GameStatePatch; events: ReactionTriggerEvent[] } {
+  let working = state;
+  const events: ReactionTriggerEvent[] = [];
+  for (const mageId of mageIds) {
+    const result = banishMage(working, mageId, byPlayerId);
+    working = { ...working, ...result.patch };
+    events.push(result.triggerEvent);
+  }
+  return {
+    patch: { players: working.players, rooms: working.rooms },
+    events,
+  };
+}
+
+function woundManyMages(
+  state: GameState,
+  mageIds: string[],
+  byPlayerId: string,
+): { patch: GameStatePatch; events: ReactionTriggerEvent[] } {
+  let working = state;
+  const events: ReactionTriggerEvent[] = [];
+  for (const mageId of mageIds) {
+    const result = woundMage(working, mageId, byPlayerId);
+    working = { ...working, ...result.patch };
+    events.push(result.triggerEvent);
+  }
+  return {
+    patch: { players: working.players, rooms: working.rooms },
+    events,
+  };
+}
+
+/**
+ * Reactor queue for a batch effect: opponents in turn order starting
+ * after the caster, filtered to those who own at least one affected mage.
+ * Players with no affected mages would only see an empty prompt — skip them.
+ */
+function buildBatchReactorQueue(
+  state: GameState,
+  casterId: string,
+  events: ReactionTriggerEvent[],
+): string[] {
+  const affectedOwnerIds = new Set<string>();
+  for (const event of events) {
+    if (
+      event.kind === 'mage-wounded' ||
+      event.kind === 'mage-banished' ||
+      event.kind === 'mage-moved' ||
+      event.kind === 'mage-shadowed'
+    ) {
+      affectedOwnerIds.add(event.ownerId);
+    }
+  }
+  affectedOwnerIds.delete(casterId);
+  return buildReactionQueue(state, casterId).filter((pid) =>
+    affectedOwnerIds.has(pid),
+  );
+}
+
+/** Spell-source banishable mages in a given room. */
+function buildBanishableMagesInRoom(
+  state: GameState,
+  casterId: string,
+  roomId: string,
+): string[] {
+  const eligible = new Set(buildBanishTargets(state, casterId));
+  const room = state.rooms.find((r) => r.id === roomId);
+  if (!room) return [];
+  const mages: string[] = [];
+  for (const s of room.actionSpaces) {
+    if (s.occupant && eligible.has(s.occupant.mageId)) {
+      mages.push(s.occupant.mageId);
+    }
+    if (s.shadowOccupant && eligible.has(s.shadowOccupant.mageId)) {
+      mages.push(s.shadowOccupant.mageId);
+    }
+  }
+  return mages;
+}
+
+/** Spell-source woundable mages in a given room. */
+function buildWoundableMagesInRoom(
+  state: GameState,
+  casterId: string,
+  roomId: string,
+): string[] {
+  const eligible = new Set(buildBurnTargets(state, casterId));
+  const room = state.rooms.find((r) => r.id === roomId);
+  if (!room) return [];
+  const mages: string[] = [];
+  for (const s of room.actionSpaces) {
+    if (s.occupant && eligible.has(s.occupant.mageId)) {
+      mages.push(s.occupant.mageId);
+    }
+    if (s.shadowOccupant && eligible.has(s.shadowOccupant.mageId)) {
+      mages.push(s.shadowOccupant.mageId);
+    }
+  }
+  return mages;
+}
+
+/**
+ * Book of One Hundred Seas L3 "Tsunami" — Banish all Mages in a room.
+ *
+ * Caster picks a room with at least one banishable mage. All banishable
+ * mages in that room are banished simultaneously; a single reaction window
+ * opens with every banish event so each affected player gets one reaction
+ * choosing which of their banished mages to use it on. No Infirmary bonus
+ * (banished mages don't enter the infirmary).
+ */
+registerEffect('base.spell.book-of-one-hundred-seas.l3', (ctx): EffectResult => {
+  const step = ctx.resumeContext?.['step'];
+  const self = 'base.spell.book-of-one-hundred-seas.l3';
+
+  if (!ctx.resumeAnswer) {
+    const eligibleRoomIds: string[] = [];
+    for (const r of ctx.state.rooms) {
+      if (
+        buildBanishableMagesInRoom(ctx.state, ctx.triggeringPlayerId, r.id)
+          .length > 0
+      ) {
+        eligibleRoomIds.push(r.id);
+      }
+    }
+    if (eligibleRoomIds.length === 0) return { kind: 'done', patch: {} };
+    return {
+      kind: 'pause',
+      pending: {
+        responderId: ctx.triggeringPlayerId,
+        prompt: {
+          kind: 'choose-from-options',
+          options: eligibleRoomIds.map((rid) => {
+            const r = ctx.state.rooms.find((rr) => rr.id === rid)!;
+            return { id: rid, label: r.name, payload: {} };
+          }),
+        },
+        resume: { effectId: self, context: { step: 'apply' } },
+        source: ctx.source,
+      },
+    };
+  }
+  if (step === 'apply') {
+    if (ctx.resumeAnswer.kind !== 'option-chosen') {
+      throw new Error(`${self} apply expected option-chosen`);
+    }
+    const roomId = ctx.resumeAnswer.optionId;
+    const mageIds = buildBanishableMagesInRoom(
+      ctx.state,
+      ctx.triggeringPlayerId,
+      roomId,
+    );
+    if (mageIds.length === 0) return { kind: 'done', patch: {} };
+    const banished = banishManyMages(
+      ctx.state,
+      mageIds,
+      ctx.triggeringPlayerId,
+    );
+    const reactorQueue = buildBatchReactorQueue(
+      ctx.state,
+      ctx.triggeringPlayerId,
+      banished.events,
+    );
+    return {
+      kind: 'open-reaction',
+      patch: banished.patch,
+      window: {
+        triggerEvents: banished.events,
+        pendingResponderIds: reactorQueue,
+        reactedPlayerIds: [],
+        afterResume: { effectId: 'base.system.noop', context: {} },
+        source: ctx.source,
+      },
+    };
+  }
+  throw new Error(`${self} unexpected step ${String(step)}`);
+});
+
+/**
+ * The Lamentations of Sareth L3 "Nox" — Wound all Mages in a room. Owners
+ * receive NO Infirmary bonus per spell text. Mirrors Tsunami's shape but
+ * uses `woundManyMages`.
+ */
+registerEffect('base.spell.the-lamentations-of-sareth.l3', (ctx): EffectResult => {
+  const step = ctx.resumeContext?.['step'];
+  const self = 'base.spell.the-lamentations-of-sareth.l3';
+
+  if (!ctx.resumeAnswer) {
+    const eligibleRoomIds: string[] = [];
+    for (const r of ctx.state.rooms) {
+      if (
+        buildWoundableMagesInRoom(ctx.state, ctx.triggeringPlayerId, r.id)
+          .length > 0
+      ) {
+        eligibleRoomIds.push(r.id);
+      }
+    }
+    if (eligibleRoomIds.length === 0) return { kind: 'done', patch: {} };
+    return {
+      kind: 'pause',
+      pending: {
+        responderId: ctx.triggeringPlayerId,
+        prompt: {
+          kind: 'choose-from-options',
+          options: eligibleRoomIds.map((rid) => {
+            const r = ctx.state.rooms.find((rr) => rr.id === rid)!;
+            return { id: rid, label: r.name, payload: {} };
+          }),
+        },
+        resume: { effectId: self, context: { step: 'apply' } },
+        source: ctx.source,
+      },
+    };
+  }
+  if (step === 'apply') {
+    if (ctx.resumeAnswer.kind !== 'option-chosen') {
+      throw new Error(`${self} apply expected option-chosen`);
+    }
+    const roomId = ctx.resumeAnswer.optionId;
+    const mageIds = buildWoundableMagesInRoom(
+      ctx.state,
+      ctx.triggeringPlayerId,
+      roomId,
+    );
+    if (mageIds.length === 0) return { kind: 'done', patch: {} };
+    const wounded = woundManyMages(ctx.state, mageIds, ctx.triggeringPlayerId);
+    const reactorQueue = buildBatchReactorQueue(
+      ctx.state,
+      ctx.triggeringPlayerId,
+      wounded.events,
+    );
+    return {
+      kind: 'open-reaction',
+      patch: wounded.patch,
+      window: {
+        triggerEvents: wounded.events,
+        pendingResponderIds: reactorQueue,
+        reactedPlayerIds: [],
+        afterResume: { effectId: 'base.system.noop', context: {} },
+        source: ctx.source,
+      },
+    };
+  }
+  throw new Error(`${self} unexpected step ${String(step)}`);
+});
