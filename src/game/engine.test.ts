@@ -6790,3 +6790,232 @@ describe('Spell wiring — Wave 4 (wound/banish + place)', () => {
     }
   });
 });
+
+// ============================================================================
+// Spell wiring — Wave 5a: place / move
+// ============================================================================
+
+describe('Spell wiring — Wave 5a (place / move)', () => {
+  it('Celerity: places caster\'s office mage on a chosen open slot and credits roundPlacements', () => {
+    let s = initGame(TWO_PLAYER_CONFIG);
+    s = forceLibrarySideA(s);
+    s = zeroPlayerResources(s, 'p1');
+    s = addOwnedSpell(s, 'p1', 'base.spell.everyday-paralocation', {
+      intPlaced: true,
+    });
+    s = setMana(s, 'p1', 1);
+    s = addMage(s, 'p1', {
+      id: 'alice-placer',
+      cardId: 'base.mage.divinity',
+      color: 'blue',
+    });
+    s = {
+      ...s,
+      firstPlayerIndex: 0,
+      phase: {
+        kind: 'errands',
+        round: 1,
+        activePlayerIndex: 0,
+        actionUsed: false,
+        fastActionUsed: false,
+      },
+    };
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.everyday-paralocation',
+      level: 1,
+    });
+    // Mage picker.
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'mage-chosen', mageId: 'alice-placer' },
+    });
+    // Slot picker.
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: {
+        kind: 'space-chosen',
+        spaceId: 'base.room.library.a.slot-1',
+      },
+    });
+    const slot = s.rooms
+      .flatMap((r) => r.actionSpaces)
+      .find((sp) => sp.id === 'base.room.library.a.slot-1');
+    expect(slot?.occupant?.mageId).toBe('alice-placer');
+    const alice = s.players.find((p) => p.id === 'p1')!;
+    expect(alice.roundPlacements).toContain('base.room.library.a');
+    expect(s.pendingResolutionStack).toHaveLength(0);
+  });
+
+  it('Celerity: excludes slots in rooms where caster is already at per-round cap', () => {
+    let s = initGame(TWO_PLAYER_CONFIG);
+    s = forceRoomSide(s, 'Council Chamber', 'A');
+    s = forceLibrarySideA(s);
+    s = zeroPlayerResources(s, 'p1');
+    s = addOwnedSpell(s, 'p1', 'base.spell.everyday-paralocation', {
+      intPlaced: true,
+    });
+    s = setMana(s, 'p1', 1);
+    s = addMage(s, 'p1', {
+      id: 'alice-placer',
+      cardId: 'base.mage.divinity',
+      color: 'blue',
+    });
+    const councilRoom = s.rooms.find((r) => r.name === 'Council Chamber')!;
+    s = mapPlayer(s, 'p1', (p) => ({
+      ...p,
+      roundPlacements: [...p.roundPlacements, councilRoom.id],
+    }));
+    s = {
+      ...s,
+      firstPlayerIndex: 0,
+      phase: {
+        kind: 'errands',
+        round: 1,
+        activePlayerIndex: 0,
+        actionUsed: false,
+        fastActionUsed: false,
+      },
+    };
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.everyday-paralocation',
+      level: 1,
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'mage-chosen', mageId: 'alice-placer' },
+    });
+    const slotPrompt = topPending(s);
+    if (slotPrompt.prompt.kind === 'choose-target-action-space') {
+      const councilIds = councilRoom.actionSpaces.map((sp) => sp.id);
+      for (const cid of councilIds) {
+        expect(slotPrompt.prompt.eligibleSpaceIds).not.toContain(cid);
+      }
+    }
+  });
+
+  it('Zephyr: moves an opponent mage to another open slot in the same room', () => {
+    let s = initGame(TWO_PLAYER_CONFIG);
+    s = forceLibrarySideA(s);
+    s = zeroPlayerResources(s, 'p1');
+    s = zeroPlayerResources(s, 'p2');
+    s = addOwnedSpell(s, 'p1', 'base.spell.taming-of-the-storm', {
+      intPlaced: true,
+    });
+    s = setMana(s, 'p1', 1);
+    s = addMage(s, 'p2', {
+      id: 'bob-mage',
+      cardId: 'base.mage.sorcery',
+      color: 'red',
+    });
+    s = placeMageOnSpace(s, 'p2', 'bob-mage', 'base.room.library.a.slot-1');
+    s = {
+      ...s,
+      firstPlayerIndex: 0,
+      phase: {
+        kind: 'errands',
+        round: 1,
+        activePlayerIndex: 0,
+        actionUsed: false,
+        fastActionUsed: false,
+      },
+    };
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.taming-of-the-storm',
+      level: 1,
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'mage-chosen', mageId: 'bob-mage' },
+    });
+    // Destination slot picker — must be Library (same room as source).
+    const slotPrompt = topPending(s);
+    if (slotPrompt.prompt.kind === 'choose-target-action-space') {
+      const libraryRoom = s.rooms.find((r) => r.name === 'Library')!;
+      const librarySlotIds = libraryRoom.actionSpaces.map((sp) => sp.id);
+      // Eligible space ids should all be in Library, exclude slot-1 (source).
+      for (const eligibleId of slotPrompt.prompt.eligibleSpaceIds) {
+        expect(librarySlotIds).toContain(eligibleId);
+      }
+      expect(slotPrompt.prompt.eligibleSpaceIds).not.toContain(
+        'base.room.library.a.slot-1',
+      );
+    }
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: slotPrompt.id,
+      answer: {
+        kind: 'space-chosen',
+        spaceId: 'base.room.library.a.slot-2',
+      },
+    });
+    // Reaction window opens (mage-moved event).
+    const reactionPrompt = topPending(s);
+    expect(reactionPrompt.prompt.kind).toBe('reaction-window');
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: reactionPrompt.id,
+      answer: { kind: 'reaction-passed' },
+    });
+    const bob = findMageById(s, 'bob-mage');
+    expect(bob.location).toEqual({
+      kind: 'action-space',
+      spaceId: 'base.room.library.a.slot-2',
+    });
+    expect(s.pendingResolutionStack).toHaveLength(0);
+  });
+
+  it('Zephyr: excludes caster\'s own mages from the target list', () => {
+    let s = initGame(TWO_PLAYER_CONFIG);
+    s = forceLibrarySideA(s);
+    s = zeroPlayerResources(s, 'p1');
+    s = zeroPlayerResources(s, 'p2');
+    s = addOwnedSpell(s, 'p1', 'base.spell.taming-of-the-storm', {
+      intPlaced: true,
+    });
+    s = setMana(s, 'p1', 1);
+    s = addMage(s, 'p1', {
+      id: 'alice-mage',
+      cardId: 'base.mage.sorcery',
+      color: 'red',
+    });
+    s = placeMageOnSpace(s, 'p1', 'alice-mage', 'base.room.library.a.slot-1');
+    s = addMage(s, 'p2', {
+      id: 'bob-mage',
+      cardId: 'base.mage.sorcery',
+      color: 'red',
+    });
+    s = placeMageOnSpace(s, 'p2', 'bob-mage', 'base.room.library.a.slot-2');
+    s = {
+      ...s,
+      firstPlayerIndex: 0,
+      phase: {
+        kind: 'errands',
+        round: 1,
+        activePlayerIndex: 0,
+        actionUsed: false,
+        fastActionUsed: false,
+      },
+    };
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.taming-of-the-storm',
+      level: 1,
+    });
+    const prompt = topPending(s);
+    if (prompt.prompt.kind === 'choose-target-mage') {
+      expect(prompt.prompt.eligibleMageIds).toContain('bob-mage');
+      expect(prompt.prompt.eligibleMageIds).not.toContain('alice-mage');
+    }
+  });
+});

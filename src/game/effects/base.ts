@@ -5786,3 +5786,202 @@ registerEffect(
     source: 'spell',
   }),
 );
+
+// ============================================================================
+// Spell wiring — Wave 5a: place / move primitives
+// ============================================================================
+//
+// Celerity: pick one of your office mages → pick an open slot → place
+// (respecting per-room caps + cannotBePlacedInDirectly via
+// `listEligiblePlacementSlots`). Credits `roundPlacements` so the cap is
+// enforced on subsequent placements that round.
+//
+// Zephyr: pick an opponent's placed mage (spell-source filter, opponents
+// only) → pick another open slot in the SAME room → move + open a
+// `mage-moved` reaction window. No new placement; per-room cap doesn't
+// apply.
+
+/** Everyday Paralocation L1 "Celerity" — Place any Mage (your office mage). */
+registerEffect('base.spell.everyday-paralocation.l1', (ctx): EffectResult => {
+  const step = ctx.resumeContext?.['step'];
+  if (!ctx.resumeAnswer) {
+    const player = ctx.state.players.find(
+      (p) => p.id === ctx.triggeringPlayerId,
+    );
+    const officeMages =
+      player?.mages
+        .filter((m) => m.location.kind === 'office' && !m.isWounded)
+        .map((m) => m.id) ?? [];
+    if (officeMages.length === 0) return { kind: 'done', patch: {} };
+    return {
+      kind: 'pause',
+      pending: {
+        responderId: ctx.triggeringPlayerId,
+        prompt: { kind: 'choose-target-mage', eligibleMageIds: officeMages },
+        resume: {
+          effectId: 'base.spell.everyday-paralocation.l1',
+          context: { step: 'pick-slot' },
+        },
+        source: ctx.source,
+      },
+    };
+  }
+  if (step === 'pick-slot') {
+    if (ctx.resumeAnswer.kind !== 'mage-chosen') {
+      throw new Error('celerity pick-slot expected mage-chosen');
+    }
+    const placerMageId = ctx.resumeAnswer.mageId;
+    const openSlots = listEligiblePlacementSlots(
+      ctx.state,
+      ctx.triggeringPlayerId,
+    );
+    if (openSlots.length === 0) return { kind: 'done', patch: {} };
+    return {
+      kind: 'pause',
+      pending: {
+        responderId: ctx.triggeringPlayerId,
+        prompt: {
+          kind: 'choose-target-action-space',
+          eligibleSpaceIds: openSlots,
+        },
+        resume: {
+          effectId: 'base.spell.everyday-paralocation.l1',
+          context: { step: 'apply', placerMageId },
+        },
+        source: ctx.source,
+      },
+    };
+  }
+  if (step === 'apply') {
+    if (ctx.resumeAnswer.kind !== 'space-chosen') {
+      throw new Error('celerity apply expected space-chosen');
+    }
+    const placerMageId = ctx.resumeContext?.['placerMageId'];
+    if (typeof placerMageId !== 'string') {
+      throw new Error('celerity apply: missing placerMageId');
+    }
+    const spaceId = ctx.resumeAnswer.spaceId;
+    const targetRoom = ctx.state.rooms.find((r) =>
+      r.actionSpaces.some((s) => s.id === spaceId),
+    );
+    if (!targetRoom) {
+      throw new Error(`celerity: room for ${spaceId} not found`);
+    }
+    const placePatch = placeOfficeMageOnSpace(
+      ctx.state,
+      ctx.triggeringPlayerId,
+      placerMageId,
+      spaceId,
+    );
+    const updatedPlayers = (placePatch.players ?? ctx.state.players).map((p) =>
+      p.id !== ctx.triggeringPlayerId
+        ? p
+        : {
+            ...p,
+            roundPlacements: [...p.roundPlacements, targetRoom.id],
+          },
+    );
+    return {
+      kind: 'done',
+      patch: { ...placePatch, players: updatedPlayers },
+    };
+  }
+  throw new Error(`celerity unexpected step ${String(step)}`);
+});
+
+/**
+ * Taming of the Storm L1 "Zephyr" — Move an opponent's Mage to another open
+ * slot in the same room. Two prompts: pick target, then pick destination
+ * slot (must be empty + in the target's current room + not the source slot).
+ */
+registerEffect('base.spell.taming-of-the-storm.l1', (ctx): EffectResult => {
+  const step = ctx.resumeContext?.['step'];
+  if (!ctx.resumeAnswer) {
+    const targets = buildWoundTargetsFor(
+      ctx.state,
+      ctx.triggeringPlayerId,
+      'opponent-only',
+    );
+    if (targets.length === 0) return { kind: 'done', patch: {} };
+    return {
+      kind: 'pause',
+      pending: {
+        responderId: ctx.triggeringPlayerId,
+        prompt: { kind: 'choose-target-mage', eligibleMageIds: targets },
+        resume: {
+          effectId: 'base.spell.taming-of-the-storm.l1',
+          context: { step: 'pick-destination' },
+        },
+        source: ctx.source,
+      },
+    };
+  }
+  if (step === 'pick-destination') {
+    if (ctx.resumeAnswer.kind !== 'mage-chosen') {
+      throw new Error('zephyr pick-destination expected mage-chosen');
+    }
+    const targetMageId = ctx.resumeAnswer.mageId;
+    const targetMage = ctx.state.players
+      .flatMap((p) => p.mages)
+      .find((m) => m.id === targetMageId);
+    if (!targetMage || targetMage.location.kind !== 'action-space') {
+      throw new Error('zephyr: target no longer on a slot');
+    }
+    const sourceSpaceId = targetMage.location.spaceId;
+    const sourceRoom = ctx.state.rooms.find((r) =>
+      r.actionSpaces.some((s) => s.id === sourceSpaceId),
+    );
+    if (!sourceRoom) {
+      throw new Error('zephyr: room not found for target');
+    }
+    const openSlots = sourceRoom.actionSpaces
+      .filter((s) => s.id !== sourceSpaceId && !s.occupant)
+      .map((s) => s.id);
+    if (openSlots.length === 0) return { kind: 'done', patch: {} };
+    return {
+      kind: 'pause',
+      pending: {
+        responderId: ctx.triggeringPlayerId,
+        prompt: {
+          kind: 'choose-target-action-space',
+          eligibleSpaceIds: openSlots,
+        },
+        resume: {
+          effectId: 'base.spell.taming-of-the-storm.l1',
+          context: { step: 'apply', targetMageId },
+        },
+        source: ctx.source,
+      },
+    };
+  }
+  if (step === 'apply') {
+    if (ctx.resumeAnswer.kind !== 'space-chosen') {
+      throw new Error('zephyr apply expected space-chosen');
+    }
+    const targetMageId = ctx.resumeContext?.['targetMageId'];
+    if (typeof targetMageId !== 'string') {
+      throw new Error('zephyr apply: missing targetMageId');
+    }
+    const moved = moveMageToSpace(
+      ctx.state,
+      targetMageId,
+      ctx.resumeAnswer.spaceId,
+      ctx.triggeringPlayerId,
+    );
+    return {
+      kind: 'open-reaction',
+      patch: moved.patch,
+      window: {
+        triggerEvent: moved.triggerEvent,
+        pendingResponderIds: buildReactionQueue(
+          ctx.state,
+          ctx.triggeringPlayerId,
+        ),
+        reactedPlayerIds: [],
+        afterResume: { effectId: 'base.system.noop', context: {} },
+        source: ctx.source,
+      },
+    };
+  }
+  throw new Error(`zephyr unexpected step ${String(step)}`);
+});
