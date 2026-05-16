@@ -1217,10 +1217,15 @@ function ResourceLine({ player }: { player: Player }) {
   // `wisPlacedLevel3` consumed 1 WIS. Show as "unused (total)" so the
   // player can see both their available pool and how much they've earned
   // overall this game.
+  //
+  // The candidate's leader spell is "free" at game start — it ships with
+  // intPlaced=true but no INT was spent on it, so we exclude it from the
+  // spent tally.
   let intSpent = 0;
   let wisSpent = 0;
   for (const s of player.ownedSpells) {
-    if (s.intPlaced) intSpent += 1;
+    const isLeaderSpell = s.cardId === player.candidateStartingSpellId;
+    if (s.intPlaced && !isLeaderSpell) intSpent += 1;
     if (s.wisPlacedLevel2) wisSpent += 1;
     if (s.wisPlacedLevel3) wisSpent += 1;
   }
