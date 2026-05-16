@@ -1891,9 +1891,10 @@ function redealTableaus(state: GameState): GameState {
   const spellTableau = spellPool.slice(0, 3);
   const spellDeck = spellPool.slice(3);
 
-  const vaultPool = [...state.vaultDeck, ...state.vaultTableau];
-  const vaultTableau = vaultPool.slice(0, 3);
-  const vaultDeck = vaultPool.slice(3);
+  // Vault tableau is NOT redealt at round-setup. It auto-refills slot-by-slot
+  // from `vaultDeck` whenever a card is drafted / bought / removed (handled
+  // in `applyVaultDraft`, `applyVaultPurchase`, `applyVaultPurchaseMaybeWaived`).
+  // Cards left in the tableau at end of round stay where they are.
 
   const supporterPool = [...state.supporterDeck, ...state.supporterTableau];
   const supporterTableau = supporterPool.slice(0, 5);
@@ -1903,8 +1904,6 @@ function redealTableaus(state: GameState): GameState {
     ...state,
     spellDeck,
     spellTableau,
-    vaultDeck,
-    vaultTableau,
     supporterDeck,
     supporterTableau,
   };

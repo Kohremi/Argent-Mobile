@@ -964,7 +964,9 @@ export function findActionSpace(
  * purchase but with no gold cost — used by Vault A slot 1 ("Draft a Vault
  * Card AND Gain 4 Gold") and Vault A slot 2's draft branch.
  *
- * Tableau slots are NOT auto-refilled — refresh happens at round-setup.
+ * Tableau slots auto-refill from the top of `vaultDeck` whenever a card
+ * leaves the tableau (mirroring `spellTableau`'s behavior), so the
+ * available offerings stay at 3 until the deck runs dry.
  */
 export function applyVaultDraft(
   state: GameState,
@@ -978,6 +980,7 @@ export function applyVaultDraft(
   if (!lookupVaultCardDef(state, cardId)) {
     throw new Error(`vault draft: ${cardId} not in active packs`);
   }
+  const { tableau, deck } = removeFromVaultTableauWithRefill(state, idx);
   return {
     players: state.players.map((p) =>
       p.id !== playerId
@@ -987,10 +990,8 @@ export function applyVaultDraft(
             vaultCards: [...p.vaultCards, { cardId, exhausted: false }],
           },
     ),
-    vaultTableau: [
-      ...state.vaultTableau.slice(0, idx),
-      ...state.vaultTableau.slice(idx + 1),
-    ],
+    vaultTableau: tableau,
+    vaultDeck: deck,
   };
 }
 
@@ -1013,6 +1014,7 @@ export function applyVaultPurchase(
     );
   }
 
+  const { tableau, deck } = removeFromVaultTableauWithRefill(state, idx);
   return {
     players: state.players.map((p) =>
       p.id !== playerId
@@ -1023,11 +1025,29 @@ export function applyVaultPurchase(
             vaultCards: [...p.vaultCards, { cardId, exhausted: false }],
           },
     ),
-    vaultTableau: [
-      ...state.vaultTableau.slice(0, idx),
-      ...state.vaultTableau.slice(idx + 1),
-    ],
+    vaultTableau: tableau,
+    vaultDeck: deck,
   };
+}
+
+/**
+ * Removes the card at `idx` from the vault tableau and backfills the slot
+ * from the top of the vault deck if one's available. Mirrors the
+ * spell-tableau auto-refill behavior so vault offerings stay at 3 until
+ * the deck is empty (at which point the slot is dropped entirely).
+ */
+function removeFromVaultTableauWithRefill(
+  state: GameState,
+  idx: number,
+): { tableau: VaultCardId[]; deck: VaultCardId[] } {
+  const top = state.vaultDeck[0];
+  const deck =
+    top !== undefined ? state.vaultDeck.slice(1) : state.vaultDeck;
+  const tableau =
+    top !== undefined
+      ? state.vaultTableau.map((c, i) => (i === idx ? top : c))
+      : state.vaultTableau.filter((_, i) => i !== idx);
+  return { tableau, deck };
 }
 
 /**
@@ -1089,6 +1109,7 @@ export function applyVaultPurchaseMaybeWaived(
       `applyVaultPurchaseMaybeWaived: ${vaultCardId} not in vault tableau`,
     );
   }
+  const { tableau, deck } = removeFromVaultTableauWithRefill(state, idx);
   return {
     players: state.players.map((p) =>
       p.id !== buyerId
@@ -1099,10 +1120,8 @@ export function applyVaultPurchaseMaybeWaived(
             vaultCards: [...p.vaultCards, { cardId: vaultCardId, exhausted: false }],
           },
     ),
-    vaultTableau: [
-      ...state.vaultTableau.slice(0, idx),
-      ...state.vaultTableau.slice(idx + 1),
-    ],
+    vaultTableau: tableau,
+    vaultDeck: deck,
   };
 }
 

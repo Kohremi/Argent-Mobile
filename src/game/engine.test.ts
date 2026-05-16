@@ -4274,12 +4274,15 @@ describe('PLAY_VAULT_CARD', () => {
   it('buying one copy of a duplicate leaves the other copy in the tableau', () => {
     let s = initGame(TWO_PLAYER_CONFIG);
     s = setGold(s, 'p1', 10);
-    // Force two Mana Crystal copies into the tableau.
+    // Force two Mana Crystal copies into the tableau and drain the deck so
+    // the auto-refill doesn't slot a third card in. The point of this
+    // test is the duplicate-handling, not the refill.
     s = setVaultTableau(s, [
       'base.vault.mana-crystal',
       'base.vault.mana-crystal',
       'base.vault.spirits',
     ]);
+    s = { ...s, vaultDeck: [] };
     s = {
       ...s,
       firstPlayerIndex: 0,
@@ -4552,11 +4555,14 @@ describe('BUY_VAULT_CARD action', () => {
       'base.vault.mana-elixir',
       'base.vault.phase-steppers',
     ]);
+    // Drain the deck so the basic-remove tests can assert the simpler
+    // "tableau lost a card" shape. Auto-refill behavior gets its own test.
+    s = { ...s, vaultDeck: [] };
     s = { ...s, firstPlayerIndex: 0, phase: { kind: 'errands', round: 1, activePlayerIndex: 0, actionUsed: false, fastActionUsed: false } };
     return s;
   }
 
-  it('moves card to player, deducts gold, removes from tableau', () => {
+  it('moves card to player, deducts gold, removes from tableau (deck empty → no refill)', () => {
     let s = setupBuyAction();
     s = applyAction(s, {
       type: 'BUY_VAULT_CARD',
@@ -4569,6 +4575,31 @@ describe('BUY_VAULT_CARD action', () => {
       { cardId: 'base.vault.mana-elixir', exhausted: false },
     ]);
     expect(s.vaultTableau).toEqual(['base.vault.phase-steppers']);
+  });
+
+  it('buying a card auto-refills the slot from the top of the vault deck', () => {
+    let s = initGame(TWO_PLAYER_CONFIG);
+    s = setGold(s, 'p1', 4);
+    s = setVaultTableau(s, [
+      'base.vault.mana-elixir',
+      'base.vault.phase-steppers',
+      'base.vault.spirits',
+    ]);
+    s = { ...s, vaultDeck: ['base.vault.mystic-amulet', 'base.vault.runestone'] };
+    s = { ...s, firstPlayerIndex: 0, phase: { kind: 'errands', round: 1, activePlayerIndex: 0, actionUsed: false, fastActionUsed: false } };
+    s = applyAction(s, {
+      type: 'BUY_VAULT_CARD',
+      playerId: 'p1',
+      vaultCardId: 'base.vault.mana-elixir',
+    });
+    // Slot 0 (where mana-elixir was) refilled with the deck top.
+    expect(s.vaultTableau).toEqual([
+      'base.vault.mystic-amulet',
+      'base.vault.phase-steppers',
+      'base.vault.spirits',
+    ]);
+    // The deck advanced past the slot-in card.
+    expect(s.vaultDeck).toEqual(['base.vault.runestone']);
   });
 
   it('rejects when player cannot afford', () => {
