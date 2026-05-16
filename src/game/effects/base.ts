@@ -31,10 +31,12 @@ import {
   findRoomBySpaceId,
   gainResourcePatch,
   gainResourcesPatch,
+  buildRefreshOwnedSpellPrompt,
   healMageToSpace,
   isRoomAtPlayerCap,
   moveMageToSpace,
   placeOfficeMageAsShadow,
+  refreshOwnedSpellPatch,
   playerHasAuricCatalyst,
   spellLabel,
   woundMage,
@@ -4197,50 +4199,25 @@ registerEffect('base.vault.sealed-jar', (ctx): EffectResult => {
  */
 registerEffect('base.vault.bottled-memories', (ctx): EffectResult => {
   if (!ctx.resumeAnswer) {
-    const player = ctx.state.players.find(
-      (p) => p.id === ctx.triggeringPlayerId,
+    const prompt = buildRefreshOwnedSpellPrompt(
+      ctx.state,
+      ctx.triggeringPlayerId,
+      { effectId: 'base.vault.bottled-memories', context: {} },
+      ctx.source,
     );
-    const exhausted =
-      player?.ownedSpells.filter((s) => s.exhausted).map((s) => s.cardId) ?? [];
-    if (exhausted.length === 0) return { kind: 'done', patch: {} };
-    return {
-      kind: 'pause',
-      pending: {
-        responderId: ctx.triggeringPlayerId,
-        // Spell-from-list is a choose-from-options here because we don't
-        // have a dedicated "pick from owned spells" prompt yet — the IDs
-        // come from the caster's own office.
-        prompt: {
-          kind: 'choose-from-options',
-          options: exhausted.map((cid) => ({
-            id: cid,
-            label: `Refresh ${cid}`,
-            payload: {},
-          })),
-        },
-        resume: { effectId: 'base.vault.bottled-memories', context: {} },
-        source: ctx.source,
-      },
-    };
+    if (!prompt) return { kind: 'done', patch: {} };
+    return { kind: 'pause', pending: prompt };
   }
   if (ctx.resumeAnswer.kind !== 'option-chosen') {
     throw new Error('bottled-memories expected option-chosen');
   }
-  const targetCardId = ctx.resumeAnswer.optionId;
   return {
     kind: 'done',
-    patch: {
-      players: ctx.state.players.map((p) =>
-        p.id !== ctx.triggeringPlayerId
-          ? p
-          : {
-              ...p,
-              ownedSpells: p.ownedSpells.map((s) =>
-                s.cardId !== targetCardId ? s : { ...s, exhausted: false },
-              ),
-            },
-      ),
-    },
+    patch: refreshOwnedSpellPatch(
+      ctx.state,
+      ctx.triggeringPlayerId,
+      ctx.resumeAnswer.optionId,
+    ),
   };
 });
 
@@ -5073,3 +5050,200 @@ function promptTargetForManaRepeat(
     },
   };
 }
+
+// ============================================================================
+// Spell wiring — Wave 1: resource gains + spell-refresh primitives
+// ============================================================================
+//
+// All of these spells are pure effects that either grant a resource, gain a
+// Mark, or refresh an exhausted spell. Composite spells (e.g. Power = gain
+// 1 Mana + refresh) chain re-entrant steps using `resumeContext.step`.
+//
+// The refresh primitive uses `buildRefreshOwnedSpellPrompt` /
+// `refreshOwnedSpellPatch` (in helpers.ts) — shared with Bottled Memories
+// and any future card that refreshes a spell.
+
+/** The Pursuit of Power L1 "Warmth" — Gain 2 Mana. */
+registerEffect(
+  'base.spell.the-pursuit-of-power.l1',
+  (ctx): EffectResult => ({
+    kind: 'done',
+    patch: gainResourcePatch(ctx.state, ctx.triggeringPlayerId, 'mana', 2),
+  }),
+);
+
+/** Sorcerous Inspiration L1 "Luminosity" — Gain a Mark. */
+registerEffect(
+  'base.spell.sorcerous-inspiration.l1',
+  (ctx): EffectResult => {
+    if (!ctx.resumeAnswer) {
+      const prompt = spawnGainMarkPrompt(
+        ctx.state,
+        ctx.triggeringPlayerId,
+        ctx.source,
+      );
+      if (prompt === null) return { kind: 'done', patch: {} };
+      return { kind: 'pause', pending: prompt };
+    }
+    throw new Error(
+      'sorcerous-inspiration.l1 should not be re-invoked (gain-mark handles its own resume)',
+    );
+  },
+);
+
+/** The Light that Leads L1 "Illuminate" — Gain a Mark (fast-action). */
+registerEffect(
+  'base.spell.the-light-that-leads.l1',
+  (ctx): EffectResult => {
+    if (!ctx.resumeAnswer) {
+      const prompt = spawnGainMarkPrompt(
+        ctx.state,
+        ctx.triggeringPlayerId,
+        ctx.source,
+      );
+      if (prompt === null) return { kind: 'done', patch: {} };
+      return { kind: 'pause', pending: prompt };
+    }
+    throw new Error(
+      'the-light-that-leads.l1 should not be re-invoked (gain-mark handles its own resume)',
+    );
+  },
+);
+
+/** A Brighter Flame L2 "Kindle" — Refresh an exhausted Spell. */
+registerEffect(
+  'base.spell.a-brighter-flame.l2',
+  (ctx): EffectResult => {
+    if (!ctx.resumeAnswer) {
+      const prompt = buildRefreshOwnedSpellPrompt(
+        ctx.state,
+        ctx.triggeringPlayerId,
+        {
+          effectId: 'base.spell.a-brighter-flame.l2',
+          context: { step: 'apply-refresh' },
+        },
+        ctx.source,
+      );
+      if (!prompt) return { kind: 'done', patch: {} };
+      return { kind: 'pause', pending: prompt };
+    }
+    if (ctx.resumeAnswer.kind !== 'option-chosen') {
+      throw new Error(
+        `a-brighter-flame.l2 expected option-chosen, got ${ctx.resumeAnswer.kind}`,
+      );
+    }
+    return {
+      kind: 'done',
+      patch: refreshOwnedSpellPatch(
+        ctx.state,
+        ctx.triggeringPlayerId,
+        ctx.resumeAnswer.optionId,
+      ),
+    };
+  },
+);
+
+/**
+ * The Pursuit of Power L2 "Power" — Gain 1 Mana, then refresh a Spell.
+ *
+ * Step 1 (no resumeAnswer): apply the mana gain immediately and surface the
+ * refresh prompt (if any exhausted spells exist). If nothing to refresh, the
+ * effect ends after the mana gain.
+ *
+ * Step 2 ('apply-refresh'): apply the refresh patch for the chosen spell.
+ */
+registerEffect(
+  'base.spell.the-pursuit-of-power.l2',
+  (ctx): EffectResult => {
+    const step = ctx.resumeContext?.['step'];
+    if (!ctx.resumeAnswer) {
+      const manaPatch = gainResourcePatch(
+        ctx.state,
+        ctx.triggeringPlayerId,
+        'mana',
+        1,
+      );
+      const stateAfter: GameState = { ...ctx.state, ...manaPatch };
+      const prompt = buildRefreshOwnedSpellPrompt(
+        stateAfter,
+        ctx.triggeringPlayerId,
+        {
+          effectId: 'base.spell.the-pursuit-of-power.l2',
+          context: { step: 'apply-refresh' },
+        },
+        ctx.source,
+      );
+      if (!prompt) return { kind: 'done', patch: manaPatch };
+      return { kind: 'pause', patch: manaPatch, pending: prompt };
+    }
+    if (step === 'apply-refresh') {
+      if (ctx.resumeAnswer.kind !== 'option-chosen') {
+        throw new Error(
+          `the-pursuit-of-power.l2 apply-refresh expected option-chosen, got ${ctx.resumeAnswer.kind}`,
+        );
+      }
+      return {
+        kind: 'done',
+        patch: refreshOwnedSpellPatch(
+          ctx.state,
+          ctx.triggeringPlayerId,
+          ctx.resumeAnswer.optionId,
+        ),
+      };
+    }
+    throw new Error(`the-pursuit-of-power.l2 unexpected step ${String(step)}`);
+  },
+);
+
+/**
+ * The Pursuit of Power L3 "Intensity" — Refresh a Spell, then gain a Research.
+ *
+ * The Research prompt fires AFTER the refresh resolves. If the player has no
+ * exhausted spells, we skip straight to the Research prompt (still get to
+ * spend 1 Research).
+ */
+registerEffect(
+  'base.spell.the-pursuit-of-power.l3',
+  (ctx): EffectResult => {
+    const step = ctx.resumeContext?.['step'];
+    if (!ctx.resumeAnswer) {
+      const refreshPrompt = buildRefreshOwnedSpellPrompt(
+        ctx.state,
+        ctx.triggeringPlayerId,
+        {
+          effectId: 'base.spell.the-pursuit-of-power.l3',
+          context: { step: 'after-refresh' },
+        },
+        ctx.source,
+      );
+      if (refreshPrompt) return { kind: 'pause', pending: refreshPrompt };
+      // No exhausted spells — go straight to Research.
+      const researchPrompt = spawnResearchPrompt(
+        ctx.state,
+        ctx.triggeringPlayerId,
+        ctx.source,
+      );
+      return { kind: 'pause', pending: researchPrompt };
+    }
+    if (step === 'after-refresh') {
+      if (ctx.resumeAnswer.kind !== 'option-chosen') {
+        throw new Error(
+          `the-pursuit-of-power.l3 after-refresh expected option-chosen, got ${ctx.resumeAnswer.kind}`,
+        );
+      }
+      const refreshPatch = refreshOwnedSpellPatch(
+        ctx.state,
+        ctx.triggeringPlayerId,
+        ctx.resumeAnswer.optionId,
+      );
+      const stateAfter: GameState = { ...ctx.state, ...refreshPatch };
+      const researchPrompt = spawnResearchPrompt(
+        stateAfter,
+        ctx.triggeringPlayerId,
+        ctx.source,
+      );
+      return { kind: 'pause', patch: refreshPatch, pending: researchPrompt };
+    }
+    throw new Error(`the-pursuit-of-power.l3 unexpected step ${String(step)}`);
+  },
+);

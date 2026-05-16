@@ -846,7 +846,7 @@ const vaultCards: VaultCard[] = [
     id: 'base.vault.sealed-scroll',
     name: 'Sealed Scroll',
     sourcePackId: PACK_ID,
-    type: 'treasure',
+    type: 'consumable',
     goldCost: 5,
     timing: 'fast-action',
     effectId: 'base.vault.sealed-scroll',

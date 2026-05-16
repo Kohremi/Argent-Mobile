@@ -6150,3 +6150,162 @@ describe('Courtyard A', () => {
     expect(s.players.find((p) => p.id === 'p1')?.resources.mana).toBe(3);
   });
 });
+
+// ============================================================================
+// Spell wiring — Wave 1: resource gains + spell refresh
+// ============================================================================
+
+describe('Spell wiring — Wave 1 (resource gains / refresh)', () => {
+  function setupSpellCast(spellCardId: string, level: 1 | 2 | 3 = 1): GameState {
+    let s = initGame(TWO_PLAYER_CONFIG);
+    s = zeroPlayerResources(s, 'p1');
+    s = zeroPlayerResources(s, 'p2');
+    s = addOwnedSpell(s, 'p1', spellCardId, {
+      intPlaced: level >= 1,
+      wisPlacedLevel2: level >= 2,
+      wisPlacedLevel3: level >= 3,
+    });
+    s = {
+      ...s,
+      firstPlayerIndex: 0,
+      phase: {
+        kind: 'errands',
+        round: 1,
+        activePlayerIndex: 0,
+        actionUsed: false,
+        fastActionUsed: false,
+      },
+    };
+    return s;
+  }
+
+  it('The Pursuit of Power L1 "Warmth": gain 2 Mana', () => {
+    let s = setupSpellCast('base.spell.the-pursuit-of-power');
+    s = setMana(s, 'p1', 0); // Warmth costs 0 mana, so 0→2.
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.the-pursuit-of-power',
+      level: 1,
+    });
+    expect(s.pendingResolutionStack).toHaveLength(0);
+    expect(s.players.find((p) => p.id === 'p1')?.resources.mana).toBe(2);
+  });
+
+  it('Sorcerous Inspiration L1 "Luminosity": surfaces gain-mark voter prompt', () => {
+    let s = setupSpellCast('base.spell.sorcerous-inspiration');
+    s = setMana(s, 'p1', 1);
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.sorcerous-inspiration',
+      level: 1,
+    });
+    const prompt = topPending(s);
+    expect(prompt.prompt.kind).toBe('choose-voter');
+  });
+
+  it('The Light that Leads L1 "Illuminate": surfaces gain-mark voter prompt (fast-action)', () => {
+    let s = setupSpellCast('base.spell.the-light-that-leads');
+    s = setMana(s, 'p1', 2);
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.the-light-that-leads',
+      level: 1,
+    });
+    const prompt = topPending(s);
+    expect(prompt.prompt.kind).toBe('choose-voter');
+  });
+
+  it('A Brighter Flame L2 "Kindle": refreshes a chosen exhausted spell', () => {
+    let s = setupSpellCast('base.spell.a-brighter-flame', 2);
+    // Add a second spell to refresh, mark it exhausted.
+    s = addOwnedSpell(s, 'p1', 'base.spell.burn', { exhausted: true });
+    s = setMana(s, 'p1', 2); // L2 Kindle = 2 mana fast-action.
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.a-brighter-flame',
+      level: 2,
+    });
+    const refreshPrompt = topPending(s);
+    expect(refreshPrompt.prompt.kind).toBe('choose-from-options');
+    if (refreshPrompt.prompt.kind === 'choose-from-options') {
+      expect(refreshPrompt.prompt.options.map((o) => o.id)).toContain(
+        'base.spell.burn',
+      );
+    }
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: refreshPrompt.id,
+      answer: {
+        kind: 'option-chosen',
+        optionId: 'base.spell.burn',
+        payload: {},
+      },
+    });
+    const alice = s.players.find((p) => p.id === 'p1');
+    const burn = alice?.ownedSpells.find((sp) => sp.cardId === 'base.spell.burn');
+    expect(burn?.exhausted).toBe(false);
+  });
+
+  it('The Pursuit of Power L2 "Power": grants 1 Mana up front + surfaces refresh prompt', () => {
+    let s = setupSpellCast('base.spell.the-pursuit-of-power', 2);
+    s = addOwnedSpell(s, 'p1', 'base.spell.burn', { exhausted: true });
+    s = setMana(s, 'p1', 0); // L2 Power costs 0 mana; effect grants +1 → final 1.
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.the-pursuit-of-power',
+      level: 2,
+    });
+    expect(s.players.find((p) => p.id === 'p1')?.resources.mana).toBe(1);
+    const refreshPrompt = topPending(s);
+    expect(refreshPrompt.prompt.kind).toBe('choose-from-options');
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: refreshPrompt.id,
+      answer: {
+        kind: 'option-chosen',
+        optionId: 'base.spell.burn',
+        payload: {},
+      },
+    });
+    expect(s.pendingResolutionStack).toHaveLength(0);
+    const burn = s.players
+      .find((p) => p.id === 'p1')
+      ?.ownedSpells.find((sp) => sp.cardId === 'base.spell.burn');
+    expect(burn?.exhausted).toBe(false);
+  });
+
+  it('The Pursuit of Power L3 "Intensity": refresh prompt → research prompt', () => {
+    let s = setupSpellCast('base.spell.the-pursuit-of-power', 3);
+    s = addOwnedSpell(s, 'p1', 'base.spell.burn', { exhausted: true });
+    s = setMana(s, 'p1', 1); // L3 Intensity costs 1 mana.
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.the-pursuit-of-power',
+      level: 3,
+    });
+    // First prompt: refresh.
+    const refreshPrompt = topPending(s);
+    expect(refreshPrompt.resume.effectId).toBe(
+      'base.spell.the-pursuit-of-power.l3',
+    );
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: refreshPrompt.id,
+      answer: {
+        kind: 'option-chosen',
+        optionId: 'base.spell.burn',
+        payload: {},
+      },
+    });
+    // Second prompt: research.
+    const researchPrompt = topPending(s);
+    expect(researchPrompt.resume.effectId).toBe('base.system.spend-research');
+  });
+
+});

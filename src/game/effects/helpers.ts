@@ -19,6 +19,7 @@ import type {
   ReactionTriggerEvent,
   ResolutionSource,
   Room,
+  SerializableContext,
   SpellCardId,
   SupporterCard,
   SupporterCardId,
@@ -1051,6 +1052,72 @@ export function applyVaultPurchaseMaybeWaived(
 // Each helper does the data-model mutation; the prompt-chain plumbing lives
 // in `effects/base.ts` under `spawnResearchPrompt` + `spend-research`.
 // ============================================================================
+
+/**
+ * Builds the "pick an exhausted spell to refresh" prompt. Returns null if
+ * the player has no exhausted spells (caller should treat as no-op).
+ *
+ * Callers supply the resume continuation so they can chain follow-up steps
+ * (e.g. "refresh then gain mana"). The chosen optionId is the spell card id,
+ * which the caller threads into `refreshOwnedSpellPatch` on resume.
+ */
+export function buildRefreshOwnedSpellPrompt(
+  state: GameState,
+  playerId: PlayerId,
+  resume: { effectId: string; context: SerializableContext },
+  source: ResolutionSource,
+): {
+  responderId: PlayerId;
+  prompt: {
+    kind: 'choose-from-options';
+    options: { id: string; label: string; payload: Record<string, never> }[];
+  };
+  resume: { effectId: string; context: SerializableContext };
+  source: ResolutionSource;
+} | null {
+  const player = findPlayer(state, playerId);
+  if (!player) return null;
+  const exhausted = player.ownedSpells
+    .filter((s) => s.exhausted)
+    .map((s) => s.cardId);
+  if (exhausted.length === 0) return null;
+  return {
+    responderId: playerId,
+    prompt: {
+      kind: 'choose-from-options' as const,
+      options: exhausted.map((cid) => ({
+        id: cid,
+        label: `Refresh ${cid}`,
+        payload: {},
+      })),
+    },
+    resume,
+    source,
+  };
+}
+
+/**
+ * Marks the chosen owned spell as refreshed (`exhausted: false`). No-op if
+ * the player doesn't own that spell.
+ */
+export function refreshOwnedSpellPatch(
+  state: GameState,
+  playerId: PlayerId,
+  spellCardId: SpellCardId,
+): GameStatePatch {
+  return {
+    players: state.players.map((p) =>
+      p.id !== playerId
+        ? p
+        : {
+            ...p,
+            ownedSpells: p.ownedSpells.map((s) =>
+              s.cardId !== spellCardId ? s : { ...s, exhausted: false },
+            ),
+          },
+    ),
+  };
+}
 
 /**
  * Drafts a spell from the tableau into the player's office: removes it from
