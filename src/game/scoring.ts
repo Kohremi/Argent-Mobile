@@ -30,9 +30,9 @@ export function scorePlayerForCriterion(
     case 'most-marks':
       return player.resources.marks;
     case 'most-intelligence':
-      return player.resources.intelligence;
+      return countTotalIntelligence(player);
     case 'most-wisdom':
-      return player.resources.wisdom;
+      return countTotalWisdom(player);
     case 'most-research':
       return countResearchLevels(player);
     case 'most-supporters':
@@ -88,6 +88,41 @@ function countConsumables(player: Player): number {
  * Spell cards (intPlaced + wisPlacedLevel2 + wisPlacedLevel3 each count 1).
  * Used by the Candide Malephaise / "Most Research" voter.
  */
+/**
+ * Total Intelligence Tokens the player has accumulated this game — both
+ * the unspent pool AND the INT they've already placed on researched
+ * spells. The leader's starting spell ships with `intPlaced: true` but
+ * the player never spent any INT to research it, so it's excluded.
+ *
+ * "Most Intelligence" voter (Ainos Lockehart) is awarded based on this
+ * count, NOT the unspent pool alone — otherwise a player who spent all
+ * their INT on research would unfairly score 0 here.
+ */
+function countTotalIntelligence(player: Player): number {
+  let placed = 0;
+  for (const owned of player.ownedSpells) {
+    if (owned.cardId === player.candidateStartingSpellId) continue;
+    if (owned.intPlaced) placed += 1;
+  }
+  return player.resources.intelligence + placed;
+}
+
+/**
+ * Total Wisdom Tokens accumulated this game — unspent pool + WIS placed
+ * on owned spells. Symmetric with `countTotalIntelligence`. Leader spells
+ * have no L2/L3 today (no WIS ever placed on them) but the leader-spell
+ * exclusion is kept here for symmetry / future-proofing.
+ */
+function countTotalWisdom(player: Player): number {
+  let placed = 0;
+  for (const owned of player.ownedSpells) {
+    if (owned.cardId === player.candidateStartingSpellId) continue;
+    if (owned.wisPlacedLevel2) placed += 1;
+    if (owned.wisPlacedLevel3) placed += 1;
+  }
+  return player.resources.wisdom + placed;
+}
+
 function countResearchLevels(player: Player): number {
   let n = 0;
   for (const owned of player.ownedSpells) {

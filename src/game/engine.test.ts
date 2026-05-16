@@ -9257,3 +9257,106 @@ describe('Multi-Research cards', () => {
     }
   });
 });
+
+// ============================================================================
+// Bug repro: 'most-intelligence' voter with 2 players tied on INT
+// ============================================================================
+
+describe('Most-INT voter — bug repro', () => {
+  it('total INT counts unspent pool + placed (so a player who researched all 3 still scores 3)', () => {
+    let s = initGame(TWO_PLAYER_CONFIG);
+    s = zeroPlayerResources(s, 'p1');
+    s = zeroPlayerResources(s, 'p2');
+    // p1 has 0 unspent INT but researched 3 spells (3 INT placed) — total 3.
+    s = addOwnedSpell(s, 'p1', 'base.spell.burn', { intPlaced: true });
+    s = addOwnedSpell(s, 'p1', 'base.spell.living-image', { intPlaced: true });
+    s = addOwnedSpell(s, 'p1', 'base.spell.flash-of-light', { intPlaced: true });
+    // p2 has 3 unspent INT but no researched spells.
+    s = mapPlayer(s, 'p2', (p) => ({
+      ...p,
+      resources: { ...p.resources, intelligence: 3 },
+    }));
+    s = { ...s, voters: s.voters.map((v) => ({ ...v, revealed: true })) };
+    const intVoter = s.voters.find((v) => v.criterion === 'most-intelligence');
+    if (!intVoter) {
+      throw new Error('most-intelligence voter must be seeded for this test');
+    }
+    // Both should now score 3 (total Intelligence Tokens).
+    const p1 = s.players.find((p) => p.id === 'p1')!;
+    const p2 = s.players.find((p) => p.id === 'p2')!;
+    expect(scorePlayerForCriterion(s, p1, 'most-intelligence')).toBe(3);
+    expect(scorePlayerForCriterion(s, p2, 'most-intelligence')).toBe(3);
+    // Tied → mark breaks it. p1 has the mark.
+    s = {
+      ...s,
+      voterMarks: [{ playerId: 'p1', voterId: intVoter.id }],
+    };
+    expect(computeVoterWinner(s, intVoter)).toBe('p1');
+  });
+
+  it('total WIS counts unspent pool + placed levels (symmetric)', () => {
+    let s = initGame(TWO_PLAYER_CONFIG);
+    s = zeroPlayerResources(s, 'p1');
+    s = addOwnedSpell(s, 'p1', 'base.spell.burn', {
+      intPlaced: true,
+      wisPlacedLevel2: true,
+      wisPlacedLevel3: true,
+    });
+    s = mapPlayer(s, 'p1', (p) => ({
+      ...p,
+      resources: { ...p.resources, wisdom: 1 },
+    }));
+    const p1 = s.players.find((p) => p.id === 'p1')!;
+    // 1 unspent + 2 placed (L2 + L3) = 3.
+    expect(scorePlayerForCriterion(s, p1, 'most-wisdom')).toBe(3);
+  });
+
+  it('leader spell does NOT inflate Intelligence total (it ships intPlaced=true for free)', () => {
+    let s = initGame(TWO_PLAYER_CONFIG);
+    s = zeroPlayerResources(s, 'p1');
+    // Set the leader spell as the candidate's starter spell, add it with
+    // intPlaced=true. p1 has 0 unspent INT.
+    s = mapPlayer(s, 'p1', (p) => ({
+      ...p,
+      candidateStartingSpellId: 'base.spell.flash-of-light',
+      ownedSpells: [
+        {
+          cardId: 'base.spell.flash-of-light',
+          intPlaced: true,
+          wisPlacedLevel2: false,
+          wisPlacedLevel3: false,
+          exhausted: false,
+        },
+      ],
+    }));
+    const p1 = s.players.find((p) => p.id === 'p1')!;
+    // 0 unspent + 0 placed (leader excluded) = 0.
+    expect(scorePlayerForCriterion(s, p1, 'most-intelligence')).toBe(0);
+  });
+
+  it('two players tied on INT, one marked → marked player wins (must not abstain)', () => {
+    let s = initGame(TWO_PLAYER_CONFIG);
+    s = zeroPlayerResources(s, 'p1');
+    s = zeroPlayerResources(s, 'p2');
+    s = mapPlayer(s, 'p1', (p) => ({
+      ...p,
+      resources: { ...p.resources, intelligence: 3 },
+    }));
+    s = mapPlayer(s, 'p2', (p) => ({
+      ...p,
+      resources: { ...p.resources, intelligence: 3 },
+    }));
+    // Force every voter face-up so they all participate in scoring.
+    s = { ...s, voters: s.voters.map((v) => ({ ...v, revealed: true })) };
+    const intVoter = s.voters.find((v) => v.criterion === 'most-intelligence');
+    if (!intVoter) {
+      throw new Error('most-intelligence voter must be seeded for this test');
+    }
+    // p1 has the mark.
+    s = {
+      ...s,
+      voterMarks: [{ playerId: 'p1', voterId: intVoter.id }],
+    };
+    expect(computeVoterWinner(s, intVoter)).toBe('p1');
+  });
+});
