@@ -442,3 +442,40 @@ function robeAccent(color: MageColor) {
       );
   }
 }
+
+// ============================================================================
+// Bell icon — used by the Bell Tower panel
+// ============================================================================
+
+export function BellIcon({
+  className,
+  size = 14,
+}: IconProps) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      role="img"
+      aria-label="Bell Tower"
+      className={clsx('inline-block flex-shrink-0 text-amber-300', className)}
+      fill="currentColor"
+    >
+      <title>Bell Tower</title>
+      {/* Bell body: dome curving down to a flared lip. */}
+      <path d="M12 3 C7 3 5 7 5 12 V16 H19 V12 C19 7 17 3 12 3 Z" />
+      {/* Small handle on top. */}
+      <circle cx="12" cy="3" r="1.3" />
+      {/* Clapper hanging below the lip. */}
+      <circle cx="12" cy="19" r="1.6" />
+      {/* Lip accent. */}
+      <path
+        d="M5 16 H19"
+        stroke="white"
+        strokeOpacity="0.35"
+        strokeWidth="0.8"
+        fill="none"
+      />
+    </svg>
+  );
+}

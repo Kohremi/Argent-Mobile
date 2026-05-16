@@ -1174,6 +1174,44 @@ describe('Bell Tower offerings', () => {
     expect(player?.resources.mana).toBe(2);
   });
 
+  it('Gold-or-Mana with claimChoice=gold short-circuits the prompt and grants 2 Gold', () => {
+    let s = startErrands();
+    const activeId = s.players[s.firstPlayerIndex]?.id;
+    if (!activeId) throw new Error('no active player');
+    const goldBefore =
+      s.players.find((p) => p.id === activeId)?.resources.gold ?? 0;
+    s = applyAction(s, {
+      type: 'CLAIM_BELL_TOWER',
+      playerId: activeId,
+      bellTowerCardId: 'base.bell.gold-or-mana',
+      claimChoice: 'gold',
+    });
+    // No follow-up prompt — choice was pre-supplied.
+    expect(s.pendingResolutionStack).toHaveLength(0);
+    const player = s.players.find((p) => p.id === activeId);
+    expect(player?.resources.gold).toBe(goldBefore + 2);
+  });
+
+  it('Gold-or-Mana with claimChoice=mana short-circuits the prompt and grants 1 Mana', () => {
+    let s = startErrands();
+    const activeId = s.players[s.firstPlayerIndex]?.id;
+    if (!activeId) throw new Error('no active player');
+    const manaBefore =
+      s.players.find((p) => p.id === activeId)?.resources.mana ?? 0;
+    const goldBefore =
+      s.players.find((p) => p.id === activeId)?.resources.gold ?? 0;
+    s = applyAction(s, {
+      type: 'CLAIM_BELL_TOWER',
+      playerId: activeId,
+      bellTowerCardId: 'base.bell.gold-or-mana',
+      claimChoice: 'mana',
+    });
+    expect(s.pendingResolutionStack).toHaveLength(0);
+    const player = s.players.find((p) => p.id === activeId);
+    expect(player?.resources.mana).toBe(manaBefore + 1);
+    expect(player?.resources.gold).toBe(goldBefore);
+  });
+
   it('First-Player Token sets firstPlayerIndex to the claimer', () => {
     let s = startErrands();
     // Pick a non-first-player to make the change observable.

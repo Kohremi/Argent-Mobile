@@ -9,7 +9,7 @@ import { useGameStore } from '../store/gameStore';
 import { baseGamePack } from '../content/packs/base';
 import { listPacks } from '../content/registry';
 import { computeFinalScoring } from '../game/scoring';
-import { MageIcon, ResourceIcon, type ResourceKind } from './icons';
+import { BellIcon, MageIcon, ResourceIcon, type ResourceKind } from './icons';
 import type {
   Candidate,
   GameAction,
@@ -3469,7 +3469,8 @@ function BellTowerPanel({
   return (
     <section className="rounded border border-slate-700 bg-slate-900 p-3 space-y-2">
       <div className="flex items-baseline justify-between">
-        <h2 className="text-sm font-medium">
+        <h2 className="text-sm font-medium inline-flex items-center gap-1.5">
+          <BellIcon size={14} />
           Bell Tower ({state.bellTower.available.length} available
           {state.bellTower.taken.length
             ? `, ${state.bellTower.taken.length} taken`
@@ -3486,29 +3487,72 @@ function BellTowerPanel({
         </p>
       ) : (
         <ul className="space-y-1">
-          {state.bellTower.available.map((c) => (
-            <li
-              key={c.id}
-              className="flex items-center justify-between gap-2 rounded bg-slate-950/40 px-2 py-1 text-xs"
-            >
-              <span className="text-slate-200">{c.name}</span>
-              {canClaim && activePlayer && (
-                <button
-                  type="button"
-                  onClick={() =>
-                    dispatch({
-                      type: 'CLAIM_BELL_TOWER',
-                      playerId: activePlayer.id,
-                      bellTowerCardId: c.id,
-                    })
-                  }
-                  className="px-2 py-0.5 rounded bg-amber-500 text-slate-950 hover:bg-amber-400 text-[11px]"
-                >
-                  Claim (as {activePlayer.name})
-                </button>
-              )}
-            </li>
-          ))}
+          {state.bellTower.available.map((c) => {
+            const isGoldOrMana = c.id === 'base.bell.gold-or-mana';
+            return (
+              <li
+                key={c.id}
+                className="flex items-center justify-between gap-2 rounded bg-slate-950/40 px-2 py-1 text-xs"
+              >
+                <span className="text-slate-200 inline-flex items-center gap-1.5">
+                  <BellIcon size={12} />
+                  {c.name}
+                </span>
+                {canClaim && activePlayer && (
+                  <div className="flex items-center gap-1">
+                    {isGoldOrMana ? (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            dispatch({
+                              type: 'CLAIM_BELL_TOWER',
+                              playerId: activePlayer.id,
+                              bellTowerCardId: c.id,
+                              claimChoice: 'gold',
+                            })
+                          }
+                          className="px-2 py-0.5 rounded bg-amber-500 text-slate-950 hover:bg-amber-400 text-[11px] inline-flex items-center gap-1"
+                          title={`Claim and gain 2 Gold (as ${activePlayer.name})`}
+                        >
+                          Claim +2 <ResourceIcon kind="gold" size={11} />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            dispatch({
+                              type: 'CLAIM_BELL_TOWER',
+                              playerId: activePlayer.id,
+                              bellTowerCardId: c.id,
+                              claimChoice: 'mana',
+                            })
+                          }
+                          className="px-2 py-0.5 rounded bg-cyan-500 text-slate-950 hover:bg-cyan-400 text-[11px] inline-flex items-center gap-1"
+                          title={`Claim and gain 1 Mana (as ${activePlayer.name})`}
+                        >
+                          Claim +1 <ResourceIcon kind="mana" size={11} />
+                        </button>
+                      </>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          dispatch({
+                            type: 'CLAIM_BELL_TOWER',
+                            playerId: activePlayer.id,
+                            bellTowerCardId: c.id,
+                          })
+                        }
+                        className="px-2 py-0.5 rounded bg-amber-500 text-slate-950 hover:bg-amber-400 text-[11px]"
+                      >
+                        Claim (as {activePlayer.name})
+                      </button>
+                    )}
+                  </div>
+                )}
+              </li>
+            );
+          })}
         </ul>
       )}
       {state.bellTower.taken.length > 0 && (

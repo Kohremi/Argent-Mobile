@@ -986,6 +986,15 @@ export interface ClaimBellTowerAction {
   type: 'CLAIM_BELL_TOWER';
   playerId: PlayerId;
   bellTowerCardId: BellTowerCardId;
+  /**
+   * Optional pre-supplied resolution for the bell tower card's effect.
+   * When the card surfaces a choose-from-options prompt (e.g.
+   * `base.bell.gold-or-mana` offers Gold vs Mana), the UI can dispatch
+   * the choice up front so the player commits to a single button click
+   * instead of clicking Claim and then resolving a follow-up prompt.
+   * The engine threads it in as the effect's `resumeAnswer`.
+   */
+  claimChoice?: string;
 }
 
 export interface AdvancePhaseAction {

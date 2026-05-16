@@ -1531,11 +1531,24 @@ function handleClaimBellTower(
     triggeringPlayerId: action.playerId,
     description: card.name,
   };
+  // When the UI dispatched a pre-supplied `claimChoice`, synthesize the
+  // effect's resumeAnswer so it short-circuits the choose-from-options
+  // prompt and applies the picked option directly. Without it the effect
+  // surfaces a normal pending prompt for the player to resolve later.
   const ctx: EffectContext = {
     state: claimed,
     source,
     triggeringPlayerId: action.playerId,
     allowReactions: true,
+    ...(action.claimChoice
+      ? {
+          resumeAnswer: {
+            kind: 'option-chosen' as const,
+            optionId: action.claimChoice,
+            payload: {},
+          },
+        }
+      : {}),
   };
   const result = getEffect(card.effectId)(ctx);
   return applyEffectResult(claimed, result, ctx);
