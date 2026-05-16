@@ -6619,3 +6619,169 @@ describe('Spell wiring — Wave 2 (single-target wound)', () => {
     expect(alice?.ownedSpells[0]?.exhausted).toBe(true);
   });
 });
+
+// ============================================================================
+// Spell wiring — Wave 4: wound/banish + place-in-vacated-slot
+// ============================================================================
+
+describe('Spell wiring — Wave 4 (wound/banish + place)', () => {
+  function setupWoundPlaceCast(opts: {
+    spellCardId: string;
+    level?: 1 | 2 | 3;
+    casterMana?: number;
+  }): GameState {
+    const level = opts.level ?? 2;
+    let s = initGame(TWO_PLAYER_CONFIG);
+    s = forceLibrarySideA(s);
+    s = zeroPlayerResources(s, 'p1');
+    s = zeroPlayerResources(s, 'p2');
+    s = addOwnedSpell(s, 'p1', opts.spellCardId, {
+      intPlaced: true,
+      wisPlacedLevel2: level >= 2,
+      wisPlacedLevel3: level >= 3,
+    });
+    s = setMana(s, 'p1', opts.casterMana ?? 3);
+    s = addMage(s, 'p1', {
+      id: 'alice-placer',
+      cardId: 'base.mage.sorcery',
+      color: 'red',
+    });
+    s = addMage(s, 'p2', {
+      id: 'bob-target',
+      cardId: 'base.mage.sorcery',
+      color: 'red',
+    });
+    s = placeMageOnSpace(
+      s,
+      'p2',
+      'bob-target',
+      'base.room.library.a.slot-1',
+    );
+    s = {
+      ...s,
+      firstPlayerIndex: 0,
+      phase: {
+        kind: 'errands',
+        round: 1,
+        activePlayerIndex: 0,
+        actionUsed: false,
+        fastActionUsed: false,
+      },
+    };
+    return s;
+  }
+
+  it('Poison (L2): wounds + places caster\'s mage in the vacated slot; NO Infirmary bonus prompt', () => {
+    let s = setupWoundPlaceCast({
+      spellCardId: 'base.spell.the-lamentations-of-sareth',
+      level: 2,
+      casterMana: 3,
+    });
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.the-lamentations-of-sareth',
+      level: 2,
+    });
+    // Wound target prompt.
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'mage-chosen', mageId: 'bob-target' },
+    });
+    // Reaction window.
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'reaction-passed' },
+    });
+    // No bonus prompt — directly the placer prompt.
+    const placerPrompt = topPending(s);
+    expect(placerPrompt.prompt.kind).toBe('choose-target-mage');
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: placerPrompt.id,
+      answer: { kind: 'mage-chosen', mageId: 'alice-placer' },
+    });
+    // Slot now has Alice's mage; Bob's was wounded.
+    const slot = s.rooms
+      .flatMap((r) => r.actionSpaces)
+      .find((sp) => sp.id === 'base.room.library.a.slot-1');
+    expect(slot?.occupant?.mageId).toBe('alice-placer');
+    expect(findMageById(s, 'bob-target').isWounded).toBe(true);
+    expect(s.pendingResolutionStack).toHaveLength(0);
+  });
+
+  it('Tidal Wave (L2): banishes opponent + places caster\'s mage in the vacated slot', () => {
+    let s = setupWoundPlaceCast({
+      spellCardId: 'base.spell.book-of-one-hundred-seas',
+      level: 2,
+      casterMana: 2,
+    });
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.book-of-one-hundred-seas',
+      level: 2,
+    });
+    // Banish target prompt.
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'mage-chosen', mageId: 'bob-target' },
+    });
+    // Reaction window.
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'reaction-passed' },
+    });
+    // Placer prompt fires (no Infirmary bonus since banish doesn't go there).
+    const placerPrompt = topPending(s);
+    expect(placerPrompt.prompt.kind).toBe('choose-target-mage');
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: placerPrompt.id,
+      answer: { kind: 'mage-chosen', mageId: 'alice-placer' },
+    });
+    const slot = s.rooms
+      .flatMap((r) => r.actionSpaces)
+      .find((sp) => sp.id === 'base.room.library.a.slot-1');
+    expect(slot?.occupant?.mageId).toBe('alice-placer');
+    expect(findMageById(s, 'bob-target').location.kind).toBe('banished');
+    expect(s.pendingResolutionStack).toHaveLength(0);
+  });
+
+  it('Tidal Wave: excludes the caster\'s own mages from the banish-target list', () => {
+    let s = setupWoundPlaceCast({
+      spellCardId: 'base.spell.book-of-one-hundred-seas',
+      level: 2,
+      casterMana: 2,
+    });
+    // Place Alice's mage too so we can check it's excluded.
+    s = placeMageOnSpace(
+      s,
+      'p1',
+      'alice-placer',
+      'base.room.library.a.slot-2',
+    );
+    // Need another office mage so we have a placer post-banish; doesn't
+    // affect this test's assertion either way.
+    s = addMage(s, 'p1', {
+      id: 'alice-office',
+      cardId: 'base.mage.divinity',
+      color: 'blue',
+    });
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.book-of-one-hundred-seas',
+      level: 2,
+    });
+    const prompt = topPending(s);
+    if (prompt.prompt.kind === 'choose-target-mage') {
+      expect(prompt.prompt.eligibleMageIds).toContain('bob-target');
+      expect(prompt.prompt.eligibleMageIds).not.toContain('alice-placer');
+    }
+  });
+});

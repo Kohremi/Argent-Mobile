@@ -4400,16 +4400,63 @@ registerEffect('base.vault.liquid-lightning', (ctx): EffectResult => {
  *      has no office mage, end without placing.
  *   6. `apply-place`: place the chosen mage onto the wounded slot.
  */
-function woundAndPlaceEffect(selfEffectId: string) {
+function woundAndPlaceEffect(opts: {
+  selfEffectId: string;
+  /**
+   * 'non-spell' = vault cards / supporters / mage abilities (blue immunity
+   * does NOT apply). 'spell' = direct spell cast (blue immunity applies).
+   */
+  source?: 'spell' | 'non-spell';
+  /**
+   * Suppress the standard post-wound Infirmary bonus (e.g. Poison: "owner
+   * gains no Infirmary Bonus"). When true, skip directly to the place step.
+   */
+  suppressInfirmaryBonus?: boolean;
+}) {
+  const { selfEffectId } = opts;
+  const source = opts.source ?? 'non-spell';
+  const suppressBonus = opts.suppressInfirmaryBonus ?? false;
   return (ctx: EffectContext): EffectResult => {
     const step = ctx.resumeContext?.['step'];
 
+    // after-wound is re-entered from the reaction-window's afterResume
+    // (invokeContinuation passes no resumeAnswer). Handle it BEFORE the
+    // first-call short-circuit so we don't re-present the wound prompt.
+    if (step === 'after-wound') {
+      const event = readTriggerEvent(ctx);
+      const slotId = ctx.resumeContext?.['slotId'];
+      if (typeof slotId !== 'string') {
+        throw new Error(`${selfEffectId} after-wound: missing slotId`);
+      }
+      if (
+        !suppressBonus &&
+        event &&
+        checkInfirmaryBonusApplies(ctx.state, event)
+      ) {
+        return {
+          kind: 'pause',
+          pending: bonusPromptFor(event, ctx.triggeringPlayerId, {
+            effectId: selfEffectId,
+            context: {
+              step: 'after-bonus',
+              recipientPlayerId: event.ownerId,
+              slotId,
+            },
+          }),
+        };
+      }
+      return tryPlaceForWoundPlace(ctx, selfEffectId, slotId, ctx.state);
+    }
+
     // Step 1: present wound target list.
     if (!ctx.resumeAnswer) {
-      const targets = buildNonSpellHarmfulTargets(
-        ctx.state,
-        ctx.triggeringPlayerId,
-      );
+      const targets =
+        source === 'spell'
+          ? buildBurnTargets(ctx.state, ctx.triggeringPlayerId)
+          : buildNonSpellHarmfulTargets(
+              ctx.state,
+              ctx.triggeringPlayerId,
+            );
       if (targets.length === 0) return { kind: 'done', patch: {} };
       return {
         kind: 'pause',
@@ -4463,28 +4510,9 @@ function woundAndPlaceEffect(selfEffectId: string) {
       };
     }
 
-    // Step 3: post-reaction. If the bonus applies, route through after-bonus.
-    if (step === 'after-wound') {
-      const event = readTriggerEvent(ctx);
-      const slotId = ctx.resumeContext?.['slotId'];
-      if (typeof slotId !== 'string') {
-        throw new Error(`${selfEffectId} after-wound: missing slotId`);
-      }
-      if (event && checkInfirmaryBonusApplies(ctx.state, event)) {
-        return {
-          kind: 'pause',
-          pending: bonusPromptFor(event, ctx.triggeringPlayerId, {
-            effectId: selfEffectId,
-            context: {
-              step: 'after-bonus',
-              recipientPlayerId: event.ownerId,
-              slotId,
-            },
-          }),
-        };
-      }
-      return tryPlaceForWoundPlace(ctx, selfEffectId, slotId, ctx.state);
-    }
+    // Step 3 (after-wound) is handled at the top of the function before the
+    // resumeAnswer short-circuit, since the reaction-window's afterResume
+    // re-enters without a resumeAnswer.
 
     // Step 4: apply the bonus the wounded player picked, then attempt the place.
     if (step === 'after-bonus') {
@@ -4570,8 +4598,14 @@ function tryPlaceForWoundPlace(
   };
 }
 
-registerEffect('base.vault.bottled-rage', woundAndPlaceEffect('base.vault.bottled-rage'));
-registerEffect('base.vault.spellblade', woundAndPlaceEffect('base.vault.spellblade'));
+registerEffect(
+  'base.vault.bottled-rage',
+  woundAndPlaceEffect({ selfEffectId: 'base.vault.bottled-rage', source: 'non-spell' }),
+);
+registerEffect(
+  'base.vault.spellblade',
+  woundAndPlaceEffect({ selfEffectId: 'base.vault.spellblade', source: 'non-spell' }),
+);
 
 /**
  * Shadow Potion (consumable, action) — Shadow a slot with one of your Mages.
@@ -5623,3 +5657,153 @@ registerEffect('base.spell.on-the-weakness-of-flesh.l1', (ctx): EffectResult => 
   }
   throw new Error(`disease unexpected step ${String(step)}`);
 });
+
+// ============================================================================
+// Spell wiring — Wave 4: wound/banish-and-place-in-vacated-slot
+// ============================================================================
+//
+// Poison reuses `woundAndPlaceEffect` with the spell-source filter +
+// bonus suppression. Tidal Wave needs a parallel banish-and-place factory:
+// banish target → reaction window → if the slot is still empty, prompt
+// for the placer.
+
+function banishAndPlaceInSlotEffect(opts: {
+  selfEffectId: string;
+  /** Spell filter applies blue immunity; non-spell does not. */
+  source: 'spell' | 'non-spell';
+}) {
+  const { selfEffectId, source } = opts;
+  return (ctx: EffectContext): EffectResult => {
+    const step = ctx.resumeContext?.['step'];
+
+    // after-banish is re-entered from the reaction-window's afterResume
+    // (no resumeAnswer). Handle BEFORE the first-call short-circuit.
+    if (step === 'after-banish') {
+      const slotId = ctx.resumeContext?.['slotId'];
+      if (typeof slotId !== 'string') {
+        throw new Error(`${selfEffectId} after-banish: missing slotId`);
+      }
+      return tryPlaceForWoundPlace(ctx, selfEffectId, slotId, ctx.state);
+    }
+
+    // Step 1: pick banish target (opponents only per the spell text).
+    if (!ctx.resumeAnswer) {
+      const all =
+        source === 'spell'
+          ? buildBanishTargets(ctx.state, ctx.triggeringPlayerId)
+          : buildNonSpellHarmfulTargets(ctx.state, ctx.triggeringPlayerId);
+      const opponentTargets = all.filter((mageId) => {
+        const lookup = ctx.state.players.find((p) =>
+          p.mages.some((m) => m.id === mageId),
+        );
+        return lookup?.id !== ctx.triggeringPlayerId;
+      });
+      if (opponentTargets.length === 0) {
+        return { kind: 'done', patch: {} };
+      }
+      return {
+        kind: 'pause',
+        pending: {
+          responderId: ctx.triggeringPlayerId,
+          prompt: {
+            kind: 'choose-target-mage',
+            eligibleMageIds: opponentTargets,
+          },
+          resume: { effectId: selfEffectId, context: { step: 'banish' } },
+          source: ctx.source,
+        },
+      };
+    }
+
+    // Step 2: banish + open reaction window.
+    if (step === 'banish') {
+      if (ctx.resumeAnswer.kind !== 'mage-chosen') {
+        throw new Error(`${selfEffectId} banish expected mage-chosen`);
+      }
+      const target = ctx.resumeAnswer.mageId;
+      const targetMage = ctx.state.players
+        .flatMap((p) => p.mages)
+        .find((m) => m.id === target);
+      if (!targetMage || targetMage.location.kind !== 'action-space') {
+        throw new Error(`${selfEffectId}: banish target no longer on a slot`);
+      }
+      const slotId = targetMage.location.spaceId;
+      const banished = banishMage(
+        ctx.state,
+        target,
+        ctx.triggeringPlayerId,
+      );
+      return {
+        kind: 'open-reaction',
+        patch: banished.patch,
+        window: {
+          triggerEvent: banished.triggerEvent,
+          pendingResponderIds: buildReactionQueue(
+            ctx.state,
+            ctx.triggeringPlayerId,
+          ),
+          reactedPlayerIds: [],
+          afterResume: {
+            effectId: selfEffectId,
+            context: { step: 'after-banish', slotId },
+          },
+          source: ctx.source,
+        },
+      };
+    }
+
+    // Step 3 (after-banish) is handled at the top of the function before the
+    // resumeAnswer short-circuit, since the reaction-window's afterResume
+    // re-enters without a resumeAnswer.
+
+    // Step 4 (re-uses the same `apply-place` step as wound-and-place).
+    if (step === 'apply-place') {
+      if (ctx.resumeAnswer.kind !== 'mage-chosen') {
+        throw new Error(`${selfEffectId} apply-place expected mage-chosen`);
+      }
+      const slotId = ctx.resumeContext?.['slotId'];
+      if (typeof slotId !== 'string') {
+        throw new Error(`${selfEffectId}: missing slotId`);
+      }
+      const lookup = findActionSpace(ctx.state, slotId);
+      if (!lookup || lookup.space.occupant !== null) {
+        return { kind: 'done', patch: {} };
+      }
+      return {
+        kind: 'done',
+        patch: placeOfficeMageOnSpace(
+          ctx.state,
+          ctx.triggeringPlayerId,
+          ctx.resumeAnswer.mageId,
+          slotId,
+        ),
+      };
+    }
+    throw new Error(`${selfEffectId} unexpected step ${String(step)}`);
+  };
+}
+
+/**
+ * The Lamentations of Sareth L2 "Poison" — Wound a Mage and place one of
+ * yours in its slot. Owner gains no Infirmary bonus.
+ */
+registerEffect(
+  'base.spell.the-lamentations-of-sareth.l2',
+  woundAndPlaceEffect({
+    selfEffectId: 'base.spell.the-lamentations-of-sareth.l2',
+    source: 'spell',
+    suppressInfirmaryBonus: true,
+  }),
+);
+
+/**
+ * Book of One Hundred Seas L2 "Tidal Wave" — Banish an opponent's Mage and
+ * place a Mage from your Office in its place.
+ */
+registerEffect(
+  'base.spell.book-of-one-hundred-seas.l2',
+  banishAndPlaceInSlotEffect({
+    selfEffectId: 'base.spell.book-of-one-hundred-seas.l2',
+    source: 'spell',
+  }),
+);
