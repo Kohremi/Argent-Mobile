@@ -1212,13 +1212,33 @@ function ReactionWindowsPanel({ state }: { state: GameState }) {
 
 function ResourceLine({ player }: { player: Player }) {
   const r = player.resources;
+  // Total INT/WIS "earned" = currently unused + already spent on spell
+  // research. Each `intPlaced` consumed 1 INT; each `wisPlacedLevel2` /
+  // `wisPlacedLevel3` consumed 1 WIS. Show as "unused (total)" so the
+  // player can see both their available pool and how much they've earned
+  // overall this game.
+  let intSpent = 0;
+  let wisSpent = 0;
+  for (const s of player.ownedSpells) {
+    if (s.intPlaced) intSpent += 1;
+    if (s.wisPlacedLevel2) wisSpent += 1;
+    if (s.wisPlacedLevel3) wisSpent += 1;
+  }
   return (
     <div className="flex flex-wrap gap-x-2 gap-y-1 text-xs text-slate-300 items-center">
       <ResourcePill kind="gold" count={r.gold} />
       <ResourcePill kind="mana" count={r.mana} />
       <ResourcePill kind="influence" count={r.influence} />
-      <ResourcePill kind="intelligence" count={r.intelligence} />
-      <ResourcePill kind="wisdom" count={r.wisdom} />
+      <ResourcePill
+        kind="intelligence"
+        count={r.intelligence}
+        totalEarned={r.intelligence + intSpent}
+      />
+      <ResourcePill
+        kind="wisdom"
+        count={r.wisdom}
+        totalEarned={r.wisdom + wisSpent}
+      />
       <ResourcePill kind="marks" count={r.marks} />
       <ResourcePill kind="merit-badge" count={r.meritBadges} />
       {r.meritBadgesSpent > 0 && (
@@ -1231,16 +1251,30 @@ function ResourceLine({ player }: { player: Player }) {
 function ResourcePill({
   kind,
   count,
+  totalEarned,
   size = 14,
 }: {
   kind: ResourceKind;
   count: number;
+  /**
+   * Optional grand-total this player has accumulated across the whole game
+   * (used by INT/WIS: unused + already spent on research). When set and
+   * greater than `count`, rendered in parens after the unused count, e.g.
+   * "INT 2 (4)" = 2 unused, 4 earned this game.
+   */
+  totalEarned?: number;
   size?: number;
 }) {
+  const showTotal = totalEarned !== undefined && totalEarned > count;
   return (
     <span className="inline-flex items-center gap-1">
       <ResourceIcon kind={kind} size={size} />
-      <span className="tabular-nums">{count}</span>
+      <span className="tabular-nums">
+        {count}
+        {showTotal && (
+          <span className="text-slate-500"> ({totalEarned})</span>
+        )}
+      </span>
     </span>
   );
 }
