@@ -1,7 +1,7 @@
 // Base game effect implementations. Currently scoped to the Vertical Slice
 // targets: Library A slot 1, Burn L1, Phase Steppers reaction.
 
-import { getEffect, registerEffect } from './registry';
+import { getEffect, hasEffect, registerEffect } from './registry';
 import { computeFinalScoring, playerOwnsWildSupporter } from '../scoring';
 import { getPack } from '../../content/registry';
 import {
@@ -3244,18 +3244,56 @@ registerEffect(
           'mysticism-place-after-cast apply: missing placerMageId',
         );
       }
-      // Place onto the BASE position of the chosen slot. No merit cost
-      // (mage abilities bypass it) and no per-room-cap enforcement, mirroring
-      // the Ars Magna treatment.
-      return {
-        kind: 'done',
-        patch: placeOfficeMageOnSpace(
-          ctx.state,
-          ctx.triggeringPlayerId,
-          placerMageId,
-          ctx.resumeAnswer.spaceId,
-        ),
+      const spaceId = ctx.resumeAnswer.spaceId;
+      // Locate the target room + space so we can update roundPlacements
+      // for the per-room cap AND fire instant-room rewards.
+      const targetRoom = ctx.state.rooms.find((r) =>
+        r.actionSpaces.some((s) => s.id === spaceId),
+      );
+      if (!targetRoom) {
+        throw new Error(`mysticism-place-after-cast: room for ${spaceId} not found`);
+      }
+      const targetSpace = targetRoom.actionSpaces.find((s) => s.id === spaceId);
+      if (!targetSpace) {
+        throw new Error(`mysticism-place-after-cast: space ${spaceId} not found`);
+      }
+      // Place the mage at the BASE position and credit roundPlacements
+      // for the room so subsequent placements respect the cap (Council
+      // Chamber has max 1 per player per round).
+      const placePatch = placeOfficeMageOnSpace(
+        ctx.state,
+        ctx.triggeringPlayerId,
+        placerMageId,
+        spaceId,
+      );
+      const updatedPlayers = (placePatch.players ?? ctx.state.players).map((p) =>
+        p.id !== ctx.triggeringPlayerId
+          ? p
+          : {
+              ...p,
+              roundPlacements: [...p.roundPlacements, targetRoom.id],
+            },
+      );
+      const finalPatch: GameStatePatch = {
+        ...placePatch,
+        players: updatedPlayers,
       };
+      // Instant rooms resolve their reward at placement time. Match
+      // PLACE_WORKER: pause with the forfeit-or-reward prompt routed
+      // through `base.system.resolution-choice`.
+      if (targetRoom.isInstantRoom && hasEffect(targetSpace.effectId)) {
+        return {
+          kind: 'pause',
+          patch: finalPatch,
+          pending: buildResolutionChoicePromptInput(
+            { ...ctx.state, ...finalPatch },
+            targetRoom,
+            targetSpace,
+            ctx.triggeringPlayerId,
+          ),
+        };
+      }
+      return { kind: 'done', patch: finalPatch };
     }
     throw new Error(
       `mysticism-place-after-cast unexpected step ${String(step)}`,
@@ -3263,17 +3301,102 @@ registerEffect(
   },
 );
 
-function openSlotPrompt(
-  ctx: EffectContext,
-  placerMageId: string,
-): EffectResult {
+/**
+ * Per-room cap + cannotBePlacedInDirectly aware list of empty base slots
+ * for the responder. Used by the Mysticism place-after-cast prompt so
+ * Council Chamber's "1 mage per player per round" rule is respected and
+ * the Infirmary (non-placeable) is excluded.
+ */
+function listEligiblePlacementSlots(
+  state: GameState,
+  playerId: string,
+): string[] {
+  const player = state.players.find((p) => p.id === playerId);
   const openSlots: string[] = [];
-  for (const r of ctx.state.rooms) {
+  for (const r of state.rooms) {
     if (r.cannotBePlacedInDirectly) continue;
+    const roomLimit = r.maxMagesPerPlayerPerRound ?? Infinity;
+    if (Number.isFinite(roomLimit) && player) {
+      const placedHere = player.roundPlacements.filter(
+        (rid) => rid === r.id,
+      ).length;
+      if (placedHere >= roomLimit) continue;
+    }
     for (const s of r.actionSpaces) {
       if (!s.occupant) openSlots.push(s.id);
     }
   }
+  return openSlots;
+}
+
+/**
+ * Builds the standard forfeit-or-reward PendingResolutionInput for an
+ * instant-room placement triggered by a mage power (Mysticism etc.).
+ * Mirrors `pushResolutionChoicePrompt` in `engine.ts` — kept in sync.
+ */
+function buildResolutionChoicePromptInput(
+  state: GameState,
+  room: GameState['rooms'][number],
+  space: GameState['rooms'][number]['actionSpaces'][number],
+  playerId: string,
+): PendingResolutionInput {
+  const player = state.players.find((p) => p.id === playerId);
+  const meritCost =
+    space.slotType === 'merit'
+      ? (space.costToActivate?.meritBadges ?? 0)
+      : 0;
+  const canAffordReward =
+    meritCost === 0 || (player?.resources.meritBadges ?? 0) >= meritCost;
+  return {
+    responderId: playerId,
+    prompt: {
+      kind: 'choose-from-options',
+      options: [
+        canAffordReward
+          ? {
+              id: 'reward',
+              label:
+                meritCost > 0
+                  ? `Take reward (spend ${meritCost} MB)`
+                  : 'Take reward',
+              payload: {},
+              available: true,
+            }
+          : {
+              id: 'reward',
+              label: `Take reward (spend ${meritCost} MB)`,
+              payload: {},
+              available: false,
+              unavailableReason: `requires ${meritCost} Merit Badge${meritCost === 1 ? '' : 's'} (you have ${player?.resources.meritBadges ?? 0})`,
+            },
+        { id: 'forfeit', label: 'Forfeit for 1 IP', payload: {} },
+      ],
+    },
+    resume: {
+      effectId: 'base.system.resolution-choice',
+      context: {
+        spaceId: space.id,
+        innerEffectId: space.effectId,
+        meritCost,
+      },
+    },
+    source: {
+      kind: 'room-action',
+      id: space.id,
+      triggeringPlayerId: playerId,
+      description: `${room.name} (${room.side}) — slot ${space.index + 1}`,
+    },
+  };
+}
+
+function openSlotPrompt(
+  ctx: EffectContext,
+  placerMageId: string,
+): EffectResult {
+  const openSlots = listEligiblePlacementSlots(
+    ctx.state,
+    ctx.triggeringPlayerId,
+  );
   if (openSlots.length === 0) return { kind: 'done', patch: {} };
   return {
     kind: 'pause',

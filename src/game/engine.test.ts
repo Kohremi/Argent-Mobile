@@ -2647,6 +2647,88 @@ describe('Leader spells (unique single-level)', () => {
     expect(s.pendingResolutionStack).toHaveLength(0);
   });
 
+  it('Mysticism place opportunity: filters out rooms where the player has hit the per-round cap', () => {
+    let s = setupLeaderTest();
+    s = forceRoomSide(s, 'Council Chamber', 'A');
+    s = addMage(s, 'p1', {
+      id: 'alice-grey',
+      cardId: 'base.mage.mysticism',
+      color: 'grey',
+    });
+    s = addOwnedSpell(s, 'p1', 'base.spell.trance');
+    // Pretend Alice already placed in Council Chamber this round (cap=1).
+    const councilRoom = s.rooms.find((r) => r.name === 'Council Chamber')!;
+    s = mapPlayer(s, 'p1', (p) => ({
+      ...p,
+      roundPlacements: [...p.roundPlacements, councilRoom.id],
+    }));
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.trance',
+      level: 1,
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'option-chosen', optionId: 'place', payload: {} },
+    });
+    const slotPrompt = topPending(s);
+    expect(slotPrompt.prompt.kind).toBe('choose-target-action-space');
+    if (slotPrompt.prompt.kind === 'choose-target-action-space') {
+      const councilSlotIds = councilRoom.actionSpaces.map((sp) => sp.id);
+      for (const cid of councilSlotIds) {
+        expect(slotPrompt.prompt.eligibleSpaceIds).not.toContain(cid);
+      }
+    }
+  });
+
+  it('Mysticism place opportunity: placing into an instant room surfaces the slot reward prompt', () => {
+    let s = setupLeaderTest();
+    // Guilds A is an instant room. Force it into play.
+    s = forceRoomSide(s, 'Guilds', 'A');
+    s = setMeritBadges(s, 'p1', 5);
+    s = addMage(s, 'p1', {
+      id: 'alice-grey',
+      cardId: 'base.mage.mysticism',
+      color: 'grey',
+    });
+    s = addOwnedSpell(s, 'p1', 'base.spell.trance');
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.trance',
+      level: 1,
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'option-chosen', optionId: 'place', payload: {} },
+    });
+    const slotPrompt = topPending(s);
+    expect(slotPrompt.prompt.kind).toBe('choose-target-action-space');
+    const guildsRoom = s.rooms.find((r) => r.name === 'Guilds')!;
+    const guildsSlot = guildsRoom.actionSpaces[0]!;
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: slotPrompt.id,
+      answer: { kind: 'space-chosen', spaceId: guildsSlot.id },
+    });
+    // Mage is placed AND the resolution-choice (forfeit-or-reward) prompt
+    // now fires for the instant slot reward.
+    const placed = findMageById(s, 'alice-grey');
+    expect(placed.location).toEqual({
+      kind: 'action-space',
+      spaceId: guildsSlot.id,
+    });
+    const rewardPrompt = topPending(s);
+    expect(rewardPrompt.resume.effectId).toBe('base.system.resolution-choice');
+    // The placement was credited to roundPlacements so per-room caps work
+    // on subsequent placements this round.
+    const alice = s.players.find((p) => p.id === 'p1');
+    expect(alice?.roundPlacements).toContain(guildsRoom.id);
+  });
+
   it('Living Image: adds an off-white mage and decrements the supply', () => {
     let s = setupLeaderTest();
     // Caster mage is intentionally NOT off-white so the new off-white mage
