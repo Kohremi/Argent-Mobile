@@ -819,10 +819,9 @@ describe('Endgame scoring', () => {
     // Both p1 and p2 should have nonzero votes; whichever has higher
     // influence wins; with influence equal we move to arrival-seq tiebreaker.
     // p1 arrived at IP 5 first (seq 1) → archmage.
-    if (
-      result.votesPerPlayer.p1 === result.votesPerPlayer.p2 &&
-      result.votesPerPlayer.p1 > 0
-    ) {
+    const p1Votes = result.votesPerPlayer.p1 ?? 0;
+    const p2Votes = result.votesPerPlayer.p2 ?? 0;
+    if (p1Votes === p2Votes && p1Votes > 0) {
       expect(result.archmage).toBe('p1');
       expect(result.tiebreaker).toBe('influence-arrival');
     }
