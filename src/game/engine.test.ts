@@ -5267,7 +5267,11 @@ describe('Spell research actions', () => {
     expect(owned?.wisPlacedLevel3).toBe(false);
   });
 
-  it('Move-INT: discards a learned spell (refunding its WIS) and drafts a new one with the moved INT', () => {
+  // Skipped: per the Argent base rulebook, the only research actions are
+  // 'draft' (spend INT) and 'add-wis' (spend WIS). 'move-int' and 'move-wis'
+  // are no longer offered by spawnResearchPrompt. Tests kept (skipped) in case
+  // the rules ever re-enable them — the underlying effects remain registered.
+  it.skip('Move-INT: discards a learned spell (refunding its WIS) and drafts a new one with the moved INT', () => {
     let s = setupResearchTest({
       // 0 INT + 0 WIS in pool; one learned spell with 1 WIS placed.
       ownedSpells: [
@@ -5315,7 +5319,8 @@ describe('Spell research actions', () => {
     expect(alice?.resources.intelligence).toBe(0);
   });
 
-  it('Move-WIS: shifts 1 WIS from one owned spell to another', () => {
+  // Skipped: same reason as Move-INT above.
+  it.skip('Move-WIS: shifts 1 WIS from one owned spell to another', () => {
     let s = setupResearchTest({
       ownedSpells: [
         { cardId: 'base.spell.burn', intPlaced: true, wisPlacedLevel2: true },

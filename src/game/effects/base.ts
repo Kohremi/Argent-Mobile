@@ -305,18 +305,22 @@ registerEffect('base.room.library-a.slot-4', (ctx: EffectContext): EffectResult 
 });
 
 /**
- * Research is transient — the player spends it immediately on one of four
+ * Research is transient — the player spends it immediately on one of two
  * actions (or discards it):
- *   - draft    : draft a new Spell from the tableau using 1 unspent INT
- *   - move-int : discard a learned Spell (refund its INT + any WIS) and
- *                draft a new Spell with that INT
- *   - add-wis  : place 1 unspent WIS onto a learned Spell to unlock its
- *                next level (L2, then L3)
- *   - move-wis : move 1 WIS from one owned Spell's L2/L3 slot to another
+ *   - draft   : draft a new Spell from the tableau using 1 unspent INT
+ *   - add-wis : place 1 unspent WIS onto a learned Spell to unlock its
+ *               next level (L2, then L3)
  *
- * Each option is only listed when its prerequisites are satisfied so
- * players never see actions they can't take. 'discard' is always
- * available.
+ * Each option is only listed when its prerequisites are satisfied. 'discard'
+ * is always available as a fallback.
+ *
+ * NOTE: The published Argent base game has only the two actions above. Two
+ * additional actions — `move-int` (discard a learned Spell, draft another)
+ * and `move-wis` (shift 1 WIS between owned Spells) — were planned but are
+ * NOT part of the rulebook. Their underlying effects + sub-prompts are
+ * still registered (so the wiring stays warm in case the rules ever change),
+ * but they are intentionally not offered here. The two associated tests
+ * (move-INT, move-WIS) are skipped for the same reason.
  */
 function spawnResearchPrompt(
   state: GameState,
@@ -330,9 +334,6 @@ function spawnResearchPrompt(
   const upgradable = learned.filter(
     (s) => !(s.wisPlacedLevel2 && s.wisPlacedLevel3),
   );
-  const withWis = learned.filter(
-    (s) => s.wisPlacedLevel2 || s.wisPlacedLevel3,
-  );
   const tableauNonEmpty = state.spellTableau.length > 0;
 
   const options: ChoiceOption[] = [];
@@ -343,34 +344,12 @@ function spawnResearchPrompt(
       payload: {},
     });
   }
-  if (tableauNonEmpty && learned.length > 0) {
-    options.push({
-      id: 'move-int',
-      label: 'Discard a learned Spell; draft a new one (move INT)',
-      payload: {},
-    });
-  }
   if (wisPool >= 1 && upgradable.length > 0) {
     options.push({
       id: 'add-wis',
       label: 'Place 1 WIS to unlock the next level of an owned Spell',
       payload: {},
     });
-  }
-  if (withWis.length > 0 && upgradable.length > 0) {
-    // Move-WIS is viable iff at least one owned spell carries WIS AND at
-    // least one other owned spell has an open L2/L3 slot. Tighter
-    // source/dest disjoint check happens in the move-wis effect.
-    const someOtherUpgradable = upgradable.some(
-      (s) => !(s.wisPlacedLevel2 && s.wisPlacedLevel3 && s.cardId === withWis[0]?.cardId),
-    );
-    if (someOtherUpgradable) {
-      options.push({
-        id: 'move-wis',
-        label: 'Move 1 WIS from one of your Spells to another',
-        payload: {},
-      });
-    }
   }
   options.push({ id: 'discard', label: 'Discard 1 Research', payload: {} });
 
