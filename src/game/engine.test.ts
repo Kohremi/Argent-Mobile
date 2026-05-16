@@ -6466,6 +6466,126 @@ describe('Spell wiring — Wave 2 (single-target wound)', () => {
     expect(s.pendingResolutionStack).toHaveLength(0);
   });
 
+  it('Wave (banish): banishes an opponent mage; opens a mage-banished reaction window but no Infirmary bonus', () => {
+    let s = setupWoundCast({
+      spellCardId: 'base.spell.book-of-one-hundred-seas',
+      casterMana: 1,
+    });
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.book-of-one-hundred-seas',
+      level: 1,
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'mage-chosen', mageId: 'bob-mage' },
+    });
+    // Reaction window opens.
+    const reactionPrompt = topPending(s);
+    expect(reactionPrompt.prompt.kind).toBe('reaction-window');
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: reactionPrompt.id,
+      answer: { kind: 'reaction-passed' },
+    });
+    // Bob's mage is banished — no Infirmary bonus prompt.
+    expect(findMageById(s, 'bob-mage').location.kind).toBe('banished');
+    expect(s.pendingResolutionStack).toHaveLength(0);
+  });
+
+  it('Wave (banish): excludes the caster\'s own mages from the target list', () => {
+    let s = setupWoundCast({
+      spellCardId: 'base.spell.book-of-one-hundred-seas',
+      casterMana: 1,
+      aliceHasTargetableMage: true,
+    });
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.book-of-one-hundred-seas',
+      level: 1,
+    });
+    const prompt = topPending(s);
+    if (prompt.prompt.kind === 'choose-target-mage') {
+      expect(prompt.prompt.eligibleMageIds).toContain('bob-mage');
+      expect(prompt.prompt.eligibleMageIds).not.toContain('alice-mage');
+    }
+  });
+
+  it('Disease: surfaces "Wound vs Banish" choice → wound branch routes to wound target', () => {
+    let s = setupWoundCast({
+      spellCardId: 'base.spell.on-the-weakness-of-flesh',
+      casterMana: 0, // Disease L1 costs 0 mana.
+    });
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.on-the-weakness-of-flesh',
+      level: 1,
+    });
+    const modePrompt = topPending(s);
+    expect(modePrompt.prompt.kind).toBe('choose-from-options');
+    if (modePrompt.prompt.kind === 'choose-from-options') {
+      expect(modePrompt.prompt.options.map((o) => o.id).sort()).toEqual([
+        'banish',
+        'wound',
+      ]);
+    }
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: modePrompt.id,
+      answer: { kind: 'option-chosen', optionId: 'wound', payload: {} },
+    });
+    const targetPrompt = topPending(s);
+    expect(targetPrompt.prompt.kind).toBe('choose-target-mage');
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: targetPrompt.id,
+      answer: { kind: 'mage-chosen', mageId: 'bob-mage' },
+    });
+    // Pass reaction → bonus prompt appears (wound path uses post-wound-bonus).
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'reaction-passed' },
+    });
+    expect(findMageById(s, 'bob-mage').isWounded).toBe(true);
+    const bonusPrompt = topPending(s);
+    expect(bonusPrompt.responderId).toBe('p2');
+  });
+
+  it('Disease: banish branch routes to banish target and produces no bonus', () => {
+    let s = setupWoundCast({
+      spellCardId: 'base.spell.on-the-weakness-of-flesh',
+      casterMana: 0,
+    });
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.on-the-weakness-of-flesh',
+      level: 1,
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'option-chosen', optionId: 'banish', payload: {} },
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'mage-chosen', mageId: 'bob-mage' },
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'reaction-passed' },
+    });
+    expect(findMageById(s, 'bob-mage').location.kind).toBe('banished');
+    expect(s.pendingResolutionStack).toHaveLength(0);
+  });
+
   it('Wound spells fizzle when no legal target exists', () => {
     // No mages on the board at all for the opposing side.
     let s = initGame(TWO_PLAYER_CONFIG);

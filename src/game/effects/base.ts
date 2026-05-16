@@ -5378,3 +5378,248 @@ registerEffect(
     suppressInfirmaryBonus: true,
   }),
 );
+
+// ============================================================================
+// Spell wiring — Wave 3: single-target banish + wound-or-banish choice
+// ============================================================================
+//
+// Factory mirrors `simpleWoundSpell`. Banish doesn't open an Infirmary bonus
+// (the mage doesn't enter the Infirmary), so the afterResume is always
+// `base.system.noop`. Reactions like Mystic Amulet still fire from the
+// mage-banished reaction window.
+
+function buildBanishTargetsFor(
+  state: GameState,
+  casterId: string,
+  filter: WoundTargetFilter,
+): string[] {
+  const all = buildBanishTargets(state, casterId);
+  if (filter === 'any-mage') return all;
+  return all.filter((mageId) => {
+    const lookup = state.players.find((p) =>
+      p.mages.some((m) => m.id === mageId),
+    );
+    return lookup?.id !== casterId;
+  });
+}
+
+function simpleBanishSpell(opts: {
+  selfEffectId: string;
+  targetFilter: WoundTargetFilter;
+}) {
+  return (ctx: EffectContext): EffectResult => {
+    if (!ctx.resumeAnswer) {
+      const targets = buildBanishTargetsFor(
+        ctx.state,
+        ctx.triggeringPlayerId,
+        opts.targetFilter,
+      );
+      if (targets.length === 0) return { kind: 'done', patch: {} };
+      return {
+        kind: 'pause',
+        pending: {
+          responderId: ctx.triggeringPlayerId,
+          prompt: { kind: 'choose-target-mage', eligibleMageIds: targets },
+          resume: {
+            effectId: opts.selfEffectId,
+            context: { step: 'apply-banish' },
+          },
+          source: ctx.source,
+        },
+      };
+    }
+    const step = ctx.resumeContext?.['step'];
+    if (step !== 'apply-banish') {
+      throw new Error(
+        `${opts.selfEffectId}: unexpected resume step ${String(step)}`,
+      );
+    }
+    if (ctx.resumeAnswer.kind !== 'mage-chosen') {
+      throw new Error(
+        `${opts.selfEffectId} apply-banish expected mage-chosen, got ${ctx.resumeAnswer.kind}`,
+      );
+    }
+    const banished = banishMage(
+      ctx.state,
+      ctx.resumeAnswer.mageId,
+      ctx.triggeringPlayerId,
+    );
+    return {
+      kind: 'open-reaction',
+      patch: banished.patch,
+      window: {
+        triggerEvent: banished.triggerEvent,
+        pendingResponderIds: buildReactionQueue(
+          ctx.state,
+          ctx.triggeringPlayerId,
+        ),
+        reactedPlayerIds: [],
+        afterResume: { effectId: 'base.system.noop', context: {} },
+        source: ctx.source,
+      },
+    };
+  };
+}
+
+/** Book of One Hundred Seas L1 "Wave" — Banish an opponent's Mage. */
+registerEffect(
+  'base.spell.book-of-one-hundred-seas.l1',
+  simpleBanishSpell({
+    selfEffectId: 'base.spell.book-of-one-hundred-seas.l1',
+    targetFilter: 'opponent-only',
+  }),
+);
+
+/**
+ * On the Weakness of Flesh L1 "Disease" — Wound a Mage OR banish a Mage.
+ *
+ * Step 1: present "Wound" / "Banish" choice.
+ * Step 2 (wound-branch): pick wound target → apply wound + reaction window.
+ * Step 2 (banish-branch): pick banish target → apply banish + reaction window.
+ *
+ * If neither subroutine has any legal target the corresponding option is
+ * suppressed; if both are empty the spell fizzles silently after step 1.
+ */
+registerEffect('base.spell.on-the-weakness-of-flesh.l1', (ctx): EffectResult => {
+  const step = ctx.resumeContext?.['step'];
+  if (!ctx.resumeAnswer) {
+    const woundTargets = buildWoundTargetsFor(
+      ctx.state,
+      ctx.triggeringPlayerId,
+      'any-mage',
+    );
+    const banishTargets = buildBanishTargetsFor(
+      ctx.state,
+      ctx.triggeringPlayerId,
+      'any-mage',
+    );
+    if (woundTargets.length === 0 && banishTargets.length === 0) {
+      return { kind: 'done', patch: {} };
+    }
+    const options: ChoiceOption[] = [];
+    if (woundTargets.length > 0) {
+      options.push({ id: 'wound', label: 'Wound a Mage', payload: {} });
+    }
+    if (banishTargets.length > 0) {
+      options.push({ id: 'banish', label: 'Banish a Mage', payload: {} });
+    }
+    return {
+      kind: 'pause',
+      pending: {
+        responderId: ctx.triggeringPlayerId,
+        prompt: { kind: 'choose-from-options', options },
+        resume: {
+          effectId: 'base.spell.on-the-weakness-of-flesh.l1',
+          context: { step: 'pick-mode' },
+        },
+        source: ctx.source,
+      },
+    };
+  }
+  if (step === 'pick-mode') {
+    if (ctx.resumeAnswer.kind !== 'option-chosen') {
+      throw new Error('disease pick-mode expected option-chosen');
+    }
+    if (ctx.resumeAnswer.optionId === 'wound') {
+      const woundTargets = buildWoundTargetsFor(
+        ctx.state,
+        ctx.triggeringPlayerId,
+        'any-mage',
+      );
+      return {
+        kind: 'pause',
+        pending: {
+          responderId: ctx.triggeringPlayerId,
+          prompt: {
+            kind: 'choose-target-mage',
+            eligibleMageIds: woundTargets,
+          },
+          resume: {
+            effectId: 'base.spell.on-the-weakness-of-flesh.l1',
+            context: { step: 'apply-wound' },
+          },
+          source: ctx.source,
+        },
+      };
+    }
+    if (ctx.resumeAnswer.optionId === 'banish') {
+      const banishTargets = buildBanishTargetsFor(
+        ctx.state,
+        ctx.triggeringPlayerId,
+        'any-mage',
+      );
+      return {
+        kind: 'pause',
+        pending: {
+          responderId: ctx.triggeringPlayerId,
+          prompt: {
+            kind: 'choose-target-mage',
+            eligibleMageIds: banishTargets,
+          },
+          resume: {
+            effectId: 'base.spell.on-the-weakness-of-flesh.l1',
+            context: { step: 'apply-banish' },
+          },
+          source: ctx.source,
+        },
+      };
+    }
+    throw new Error(
+      `disease pick-mode unknown option ${ctx.resumeAnswer.optionId}`,
+    );
+  }
+  if (step === 'apply-wound') {
+    if (ctx.resumeAnswer.kind !== 'mage-chosen') {
+      throw new Error('disease apply-wound expected mage-chosen');
+    }
+    const wounded = woundMage(
+      ctx.state,
+      ctx.resumeAnswer.mageId,
+      ctx.triggeringPlayerId,
+    );
+    return {
+      kind: 'open-reaction',
+      patch: wounded.patch,
+      window: {
+        triggerEvent: wounded.triggerEvent,
+        pendingResponderIds: buildReactionQueue(
+          ctx.state,
+          ctx.triggeringPlayerId,
+        ),
+        reactedPlayerIds: [],
+        afterResume: {
+          effectId: 'base.system.post-wound-bonus',
+          context: {
+            triggerEvent: triggerEventToContext(wounded.triggerEvent),
+          },
+        },
+        source: ctx.source,
+      },
+    };
+  }
+  if (step === 'apply-banish') {
+    if (ctx.resumeAnswer.kind !== 'mage-chosen') {
+      throw new Error('disease apply-banish expected mage-chosen');
+    }
+    const banished = banishMage(
+      ctx.state,
+      ctx.resumeAnswer.mageId,
+      ctx.triggeringPlayerId,
+    );
+    return {
+      kind: 'open-reaction',
+      patch: banished.patch,
+      window: {
+        triggerEvent: banished.triggerEvent,
+        pendingResponderIds: buildReactionQueue(
+          ctx.state,
+          ctx.triggeringPlayerId,
+        ),
+        reactedPlayerIds: [],
+        afterResume: { effectId: 'base.system.noop', context: {} },
+        source: ctx.source,
+      },
+    };
+  }
+  throw new Error(`disease unexpected step ${String(step)}`);
+});
