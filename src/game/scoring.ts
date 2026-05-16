@@ -255,8 +255,10 @@ function countMarksOnVoter(
 /**
  * Resolves a multi-way tie at the per-voter level. Per rulebook:
  *   1. Most marks placed on this voter wins.
- *   2. Lowest IP arrival sequence wins (placed on the IP track first).
- *   3. Still tied → no winner (no votes awarded for this voter).
+ *   2. Still tied → most total Influence wins.
+ *   3. Still tied → reached that Influence value first (lowest
+ *      `influenceArrivalSeq`).
+ *   4. Still tied → no winner (no votes awarded for this voter).
  */
 function breakVoterTie(
   state: GameState,
@@ -277,10 +279,25 @@ function breakVoterTie(
   }
   if (marksLeaders.length === 1) return marksLeaders[0]!.id;
 
-  // Tiebreaker 2: lowest influenceArrivalSeq (placed on IP first).
-  // 0 means the player has never increased their IP — treat as no-arrival
-  // and disqualify from this tiebreaker.
-  const withArrival = marksLeaders.filter((p) => p.influenceArrivalSeq > 0);
+  // Tiebreaker 2: most total Influence.
+  let bestInfluence = -1;
+  let influenceLeaders: Player[] = [];
+  for (const p of marksLeaders) {
+    if (p.resources.influence > bestInfluence) {
+      bestInfluence = p.resources.influence;
+      influenceLeaders = [p];
+    } else if (p.resources.influence === bestInfluence) {
+      influenceLeaders.push(p);
+    }
+  }
+  if (influenceLeaders.length === 1) return influenceLeaders[0]!.id;
+
+  // Tiebreaker 3: lowest influenceArrivalSeq (reached that IP value first).
+  // seq === 0 means the player has never gained Influence — disqualify
+  // from this tiebreaker.
+  const withArrival = influenceLeaders.filter(
+    (p) => p.influenceArrivalSeq > 0,
+  );
   if (withArrival.length === 1) return withArrival[0]!.id;
   if (withArrival.length === 0) return null;
 

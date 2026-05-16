@@ -737,6 +737,97 @@ describe('Endgame scoring', () => {
     expect(scorePlayerForCriterion(s, p1, 'most-diversity')).toBe(3);
   });
 
+  it('most-diversity: extra levels of the same spell do NOT add to diversity (breadth not depth)', () => {
+    let s = initGame(FOUR_PLAYER_CONFIG);
+    s = mapPlayer(s, 'p1', (p) => ({
+      ...p,
+      ownedSpells: [
+        {
+          cardId: 'base.spell.burn', // sorcery, fully researched
+          intPlaced: true,
+          wisPlacedLevel2: true,
+          wisPlacedLevel3: true,
+          exhausted: false,
+        },
+      ],
+      supporters: [],
+    }));
+    const p1 = s.players.find((p) => p.id === 'p1')!;
+    // 1 distinct department represented (sorcery).
+    expect(scorePlayerForCriterion(s, p1, 'most-diversity')).toBe(1);
+  });
+
+  it('most-diversity: unresearched spell contributes 0 to diversity', () => {
+    let s = initGame(FOUR_PLAYER_CONFIG);
+    s = mapPlayer(s, 'p1', (p) => ({
+      ...p,
+      ownedSpells: [
+        {
+          cardId: 'base.spell.burn',
+          intPlaced: false,
+          wisPlacedLevel2: false,
+          wisPlacedLevel3: false,
+          exhausted: false,
+        },
+      ],
+      supporters: [],
+    }));
+    const p1 = s.players.find((p) => p.id === 'p1')!;
+    expect(scorePlayerForCriterion(s, p1, 'most-diversity')).toBe(0);
+  });
+
+  it('per-voter tiebreaker: marks first, then most Influence, then arrival-seq', () => {
+    // Build a controlled state with three players tied at the same diversity
+    // score (1 dept each), then exercise each tiebreaker step.
+    let s = initGame(FOUR_PLAYER_CONFIG);
+    // Force every voter face-up so computeVoterWinner runs on each.
+    s = { ...s, voters: s.voters.map((v) => ({ ...v, revealed: true })) };
+    const diversityVoter = s.voters.find(
+      (v) => v.criterion === 'most-diversity',
+    );
+    if (!diversityVoter) {
+      throw new Error('diversity voter must be in the seeded set for this test');
+    }
+    // Give p1, p2, p3 one supporter each (different departments → diversity 1 each).
+    s = mapPlayer(s, 'p1', (p) => ({
+      ...p,
+      supporters: ['base.supporter.allys-mehrmus'], // sorcery
+    }));
+    s = mapPlayer(s, 'p2', (p) => ({
+      ...p,
+      supporters: ['base.supporter.alumis'], // mysticism
+    }));
+    s = mapPlayer(s, 'p3', (p) => ({
+      ...p,
+      supporters: ['base.supporter.andrus-dochartaigh'], // divinity
+    }));
+    // p4 has nothing.
+
+    // --- Tiebreaker 1: marks. Only p2 has a mark on this voter. ---
+    let withMark = {
+      ...s,
+      voterMarks: [{ playerId: 'p2', voterId: diversityVoter.id }],
+    };
+    expect(computeVoterWinner(withMark, diversityVoter)).toBe('p2');
+
+    // --- Tiebreaker 2: nobody marked → most Influence wins. ---
+    let withInfluence = mapPlayer(s, 'p3', (p) => ({
+      ...p,
+      resources: { ...p.resources, influence: 7 },
+      influenceArrivalSeq: 5,
+    }));
+    expect(computeVoterWinner(withInfluence, diversityVoter)).toBe('p3');
+
+    // --- Tiebreaker 3: tied on marks AND influence → arrival-seq breaks it. ---
+    let withSeq = withInfluence;
+    withSeq = mapPlayer(withSeq, 'p1', (p) => ({
+      ...p,
+      resources: { ...p.resources, influence: 7 },
+      influenceArrivalSeq: 3, // arrived at 7 IP earlier than p3
+    }));
+    expect(computeVoterWinner(withSeq, diversityVoter)).toBe('p1');
+  });
+
   it('most-treasures only counts vault cards of type treasure', () => {
     let s = initGame(FOUR_PLAYER_CONFIG);
     s = mapPlayer(s, 'p1', (p) => ({
