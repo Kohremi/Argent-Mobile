@@ -804,21 +804,36 @@ describe('Endgame scoring', () => {
     // p4 has nothing.
 
     // --- Tiebreaker 1: marks. Only p2 has a mark on this voter. ---
-    let withMark = {
+    const withMark = {
       ...s,
       voterMarks: [{ playerId: 'p2', voterId: diversityVoter.id }],
     };
     expect(computeVoterWinner(withMark, diversityVoter)).toBe('p2');
 
-    // --- Tiebreaker 2: nobody marked → most Influence wins. ---
-    let withInfluence = mapPlayer(s, 'p3', (p) => ({
+    // --- Tiebreaker 2: marks tied (p1 and p3 both marked once) → most
+    //     Influence wins, restricted to marked players. p4 has no mark
+    //     so it can't win even if it had massive Influence.
+    let withInfluence = {
+      ...s,
+      voterMarks: [
+        { playerId: 'p1', voterId: diversityVoter.id },
+        { playerId: 'p3', voterId: diversityVoter.id },
+      ],
+    };
+    withInfluence = mapPlayer(withInfluence, 'p3', (p) => ({
       ...p,
       resources: { ...p.resources, influence: 7 },
       influenceArrivalSeq: 5,
     }));
+    withInfluence = mapPlayer(withInfluence, 'p4', (p) => ({
+      ...p,
+      // p4 has the most Influence but no mark → excluded from tiebreaker.
+      resources: { ...p.resources, influence: 100 },
+      influenceArrivalSeq: 1,
+    }));
     expect(computeVoterWinner(withInfluence, diversityVoter)).toBe('p3');
 
-    // --- Tiebreaker 3: tied on marks AND influence → arrival-seq breaks it. ---
+    // --- Tiebreaker 3: marks tied + Influence tied → arrival-seq breaks it. ---
     let withSeq = withInfluence;
     withSeq = mapPlayer(withSeq, 'p1', (p) => ({
       ...p,
@@ -826,6 +841,38 @@ describe('Endgame scoring', () => {
       influenceArrivalSeq: 3, // arrived at 7 IP earlier than p3
     }));
     expect(computeVoterWinner(withSeq, diversityVoter)).toBe('p1');
+  });
+
+  it('per-voter tiebreaker: abstains when NO candidate has marked the voter, even with unequal Influence', () => {
+    let s = initGame(FOUR_PLAYER_CONFIG);
+    s = { ...s, voters: s.voters.map((v) => ({ ...v, revealed: true })) };
+    const diversityVoter = s.voters.find(
+      (v) => v.criterion === 'most-diversity',
+    );
+    if (!diversityVoter) {
+      throw new Error('diversity voter must be seeded for this test');
+    }
+    // Three players tied on diversity (1 each), none marked the voter.
+    s = mapPlayer(s, 'p1', (p) => ({
+      ...p,
+      supporters: ['base.supporter.allys-mehrmus'],
+      resources: { ...p.resources, influence: 3 },
+      influenceArrivalSeq: 1,
+    }));
+    s = mapPlayer(s, 'p2', (p) => ({
+      ...p,
+      supporters: ['base.supporter.alumis'],
+      resources: { ...p.resources, influence: 7 },
+      influenceArrivalSeq: 4,
+    }));
+    s = mapPlayer(s, 'p3', (p) => ({
+      ...p,
+      supporters: ['base.supporter.andrus-dochartaigh'],
+      resources: { ...p.resources, influence: 5 },
+      influenceArrivalSeq: 2,
+    }));
+    // No voterMarks at all.
+    expect(computeVoterWinner(s, diversityVoter)).toBe(null);
   });
 
   it('most-treasures only counts vault cards of type treasure', () => {

@@ -255,9 +255,12 @@ function countMarksOnVoter(
 /**
  * Resolves a multi-way tie at the per-voter level. Per rulebook:
  *   1. Most marks placed on this voter wins.
- *   2. Still tied → most total Influence wins.
+ *   2. Still tied → most total Influence wins, but ONLY among players
+ *      who have at least one mark on this voter. If none of the tied
+ *      candidates marked the voter, no further tiebreakers run — the
+ *      voter abstains.
  *   3. Still tied → reached that Influence value first (lowest
- *      `influenceArrivalSeq`).
+ *      `influenceArrivalSeq`), again limited to marked players.
  *   4. Still tied → no winner (no votes awarded for this voter).
  */
 function breakVoterTie(
@@ -279,7 +282,12 @@ function breakVoterTie(
   }
   if (marksLeaders.length === 1) return marksLeaders[0]!.id;
 
-  // Tiebreaker 2: most total Influence.
+  // Per the rulebook, only players who have marked this voter can advance
+  // to the IP-based tiebreakers. If everyone is tied at 0 marks, the voter
+  // abstains entirely.
+  if (bestMarks === 0) return null;
+
+  // Tiebreaker 2: most total Influence (among the marked candidates).
   let bestInfluence = -1;
   let influenceLeaders: Player[] = [];
   for (const p of marksLeaders) {
