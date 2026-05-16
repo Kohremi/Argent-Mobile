@@ -253,44 +253,37 @@ function countMarksOnVoter(
 }
 
 /**
- * Resolves a multi-way tie at the per-voter level. Per rulebook:
- *   1. Most marks placed on this voter wins.
- *   2. Still tied → most total Influence wins, but ONLY among players
- *      who have at least one mark on this voter. If none of the tied
- *      candidates marked the voter, no further tiebreakers run — the
- *      voter abstains.
- *   3. Still tied → reached that Influence value first (lowest
- *      `influenceArrivalSeq`), again limited to marked players.
- *   4. Still tied → no winner (no votes awarded for this voter).
+ * Resolves a multi-way tie at the per-voter level. Marks are binary
+ * (a player has either marked the voter or not — max 1 mark per voter).
+ *
+ * Chain:
+ *   1. Among the candidates tied on the voter's criterion, see who marked
+ *      the voter.
+ *      - Exactly ONE marked → that player wins.
+ *      - Otherwise (zero markers OR multiple markers) the IP tiebreaker
+ *        runs on the appropriate subset:
+ *          * zero markers     → IP across ALL tied candidates.
+ *          * multiple markers → IP among the markers only.
+ *   2. Most total Influence in the IP pool wins.
+ *   3. Still tied on Influence → voter abstains (no winner).
  */
 function breakVoterTie(
   state: GameState,
   voter: ConsortiumVoter,
   candidates: Player[],
 ): PlayerId | null {
-  // Tiebreaker 1: marks on this voter.
-  let bestMarks = -1;
-  let marksLeaders: Player[] = [];
-  for (const p of candidates) {
-    const marks = countMarksOnVoter(state, voter.id, p.id);
-    if (marks > bestMarks) {
-      bestMarks = marks;
-      marksLeaders = [p];
-    } else if (marks === bestMarks) {
-      marksLeaders.push(p);
-    }
-  }
-  if (marksLeaders.length === 1) return marksLeaders[0]!.id;
+  const markers = candidates.filter(
+    (p) => countMarksOnVoter(state, voter.id, p.id) > 0,
+  );
 
-  // Per the rulebook, only players who have marked this voter can advance
-  // to the IP-based tiebreakers. If everyone is tied at 0 marks, the voter
-  // abstains entirely.
-  if (bestMarks === 0) return null;
+  // Step 1: marks (binary).
+  if (markers.length === 1) return markers[0]!.id;
 
-  // Tiebreaker 2: most total Influence (among the marked candidates).
+  // Step 2: IP tiebreaker on the appropriate subset.
+  const ipPool = markers.length === 0 ? candidates : markers;
   let bestInfluence = -1;
   let influenceLeaders: Player[] = [];
-  for (const p of marksLeaders) {
+  for (const p of ipPool) {
     if (p.resources.influence > bestInfluence) {
       bestInfluence = p.resources.influence;
       influenceLeaders = [p];
@@ -300,28 +293,7 @@ function breakVoterTie(
   }
   if (influenceLeaders.length === 1) return influenceLeaders[0]!.id;
 
-  // Tiebreaker 3: lowest influenceArrivalSeq (reached that IP value first).
-  // seq === 0 means the player has never gained Influence — disqualify
-  // from this tiebreaker.
-  const withArrival = influenceLeaders.filter(
-    (p) => p.influenceArrivalSeq > 0,
-  );
-  if (withArrival.length === 1) return withArrival[0]!.id;
-  if (withArrival.length === 0) return null;
-
-  let bestSeq = Infinity;
-  let seqLeaders: Player[] = [];
-  for (const p of withArrival) {
-    if (p.influenceArrivalSeq < bestSeq) {
-      bestSeq = p.influenceArrivalSeq;
-      seqLeaders = [p];
-    } else if (p.influenceArrivalSeq === bestSeq) {
-      seqLeaders.push(p);
-    }
-  }
-  if (seqLeaders.length === 1) return seqLeaders[0]!.id;
-
-  // Still tied: no winner.
+  // Step 3: still tied → abstain.
   return null;
 }
 

@@ -776,11 +776,9 @@ describe('Endgame scoring', () => {
     expect(scorePlayerForCriterion(s, p1, 'most-diversity')).toBe(0);
   });
 
-  it('per-voter tiebreaker: marks first, then most Influence, then arrival-seq', () => {
-    // Build a controlled state with three players tied at the same diversity
-    // score (1 dept each), then exercise each tiebreaker step.
+  it('per-voter tiebreaker: simplified — marks (binary) then IP on the right subset', () => {
+    // Three players tied at diversity = 1 each.
     let s = initGame(FOUR_PLAYER_CONFIG);
-    // Force every voter face-up so computeVoterWinner runs on each.
     s = { ...s, voters: s.voters.map((v) => ({ ...v, revealed: true })) };
     const diversityVoter = s.voters.find(
       (v) => v.criterion === 'most-diversity',
@@ -788,7 +786,6 @@ describe('Endgame scoring', () => {
     if (!diversityVoter) {
       throw new Error('diversity voter must be in the seeded set for this test');
     }
-    // Give p1, p2, p3 one supporter each (different departments → diversity 1 each).
     s = mapPlayer(s, 'p1', (p) => ({
       ...p,
       supporters: ['base.supporter.allys-mehrmus'], // sorcery
@@ -801,49 +798,47 @@ describe('Endgame scoring', () => {
       ...p,
       supporters: ['base.supporter.andrus-dochartaigh'], // divinity
     }));
-    // p4 has nothing.
+    // p4 has nothing → not tied with the others (criterion=0 → excluded earlier).
 
-    // --- Tiebreaker 1: marks. Only p2 has a mark on this voter. ---
-    const withMark = {
+    // Case A: exactly one marker wins outright (no IP comparison).
+    const oneMarker = {
       ...s,
       voterMarks: [{ playerId: 'p2', voterId: diversityVoter.id }],
     };
-    expect(computeVoterWinner(withMark, diversityVoter)).toBe('p2');
+    expect(computeVoterWinner(oneMarker, diversityVoter)).toBe('p2');
 
-    // --- Tiebreaker 2: marks tied (p1 and p3 both marked once) → most
-    //     Influence wins, restricted to marked players. p4 has no mark
-    //     so it can't win even if it had massive Influence.
-    let withInfluence = {
+    // Case B: multiple markers → IP runs ONLY among them. p4 doesn't have
+    // the diversity to be a candidate; among p1/p3 (both marked), p3 has
+    // more Influence → wins.
+    let multipleMarkers = {
       ...s,
       voterMarks: [
         { playerId: 'p1', voterId: diversityVoter.id },
         { playerId: 'p3', voterId: diversityVoter.id },
       ],
     };
-    withInfluence = mapPlayer(withInfluence, 'p3', (p) => ({
+    multipleMarkers = mapPlayer(multipleMarkers, 'p3', (p) => ({
       ...p,
       resources: { ...p.resources, influence: 7 },
-      influenceArrivalSeq: 5,
     }));
-    withInfluence = mapPlayer(withInfluence, 'p4', (p) => ({
+    multipleMarkers = mapPlayer(multipleMarkers, 'p2', (p) => ({
       ...p,
-      // p4 has the most Influence but no mark → excluded from tiebreaker.
+      // p2 has the most Influence but no mark — not in the IP pool.
       resources: { ...p.resources, influence: 100 },
-      influenceArrivalSeq: 1,
     }));
-    expect(computeVoterWinner(withInfluence, diversityVoter)).toBe('p3');
+    expect(computeVoterWinner(multipleMarkers, diversityVoter)).toBe('p3');
 
-    // --- Tiebreaker 3: marks tied + Influence tied → arrival-seq breaks it. ---
-    let withSeq = withInfluence;
-    withSeq = mapPlayer(withSeq, 'p1', (p) => ({
+    // Case C: zero markers → IP runs across ALL tied candidates. Highest
+    // IP wins regardless of marks.
+    const zeroMarkers = mapPlayer(s, 'p3', (p) => ({
       ...p,
-      resources: { ...p.resources, influence: 7 },
-      influenceArrivalSeq: 3, // arrived at 7 IP earlier than p3
+      resources: { ...p.resources, influence: 9 },
     }));
-    expect(computeVoterWinner(withSeq, diversityVoter)).toBe('p1');
+    expect(computeVoterWinner(zeroMarkers, diversityVoter)).toBe('p3');
   });
 
-  it('per-voter tiebreaker: abstains when NO candidate has marked the voter, even with unequal Influence', () => {
+  it('per-voter tiebreaker: tied on IP after the marks step → voter abstains', () => {
+    // Two players tied on the criterion, neither marked, tied on IP.
     let s = initGame(FOUR_PLAYER_CONFIG);
     s = { ...s, voters: s.voters.map((v) => ({ ...v, revealed: true })) };
     const diversityVoter = s.voters.find(
@@ -852,26 +847,16 @@ describe('Endgame scoring', () => {
     if (!diversityVoter) {
       throw new Error('diversity voter must be seeded for this test');
     }
-    // Three players tied on diversity (1 each), none marked the voter.
     s = mapPlayer(s, 'p1', (p) => ({
       ...p,
       supporters: ['base.supporter.allys-mehrmus'],
-      resources: { ...p.resources, influence: 3 },
-      influenceArrivalSeq: 1,
+      resources: { ...p.resources, influence: 5 },
     }));
     s = mapPlayer(s, 'p2', (p) => ({
       ...p,
       supporters: ['base.supporter.alumis'],
-      resources: { ...p.resources, influence: 7 },
-      influenceArrivalSeq: 4,
-    }));
-    s = mapPlayer(s, 'p3', (p) => ({
-      ...p,
-      supporters: ['base.supporter.andrus-dochartaigh'],
       resources: { ...p.resources, influence: 5 },
-      influenceArrivalSeq: 2,
     }));
-    // No voterMarks at all.
     expect(computeVoterWinner(s, diversityVoter)).toBe(null);
   });
 
