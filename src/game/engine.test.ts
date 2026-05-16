@@ -5798,6 +5798,123 @@ describe('Spell research actions', () => {
     expect(owned?.wisPlacedLevel3).toBe(false);
   });
 
+  it('Add-WIS: L2-already-placed spell goes to L3 on the next WIS spend', () => {
+    let s = setupResearchTest({
+      wisdom: 1,
+      ownedSpells: [
+        {
+          cardId: 'base.spell.burn',
+          intPlaced: true,
+          wisPlacedLevel2: true,
+        },
+      ],
+    });
+    s = driveToResearchSubPrompt(s);
+    const menu = topPending(s);
+    if (menu.prompt.kind === 'choose-from-options') {
+      expect(menu.prompt.options.map((o) => o.id)).toContain('add-wis');
+    }
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'option-chosen', optionId: 'add-wis', payload: {} },
+    });
+    // Spell-pick prompt should list burn with label "→ L3".
+    const pickPrompt = topPending(s);
+    if (pickPrompt.prompt.kind === 'choose-from-options') {
+      const burn = pickPrompt.prompt.options.find(
+        (o) => o.id === 'base.spell.burn',
+      );
+      expect(burn).toBeDefined();
+      expect(burn?.label).toMatch(/L3/);
+    }
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: pickPrompt.id,
+      answer: { kind: 'option-chosen', optionId: 'base.spell.burn', payload: {} },
+    });
+    const owned = s.players
+      .find((p) => p.id === 'p1')
+      ?.ownedSpells.find((o) => o.cardId === 'base.spell.burn');
+    expect(owned?.wisPlacedLevel2).toBe(true);
+    expect(owned?.wisPlacedLevel3).toBe(true);
+  });
+
+  it('Add-WIS: an EXHAUSTED spell is still a legal upgrade target', () => {
+    let s = setupResearchTest({
+      wisdom: 1,
+      ownedSpells: [{ cardId: 'base.spell.burn', intPlaced: true }],
+    });
+    // Mark burn exhausted (as if just cast).
+    s = mapPlayer(s, 'p1', (p) => ({
+      ...p,
+      ownedSpells: p.ownedSpells.map((o) =>
+        o.cardId === 'base.spell.burn' ? { ...o, exhausted: true } : o,
+      ),
+    }));
+    s = driveToResearchSubPrompt(s);
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'option-chosen', optionId: 'add-wis', payload: {} },
+    });
+    // Spell-pick prompt should include the exhausted burn spell.
+    const pickPrompt = topPending(s);
+    if (pickPrompt.prompt.kind === 'choose-from-options') {
+      expect(pickPrompt.prompt.options.map((o) => o.id)).toContain(
+        'base.spell.burn',
+      );
+    }
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: pickPrompt.id,
+      answer: { kind: 'option-chosen', optionId: 'base.spell.burn', payload: {} },
+    });
+    const owned = s.players
+      .find((p) => p.id === 'p1')
+      ?.ownedSpells.find((o) => o.cardId === 'base.spell.burn');
+    expect(owned?.wisPlacedLevel2).toBe(true);
+    expect(owned?.exhausted).toBe(true); // still exhausted
+  });
+
+  it('Add-WIS: every researched (non-fully-upgraded) spell is offered as a target', () => {
+    let s = setupResearchTest({
+      wisdom: 1,
+      ownedSpells: [
+        // L1-only
+        { cardId: 'base.spell.burn', intPlaced: true },
+        // L2 already placed
+        {
+          cardId: 'base.spell.living-image',
+          intPlaced: true,
+          wisPlacedLevel2: true,
+        },
+        // Fully upgraded — should NOT appear in the pick list
+        {
+          cardId: 'base.spell.flash-of-light',
+          intPlaced: true,
+          wisPlacedLevel2: true,
+          wisPlacedLevel3: true,
+        },
+      ],
+    });
+    s = driveToResearchSubPrompt(s);
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'option-chosen', optionId: 'add-wis', payload: {} },
+    });
+    const pickPrompt = topPending(s);
+    expect(pickPrompt.prompt.kind).toBe('choose-from-options');
+    if (pickPrompt.prompt.kind === 'choose-from-options') {
+      const ids = pickPrompt.prompt.options.map((o) => o.id);
+      expect(ids).toContain('base.spell.burn');
+      expect(ids).toContain('base.spell.living-image');
+      // Fully-upgraded spell must NOT be in the list.
+      expect(ids).not.toContain('base.spell.flash-of-light');
+    }
+  });
+
   // Skipped: per the Argent base rulebook, the only research actions are
   // 'draft' (spend INT) and 'add-wis' (spend WIS). 'move-int' and 'move-wis'
   // are no longer offered by spawnResearchPrompt. Tests kept (skipped) in case

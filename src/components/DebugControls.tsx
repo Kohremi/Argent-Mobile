@@ -1548,11 +1548,13 @@ function PlayerCard({
                     // own spells participate; unique spells never do.
                     let researchClick: (() => void) | undefined;
                     let researchHint: string | undefined;
+                    // Note: an exhausted spell is still a legal RESEARCH
+                    // target (exhaustion only blocks casting, not adding /
+                    // moving WIS). Don't gate by `s.exhausted` here.
                     if (
                       researchMode &&
                       researchTargetsThisPlayer &&
-                      !card.unique &&
-                      !s.exhausted
+                      !card.unique
                     ) {
                       const src = researchMode.source;
                       if (src === null) {
