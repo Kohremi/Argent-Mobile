@@ -624,14 +624,15 @@ function handlePlaceWorker(state: GameState, action: PlaceWorkerAction): GameSta
     }
   }
 
-  // TODO: Purple-mage placement-as-fast-action trigger (the Planar Studies
-  // mage power). Not yet implemented; purple still pays the Fast Action
-  // budget through the standard placement path below.
-
-  // Purple (Planar Studies) Mages place as a Fast Action; everyone else
+  // Purple (Planar Studies) Mages place as a Fast Action by default, but
+  // they CAN consume the Regular Action if the Fast Action has already
+  // been used this turn (player chose to place a fast-action-eligible
+  // mage late, e.g. after another fast action). Everyone else always
   // consumes the Action budget.
-  const budgetKind: ActionBudgetKind =
-    mage.color === 'purple' ? 'fast-action' : 'action';
+  let budgetKind: ActionBudgetKind = 'action';
+  if (mage.color === 'purple') {
+    budgetKind = state.phase.fastActionUsed ? 'action' : 'fast-action';
+  }
   state = consumeActionBudget(state, budgetKind, 'PLACE_WORKER');
 
   // Red Mage Ars Magna: spending 1 mana when placing wounds the slot's

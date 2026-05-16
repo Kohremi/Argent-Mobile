@@ -337,10 +337,16 @@ function placementBlockedReason(
     ).length;
     if (placedHere >= roomLimit) return `${room.name}: already at room limit this round`;
   }
-  // Action budget.
-  const isFast = mage.color === 'purple';
-  if (isFast) {
-    if (state.phase.fastActionUsed) return 'Fast Action already used';
+  // Action budget. Purple (Planar Studies) Mages prefer the Fast Action
+  // but can fall back to the Regular Action when the Fast Action is
+  // spent — they're blocked only if BOTH budgets are gone (or the
+  // Regular Action is already spent, which prevents any Fast Action by
+  // the "Fast before Regular" rule).
+  if (mage.color === 'purple') {
+    if (state.phase.actionUsed) return 'Action already used';
+    if (state.phase.fastActionUsed && state.phase.actionUsed) {
+      return 'no Actions left this turn';
+    }
   } else {
     if (state.phase.actionUsed) return 'Action already used';
   }

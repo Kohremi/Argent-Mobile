@@ -3643,6 +3643,104 @@ describe('PLACE_WORKER', () => {
     });
   });
 
+  it('purple mage: consumes the Fast Action when available', () => {
+    let s = initGame(TWO_PLAYER_CONFIG);
+    s = forceLibrarySideA(s);
+    s = addMage(s, 'p1', {
+      id: 'alice-purple',
+      cardId: 'base.mage.planar-studies',
+      color: 'purple',
+    });
+    s = {
+      ...s,
+      firstPlayerIndex: 0,
+      phase: {
+        kind: 'errands',
+        round: 1,
+        activePlayerIndex: 0,
+        actionUsed: false,
+        fastActionUsed: false,
+      },
+    };
+    s = applyAction(s, {
+      type: 'PLACE_WORKER',
+      playerId: 'p1',
+      mageId: 'alice-purple',
+      actionSpaceId: 'base.room.library.a.slot-4',
+    });
+    if (s.phase.kind !== 'errands') throw new Error('not errands');
+    expect(s.phase.fastActionUsed).toBe(true);
+    expect(s.phase.actionUsed).toBe(false);
+  });
+
+  it('purple mage: falls back to the Regular Action when the Fast Action is already used', () => {
+    let s = initGame(TWO_PLAYER_CONFIG);
+    s = forceLibrarySideA(s);
+    s = addMage(s, 'p1', {
+      id: 'alice-purple',
+      cardId: 'base.mage.planar-studies',
+      color: 'purple',
+    });
+    s = {
+      ...s,
+      firstPlayerIndex: 0,
+      phase: {
+        kind: 'errands',
+        round: 1,
+        activePlayerIndex: 0,
+        actionUsed: false,
+        // Fast action already burned (e.g. via a fast-action supporter
+        // earlier this turn).
+        fastActionUsed: true,
+      },
+    };
+    s = applyAction(s, {
+      type: 'PLACE_WORKER',
+      playerId: 'p1',
+      mageId: 'alice-purple',
+      actionSpaceId: 'base.room.library.a.slot-4',
+    });
+    // The Regular Action was consumed. With nothing pending the turn
+    // auto-advanced to p2.
+    if (s.phase.kind !== 'errands') {
+      throw new Error('expected to still be in errands phase');
+    }
+    expect(s.phase.activePlayerIndex).toBe(1);
+    expect(findMageById(s, 'alice-purple').location).toEqual({
+      kind: 'action-space',
+      spaceId: 'base.room.library.a.slot-4',
+    });
+  });
+
+  it('purple mage: cannot be placed when the Regular Action has already been used', () => {
+    let s = initGame(TWO_PLAYER_CONFIG);
+    s = forceLibrarySideA(s);
+    s = addMage(s, 'p1', {
+      id: 'alice-purple',
+      cardId: 'base.mage.planar-studies',
+      color: 'purple',
+    });
+    s = {
+      ...s,
+      firstPlayerIndex: 0,
+      phase: {
+        kind: 'errands',
+        round: 1,
+        activePlayerIndex: 0,
+        actionUsed: true,
+        fastActionUsed: false,
+      },
+    };
+    expect(() =>
+      applyAction(s, {
+        type: 'PLACE_WORKER',
+        playerId: 'p1',
+        mageId: 'alice-purple',
+        actionSpaceId: 'base.room.library.a.slot-4',
+      }),
+    ).toThrow();
+  });
+
   it('rejects placement on a Mage not in office', () => {
     let s = initGame(TWO_PLAYER_CONFIG);
     s = forceLibrarySideA(s);
