@@ -37,6 +37,7 @@ import {
   moveMageToSpace,
   placeOfficeMageAsShadow,
   refreshOwnedSpellPatch,
+  returnMageToOfficePatch,
   playerHasAuricCatalyst,
   spellLabel,
   woundMage,
@@ -6395,3 +6396,257 @@ function immolationFinalPlace(
     ),
   };
 }
+
+// ============================================================================
+// Spell wiring — Wave 6: infirmary heal
+// ============================================================================
+//
+// "Heal" returns a wounded mage from the Infirmary to its owner's Office.
+// "Move from infirmary" places it on a chosen open slot (Amelioration).
+// Mass-heals return ALL caster's (or all) wounded mages in one go.
+//
+// Heal events don't open a reaction window per `healMageToSpace` /
+// `returnMageToOfficePatch`. Innervation (L3) IS deferred — it allows
+// wounding an opponent in order to clear a placement slot, which is the
+// same compound shape as Immolation and warrants a separate pass.
+
+function buildWoundedTargets(
+  state: GameState,
+  filter: 'any' | 'own',
+  playerId: string,
+): string[] {
+  const targets: string[] = [];
+  for (const p of state.players) {
+    if (filter === 'own' && p.id !== playerId) continue;
+    for (const m of p.mages) {
+      if (m.location.kind === 'infirmary' && m.isWounded) {
+        targets.push(m.id);
+      }
+    }
+  }
+  return targets;
+}
+
+/** Of Mortal Form L1 "Heal" — Return a Mage from the Infirmary to its owner's Office. */
+registerEffect('base.spell.of-mortal-form.l1', (ctx): EffectResult => {
+  if (!ctx.resumeAnswer) {
+    const targets = buildWoundedTargets(ctx.state, 'any', ctx.triggeringPlayerId);
+    if (targets.length === 0) return { kind: 'done', patch: {} };
+    return {
+      kind: 'pause',
+      pending: {
+        responderId: ctx.triggeringPlayerId,
+        prompt: { kind: 'choose-target-mage', eligibleMageIds: targets },
+        resume: {
+          effectId: 'base.spell.of-mortal-form.l1',
+          context: { step: 'apply' },
+        },
+        source: ctx.source,
+      },
+    };
+  }
+  if (ctx.resumeAnswer.kind !== 'mage-chosen') {
+    throw new Error('of-mortal-form.l1 apply expected mage-chosen');
+  }
+  return {
+    kind: 'done',
+    patch: returnMageToOfficePatch(ctx.state, ctx.resumeAnswer.mageId),
+  };
+});
+
+/** Of Mortal Form L2 "Amelioration" — Move a Mage from the Infirmary to an open slot. */
+registerEffect('base.spell.of-mortal-form.l2', (ctx): EffectResult => {
+  const step = ctx.resumeContext?.['step'];
+  if (!ctx.resumeAnswer) {
+    const targets = buildWoundedTargets(ctx.state, 'any', ctx.triggeringPlayerId);
+    if (targets.length === 0) return { kind: 'done', patch: {} };
+    return {
+      kind: 'pause',
+      pending: {
+        responderId: ctx.triggeringPlayerId,
+        prompt: { kind: 'choose-target-mage', eligibleMageIds: targets },
+        resume: {
+          effectId: 'base.spell.of-mortal-form.l2',
+          context: { step: 'pick-slot' },
+        },
+        source: ctx.source,
+      },
+    };
+  }
+  if (step === 'pick-slot') {
+    if (ctx.resumeAnswer.kind !== 'mage-chosen') {
+      throw new Error('amelioration pick-slot expected mage-chosen');
+    }
+    const targetMageId = ctx.resumeAnswer.mageId;
+    // Healing-to-slot doesn't grant the recipient a roundPlacements credit
+    // (the mage is being healed-and-placed by the caster on the recipient's
+    // behalf — the per-round cap belongs to the recipient, not the caster).
+    // We still respect cannotBePlacedInDirectly so a healed mage can't be
+    // placed back into the Infirmary.
+    const openSlots: string[] = [];
+    for (const r of ctx.state.rooms) {
+      if (r.cannotBePlacedInDirectly) continue;
+      for (const s of r.actionSpaces) {
+        if (!s.occupant) openSlots.push(s.id);
+      }
+    }
+    if (openSlots.length === 0) return { kind: 'done', patch: {} };
+    return {
+      kind: 'pause',
+      pending: {
+        responderId: ctx.triggeringPlayerId,
+        prompt: {
+          kind: 'choose-target-action-space',
+          eligibleSpaceIds: openSlots,
+        },
+        resume: {
+          effectId: 'base.spell.of-mortal-form.l2',
+          context: { step: 'apply', targetMageId },
+        },
+        source: ctx.source,
+      },
+    };
+  }
+  if (step === 'apply') {
+    if (ctx.resumeAnswer.kind !== 'space-chosen') {
+      throw new Error('amelioration apply expected space-chosen');
+    }
+    const targetMageId = ctx.resumeContext?.['targetMageId'];
+    if (typeof targetMageId !== 'string') {
+      throw new Error('amelioration apply: missing targetMageId');
+    }
+    return {
+      kind: 'done',
+      patch: healMageToSpace(
+        ctx.state,
+        targetMageId,
+        ctx.resumeAnswer.spaceId,
+      ),
+    };
+  }
+  throw new Error(`amelioration unexpected step ${String(step)}`);
+});
+
+/**
+ * Rites of Renewal L1 "Chain of Healing" — Return up to two of your Mages
+ * from the Infirmary to your Office. Re-entrant loop; player can stop early.
+ *
+ * Step 1: present caster's wounded list + "Stop" option. Pick triggers a
+ * heal-to-office, increments `healed`, and re-enters at step 'pick'. After
+ * 2 heals OR Stop OR no remaining wounded, the effect ends.
+ */
+registerEffect('base.spell.rites-of-renewal.l1', (ctx): EffectResult => {
+  const healed = (ctx.resumeContext?.['healed'] as number | undefined) ?? 0;
+  const step = ctx.resumeContext?.['step'];
+  if (step !== undefined && step !== 'pick') {
+    throw new Error(`chain-of-healing unexpected step ${String(step)}`);
+  }
+
+  // Apply prior selection (if this is a re-entry from a prompt response).
+  let working = ctx.state;
+  let newlyHealed = healed;
+  if (ctx.resumeAnswer && ctx.resumeAnswer.kind === 'option-chosen') {
+    if (ctx.resumeAnswer.optionId === 'stop') {
+      return { kind: 'done', patch: {} };
+    }
+    const healPatch = returnMageToOfficePatch(
+      ctx.state,
+      ctx.resumeAnswer.optionId,
+    );
+    working = { ...ctx.state, ...healPatch };
+    newlyHealed = healed + 1;
+    if (newlyHealed >= 2) {
+      return { kind: 'done', patch: healPatch };
+    }
+    // Continue to re-prompt below; we'll surface as a fresh prompt with the
+    // already-applied patch.
+  }
+
+  const remaining = buildWoundedTargets(
+    working,
+    'own',
+    ctx.triggeringPlayerId,
+  );
+  if (remaining.length === 0) {
+    if (working === ctx.state) return { kind: 'done', patch: {} };
+    // We've applied a prior heal patch; return done with the accumulated patch.
+    return {
+      kind: 'done',
+      patch: {
+        players: working.players,
+      },
+    };
+  }
+  const options: ChoiceOption[] = remaining.map((mid) => ({
+    id: mid,
+    label: `Return ${mid} to your Office`,
+    payload: {},
+  }));
+  options.push({ id: 'stop', label: 'Stop', payload: {} });
+  const pending: PendingResolutionInput = {
+    responderId: ctx.triggeringPlayerId,
+    prompt: { kind: 'choose-from-options', options },
+    resume: {
+      effectId: 'base.spell.rites-of-renewal.l1',
+      context: { step: 'pick', healed: newlyHealed },
+    },
+    source: ctx.source,
+  };
+  if (working === ctx.state) {
+    return { kind: 'pause', pending };
+  }
+  return {
+    kind: 'pause',
+    patch: { players: working.players },
+    pending,
+  };
+});
+
+/** Rites of Renewal L2 "Circle of Healing" — Return all your wounded mages to your Office. */
+registerEffect('base.spell.rites-of-renewal.l2', (ctx): EffectResult => {
+  const woundedOwnIds = buildWoundedTargets(
+    ctx.state,
+    'own',
+    ctx.triggeringPlayerId,
+  );
+  if (woundedOwnIds.length === 0) return { kind: 'done', patch: {} };
+  let working = ctx.state;
+  for (const mid of woundedOwnIds) {
+    working = { ...working, ...returnMageToOfficePatch(working, mid) };
+  }
+  return { kind: 'done', patch: { players: working.players } };
+});
+
+/**
+ * Rites of Renewal L3 "Well of Healing" — Return all mages in the Infirmary
+ * to their Offices. Gain 2 IP if at least one opponent's Mage was returned.
+ */
+registerEffect('base.spell.rites-of-renewal.l3', (ctx): EffectResult => {
+  const allWounded = buildWoundedTargets(
+    ctx.state,
+    'any',
+    ctx.triggeringPlayerId,
+  );
+  if (allWounded.length === 0) return { kind: 'done', patch: {} };
+  let working = ctx.state;
+  let healedOpponent = false;
+  for (const mid of allWounded) {
+    const owner = ctx.state.players.find((p) =>
+      p.mages.some((m) => m.id === mid),
+    );
+    if (owner && owner.id !== ctx.triggeringPlayerId) healedOpponent = true;
+    working = { ...working, ...returnMageToOfficePatch(working, mid) };
+  }
+  const players = working.players;
+  if (!healedOpponent) {
+    return { kind: 'done', patch: { players } };
+  }
+  // +2 IP for returning at least one opponent's mage.
+  const stateWithHeals: GameState = { ...ctx.state, players };
+  const ipPatch = bumpInfluencePatch(
+    stateWithHeals,
+    ctx.triggeringPlayerId,
+    2,
+  );
+  return { kind: 'done', patch: { ...ipPatch } };
+});

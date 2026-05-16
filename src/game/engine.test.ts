@@ -7177,6 +7177,313 @@ describe('Spell wiring — Wave 5a (place / move)', () => {
     expect(s.pendingResolutionStack).toHaveLength(0);
   });
 
+  it('Heal (L1): returns a wounded mage from the Infirmary to its owner\'s office', () => {
+    let s = initGame(TWO_PLAYER_CONFIG);
+    s = forceLibrarySideA(s);
+    s = zeroPlayerResources(s, 'p1');
+    s = addOwnedSpell(s, 'p1', 'base.spell.of-mortal-form', {
+      intPlaced: true,
+    });
+    s = setMana(s, 'p1', 0); // Heal costs 0.
+    s = addMage(s, 'p2', {
+      id: 'bob-wounded',
+      cardId: 'base.mage.sorcery',
+      color: 'red',
+    });
+    // Put Bob's mage in the infirmary, wounded.
+    s = mapPlayer(s, 'p2', (p) => ({
+      ...p,
+      mages: p.mages.map((m) =>
+        m.id !== 'bob-wounded'
+          ? m
+          : {
+              ...m,
+              isWounded: true,
+              location: { kind: 'infirmary' as const },
+            },
+      ),
+    }));
+    s = {
+      ...s,
+      firstPlayerIndex: 0,
+      phase: {
+        kind: 'errands',
+        round: 1,
+        activePlayerIndex: 0,
+        actionUsed: false,
+        fastActionUsed: false,
+      },
+    };
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.of-mortal-form',
+      level: 1,
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'mage-chosen', mageId: 'bob-wounded' },
+    });
+    const bob = findMageById(s, 'bob-wounded');
+    expect(bob.isWounded).toBe(false);
+    expect(bob.location).toEqual({ kind: 'office', playerId: 'p2' });
+    expect(s.pendingResolutionStack).toHaveLength(0);
+  });
+
+  it('Amelioration (L2): heals a wounded mage onto a chosen open slot', () => {
+    let s = initGame(TWO_PLAYER_CONFIG);
+    s = forceLibrarySideA(s);
+    s = zeroPlayerResources(s, 'p1');
+    s = addOwnedSpell(s, 'p1', 'base.spell.of-mortal-form', {
+      intPlaced: true,
+      wisPlacedLevel2: true,
+    });
+    s = setMana(s, 'p1', 1);
+    s = addMage(s, 'p1', {
+      id: 'alice-wounded',
+      cardId: 'base.mage.divinity',
+      color: 'blue',
+    });
+    s = mapPlayer(s, 'p1', (p) => ({
+      ...p,
+      mages: p.mages.map((m) =>
+        m.id !== 'alice-wounded'
+          ? m
+          : {
+              ...m,
+              isWounded: true,
+              location: { kind: 'infirmary' as const },
+            },
+      ),
+    }));
+    s = {
+      ...s,
+      firstPlayerIndex: 0,
+      phase: {
+        kind: 'errands',
+        round: 1,
+        activePlayerIndex: 0,
+        actionUsed: false,
+        fastActionUsed: false,
+      },
+    };
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.of-mortal-form',
+      level: 2,
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'mage-chosen', mageId: 'alice-wounded' },
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: {
+        kind: 'space-chosen',
+        spaceId: 'base.room.library.a.slot-1',
+      },
+    });
+    const alice = findMageById(s, 'alice-wounded');
+    expect(alice.isWounded).toBe(false);
+    expect(alice.location).toEqual({
+      kind: 'action-space',
+      spaceId: 'base.room.library.a.slot-1',
+    });
+  });
+
+  it('Chain of Healing (L1): loops up to two heals, stops on "stop"', () => {
+    let s = initGame(TWO_PLAYER_CONFIG);
+    s = forceLibrarySideA(s);
+    s = zeroPlayerResources(s, 'p1');
+    s = addOwnedSpell(s, 'p1', 'base.spell.rites-of-renewal', {
+      intPlaced: true,
+    });
+    s = setMana(s, 'p1', 1);
+    s = addMage(s, 'p1', {
+      id: 'alice-w1',
+      cardId: 'base.mage.divinity',
+      color: 'blue',
+    });
+    s = addMage(s, 'p1', {
+      id: 'alice-w2',
+      cardId: 'base.mage.divinity',
+      color: 'blue',
+    });
+    s = mapPlayer(s, 'p1', (p) => ({
+      ...p,
+      mages: p.mages.map((m) =>
+        !['alice-w1', 'alice-w2'].includes(m.id)
+          ? m
+          : {
+              ...m,
+              isWounded: true,
+              location: { kind: 'infirmary' as const },
+            },
+      ),
+    }));
+    s = {
+      ...s,
+      firstPlayerIndex: 0,
+      phase: {
+        kind: 'errands',
+        round: 1,
+        activePlayerIndex: 0,
+        actionUsed: false,
+        fastActionUsed: false,
+      },
+    };
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.rites-of-renewal',
+      level: 1,
+    });
+    // First pick.
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'option-chosen', optionId: 'alice-w1', payload: {} },
+    });
+    expect(findMageById(s, 'alice-w1').isWounded).toBe(false);
+    // Second prompt offers remaining wounded + 'stop'.
+    const secondPrompt = topPending(s);
+    expect(secondPrompt.prompt.kind).toBe('choose-from-options');
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: secondPrompt.id,
+      answer: { kind: 'option-chosen', optionId: 'stop', payload: {} },
+    });
+    // alice-w2 still wounded.
+    expect(findMageById(s, 'alice-w2').isWounded).toBe(true);
+    expect(s.pendingResolutionStack).toHaveLength(0);
+  });
+
+  it('Circle of Healing (L2): mass-heals all caster wounded mages atomically', () => {
+    let s = initGame(TWO_PLAYER_CONFIG);
+    s = forceLibrarySideA(s);
+    s = zeroPlayerResources(s, 'p1');
+    s = addOwnedSpell(s, 'p1', 'base.spell.rites-of-renewal', {
+      intPlaced: true,
+      wisPlacedLevel2: true,
+    });
+    s = setMana(s, 'p1', 2);
+    s = addMage(s, 'p1', {
+      id: 'alice-w1',
+      cardId: 'base.mage.divinity',
+      color: 'blue',
+    });
+    s = addMage(s, 'p1', {
+      id: 'alice-w2',
+      cardId: 'base.mage.divinity',
+      color: 'blue',
+    });
+    s = mapPlayer(s, 'p1', (p) => ({
+      ...p,
+      mages: p.mages.map((m) =>
+        !['alice-w1', 'alice-w2'].includes(m.id)
+          ? m
+          : {
+              ...m,
+              isWounded: true,
+              location: { kind: 'infirmary' as const },
+            },
+      ),
+    }));
+    s = {
+      ...s,
+      firstPlayerIndex: 0,
+      phase: {
+        kind: 'errands',
+        round: 1,
+        activePlayerIndex: 0,
+        actionUsed: false,
+        fastActionUsed: false,
+      },
+    };
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.rites-of-renewal',
+      level: 2,
+    });
+    expect(findMageById(s, 'alice-w1').isWounded).toBe(false);
+    expect(findMageById(s, 'alice-w2').isWounded).toBe(false);
+    expect(s.pendingResolutionStack).toHaveLength(0);
+  });
+
+  it('Well of Healing (L3): heals all wounded mages + grants 2 IP when an opponent\'s mage is returned', () => {
+    let s = initGame(TWO_PLAYER_CONFIG);
+    s = forceLibrarySideA(s);
+    s = zeroPlayerResources(s, 'p1');
+    s = zeroPlayerResources(s, 'p2');
+    s = addOwnedSpell(s, 'p1', 'base.spell.rites-of-renewal', {
+      intPlaced: true,
+      wisPlacedLevel2: true,
+      wisPlacedLevel3: true,
+    });
+    s = setMana(s, 'p1', 3);
+    s = addMage(s, 'p1', {
+      id: 'alice-w',
+      cardId: 'base.mage.divinity',
+      color: 'blue',
+    });
+    s = addMage(s, 'p2', {
+      id: 'bob-w',
+      cardId: 'base.mage.sorcery',
+      color: 'red',
+    });
+    s = mapPlayer(s, 'p1', (p) => ({
+      ...p,
+      mages: p.mages.map((m) =>
+        m.id !== 'alice-w'
+          ? m
+          : {
+              ...m,
+              isWounded: true,
+              location: { kind: 'infirmary' as const },
+            },
+      ),
+    }));
+    s = mapPlayer(s, 'p2', (p) => ({
+      ...p,
+      mages: p.mages.map((m) =>
+        m.id !== 'bob-w'
+          ? m
+          : {
+              ...m,
+              isWounded: true,
+              location: { kind: 'infirmary' as const },
+            },
+      ),
+    }));
+    const ipBefore = s.players.find((p) => p.id === 'p1')!.resources.influence;
+    s = {
+      ...s,
+      firstPlayerIndex: 0,
+      phase: {
+        kind: 'errands',
+        round: 1,
+        activePlayerIndex: 0,
+        actionUsed: false,
+        fastActionUsed: false,
+      },
+    };
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.rites-of-renewal',
+      level: 3,
+    });
+    expect(findMageById(s, 'alice-w').isWounded).toBe(false);
+    expect(findMageById(s, 'bob-w').isWounded).toBe(false);
+    const ipAfter = s.players.find((p) => p.id === 'p1')!.resources.influence;
+    expect(ipAfter).toBe(ipBefore + 2);
+  });
+
   it('Zephyr: excludes caster\'s own mages from the target list', () => {
     let s = initGame(TWO_PLAYER_CONFIG);
     s = forceLibrarySideA(s);

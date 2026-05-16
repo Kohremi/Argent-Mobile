@@ -450,6 +450,45 @@ export function moveMageToSpace(
 }
 
 /**
+ * Returns a wounded mage from the Infirmary to its owner's Office. Clears
+ * `isWounded`. No reaction trigger fires for heals (mirrors `healMageToSpace`).
+ */
+export function returnMageToOfficePatch(
+  state: GameState,
+  mageId: OwnedMageId,
+): GameStatePatch {
+  const lookup = findMageOwner(state, mageId);
+  if (!lookup) {
+    throw new Error(`returnMageToOfficePatch: mage ${mageId} not found`);
+  }
+  const { player: owner, mage } = lookup;
+  if (mage.location.kind !== 'infirmary') {
+    throw new Error(
+      `returnMageToOfficePatch: ${mageId} is not in the infirmary`,
+    );
+  }
+  return {
+    players: state.players.map((p) =>
+      p.id !== owner.id
+        ? p
+        : {
+            ...p,
+            mages: p.mages.map((m) =>
+              m.id !== mageId
+                ? m
+                : {
+                    ...m,
+                    isWounded: false,
+                    isShadowing: false,
+                    location: { kind: 'office' as const, playerId: owner.id },
+                  },
+            ),
+          },
+    ),
+  };
+}
+
+/**
  * Moves a wounded mage from the Infirmary to an empty action space. Clears
  * `isWounded`. No reaction trigger fires for heals.
  */
