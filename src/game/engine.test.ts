@@ -6974,6 +6974,209 @@ describe('Spell wiring — Wave 5a (place / move)', () => {
     expect(s.pendingResolutionStack).toHaveLength(0);
   });
 
+  it('Lightning L2: wounds opponent + places caster\'s mage on a chosen open slot (anywhere)', () => {
+    let s = initGame(TWO_PLAYER_CONFIG);
+    s = forceLibrarySideA(s);
+    s = zeroPlayerResources(s, 'p1');
+    s = zeroPlayerResources(s, 'p2');
+    s = addOwnedSpell(s, 'p1', 'base.spell.lightning-and-you', {
+      intPlaced: true,
+      wisPlacedLevel2: true,
+    });
+    s = setMana(s, 'p1', 3);
+    s = addMage(s, 'p1', {
+      id: 'alice-placer',
+      cardId: 'base.mage.divinity',
+      color: 'blue',
+    });
+    s = addMage(s, 'p2', {
+      id: 'bob-target',
+      cardId: 'base.mage.sorcery',
+      color: 'red',
+    });
+    s = placeMageOnSpace(s, 'p2', 'bob-target', 'base.room.library.a.slot-1');
+    s = {
+      ...s,
+      firstPlayerIndex: 0,
+      phase: {
+        kind: 'errands',
+        round: 1,
+        activePlayerIndex: 0,
+        actionUsed: false,
+        fastActionUsed: false,
+      },
+    };
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.lightning-and-you',
+      level: 2,
+    });
+    // Wound target.
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'mage-chosen', mageId: 'bob-target' },
+    });
+    // Reaction window.
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'reaction-passed' },
+    });
+    // Bonus prompt (Bob takes gold).
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'option-chosen', optionId: 'gold', payload: {} },
+    });
+    // Pick placer.
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'mage-chosen', mageId: 'alice-placer' },
+    });
+    // Pick slot — any open slot, NOT just the vacated one.
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: {
+        kind: 'space-chosen',
+        spaceId: 'base.room.library.a.slot-3',
+      },
+    });
+    const slot3 = s.rooms
+      .flatMap((r) => r.actionSpaces)
+      .find((sp) => sp.id === 'base.room.library.a.slot-3');
+    expect(slot3?.occupant?.mageId).toBe('alice-placer');
+    expect(findMageById(s, 'bob-target').isWounded).toBe(true);
+    expect(s.pendingResolutionStack).toHaveLength(0);
+  });
+
+  it('Immolation: places into an empty slot directly (no wound)', () => {
+    let s = initGame(TWO_PLAYER_CONFIG);
+    s = forceLibrarySideA(s);
+    s = zeroPlayerResources(s, 'p1');
+    s = addOwnedSpell(s, 'p1', 'base.spell.a-brighter-flame', {
+      intPlaced: true,
+      wisPlacedLevel2: true,
+      wisPlacedLevel3: true,
+    });
+    s = setMana(s, 'p1', 3);
+    s = addMage(s, 'p1', {
+      id: 'alice-placer',
+      cardId: 'base.mage.divinity',
+      color: 'blue',
+    });
+    s = {
+      ...s,
+      firstPlayerIndex: 0,
+      phase: {
+        kind: 'errands',
+        round: 1,
+        activePlayerIndex: 0,
+        actionUsed: false,
+        fastActionUsed: false,
+      },
+    };
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.a-brighter-flame',
+      level: 3,
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'mage-chosen', mageId: 'alice-placer' },
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: {
+        kind: 'space-chosen',
+        spaceId: 'base.room.library.a.slot-1',
+      },
+    });
+    const slot = s.rooms
+      .flatMap((r) => r.actionSpaces)
+      .find((sp) => sp.id === 'base.room.library.a.slot-1');
+    expect(slot?.occupant?.mageId).toBe('alice-placer');
+    expect(s.pendingResolutionStack).toHaveLength(0);
+  });
+
+  it('Immolation: into an occupied slot wounds the occupant, then places caster\'s mage', () => {
+    let s = initGame(TWO_PLAYER_CONFIG);
+    s = forceLibrarySideA(s);
+    s = zeroPlayerResources(s, 'p1');
+    s = zeroPlayerResources(s, 'p2');
+    s = addOwnedSpell(s, 'p1', 'base.spell.a-brighter-flame', {
+      intPlaced: true,
+      wisPlacedLevel2: true,
+      wisPlacedLevel3: true,
+    });
+    s = setMana(s, 'p1', 3);
+    s = addMage(s, 'p1', {
+      id: 'alice-placer',
+      cardId: 'base.mage.divinity',
+      color: 'blue',
+    });
+    s = addMage(s, 'p2', {
+      id: 'bob-target',
+      cardId: 'base.mage.sorcery',
+      color: 'red',
+    });
+    s = placeMageOnSpace(s, 'p2', 'bob-target', 'base.room.library.a.slot-1');
+    s = {
+      ...s,
+      firstPlayerIndex: 0,
+      phase: {
+        kind: 'errands',
+        round: 1,
+        activePlayerIndex: 0,
+        actionUsed: false,
+        fastActionUsed: false,
+      },
+    };
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.a-brighter-flame',
+      level: 3,
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'mage-chosen', mageId: 'alice-placer' },
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: {
+        kind: 'space-chosen',
+        spaceId: 'base.room.library.a.slot-1',
+      },
+    });
+    // Reaction window for the wound.
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'reaction-passed' },
+    });
+    // Infirmary bonus.
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'option-chosen', optionId: 'gold', payload: {} },
+    });
+    const slot = s.rooms
+      .flatMap((r) => r.actionSpaces)
+      .find((sp) => sp.id === 'base.room.library.a.slot-1');
+    expect(slot?.occupant?.mageId).toBe('alice-placer');
+    expect(findMageById(s, 'bob-target').isWounded).toBe(true);
+    expect(s.pendingResolutionStack).toHaveLength(0);
+  });
+
   it('Zephyr: excludes caster\'s own mages from the target list', () => {
     let s = initGame(TWO_PLAYER_CONFIG);
     s = forceLibrarySideA(s);

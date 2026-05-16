@@ -5985,3 +5985,413 @@ registerEffect('base.spell.taming-of-the-storm.l1', (ctx): EffectResult => {
   }
   throw new Error(`zephyr unexpected step ${String(step)}`);
 });
+
+// ============================================================================
+// Spell wiring — Wave 5b: anywhere-place (Lightning L2, Immolation)
+// ============================================================================
+//
+// Shared helper: surface a "pick one of your office mages" pause whose
+// resume routes to the caller's `pick-slot` step. If the caster has no
+// office mages, returns null and the caller should end the effect.
+//
+// This is the same shape Celerity uses; extracting it lets Lightning L2's
+// post-wound tail and Immolation's place tail share the code.
+
+function placeAnyOfficeMagePrompt(
+  state: GameState,
+  playerId: string,
+  selfEffectId: string,
+  source: ResolutionSource,
+  pickSlotContext: SerializableContext,
+): PendingResolutionInput | null {
+  const player = state.players.find((p) => p.id === playerId);
+  const officeMages =
+    player?.mages
+      .filter((m) => m.location.kind === 'office' && !m.isWounded)
+      .map((m) => m.id) ?? [];
+  if (officeMages.length === 0) return null;
+  return {
+    responderId: playerId,
+    prompt: { kind: 'choose-target-mage', eligibleMageIds: officeMages },
+    resume: { effectId: selfEffectId, context: pickSlotContext },
+    source,
+  };
+}
+
+/** Apply a "place office mage on slot" with roundPlacements credit. */
+function placeOfficeMageOnSpaceCrediting(
+  state: GameState,
+  playerId: string,
+  mageId: string,
+  spaceId: string,
+): GameStatePatch {
+  const targetRoom = state.rooms.find((r) =>
+    r.actionSpaces.some((s) => s.id === spaceId),
+  );
+  if (!targetRoom) {
+    throw new Error(`placeOfficeMageOnSpaceCrediting: room for ${spaceId} not found`);
+  }
+  const placePatch = placeOfficeMageOnSpace(state, playerId, mageId, spaceId);
+  const updatedPlayers = (placePatch.players ?? state.players).map((p) =>
+    p.id !== playerId
+      ? p
+      : { ...p, roundPlacements: [...p.roundPlacements, targetRoom.id] },
+  );
+  return { ...placePatch, players: updatedPlayers };
+}
+
+/**
+ * Lightning and You L2 "Lightning" — Wound an opponent's Mage, then place
+ * a Mage of your own (anywhere). The "anywhere" placement differs from
+ * Bottled Rage / Spellblade / Poison which place in the vacated slot.
+ */
+registerEffect('base.spell.lightning-and-you.l2', (ctx): EffectResult => {
+  const step = ctx.resumeContext?.['step'];
+  const self = 'base.spell.lightning-and-you.l2';
+
+  // After the wound reaction window resolves — Infirmary bonus, then place.
+  if (step === 'after-wound') {
+    const event = readTriggerEvent(ctx);
+    if (event && checkInfirmaryBonusApplies(ctx.state, event)) {
+      return {
+        kind: 'pause',
+        pending: bonusPromptFor(event, ctx.triggeringPlayerId, {
+          effectId: self,
+          context: { step: 'after-bonus', recipientPlayerId: event.ownerId },
+        }),
+      };
+    }
+    const placerPrompt = placeAnyOfficeMagePrompt(
+      ctx.state,
+      ctx.triggeringPlayerId,
+      self,
+      ctx.source,
+      { step: 'pick-slot' },
+    );
+    if (!placerPrompt) return { kind: 'done', patch: {} };
+    return { kind: 'pause', pending: placerPrompt };
+  }
+
+  if (!ctx.resumeAnswer) {
+    const targets = buildWoundTargetsFor(
+      ctx.state,
+      ctx.triggeringPlayerId,
+      'opponent-only',
+    );
+    if (targets.length === 0) return { kind: 'done', patch: {} };
+    return {
+      kind: 'pause',
+      pending: {
+        responderId: ctx.triggeringPlayerId,
+        prompt: { kind: 'choose-target-mage', eligibleMageIds: targets },
+        resume: { effectId: self, context: { step: 'wound' } },
+        source: ctx.source,
+      },
+    };
+  }
+
+  if (step === 'wound') {
+    if (ctx.resumeAnswer.kind !== 'mage-chosen') {
+      throw new Error('lightning.l2 wound expected mage-chosen');
+    }
+    const wound = woundMage(
+      ctx.state,
+      ctx.resumeAnswer.mageId,
+      ctx.triggeringPlayerId,
+    );
+    return {
+      kind: 'open-reaction',
+      patch: wound.patch,
+      window: {
+        triggerEvent: wound.triggerEvent,
+        pendingResponderIds: buildReactionQueue(
+          ctx.state,
+          ctx.triggeringPlayerId,
+        ),
+        reactedPlayerIds: [],
+        afterResume: {
+          effectId: self,
+          context: {
+            step: 'after-wound',
+            triggerEvent: triggerEventToContext(wound.triggerEvent),
+          },
+        },
+        source: ctx.source,
+      },
+    };
+  }
+
+  if (step === 'after-bonus') {
+    if (ctx.resumeAnswer.kind !== 'option-chosen') {
+      throw new Error('lightning.l2 after-bonus expected option-chosen');
+    }
+    const recipientId = ctx.resumeContext?.['recipientPlayerId'];
+    if (typeof recipientId !== 'string') {
+      throw new Error('lightning.l2 after-bonus: missing recipientPlayerId');
+    }
+    const bonusPatch = applyInfirmaryBonusPatch(
+      ctx.state,
+      recipientId,
+      ctx.resumeAnswer.optionId,
+    );
+    const afterBonus: GameState = { ...ctx.state, ...bonusPatch };
+    const placerPrompt = placeAnyOfficeMagePrompt(
+      afterBonus,
+      ctx.triggeringPlayerId,
+      self,
+      ctx.source,
+      { step: 'pick-slot' },
+    );
+    if (!placerPrompt) return { kind: 'done', patch: bonusPatch };
+    return { kind: 'pause', patch: bonusPatch, pending: placerPrompt };
+  }
+
+  if (step === 'pick-slot') {
+    if (ctx.resumeAnswer.kind !== 'mage-chosen') {
+      throw new Error('lightning.l2 pick-slot expected mage-chosen');
+    }
+    const placerMageId = ctx.resumeAnswer.mageId;
+    const openSlots = listEligiblePlacementSlots(
+      ctx.state,
+      ctx.triggeringPlayerId,
+    );
+    if (openSlots.length === 0) return { kind: 'done', patch: {} };
+    return {
+      kind: 'pause',
+      pending: {
+        responderId: ctx.triggeringPlayerId,
+        prompt: {
+          kind: 'choose-target-action-space',
+          eligibleSpaceIds: openSlots,
+        },
+        resume: {
+          effectId: self,
+          context: { step: 'apply-place', placerMageId },
+        },
+        source: ctx.source,
+      },
+    };
+  }
+
+  if (step === 'apply-place') {
+    if (ctx.resumeAnswer.kind !== 'space-chosen') {
+      throw new Error('lightning.l2 apply-place expected space-chosen');
+    }
+    const placerMageId = ctx.resumeContext?.['placerMageId'];
+    if (typeof placerMageId !== 'string') {
+      throw new Error('lightning.l2 apply-place: missing placerMageId');
+    }
+    return {
+      kind: 'done',
+      patch: placeOfficeMageOnSpaceCrediting(
+        ctx.state,
+        ctx.triggeringPlayerId,
+        placerMageId,
+        ctx.resumeAnswer.spaceId,
+      ),
+    };
+  }
+  throw new Error(`lightning.l2 unexpected step ${String(step)}`);
+});
+
+/**
+ * A Brighter Flame L3 "Immolation" — Place a Mage into any slot. If the slot
+ * is occupied, wound the Mage there and take its place.
+ *
+ * Slot picker offers:
+ *  - empty slots in rooms where the caster isn't at the per-round cap and
+ *    that aren't cannotBePlacedInDirectly, AND
+ *  - occupied slots whose occupant is spell-woundable (green / opposing-blue
+ *    are immune; shadows are excluded), with the same per-room cap +
+ *    cannotBePlacedInDirectly filters.
+ */
+registerEffect('base.spell.a-brighter-flame.l3', (ctx): EffectResult => {
+  const step = ctx.resumeContext?.['step'];
+  const self = 'base.spell.a-brighter-flame.l3';
+
+  // After the wound reaction window resolves — bonus, then place into the
+  // (now hopefully empty) slot.
+  if (step === 'after-wound') {
+    const event = readTriggerEvent(ctx);
+    const placerMageId = ctx.resumeContext?.['placerMageId'];
+    const targetSpaceId = ctx.resumeContext?.['targetSpaceId'];
+    if (typeof placerMageId !== 'string' || typeof targetSpaceId !== 'string') {
+      throw new Error('immolation after-wound: missing context fields');
+    }
+    if (event && checkInfirmaryBonusApplies(ctx.state, event)) {
+      return {
+        kind: 'pause',
+        pending: bonusPromptFor(event, ctx.triggeringPlayerId, {
+          effectId: self,
+          context: {
+            step: 'after-bonus',
+            recipientPlayerId: event.ownerId,
+            placerMageId,
+            targetSpaceId,
+          },
+        }),
+      };
+    }
+    return immolationFinalPlace(ctx, placerMageId, targetSpaceId, ctx.state);
+  }
+
+  if (!ctx.resumeAnswer) {
+    // Step 1: pick caster's office mage as the placer.
+    const placerPrompt = placeAnyOfficeMagePrompt(
+      ctx.state,
+      ctx.triggeringPlayerId,
+      self,
+      ctx.source,
+      { step: 'pick-slot' },
+    );
+    if (!placerPrompt) return { kind: 'done', patch: {} };
+    return { kind: 'pause', pending: placerPrompt };
+  }
+
+  if (step === 'pick-slot') {
+    if (ctx.resumeAnswer.kind !== 'mage-chosen') {
+      throw new Error('immolation pick-slot expected mage-chosen');
+    }
+    const placerMageId = ctx.resumeAnswer.mageId;
+    // Empty slots, plus occupied slots whose base occupant is spell-woundable.
+    const emptyEligible = listEligiblePlacementSlots(
+      ctx.state,
+      ctx.triggeringPlayerId,
+    );
+    const woundableTargets = new Set(
+      buildBurnTargets(ctx.state, ctx.triggeringPlayerId),
+    );
+    const occupiedEligible: string[] = [];
+    for (const r of ctx.state.rooms) {
+      if (r.cannotBePlacedInDirectly) continue;
+      if (isRoomAtPlayerCap(ctx.state, ctx.triggeringPlayerId, r.id)) continue;
+      for (const s of r.actionSpaces) {
+        if (s.occupant && woundableTargets.has(s.occupant.mageId)) {
+          occupiedEligible.push(s.id);
+        }
+      }
+    }
+    const allSlots = Array.from(new Set([...emptyEligible, ...occupiedEligible]));
+    if (allSlots.length === 0) return { kind: 'done', patch: {} };
+    return {
+      kind: 'pause',
+      pending: {
+        responderId: ctx.triggeringPlayerId,
+        prompt: {
+          kind: 'choose-target-action-space',
+          eligibleSpaceIds: allSlots,
+        },
+        resume: { effectId: self, context: { step: 'apply', placerMageId } },
+        source: ctx.source,
+      },
+    };
+  }
+
+  if (step === 'apply') {
+    if (ctx.resumeAnswer.kind !== 'space-chosen') {
+      throw new Error('immolation apply expected space-chosen');
+    }
+    const placerMageId = ctx.resumeContext?.['placerMageId'];
+    if (typeof placerMageId !== 'string') {
+      throw new Error('immolation apply: missing placerMageId');
+    }
+    const spaceId = ctx.resumeAnswer.spaceId;
+    const space = ctx.state.rooms
+      .flatMap((r) => r.actionSpaces)
+      .find((s) => s.id === spaceId);
+    if (!space) throw new Error(`immolation: space ${spaceId} not found`);
+    if (!space.occupant) {
+      // Empty slot — straight place.
+      return {
+        kind: 'done',
+        patch: placeOfficeMageOnSpaceCrediting(
+          ctx.state,
+          ctx.triggeringPlayerId,
+          placerMageId,
+          spaceId,
+        ),
+      };
+    }
+    // Occupied slot — wound first, then place after the reaction.
+    const wound = woundMage(
+      ctx.state,
+      space.occupant.mageId,
+      ctx.triggeringPlayerId,
+    );
+    return {
+      kind: 'open-reaction',
+      patch: wound.patch,
+      window: {
+        triggerEvent: wound.triggerEvent,
+        pendingResponderIds: buildReactionQueue(
+          ctx.state,
+          ctx.triggeringPlayerId,
+        ),
+        reactedPlayerIds: [],
+        afterResume: {
+          effectId: self,
+          context: {
+            step: 'after-wound',
+            triggerEvent: triggerEventToContext(wound.triggerEvent),
+            placerMageId,
+            targetSpaceId: spaceId,
+          },
+        },
+        source: ctx.source,
+      },
+    };
+  }
+
+  if (step === 'after-bonus') {
+    if (ctx.resumeAnswer.kind !== 'option-chosen') {
+      throw new Error('immolation after-bonus expected option-chosen');
+    }
+    const recipientId = ctx.resumeContext?.['recipientPlayerId'];
+    const placerMageId = ctx.resumeContext?.['placerMageId'];
+    const targetSpaceId = ctx.resumeContext?.['targetSpaceId'];
+    if (
+      typeof recipientId !== 'string' ||
+      typeof placerMageId !== 'string' ||
+      typeof targetSpaceId !== 'string'
+    ) {
+      throw new Error('immolation after-bonus: missing context fields');
+    }
+    const bonusPatch = applyInfirmaryBonusPatch(
+      ctx.state,
+      recipientId,
+      ctx.resumeAnswer.optionId,
+    );
+    const afterBonus: GameState = { ...ctx.state, ...bonusPatch };
+    return immolationFinalPlace(ctx, placerMageId, targetSpaceId, afterBonus);
+  }
+
+  throw new Error(`immolation unexpected step ${String(step)}`);
+});
+
+/**
+ * Apply Immolation's final place after the wound + bonus chain. If the slot
+ * got reclaimed by a defensive reaction (Phase Steppers, Invisibility Cloak),
+ * the place fizzles silently.
+ */
+function immolationFinalPlace(
+  ctx: EffectContext,
+  placerMageId: string,
+  targetSpaceId: string,
+  state: GameState,
+): EffectResult {
+  const space = state.rooms
+    .flatMap((r) => r.actionSpaces)
+    .find((s) => s.id === targetSpaceId);
+  if (!space || space.occupant !== null) {
+    return { kind: 'done', patch: {} };
+  }
+  return {
+    kind: 'done',
+    patch: placeOfficeMageOnSpaceCrediting(
+      state,
+      ctx.triggeringPlayerId,
+      placerMageId,
+      targetSpaceId,
+    ),
+  };
+}
