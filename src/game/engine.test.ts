@@ -625,13 +625,13 @@ describe('Endgame scoring', () => {
     expect(scorePlayerForCriterion(s, p2, 'most-research')).toBe(1);
   });
 
-  it('most-sorcery counts supporters + researched spells in that department', () => {
+  it('most-sorcery counts supporters + each researched level of a spell', () => {
     let s = initGame(FOUR_PLAYER_CONFIG);
     s = mapPlayer(s, 'p1', (p) => ({
       ...p,
       ownedSpells: [
         {
-          cardId: 'base.spell.burn', // sorcery
+          cardId: 'base.spell.burn', // sorcery, researched at L1 only
           intPlaced: true,
           wisPlacedLevel2: false,
           wisPlacedLevel3: false,
@@ -644,9 +644,74 @@ describe('Endgame scoring', () => {
       ],
     }));
     const p1 = s.players.find((p) => p.id === 'p1')!;
+    // 2 supporters + 1 spell level = 3.
     expect(scorePlayerForCriterion(s, p1, 'most-sorcery')).toBe(3);
     // A non-sorcery supporter doesn't count.
     expect(scorePlayerForCriterion(s, p1, 'most-divinity')).toBe(0);
+  });
+
+  it('department voters: each researched level of a spell adds +1 (L3 = 3 points)', () => {
+    let s = initGame(FOUR_PLAYER_CONFIG);
+    s = mapPlayer(s, 'p1', (p) => ({
+      ...p,
+      ownedSpells: [
+        {
+          cardId: 'base.spell.burn', // sorcery, fully researched
+          intPlaced: true,
+          wisPlacedLevel2: true,
+          wisPlacedLevel3: true,
+          exhausted: false,
+        },
+      ],
+      supporters: [
+        'base.supporter.allys-mehrmus', // sorcery
+        'base.supporter.kallistar-flarechild', // sorcery
+      ],
+    }));
+    const p1 = s.players.find((p) => p.id === 'p1')!;
+    // 2 supporters + 3 spell levels = 5.
+    expect(scorePlayerForCriterion(s, p1, 'most-sorcery')).toBe(5);
+  });
+
+  it('department voters: L2-researched spell contributes 2; unrelated dept untouched', () => {
+    let s = initGame(FOUR_PLAYER_CONFIG);
+    s = mapPlayer(s, 'p1', (p) => ({
+      ...p,
+      ownedSpells: [
+        {
+          cardId: 'base.spell.burn', // sorcery
+          intPlaced: true,
+          wisPlacedLevel2: true,
+          wisPlacedLevel3: false,
+          exhausted: false,
+        },
+      ],
+      supporters: [],
+    }));
+    const p1 = s.players.find((p) => p.id === 'p1')!;
+    expect(scorePlayerForCriterion(s, p1, 'most-sorcery')).toBe(2);
+    expect(scorePlayerForCriterion(s, p1, 'most-mysticism')).toBe(0);
+  });
+
+  it('department voters: skips spells that have not been researched at L1', () => {
+    let s = initGame(FOUR_PLAYER_CONFIG);
+    s = mapPlayer(s, 'p1', (p) => ({
+      ...p,
+      // intPlaced=false → unresearched; should contribute 0 regardless of
+      // any (impossible-in-practice) higher-level flags.
+      ownedSpells: [
+        {
+          cardId: 'base.spell.burn',
+          intPlaced: false,
+          wisPlacedLevel2: false,
+          wisPlacedLevel3: false,
+          exhausted: false,
+        },
+      ],
+      supporters: [],
+    }));
+    const p1 = s.players.find((p) => p.id === 'p1')!;
+    expect(scorePlayerForCriterion(s, p1, 'most-sorcery')).toBe(0);
   });
 
   it('most-diversity counts distinct departments across spells and supporters', () => {

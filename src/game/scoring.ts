@@ -99,12 +99,15 @@ function countResearchLevels(player: Player): number {
 }
 
 /**
- * "Most X Department" voters award their vote to whoever owns the most
- * cards (supporters + researched spells) of that department.
+ * "Most X Department" voters award their vote based on the player's total
+ * weight in that department:
+ *   - Each Supporter card of the department: +1.
+ *   - Each researched level of a Spell Book in the department: +1 (so an
+ *     L3-researched spell contributes 3 toward its department's total,
+ *     L2 contributes 2, L1 contributes 1).
  *
- * Each Spell Book counts once if researched at any level (intPlaced) — the
- * extra L2/L3 research doesn't multiply the count toward department voters.
- * Each Supporter Card counts once.
+ * Example: 2 Mysticism supporters + one L3-researched Mysticism spell
+ *          = 2 + 3 = 5 toward Most Mysticism.
  *
  * Wild-department supporters (White Ash): the player declares a department
  * before voters are revealed. The declared department is stored in
@@ -118,11 +121,13 @@ function countDepartment(
   dept: Department,
 ): number {
   let n = 0;
-  // Researched Spell Books in this department.
+  // Researched levels per spell book in this department.
   for (const owned of player.ownedSpells) {
-    if (!owned.intPlaced) continue;
     const card = lookupSpellDepartment(state, owned.cardId);
-    if (card === dept) n += 1;
+    if (card !== dept) continue;
+    if (owned.intPlaced) n += 1;
+    if (owned.wisPlacedLevel2) n += 1;
+    if (owned.wisPlacedLevel3) n += 1;
   }
   // Supporters in this department (office + in personal discard).
   // Wild-department supporters are handled below via wildDepartmentChoice.
