@@ -367,6 +367,20 @@ function spawnResearchPrompt(
 }
 
 /**
+/**
+ * Surfaces a fresh Research prompt for the triggering player against the
+ * current state. Used by the engine's "drain one research from the queue"
+ * pump (see `drainResearchQueueIfIdle` in engine.ts) so cards that grant
+ * N Research can append N queue entries and have each one surface a
+ * up-to-date menu (correct option visibility based on the state AFTER
+ * the previous research was spent).
+ */
+registerEffect('base.system.spawn-research-prompt', (ctx): EffectResult => ({
+  kind: 'pause',
+  pending: spawnResearchPrompt(ctx.state, ctx.triggeringPlayerId, ctx.source),
+}));
+
+/**
  * Router for the research-spend prompt. Dispatches to a per-action effect
  * (each a multi-step prompt chain) based on the chosen option, or fizzles
  * if the option is no longer viable (e.g. INT pool went to 0 between
@@ -2351,57 +2365,29 @@ function marksLoop(
 }
 
 /**
- * Supporter research grants (e.g. Welsie Acktern → 2 Research). Each tick
- * presents a simple Spend/Discard prompt. NOTE: today the 'spend' branch
- * does NOT chain into the full Draft/Move-INT/Add-WIS/Move-WIS research
- * menu — that requires either (a) an engine extension to push multiple
- * pendings per pause, or (b) state tracking of "research owed" so the
- * full menu can fire one tick at a time. Library slots that grant 1
- * Research at a time DO use the full menu via `spawnResearchPrompt`; the
- * supporter integration is deferred.
+ * Pushes N Research opportunities onto `state.researchQueue`. Each entry
+ * surfaces a full research menu (Draft / Add-WIS / Discard) one at a time
+ * via the engine's `drainResearchQueueIfIdle` pump, generated against the
+ * then-current state so option visibility (INT/WIS pools, upgradable spell
+ * list, etc.) is up to date after each spend.
+ *
+ * Department-restricted "Gain N Research on dept X spells only" cards
+ * currently use this helper too — the type-restriction enforcement is a
+ * TODO; the player can spend on any spell at the moment.
  */
-function researchLoop(
-  ctx: EffectContext,
-  total: number,
-  selfEffectId: string,
-  restriction?: string,
-): EffectResult {
-  const remaining =
-    (ctx.resumeContext?.['remaining'] as number | undefined) ?? total;
-  let nextRemaining = remaining;
-  if (ctx.resumeAnswer?.kind === 'option-chosen') {
-    nextRemaining = remaining - 1;
+function appendResearchQueue(
+  state: GameState,
+  playerId: string,
+  source: ResolutionSource,
+  count: number,
+): GameStatePatch {
+  if (count <= 0) return {};
+  const entries: GameState['researchQueue'] = [];
+  for (let i = 0; i < count; i++) {
+    entries.push({ playerId, source });
   }
-  if (nextRemaining <= 0) {
-    return { kind: 'done', patch: {} };
-  }
-  const indexLabel = `${total - nextRemaining + 1} of ${total}`;
-  const restrictNote = restriction ? ` (restricted: ${restriction})` : '';
   return {
-    kind: 'pause',
-    pending: {
-      responderId: ctx.triggeringPlayerId,
-      prompt: {
-        kind: 'choose-from-options',
-        options: [
-          {
-            id: 'spend',
-            label: `Spend 1 Research (${indexLabel})${restrictNote}`,
-            payload: {},
-          },
-          {
-            id: 'discard',
-            label: `Discard 1 Research (${indexLabel})`,
-            payload: {},
-          },
-        ],
-      },
-      resume: {
-        effectId: selfEffectId,
-        context: { remaining: nextRemaining },
-      },
-      source: ctx.source,
-    },
+    researchQueue: [...state.researchQueue, ...entries],
   };
 }
 
@@ -2411,69 +2397,58 @@ registerEffect('base.supporter.alumis', (ctx): EffectResult =>
 );
 
 /** Rixia Van Sorrel — Gain 1 Research. */
-registerEffect('base.supporter.rixia-van-sorrel', (ctx): EffectResult =>
-  researchLoop(ctx, 1, 'base.supporter.rixia-van-sorrel'),
-);
+registerEffect('base.supporter.rixia-van-sorrel', (ctx): EffectResult => ({
+  kind: 'done',
+  patch: appendResearchQueue(ctx.state, ctx.triggeringPlayerId, ctx.source, 1),
+}));
 
 /** Welsie Acktern — Gain 2 Research. */
-registerEffect('base.supporter.welsie-acktern', (ctx): EffectResult =>
-  researchLoop(ctx, 2, 'base.supporter.welsie-acktern'),
-);
+registerEffect('base.supporter.welsie-acktern', (ctx): EffectResult => ({
+  kind: 'done',
+  patch: appendResearchQueue(ctx.state, ctx.triggeringPlayerId, ctx.source, 2),
+}));
 
 /** Batrov Wargrave — Gain 3 Research. */
-registerEffect('base.supporter.batrov-wargrave', (ctx): EffectResult =>
-  researchLoop(ctx, 3, 'base.supporter.batrov-wargrave'),
-);
+registerEffect('base.supporter.batrov-wargrave', (ctx): EffectResult => ({
+  kind: 'done',
+  patch: appendResearchQueue(ctx.state, ctx.triggeringPlayerId, ctx.source, 3),
+}));
+
+// TODO: the next 5 supporters restrict their Research to a specific
+// department. Right now we surface the unrestricted full research menu and
+// the restriction is informational only. Enforcing the department filter
+// requires either custom prompt variants per dept or a per-entry filter
+// field on the research queue; a follow-up will wire it up.
 
 /** Adelaide Chivers — Gain 2 Research, Planar (Purple) Spells only. */
-registerEffect('base.supporter.adelaide-chivers', (ctx): EffectResult =>
-  researchLoop(
-    ctx,
-    2,
-    'base.supporter.adelaide-chivers',
-    'Planar Studies (Purple) Spells only',
-  ),
-);
+registerEffect('base.supporter.adelaide-chivers', (ctx): EffectResult => ({
+  kind: 'done',
+  patch: appendResearchQueue(ctx.state, ctx.triggeringPlayerId, ctx.source, 2),
+}));
 
 /** Jaimes Kalin — Gain 2 Research, Natural Magick (Green) Spells only. */
-registerEffect('base.supporter.jaimes-kalin', (ctx): EffectResult =>
-  researchLoop(
-    ctx,
-    2,
-    'base.supporter.jaimes-kalin',
-    'Natural Magick (Green) Spells only',
-  ),
-);
+registerEffect('base.supporter.jaimes-kalin', (ctx): EffectResult => ({
+  kind: 'done',
+  patch: appendResearchQueue(ctx.state, ctx.triggeringPlayerId, ctx.source, 2),
+}));
 
 /** Jance Eylon — Gain 2 Research, Mysticism (Grey) Spells only. */
-registerEffect('base.supporter.jance-eylon', (ctx): EffectResult =>
-  researchLoop(
-    ctx,
-    2,
-    'base.supporter.jance-eylon',
-    'Mysticism (Grey) Spells only',
-  ),
-);
+registerEffect('base.supporter.jance-eylon', (ctx): EffectResult => ({
+  kind: 'done',
+  patch: appendResearchQueue(ctx.state, ctx.triggeringPlayerId, ctx.source, 2),
+}));
 
 /** Kas Karrowary — Gain 2 Research, Divinity (Blue) Spells only. */
-registerEffect('base.supporter.kas-karrowary', (ctx): EffectResult =>
-  researchLoop(
-    ctx,
-    2,
-    'base.supporter.kas-karrowary',
-    'Divinity (Blue) Spells only',
-  ),
-);
+registerEffect('base.supporter.kas-karrowary', (ctx): EffectResult => ({
+  kind: 'done',
+  patch: appendResearchQueue(ctx.state, ctx.triggeringPlayerId, ctx.source, 2),
+}));
 
 /** Vellimoor Cantz — Gain 2 Research, Sorcery (Red) Spells only. */
-registerEffect('base.supporter.vellimoor-cantz', (ctx): EffectResult =>
-  researchLoop(
-    ctx,
-    2,
-    'base.supporter.vellimoor-cantz',
-    'Sorcery (Red) Spells only',
-  ),
-);
+registerEffect('base.supporter.vellimoor-cantz', (ctx): EffectResult => ({
+  kind: 'done',
+  patch: appendResearchQueue(ctx.state, ctx.triggeringPlayerId, ctx.source, 2),
+}));
 
 // ---------------------------------------------------------------------------
 // Mage-manipulation supporters — direct analogs of the leader spells, with
@@ -4815,17 +4790,13 @@ registerEffect('base.vault.mystic-lantern', (ctx): EffectResult => {
 
 /**
  * The Contract (consumable, fast-action) — Gain 3 Research. Use this
- * Research on spells of a single chosen type. Research currently a TODO;
- * we surface the type-restriction note in the prompt label only.
+ * Research on spells of a single chosen type. The department restriction
+ * is informational for now; same TODO as the dept-restricted supporters.
  */
-registerEffect('base.vault.the-contract', (ctx): EffectResult =>
-  researchLoop(
-    ctx,
-    3,
-    'base.vault.the-contract',
-    'spells of a single chosen type',
-  ),
-);
+registerEffect('base.vault.the-contract', (ctx): EffectResult => ({
+  kind: 'done',
+  patch: appendResearchQueue(ctx.state, ctx.triggeringPlayerId, ctx.source, 3),
+}));
 
 // ---------------------------------------------------------------------------
 // Helpers for vault effects.
@@ -7822,3 +7793,16 @@ registerEffect('base.spell.on-the-weakness-of-flesh.l3', (ctx): EffectResult => 
   throw new Error(`${self} unexpected step ${String(step)}`);
 });
 
+/** Sorcerous Inspiration L2 "Brilliance" — Gain two Research. */
+registerEffect(
+  'base.spell.sorcerous-inspiration.l2',
+  (ctx): EffectResult => ({
+    kind: 'done',
+    patch: appendResearchQueue(
+      ctx.state,
+      ctx.triggeringPlayerId,
+      ctx.source,
+      2,
+    ),
+  }),
+);

@@ -817,6 +817,15 @@ export interface GameState {
    * order; the grid records where each room was placed at game start.
    */
   roomLayout: RoomLayout;
+  /**
+   * Pending Research opportunities waiting to be surfaced one-by-one. Cards
+   * that grant N Research (e.g. Brilliance, Welsie Acktern) append N entries
+   * here; the engine drains one entry at a time, surfacing a fresh research
+   * prompt for the queued player whenever the resolution stack is otherwise
+   * idle. Single-research effects can either bypass this and surface the
+   * prompt directly (existing behavior) or push one entry — both work.
+   */
+  researchQueue: { playerId: PlayerId; source: ResolutionSource }[];
 
   voters: ConsortiumVoter[];
   voterMarks: VoterMark[];

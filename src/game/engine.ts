@@ -171,12 +171,49 @@ function consumeActionBudget(
 }
 
 /**
+ * Surfaces the next queued Research prompt if the resolution stack is
+ * otherwise idle. Cards that grant N Research push N entries into
+ * `state.researchQueue`; this drains one entry per call. Each surfaced
+ * prompt is built against the current (post-previous-research) state, so
+ * options reflect the player's actual pool / spellbook at that moment.
+ *
+ * Returns the same state if there's nothing to drain or another prompt /
+ * reaction is still active.
+ */
+function drainResearchQueueIfIdle(state: GameState): GameState {
+  if (state.researchQueue.length === 0) return state;
+  if (state.pendingResolutionStack.length > 0) return state;
+  if (state.activeReactionWindows.length > 0) return state;
+  const [next, ...rest] = state.researchQueue;
+  if (!next) return state;
+  const withoutEntry: GameState = { ...state, researchQueue: rest };
+  // Invoke the spawn-research-prompt effect; it returns a pause carrying
+  // a fresh prompt scoped to the queued player.
+  const ctx: EffectContext = {
+    state: withoutEntry,
+    source: next.source,
+    triggeringPlayerId: next.playerId,
+    allowReactions: false,
+  };
+  const result = getEffect('base.system.spawn-research-prompt')(ctx);
+  return applyEffectResult(withoutEntry, result, ctx);
+}
+
+/**
  * If the active player has spent their Regular Action and no prompts or
  * reaction windows are still open, the turn ends automatically (per
  * rulebook). Called at the end of every dispatch so that turns advance
  * without an explicit "end turn" action.
+ *
+ * Before advancing the turn, the research queue is drained one entry at
+ * a time so multi-Research cards (Brilliance, Welsie Acktern, etc.) get
+ * each opportunity surfaced in sequence.
  */
 function autoAdvanceIfTurnDone(state: GameState): GameState {
+  // Drain a queued research opportunity first — this may add to the stack,
+  // in which case we stop and let the player resolve it before any further
+  // turn advancement.
+  state = drainResearchQueueIfIdle(state);
   if (state.phase.kind !== 'errands') return state;
   if (!state.phase.actionUsed) return state;
   if (state.pendingResolutionStack.length > 0) return state;
@@ -347,6 +384,10 @@ function pumpResolutionPhase(state: GameState): GameState {
   // Hard cap on iterations to avoid runaway loops if a TODO branch misbehaves.
   const HARD_CAP = 5000;
   for (let i = 0; i < HARD_CAP; i++) {
+    // Drain queued research before resolving the next slot — a slot that
+    // grants multi-Research (current data has none, but the path is wired)
+    // would otherwise leave queue entries stranded once resolution ends.
+    curr = drainResearchQueueIfIdle(curr);
     if (curr.phase.kind !== 'resolution') return curr;
     if (curr.pendingResolutionStack.length > 0) return curr;
     if (curr.activeReactionWindows.length > 0) return curr;

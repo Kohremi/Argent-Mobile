@@ -376,6 +376,7 @@ export function buildInitialState(config: GameConfig): GameState {
     phase: initialPhase(config, firstPlayerIndex),
     pendingResolutionStack: [],
     activeReactionWindows: [],
+    researchQueue: [],
     nextSequenceId: 1,
     actionLog: [],
   };

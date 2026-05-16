@@ -9060,3 +9060,200 @@ describe('Spell wiring — Wave 8c (Pestilence)', () => {
     expect(findMageById(s, 'b-lib').isWounded).toBe(true);
   });
 });
+
+// ============================================================================
+// Multi-Research cards — queue + drain pump
+// ============================================================================
+
+describe('Multi-Research cards', () => {
+  it('Welsie Acktern: appends 2 entries; the first research prompt surfaces immediately', () => {
+    let s = initGame(TWO_PLAYER_CONFIG);
+    s = zeroPlayerResources(s, 'p1');
+    s = addSupporter(s, 'p1', 'base.supporter.welsie-acktern');
+    s = {
+      ...s,
+      firstPlayerIndex: 0,
+      phase: {
+        kind: 'errands',
+        round: 1,
+        activePlayerIndex: 0,
+        actionUsed: false,
+        fastActionUsed: false,
+      },
+    };
+    s = applyAction(s, {
+      type: 'PLAY_SUPPORTER',
+      playerId: 'p1',
+      supporterCardId: 'base.supporter.welsie-acktern',
+    });
+    // One research prompt surfaced; one entry still queued.
+    expect(s.pendingResolutionStack).toHaveLength(1);
+    expect(s.researchQueue).toHaveLength(1);
+    const top = topPending(s);
+    expect(top.resume.effectId).toBe('base.system.spend-research');
+  });
+
+  it('Welsie Acktern: discarding both researches drains the queue and ends the turn', () => {
+    let s = initGame(TWO_PLAYER_CONFIG);
+    s = zeroPlayerResources(s, 'p1');
+    s = addSupporter(s, 'p1', 'base.supporter.welsie-acktern');
+    s = {
+      ...s,
+      firstPlayerIndex: 0,
+      phase: {
+        kind: 'errands',
+        round: 1,
+        activePlayerIndex: 0,
+        actionUsed: false,
+        fastActionUsed: false,
+      },
+    };
+    s = applyAction(s, {
+      type: 'PLAY_SUPPORTER',
+      playerId: 'p1',
+      supporterCardId: 'base.supporter.welsie-acktern',
+    });
+    // Resolve research #1 via 'discard' (always available).
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'option-chosen', optionId: 'discard', payload: {} },
+    });
+    // Research #2 surfaces from the queue.
+    expect(s.pendingResolutionStack).toHaveLength(1);
+    expect(s.researchQueue).toHaveLength(0);
+    expect(topPending(s).resume.effectId).toBe('base.system.spend-research');
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'option-chosen', optionId: 'discard', payload: {} },
+    });
+    // All researches drained; turn auto-advanced.
+    expect(s.pendingResolutionStack).toHaveLength(0);
+    if (s.phase.kind === 'errands') {
+      expect(s.phase.activePlayerIndex).toBe(1);
+    }
+  });
+
+  it('Batrov Wargrave: grants 3 Research drained one at a time', () => {
+    let s = initGame(TWO_PLAYER_CONFIG);
+    s = zeroPlayerResources(s, 'p1');
+    s = addSupporter(s, 'p1', 'base.supporter.batrov-wargrave');
+    s = {
+      ...s,
+      firstPlayerIndex: 0,
+      phase: {
+        kind: 'errands',
+        round: 1,
+        activePlayerIndex: 0,
+        actionUsed: false,
+        fastActionUsed: false,
+      },
+    };
+    s = applyAction(s, {
+      type: 'PLAY_SUPPORTER',
+      playerId: 'p1',
+      supporterCardId: 'base.supporter.batrov-wargrave',
+    });
+    // First surfaces; 2 still queued.
+    expect(s.researchQueue).toHaveLength(2);
+    for (let i = 0; i < 3; i++) {
+      s = applyAction(s, {
+        type: 'RESOLVE_PENDING',
+        resolutionId: topPending(s).id,
+        answer: { kind: 'option-chosen', optionId: 'discard', payload: {} },
+      });
+    }
+    expect(s.pendingResolutionStack).toHaveLength(0);
+    expect(s.researchQueue).toHaveLength(0);
+  });
+
+  it('Brilliance (Sorcerous Inspiration L2): casting grants 2 Research', () => {
+    let s = initGame(TWO_PLAYER_CONFIG);
+    s = zeroPlayerResources(s, 'p1');
+    s = addOwnedSpell(s, 'p1', 'base.spell.sorcerous-inspiration', {
+      intPlaced: true,
+      wisPlacedLevel2: true,
+    });
+    s = setMana(s, 'p1', 2);
+    s = {
+      ...s,
+      firstPlayerIndex: 0,
+      phase: {
+        kind: 'errands',
+        round: 1,
+        activePlayerIndex: 0,
+        actionUsed: false,
+        fastActionUsed: false,
+      },
+    };
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.sorcerous-inspiration',
+      level: 2,
+    });
+    // 1 prompt surfaced, 1 in queue.
+    expect(s.pendingResolutionStack).toHaveLength(1);
+    expect(s.researchQueue).toHaveLength(1);
+    expect(topPending(s).resume.effectId).toBe('base.system.spend-research');
+  });
+
+  it('Each surfaced prompt sees the current state — drafting one spell updates options for the next', () => {
+    let s = initGame(TWO_PLAYER_CONFIG);
+    s = zeroPlayerResources(s, 'p1');
+    s = addSupporter(s, 'p1', 'base.supporter.welsie-acktern');
+    // Give Alice 2 INT so each research's "draft" option fires.
+    s = mapPlayer(s, 'p1', (p) => ({
+      ...p,
+      resources: { ...p.resources, intelligence: 2 },
+    }));
+    // Pin the spell tableau so we know which cards are draftable.
+    s = {
+      ...s,
+      spellTableau: ['base.spell.burn'],
+      spellDeck: ['base.spell.living-image', ...s.spellDeck],
+    };
+    s = {
+      ...s,
+      firstPlayerIndex: 0,
+      phase: {
+        kind: 'errands',
+        round: 1,
+        activePlayerIndex: 0,
+        actionUsed: false,
+        fastActionUsed: false,
+      },
+    };
+    s = applyAction(s, {
+      type: 'PLAY_SUPPORTER',
+      playerId: 'p1',
+      supporterCardId: 'base.supporter.welsie-acktern',
+    });
+    // Research #1: draft burn.
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'option-chosen', optionId: 'draft', payload: {} },
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'option-chosen', optionId: 'base.spell.burn', payload: {} },
+    });
+    // Burn should now be in Alice's ownedSpells AND the tableau refilled
+    // with living-image.
+    const alice = s.players.find((p) => p.id === 'p1');
+    expect(alice?.ownedSpells.find((o) => o.cardId === 'base.spell.burn'))
+      .toBeDefined();
+    expect(s.spellTableau).toEqual(['base.spell.living-image']);
+    // Research #2 should have surfaced with the NEW state. Its draft option
+    // would target living-image (the new tableau).
+    expect(s.pendingResolutionStack).toHaveLength(1);
+    const second = topPending(s);
+    expect(second.resume.effectId).toBe('base.system.spend-research');
+    if (second.prompt.kind === 'choose-from-options') {
+      expect(second.prompt.options.map((o) => o.id)).toContain('draft');
+    }
+  });
+});
