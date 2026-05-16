@@ -9,7 +9,6 @@ import { buildInitialState } from './setup';
 import { getEffect, hasEffect } from './effects/index';
 import {
   applyCandidateAllocation,
-  applyVaultPurchase,
   buildReactionOptionsFor,
   buildReactionQueue,
   buildSnakeDraftOrder,
@@ -830,9 +829,50 @@ function handleBuyVaultCard(
       `BUY_VAULT_CARD: not your turn (active=${activePlayerId}, you=${action.playerId})`,
     );
   }
+  // Verify the buyer can either afford the cost outright OR has Auric
+  // Catalyst available to waive it. The actual gold deduction happens
+  // after the gold-payment reaction window resolves.
+  const card = lookupVaultCardDef(state, action.vaultCardId);
+  if (!card) {
+    throw new Error(
+      `BUY_VAULT_CARD: ${action.vaultCardId} not in active packs`,
+    );
+  }
+  const player = state.players.find((p) => p.id === action.playerId);
+  if (!player) {
+    throw new Error(`BUY_VAULT_CARD: player ${action.playerId} not found`);
+  }
+  const canAfford = player.resources.gold >= card.goldCost;
+  const canCatalyst = player.vaultCards.some(
+    (v) => v.cardId === 'base.vault.auric-catalyst' && !v.exhausted,
+  );
+  if (!canAfford && !canCatalyst) {
+    throw new Error(
+      `BUY_VAULT_CARD: insufficient gold (need ${card.goldCost}, have ${player.resources.gold})`,
+    );
+  }
   state = consumeActionBudget(state, 'action', 'BUY_VAULT_CARD');
-  const patch = applyVaultPurchase(state, action.playerId, action.vaultCardId);
-  return { ...state, ...patch };
+  // Route through the vault-buy system effect which opens a
+  // gold-payment-pending reaction window (Auric Catalyst opportunity)
+  // before applying the buy.
+  const source: ResolutionSource = {
+    kind: 'system',
+    id: 'base.system.vault-buy',
+    triggeringPlayerId: action.playerId,
+    description: `Buy ${card.name}`,
+  };
+  const ctx: EffectContext = {
+    state,
+    source,
+    triggeringPlayerId: action.playerId,
+    allowReactions: true,
+    resumeContext: {
+      vaultCardId: action.vaultCardId,
+      buyerId: action.playerId,
+    },
+  };
+  const effect = getEffect('base.system.vault-buy');
+  return applyEffectResult(state, effect(ctx), ctx);
 }
 
 function handleUseAbility(

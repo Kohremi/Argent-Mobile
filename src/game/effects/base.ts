@@ -3,6 +3,7 @@
 
 import { getEffect, registerEffect } from './registry';
 import { computeFinalScoring, playerOwnsWildSupporter } from '../scoring';
+import { getPack } from '../../content/registry';
 import {
   affordableVaultCards,
   applyAddWisToSpell,
@@ -15,7 +16,7 @@ import {
   applySecretSupporterDraw,
   applySupporterDraft,
   applyVaultDraft,
-  applyVaultPurchase,
+  applyVaultPurchaseMaybeWaived,
   banishMage,
   buildArsMagnaTargets,
   buildBanishTargets,
@@ -33,6 +34,7 @@ import {
   healMageToSpace,
   moveMageToSpace,
   placeOfficeMageAsShadow,
+  playerHasAuricCatalyst,
   spellLabel,
   woundMage,
 } from './helpers';
@@ -141,6 +143,30 @@ registerEffect('base.room.library-a.slot-2', (ctx: EffectContext): EffectResult 
  */
 registerEffect('base.room.library-a.slot-3', (ctx: EffectContext): EffectResult => {
   const step = ctx.resumeContext?.['step'];
+  // step='after-buy' is re-entered from a reaction-window's afterResume
+  // — there's no resumeAnswer in that case. Handle it BEFORE the
+  // first-call short-circuit below.
+  if (step === 'after-buy') {
+    const vaultCardId = ctx.resumeContext?.['vaultCardId'];
+    if (typeof vaultCardId !== 'string') {
+      throw new Error('library-a.slot-3 after-buy: missing vaultCardId');
+    }
+    const buyPatch = applyVaultPurchaseMaybeWaived(
+      ctx.state,
+      ctx.triggeringPlayerId,
+      vaultCardId,
+    );
+    const working = { ...ctx.state, ...buyPatch };
+    return {
+      kind: 'pause',
+      patch: { players: working.players, vaultTableau: working.vaultTableau },
+      pending: spawnResearchPrompt(
+        working,
+        ctx.triggeringPlayerId,
+        ctx.source,
+      ),
+    };
+  }
   if (!ctx.resumeAnswer) {
     const affordable = affordableVaultCards(ctx.state, ctx.triggeringPlayerId);
     if (affordable.length === 0) {
@@ -213,19 +239,23 @@ registerEffect('base.room.library-a.slot-3', (ctx: EffectContext): EffectResult 
     if (ctx.resumeAnswer.kind !== 'card-chosen') {
       throw new Error('library-a.slot-3 pick-card expected card-chosen');
     }
-    const working = {
-      ...ctx.state,
-      ...applyVaultPurchase(
-        ctx.state,
-        ctx.triggeringPlayerId,
-        ctx.resumeAnswer.cardId,
-      ),
-    };
-    return {
-      kind: 'pause',
-      patch: { players: working.players, vaultTableau: working.vaultTableau },
-      pending: spawnResearchPrompt(ctx.state, ctx.triggeringPlayerId, ctx.source),
-    };
+    // Open the gold-payment reaction window (Auric Catalyst opportunity).
+    // afterResume re-enters this effect at step='after-buy' (handled
+    // above the resumeAnswer guard) which applies the buy and spawns the
+    // Research prompt.
+    return spawnVaultBuyReactionWindow(
+      ctx.state,
+      ctx.triggeringPlayerId,
+      ctx.resumeAnswer.cardId,
+      ctx.source,
+      {
+        effectId: 'base.room.library-a.slot-3',
+        context: {
+          step: 'after-buy',
+          vaultCardId: ctx.resumeAnswer.cardId,
+        },
+      },
+    );
   }
   throw new Error(`library-a.slot-3 unexpected step ${String(step)}`);
 });
@@ -1124,6 +1154,120 @@ registerEffect('base.vault.mystic-amulet.react', (ctx): EffectResult => {
       disposal: 'exhaust',
     }),
   };
+});
+
+/**
+ * Auric Catalyst (consumable, reaction) — Reduce any Gold cost (not a
+ * swap) you would pay to zero. Triggered by a `gold-payment-pending`
+ * reaction window opened just before a vault buy. Sets the buyer's
+ * `nextGoldCostWaived` flag and consumes the card. The actual zero-cost
+ * application happens later in `applyVaultPurchaseMaybeWaived`.
+ */
+registerEffect('base.vault.auric-catalyst.react', (ctx): EffectResult => {
+  const reactorId = ctx.triggeringPlayerId;
+  return {
+    kind: 'done',
+    patch: {
+      players: ctx.state.players.map((p) => {
+        if (p.id !== reactorId) return p;
+        const idx = p.vaultCards.findIndex(
+          (v) => v.cardId === 'base.vault.auric-catalyst' && !v.exhausted,
+        );
+        if (idx === -1) return p;
+        return {
+          ...p,
+          nextGoldCostWaived: true,
+          vaultCards: p.vaultCards.filter((_, i) => i !== idx),
+          personalDiscard: [
+            ...p.personalDiscard,
+            { kind: 'consumable' as const, cardId: 'base.vault.auric-catalyst' },
+          ],
+        };
+      }),
+    },
+  };
+});
+
+/**
+ * Opens a `gold-payment-pending` reaction window before a vault buy.
+ * Used by BUY_VAULT_CARD and "Gain a Buy" sites. The window's
+ * afterResume points back to the caller's "after-buy" continuation,
+ * which applies the buy via `applyVaultPurchaseMaybeWaived`.
+ *
+ * If the buyer has no Auric Catalyst available to react with, the window
+ * opens with an empty responder queue and the engine immediately fires
+ * afterResume — the buy proceeds as normal.
+ */
+function spawnVaultBuyReactionWindow(
+  state: GameState,
+  buyerId: string,
+  vaultCardId: string,
+  source: ResolutionSource,
+  afterResume: ResumeContinuation,
+): EffectResult {
+  const buyer = state.players.find((p) => p.id === buyerId);
+  if (!buyer) return { kind: 'done', patch: {} };
+  let card: { goldCost: number } | undefined;
+  for (const pid of state.activePackIds) {
+    const pack = getPack(pid);
+    if (!pack) continue;
+    const found = pack.vaultCards.find((v) => v.id === vaultCardId);
+    if (found) {
+      card = found;
+      break;
+    }
+  }
+  if (!card) return { kind: 'done', patch: {} };
+  const canReact = playerHasAuricCatalyst(buyer);
+  return {
+    kind: 'open-reaction',
+    patch: {},
+    window: {
+      triggerEvent: {
+        kind: 'gold-payment-pending',
+        payingPlayerId: buyerId,
+        amount: card.goldCost,
+        purpose: 'vault-purchase',
+      },
+      pendingResponderIds: canReact ? [buyerId] : [],
+      reactedPlayerIds: [],
+      afterResume,
+      source,
+    },
+  };
+}
+
+/**
+ * Wraps a vault buy through a reaction window. First invocation opens
+ * the window (responder = the buyer only). When the window closes, the
+ * effect is re-entered with step='complete' and applies the buy via
+ * `applyVaultPurchaseMaybeWaived`. Used directly by BUY_VAULT_CARD; the
+ * Gain-a-Buy sites bypass this and call `spawnVaultBuyReactionWindow`
+ * with their own after-buy step so they can chain follow-ups (research).
+ */
+registerEffect('base.system.vault-buy', (ctx): EffectResult => {
+  const vaultCardId = ctx.resumeContext?.['vaultCardId'];
+  const buyerId = ctx.resumeContext?.['buyerId'];
+  const step = ctx.resumeContext?.['step'];
+  if (typeof vaultCardId !== 'string' || typeof buyerId !== 'string') {
+    throw new Error('base.system.vault-buy: missing context');
+  }
+  if (step === 'complete') {
+    return {
+      kind: 'done',
+      patch: applyVaultPurchaseMaybeWaived(ctx.state, buyerId, vaultCardId),
+    };
+  }
+  return spawnVaultBuyReactionWindow(
+    ctx.state,
+    buyerId,
+    vaultCardId,
+    ctx.source,
+    {
+      effectId: 'base.system.vault-buy',
+      context: { vaultCardId, buyerId, step: 'complete' },
+    },
+  );
 });
 
 // ============================================================================
@@ -3673,6 +3817,22 @@ registerEffect('base.vault.mana-elixir', (ctx): EffectResult => ({
  */
 registerEffect('base.vault.endless-coin-purse', (ctx): EffectResult => {
   const step = ctx.resumeContext?.['step'];
+  // step='after-buy' re-enters from a reaction-window afterResume; no
+  // resumeAnswer. Handle BEFORE the first-call short-circuit below.
+  if (step === 'after-buy') {
+    const vaultCardId = ctx.resumeContext?.['vaultCardId'];
+    if (typeof vaultCardId !== 'string') {
+      throw new Error('endless-coin-purse after-buy: missing vaultCardId');
+    }
+    return {
+      kind: 'done',
+      patch: applyVaultPurchaseMaybeWaived(
+        ctx.state,
+        ctx.triggeringPlayerId,
+        vaultCardId,
+      ),
+    };
+  }
   if (!ctx.resumeAnswer) {
     // First entry: grant 1 Gold, then ask Buy/Skip.
     const goldGained = {
@@ -3734,14 +3894,22 @@ registerEffect('base.vault.endless-coin-purse', (ctx): EffectResult => {
     if (ctx.resumeAnswer.kind !== 'card-chosen') {
       throw new Error('endless-coin-purse pick-card expected card-chosen');
     }
-    return {
-      kind: 'done',
-      patch: applyVaultPurchase(
-        ctx.state,
-        ctx.triggeringPlayerId,
-        ctx.resumeAnswer.cardId,
-      ),
-    };
+    // Route through the gold-payment reaction window so Auric Catalyst
+    // can waive the cost. afterResume re-enters at step='after-buy'
+    // (handled above the resumeAnswer guard).
+    return spawnVaultBuyReactionWindow(
+      ctx.state,
+      ctx.triggeringPlayerId,
+      ctx.resumeAnswer.cardId,
+      ctx.source,
+      {
+        effectId: 'base.vault.endless-coin-purse',
+        context: {
+          step: 'after-buy',
+          vaultCardId: ctx.resumeAnswer.cardId,
+        },
+      },
+    );
   }
   throw new Error(`endless-coin-purse unexpected step ${String(step)}`);
 });

@@ -202,6 +202,14 @@ export interface Player {
    */
   nextSpellFreeMana?: boolean;
   /**
+   * Buff flag: the next Gold cost this player would pay is reduced to
+   * zero. Set by Auric Catalyst's reaction. Consumed by the post-window
+   * apply-buy step (or the equivalent paid acquisition). Does NOT
+   * affect Swap-for-Gold abilities; only triggers that fire a
+   * gold-payment-pending reaction window.
+   */
+  nextGoldCostWaived?: boolean;
+  /**
    * For each wild-department supporter the player owns (e.g. White Ash),
    * the department they've declared it counts as. Set during the
    * 'final-scoring' phase prompt (before voters are revealed) and read by
@@ -696,6 +704,18 @@ export type ReactionTriggerEvent =
       spellId: SpellCardId;
       level: 1 | 2 | 3;
       byPlayerId: PlayerId;
+    }
+  | {
+      /**
+       * Fires immediately before a player would pay gold for a buy (and
+       * similar paid acquisitions — NOT for "Swap" abilities). The only
+       * reactor is the paying player themselves, who may play Auric
+       * Catalyst to set `nextGoldCostWaived` and reduce the cost to zero.
+       */
+      kind: 'gold-payment-pending';
+      payingPlayerId: PlayerId;
+      amount: number;
+      purpose: 'vault-purchase';
     };
 
 export interface ReactionWindow {

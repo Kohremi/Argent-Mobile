@@ -3908,6 +3908,106 @@ describe('BUY_VAULT_CARD action', () => {
       }),
     ).toThrow(/not in vault tableau/);
   });
+
+  it('Auric Catalyst: pauses on a gold-payment reaction window; playing it waives the cost', () => {
+    let s = setupBuyAction();
+    // Alice has Auric Catalyst in her office; she'll buy Mana Elixir
+    // (2 gold) but Catalyst should waive the cost.
+    s = addVaultCard(s, 'p1', 'base.vault.auric-catalyst');
+    s = setGold(s, 'p1', 4); // Plenty of gold to confirm the waiver works.
+    s = applyAction(s, {
+      type: 'BUY_VAULT_CARD',
+      playerId: 'p1',
+      vaultCardId: 'base.vault.mana-elixir',
+    });
+    // Gold-payment reaction window is open with Auric Catalyst as an option.
+    const reactionPrompt = topPending(s);
+    expect(reactionPrompt.prompt.kind).toBe('reaction-window');
+    if (reactionPrompt.prompt.kind === 'reaction-window') {
+      expect(reactionPrompt.prompt.triggerEvent.kind).toBe('gold-payment-pending');
+      const ids = reactionPrompt.prompt.reactionOptions.map((o) => o.sourceId);
+      expect(ids).toContain('base.vault.auric-catalyst');
+    }
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: reactionPrompt.id,
+      answer: {
+        kind: 'reaction-played',
+        effectId: 'base.vault.auric-catalyst.react',
+        reactionContext: {},
+      },
+    });
+    // Buy completed; gold not deducted; catalyst now in discard.
+    const alice = s.players.find((p) => p.id === 'p1');
+    expect(alice?.resources.gold).toBe(4);
+    expect(alice?.vaultCards.find((v) => v.cardId === 'base.vault.mana-elixir')).toBeTruthy();
+    expect(alice?.vaultCards.find((v) => v.cardId === 'base.vault.auric-catalyst')).toBeUndefined();
+    expect(alice?.personalDiscard).toContainEqual({
+      kind: 'consumable',
+      cardId: 'base.vault.auric-catalyst',
+    });
+    // nextGoldCostWaived consumed on apply-buy.
+    expect(alice?.nextGoldCostWaived).toBe(false);
+  });
+
+  it('Auric Catalyst: passing the reaction lets the buy proceed normally (gold deducted)', () => {
+    let s = setupBuyAction();
+    s = addVaultCard(s, 'p1', 'base.vault.auric-catalyst');
+    s = applyAction(s, {
+      type: 'BUY_VAULT_CARD',
+      playerId: 'p1',
+      vaultCardId: 'base.vault.mana-elixir',
+    });
+    const reactionPrompt = topPending(s);
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: reactionPrompt.id,
+      answer: { kind: 'reaction-passed' },
+    });
+    const alice = s.players.find((p) => p.id === 'p1');
+    expect(alice?.resources.gold).toBe(2); // 4 - 2
+    expect(alice?.vaultCards.find((v) => v.cardId === 'base.vault.mana-elixir')).toBeTruthy();
+    // Catalyst stays in office (not consumed).
+    expect(alice?.vaultCards.find((v) => v.cardId === 'base.vault.auric-catalyst')).toBeTruthy();
+  });
+
+  it('Auric Catalyst: allows a buy even when the player cannot afford the gold cost', () => {
+    let s = setupBuyAction();
+    s = setGold(s, 'p1', 0); // No gold at all.
+    s = addVaultCard(s, 'p1', 'base.vault.auric-catalyst');
+    // Despite 0 gold, the action validates because catalyst can waive.
+    s = applyAction(s, {
+      type: 'BUY_VAULT_CARD',
+      playerId: 'p1',
+      vaultCardId: 'base.vault.mana-elixir', // costs 2
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: {
+        kind: 'reaction-played',
+        effectId: 'base.vault.auric-catalyst.react',
+        reactionContext: {},
+      },
+    });
+    const alice = s.players.find((p) => p.id === 'p1');
+    expect(alice?.resources.gold).toBe(0);
+    expect(alice?.vaultCards.find((v) => v.cardId === 'base.vault.mana-elixir')).toBeTruthy();
+  });
+
+  it('No Auric Catalyst: buy proceeds without opening a reaction window', () => {
+    // Sanity check that buys without a catalyst-holder are unchanged.
+    const s = setupBuyAction();
+    const next = applyAction(s, {
+      type: 'BUY_VAULT_CARD',
+      playerId: 'p1',
+      vaultCardId: 'base.vault.mana-elixir',
+    });
+    expect(next.pendingResolutionStack).toHaveLength(0);
+    expect(next.activeReactionWindows).toHaveLength(0);
+    const alice = next.players.find((p) => p.id === 'p1');
+    expect(alice?.resources.gold).toBe(2);
+  });
 });
 
 // ============================================================================
@@ -4961,6 +5061,59 @@ describe('Library A slot 3 (regular): Gain a Buy + Research', () => {
         'discard',
       ]);
     }
+  });
+
+  it('Auric Catalyst: waives the cost on the Library A Slot 3 Gain-a-Buy step', () => {
+    let s = setupRoomSlotTest('Library', 'A', 'base.room.library.a.slot-3');
+    s = setVaultTableau(s, ['base.vault.mana-elixir']); // 2g
+    s = setGold(s, 'p1', 0);
+    // Alice has Auric Catalyst in her office — she should be able to buy
+    // the Mana Elixir even with 0 gold.
+    s = mapPlayer(s, 'p1', (p) => ({
+      ...p,
+      vaultCards: [
+        ...p.vaultCards,
+        { cardId: 'base.vault.auric-catalyst', exhausted: false },
+      ],
+    }));
+    s = driveToResolution(s);
+    // Buy/Skip prompt (catalyst makes the card affordable).
+    const buyOrSkip = topPending(s);
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: buyOrSkip.id,
+      answer: { kind: 'option-chosen', optionId: 'buy', payload: {} },
+    });
+    // Pick the card.
+    const pickCard = topPending(s);
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: pickCard.id,
+      answer: { kind: 'card-chosen', cardId: 'base.vault.mana-elixir' },
+    });
+    // Reaction window for the gold payment.
+    const reactionPrompt = topPending(s);
+    expect(reactionPrompt.prompt.kind).toBe('reaction-window');
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: reactionPrompt.id,
+      answer: {
+        kind: 'reaction-played',
+        effectId: 'base.vault.auric-catalyst.react',
+        reactionContext: {},
+      },
+    });
+    // Buy completes with 0 gold deducted; research prompt now on top.
+    const alice = s.players.find((p) => p.id === 'p1');
+    expect(alice?.resources.gold).toBe(0);
+    expect(
+      alice?.vaultCards.find((v) => v.cardId === 'base.vault.mana-elixir'),
+    ).toBeTruthy();
+    expect(
+      alice?.vaultCards.find((v) => v.cardId === 'base.vault.auric-catalyst'),
+    ).toBeUndefined();
+    const researchPrompt = topPending(s);
+    expect(researchPrompt.prompt.kind).toBe('choose-from-options');
   });
 });
 

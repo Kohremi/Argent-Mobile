@@ -665,6 +665,22 @@ export function buildReactionOptionsFor(
   if (!responder) return [];
   const options: ReturnType<typeof buildReactionOptionsFor> = [];
 
+  // Auric Catalyst — consumable, fires on the responder's own pending
+  // gold payment. Only the paying player can react (they're reducing
+  // their own cost).
+  if (
+    event.kind === 'gold-payment-pending' &&
+    event.payingPlayerId === responderId &&
+    playerHasAuricCatalyst(responder)
+  ) {
+    options.push({
+      sourceKind: 'vault-card',
+      sourceId: 'base.vault.auric-catalyst',
+      effectId: 'base.vault.auric-catalyst.react',
+      label: 'Play Auric Catalyst (reduce cost to 0)',
+    });
+  }
+
   const isOwnMageHarmEvent =
     (event.kind === 'mage-wounded' ||
       event.kind === 'mage-banished' ||
@@ -923,12 +939,69 @@ export function affordableVaultCards(
 ): VaultCardId[] {
   const player = findPlayer(state, playerId);
   if (!player) return [];
+  // If the player can play Auric Catalyst, every tableau card is
+  // effectively affordable (the catalyst waives gold cost to zero).
+  const hasCatalyst = playerHasAuricCatalyst(player);
   const result: VaultCardId[] = [];
   for (const cardId of state.vaultTableau) {
     const def = lookupVaultCardDef(state, cardId);
-    if (def && def.goldCost <= player.resources.gold) result.push(cardId);
+    if (def && (hasCatalyst || def.goldCost <= player.resources.gold)) {
+      result.push(cardId);
+    }
   }
   return result;
+}
+
+/** True if the player has a non-exhausted Auric Catalyst in their office. */
+export function playerHasAuricCatalyst(player: Player): boolean {
+  return player.vaultCards.some(
+    (v) => v.cardId === 'base.vault.auric-catalyst' && !v.exhausted,
+  );
+}
+
+/**
+ * Applies a vault buy, honoring the buyer's `nextGoldCostWaived` flag if
+ * set: in that case 0 gold is deducted (the card is gained for free) and
+ * the flag is cleared. Otherwise the regular `applyVaultPurchase` is used.
+ */
+export function applyVaultPurchaseMaybeWaived(
+  state: GameState,
+  buyerId: PlayerId,
+  vaultCardId: VaultCardId,
+): GameStatePatch {
+  const buyer = findPlayer(state, buyerId);
+  if (!buyer) {
+    throw new Error(`applyVaultPurchaseMaybeWaived: buyer ${buyerId} not found`);
+  }
+  if (!buyer.nextGoldCostWaived) {
+    return applyVaultPurchase(state, buyerId, vaultCardId);
+  }
+  // Waived: clear the flag, skip gold deduction, add the card.
+  const card = lookupVaultCardDef(state, vaultCardId);
+  if (!card) {
+    throw new Error(`applyVaultPurchaseMaybeWaived: ${vaultCardId} not in active packs`);
+  }
+  const idx = state.vaultTableau.indexOf(vaultCardId);
+  if (idx === -1) {
+    throw new Error(
+      `applyVaultPurchaseMaybeWaived: ${vaultCardId} not in vault tableau`,
+    );
+  }
+  return {
+    players: state.players.map((p) =>
+      p.id !== buyerId
+        ? p
+        : {
+            ...p,
+            nextGoldCostWaived: false,
+            vaultCards: [...p.vaultCards, { cardId: vaultCardId, exhausted: false }],
+          },
+    ),
+    vaultTableau: [
+      ...state.vaultTableau.slice(0, idx),
+      ...state.vaultTableau.slice(idx + 1),
+    ],
+  };
 }
 
 // ============================================================================
