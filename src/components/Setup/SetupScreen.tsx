@@ -1,7 +1,11 @@
 import { useMemo } from 'react';
 import clsx from 'clsx';
 import { listPacks } from '../../content/registry';
-import { PLAYER_COUNT_RANGE, useSetupStore } from '../../store/setupStore';
+import {
+  PLAYER_COUNT_RANGE,
+  ROOM_COUNT_RANGE,
+  useSetupStore,
+} from '../../store/setupStore';
 import { useGameStore } from '../../store/gameStore';
 import { randomSeed } from '../../utils/rng';
 
@@ -9,9 +13,11 @@ export function SetupScreen() {
   const packs = useMemo(() => listPacks(), []);
   const selectedPackIds = useSetupStore((s) => s.selectedPackIds);
   const playerNames = useSetupStore((s) => s.playerNames);
+  const numberOfRooms = useSetupStore((s) => s.numberOfRooms);
   const togglePack = useSetupStore((s) => s.togglePack);
   const setPlayerName = useSetupStore((s) => s.setPlayerName);
   const setPlayerCount = useSetupStore((s) => s.setPlayerCount);
+  const setNumberOfRooms = useSetupStore((s) => s.setNumberOfRooms);
   const startGame = useGameStore((s) => s.start);
 
   const playerCount = playerNames.length;
@@ -24,6 +30,7 @@ export function SetupScreen() {
       playerNames: playerNames.map((n) => n.trim()),
       rngSeed: randomSeed(),
       useCandidateDraft: true,
+      numberOfRooms,
     });
   };
 
@@ -121,6 +128,39 @@ export function SetupScreen() {
             </li>
           ))}
         </ul>
+      </section>
+
+      <section className="mb-8">
+        <div className="flex items-center justify-between mb-3">
+          <div>
+            <h2 className="text-xl font-medium">Rooms</h2>
+            <p className="text-xs text-slate-500 mt-0.5">
+              Auto-set by player count; override manually. Extras beyond the
+              pack&apos;s available rooms are placeholders.
+            </p>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              className="px-2 py-1 rounded bg-slate-800 disabled:opacity-40"
+              onClick={() => setNumberOfRooms(numberOfRooms - 1)}
+              disabled={numberOfRooms <= ROOM_COUNT_RANGE.min}
+            >
+              −
+            </button>
+            <span className="text-sm text-slate-300 w-20 text-center">
+              {numberOfRooms} rooms
+            </span>
+            <button
+              type="button"
+              className="px-2 py-1 rounded bg-slate-800 disabled:opacity-40"
+              onClick={() => setNumberOfRooms(numberOfRooms + 1)}
+              disabled={numberOfRooms >= ROOM_COUNT_RANGE.max}
+            >
+              +
+            </button>
+          </div>
+        </div>
       </section>
 
       <button

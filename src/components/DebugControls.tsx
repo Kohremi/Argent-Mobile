@@ -2961,10 +2961,19 @@ function RoomsPanel({
   const spaceMode =
     selectionMode?.kind === 'action-space' ? selectionMode : null;
 
+  // Render rooms in the spatial layout produced at game start.
+  // Each cell is either a room or an empty slot (visualized as a faint
+  // placeholder so the grid shape is legible). Adjacency-aware spells
+  // use this same grid via getOrthogonallyAdjacentRoomIds.
+  const layout = state.roomLayout;
+  const roomById = new Map(state.rooms.map((r) => [r.id, r] as const));
+  const roomIndexById = new Map(state.rooms.map((r, i) => [r.id, i] as const));
   return (
     <section>
       <div className="flex items-baseline gap-2 mb-2">
-        <h2 className="text-lg font-medium">Tower ({state.rooms.length} rooms)</h2>
+        <h2 className="text-lg font-medium">
+          Tower ({state.rooms.length} rooms, {layout.cols}×{layout.rows} grid)
+        </h2>
         {selectedMage && ownerOfSelected && (
           <span className="text-xs text-amber-300 inline-flex items-center gap-1.5">
             placing <MageIcon color={selectedMage.color} size={14} /> for{' '}
@@ -2972,8 +2981,32 @@ function RoomsPanel({
           </span>
         )}
       </div>
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-        {state.rooms.map((room, ri) => {
+      <div
+        className="grid gap-3"
+        style={{ gridTemplateColumns: `repeat(${layout.cols}, minmax(0, 1fr))` }}
+      >
+        {layout.grid.flatMap((row, rowIdx) =>
+          row.map((cellRoomId, colIdx) => {
+            if (cellRoomId == null) {
+              return (
+                <div
+                  key={`empty-${rowIdx}-${colIdx}`}
+                  className="rounded border border-dashed border-slate-800 bg-slate-900/30 min-h-[6rem]"
+                  aria-hidden="true"
+                />
+              );
+            }
+            const room = roomById.get(cellRoomId);
+            const ri = roomIndexById.get(cellRoomId);
+            if (!room || ri === undefined) return null;
+            return renderRoomCell(room, ri);
+          }),
+        )}
+      </div>
+    </section>
+  );
+
+  function renderRoomCell(room: typeof state.rooms[number], ri: number) {
           const isCurrent =
             state.phase.kind === 'resolution' && state.phase.pendingRoomIndex === ri;
           return (
@@ -3248,10 +3281,7 @@ function RoomsPanel({
               )}
             </div>
           );
-        })}
-      </div>
-    </section>
-  );
+  }
 }
 
 function BellTowerPanel({
