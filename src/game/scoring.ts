@@ -253,6 +253,59 @@ function countMarksOnVoter(
 }
 
 /**
+ * Resolves an IP-based tiebreak among a set of players. Most total
+ * Influence wins; if multiple are tied at the top, the one who reached
+ * that value first (lowest `influenceArrivalSeq`) wins. Returns null if
+ * the tie still can't be resolved (every leader has seq === 0, meaning
+ * none has ever gained Influence, or the seq itself is tied).
+ *
+ * Treated as a single "IP tiebreak" concept since arrival-seq is the
+ * inner discriminator when current Influence is tied. The `via` field
+ * lets the game-end caller distinguish "won on IP" vs "won on arrival"
+ * for the UI label.
+ */
+function resolveByInfluence(
+  pool: Player[],
+): { winner: PlayerId; via: 'influence' | 'influence-arrival' } | null {
+  if (pool.length === 0) return null;
+  let bestInfluence = -1;
+  let leaders: Player[] = [];
+  for (const p of pool) {
+    if (p.resources.influence > bestInfluence) {
+      bestInfluence = p.resources.influence;
+      leaders = [p];
+    } else if (p.resources.influence === bestInfluence) {
+      leaders.push(p);
+    }
+  }
+  if (leaders.length === 1) {
+    return { winner: leaders[0]!.id, via: 'influence' };
+  }
+
+  // Tied at top IP — who arrived first? seq === 0 means "never gained IP"
+  // and disqualifies from this step.
+  const withArrival = leaders.filter((p) => p.influenceArrivalSeq > 0);
+  if (withArrival.length === 0) return null;
+  if (withArrival.length === 1) {
+    return { winner: withArrival[0]!.id, via: 'influence-arrival' };
+  }
+  let bestSeq = Infinity;
+  let seqLeaders: Player[] = [];
+  for (const p of withArrival) {
+    if (p.influenceArrivalSeq < bestSeq) {
+      bestSeq = p.influenceArrivalSeq;
+      seqLeaders = [p];
+    } else if (p.influenceArrivalSeq === bestSeq) {
+      seqLeaders.push(p);
+    }
+  }
+  if (seqLeaders.length === 1) {
+    return { winner: seqLeaders[0]!.id, via: 'influence-arrival' };
+  }
+  return null;
+}
+
+/**
  * Resolves a multi-way tie at the per-voter level. Marks are binary
  * (a player has either marked the voter or not — max 1 mark per voter).
  *
@@ -260,12 +313,13 @@ function countMarksOnVoter(
  *   1. Among the candidates tied on the voter's criterion, see who marked
  *      the voter.
  *      - Exactly ONE marked → that player wins.
- *      - Otherwise (zero markers OR multiple markers) the IP tiebreaker
+ *      - Otherwise (zero markers OR multiple markers) the IP tiebreak
  *        runs on the appropriate subset:
  *          * zero markers     → IP across ALL tied candidates.
  *          * multiple markers → IP among the markers only.
- *   2. Most total Influence in the IP pool wins.
- *   3. Still tied on Influence → voter abstains (no winner).
+ *   2. IP tiebreak = most Influence, then "who reached that Influence
+ *      value first" (lowest `influenceArrivalSeq`) as the inner step.
+ *   3. Still tied → voter abstains.
  */
 function breakVoterTie(
   state: GameState,
@@ -279,22 +333,9 @@ function breakVoterTie(
   // Step 1: marks (binary).
   if (markers.length === 1) return markers[0]!.id;
 
-  // Step 2: IP tiebreaker on the appropriate subset.
+  // Step 2 + 3: IP tiebreak on the appropriate subset.
   const ipPool = markers.length === 0 ? candidates : markers;
-  let bestInfluence = -1;
-  let influenceLeaders: Player[] = [];
-  for (const p of ipPool) {
-    if (p.resources.influence > bestInfluence) {
-      bestInfluence = p.resources.influence;
-      influenceLeaders = [p];
-    } else if (p.resources.influence === bestInfluence) {
-      influenceLeaders.push(p);
-    }
-  }
-  if (influenceLeaders.length === 1) return influenceLeaders[0]!.id;
-
-  // Step 3: still tied → abstain.
-  return null;
+  return resolveByInfluence(ipPool)?.winner ?? null;
 }
 
 /**
@@ -450,58 +491,15 @@ export function computeFinalScoring(state: GameState): FinalScoringResult {
     };
   }
 
-  // Tiebreaker 1: total Influence.
-  let bestInfluence = -1;
-  let influenceLeaders: Player[] = [];
-  for (const p of voteLeaders) {
-    if (p.resources.influence > bestInfluence) {
-      bestInfluence = p.resources.influence;
-      influenceLeaders = [p];
-    } else if (p.resources.influence === bestInfluence) {
-      influenceLeaders.push(p);
-    }
-  }
-  if (influenceLeaders.length === 1) {
+  // IP tiebreak (most Influence, then who reached that value first).
+  const ipResult = resolveByInfluence(voteLeaders);
+  if (ipResult) {
     return {
       votesPerPlayer,
-      archmage: influenceLeaders[0]!.id,
+      archmage: ipResult.winner,
       voterAwards,
-      tiebreaker: 'influence',
+      tiebreaker: ipResult.via,
     };
-  }
-
-  // Tiebreaker 2: who reached that Influence value first (lowest arrival seq).
-  // Players who never gained Influence (seq === 0) are disqualified.
-  const withArrival = influenceLeaders.filter(
-    (p) => p.influenceArrivalSeq > 0,
-  );
-  if (withArrival.length === 1) {
-    return {
-      votesPerPlayer,
-      archmage: withArrival[0]!.id,
-      voterAwards,
-      tiebreaker: 'influence-arrival',
-    };
-  }
-  if (withArrival.length > 1) {
-    let bestSeq = Infinity;
-    let seqLeaders: Player[] = [];
-    for (const p of withArrival) {
-      if (p.influenceArrivalSeq < bestSeq) {
-        bestSeq = p.influenceArrivalSeq;
-        seqLeaders = [p];
-      } else if (p.influenceArrivalSeq === bestSeq) {
-        seqLeaders.push(p);
-      }
-    }
-    if (seqLeaders.length === 1) {
-      return {
-        votesPerPlayer,
-        archmage: seqLeaders[0]!.id,
-        voterAwards,
-        tiebreaker: 'influence-arrival',
-      };
-    }
   }
 
   return { votesPerPlayer, archmage: null, voterAwards, tiebreaker: 'none' };

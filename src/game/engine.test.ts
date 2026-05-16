@@ -837,8 +837,7 @@ describe('Endgame scoring', () => {
     expect(computeVoterWinner(zeroMarkers, diversityVoter)).toBe('p3');
   });
 
-  it('per-voter tiebreaker: tied on IP after the marks step → voter abstains', () => {
-    // Two players tied on the criterion, neither marked, tied on IP.
+  it('per-voter tiebreaker: tied IP falls through to arrival-seq (who reached that IP first wins)', () => {
     let s = initGame(FOUR_PLAYER_CONFIG);
     s = { ...s, voters: s.voters.map((v) => ({ ...v, revealed: true })) };
     const diversityVoter = s.voters.find(
@@ -847,15 +846,45 @@ describe('Endgame scoring', () => {
     if (!diversityVoter) {
       throw new Error('diversity voter must be seeded for this test');
     }
+    // Two players tied on diversity AND on Influence — arrival-seq breaks
+    // it. p1 reached 5 IP earlier (lower seq).
     s = mapPlayer(s, 'p1', (p) => ({
       ...p,
       supporters: ['base.supporter.allys-mehrmus'],
       resources: { ...p.resources, influence: 5 },
+      influenceArrivalSeq: 2,
     }));
     s = mapPlayer(s, 'p2', (p) => ({
       ...p,
       supporters: ['base.supporter.alumis'],
       resources: { ...p.resources, influence: 5 },
+      influenceArrivalSeq: 7,
+    }));
+    expect(computeVoterWinner(s, diversityVoter)).toBe('p1');
+  });
+
+  it('per-voter tiebreaker: tied IP AND tied arrival-seq → voter abstains', () => {
+    let s = initGame(FOUR_PLAYER_CONFIG);
+    s = { ...s, voters: s.voters.map((v) => ({ ...v, revealed: true })) };
+    const diversityVoter = s.voters.find(
+      (v) => v.criterion === 'most-diversity',
+    );
+    if (!diversityVoter) {
+      throw new Error('diversity voter must be seeded for this test');
+    }
+    // Same diversity, same IP, same arrival-seq — nothing can break the
+    // tie. Voter abstains.
+    s = mapPlayer(s, 'p1', (p) => ({
+      ...p,
+      supporters: ['base.supporter.allys-mehrmus'],
+      resources: { ...p.resources, influence: 5 },
+      influenceArrivalSeq: 3,
+    }));
+    s = mapPlayer(s, 'p2', (p) => ({
+      ...p,
+      supporters: ['base.supporter.alumis'],
+      resources: { ...p.resources, influence: 5 },
+      influenceArrivalSeq: 3,
     }));
     expect(computeVoterWinner(s, diversityVoter)).toBe(null);
   });
