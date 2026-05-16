@@ -7617,3 +7617,208 @@ registerEffect('base.spell.the-gift-of-fire.l3', (ctx): EffectResult => {
   throw new Error(`${self} unexpected step ${String(step)}`);
 });
 
+// ----------------------------------------------------------------------------
+// On the Weakness of Flesh L3 "Pestilence" — Choose up to four adjacent
+// rooms. Wound one Mage in each.
+// ----------------------------------------------------------------------------
+//
+// Adjacency rule: each room after the first must be orthogonally adjacent
+// to AT LEAST ONE already-chosen room (rooms form a connected component;
+// L-shapes, T-shapes, lines all valid).
+//
+// Crucial timing: every wound is held until the player either stops or
+// reaches 4 rooms — only THEN are the wounds applied atomically and the
+// single batch reaction window opens. Doing it this way matches the
+// rulebook intent (all wounds simultaneous) and gives each affected
+// player exactly ONE reaction choosing which of their bitten mages to
+// react with. Without the atomic batch, a reaction window would open
+// after the first wound and the caster's second target-pick could be
+// invalidated by a defensive reaction (Phase Steppers, Invisibility Cloak)
+// before they finish choosing.
+//
+// State machine (carried entirely in resumeContext arrays):
+//   • initial           — pick room 1 (rooms with a woundable target)
+//   • pick-target       — pick mage in the room just chosen
+//   • continue-or-stop  — after a target is locked in, either stop or
+//                         pick another room. Auto-applies when at the
+//                         4-room cap or no more adjacent rooms have a
+//                         woundable target.
+//   • after-continue-or-stop — route to next room pick or apply.
+registerEffect('base.spell.on-the-weakness-of-flesh.l3', (ctx): EffectResult => {
+  const step = ctx.resumeContext?.['step'];
+  const self = 'base.spell.on-the-weakness-of-flesh.l3';
+  const MAX_ROOMS = 4;
+
+  const chosenRoomIds =
+    (ctx.resumeContext?.['chosenRoomIds'] as string[] | undefined) ?? [];
+  const chosenTargets =
+    (ctx.resumeContext?.['chosenTargets'] as string[] | undefined) ?? [];
+
+  /** Rooms eligible for the NEXT pick: adjacent to ≥1 chosen + has target. */
+  function eligibleNextRoomIds(): string[] {
+    const chosen = new Set(chosenRoomIds);
+    const candidates = new Set<string>();
+    for (const rid of chosenRoomIds) {
+      for (const nid of getOrthogonallyAdjacentRoomIds(
+        ctx.state.roomLayout,
+        rid,
+      )) {
+        if (chosen.has(nid)) continue;
+        if (
+          buildWoundableMagesInRoom(ctx.state, ctx.triggeringPlayerId, nid)
+            .length === 0
+        )
+          continue;
+        candidates.add(nid);
+      }
+    }
+    return Array.from(candidates);
+  }
+
+  function roomOption(rid: string): ChoiceOption {
+    const r = ctx.state.rooms.find((rr) => rr.id === rid);
+    return { id: rid, label: r?.name ?? rid, payload: {} };
+  }
+
+  // initial: pick room 1.
+  if (!ctx.resumeAnswer) {
+    const eligible = ctx.state.rooms
+      .filter(
+        (r) =>
+          buildWoundableMagesInRoom(ctx.state, ctx.triggeringPlayerId, r.id)
+            .length > 0,
+      )
+      .map((r) => r.id);
+    if (eligible.length === 0) return { kind: 'done', patch: {} };
+    return {
+      kind: 'pause',
+      pending: {
+        responderId: ctx.triggeringPlayerId,
+        prompt: {
+          kind: 'choose-from-options',
+          options: eligible.map(roomOption),
+        },
+        resume: {
+          effectId: self,
+          context: { step: 'pick-target', chosenRoomIds: [], chosenTargets: [] },
+        },
+        source: ctx.source,
+      },
+    };
+  }
+
+  // pick-target: a room was just chosen; prompt for the mage.
+  if (step === 'pick-target') {
+    if (ctx.resumeAnswer.kind !== 'option-chosen') {
+      throw new Error(`${self} pick-target expected option-chosen`);
+    }
+    const newRoomId = ctx.resumeAnswer.optionId;
+    const targets = buildWoundableMagesInRoom(
+      ctx.state,
+      ctx.triggeringPlayerId,
+      newRoomId,
+    );
+    if (targets.length === 0) {
+      return chosenTargets.length === 0
+        ? { kind: 'done', patch: {} }
+        : applyBatchWound(ctx, self, chosenTargets);
+    }
+    return {
+      kind: 'pause',
+      pending: {
+        responderId: ctx.triggeringPlayerId,
+        prompt: { kind: 'choose-target-mage', eligibleMageIds: targets },
+        resume: {
+          effectId: self,
+          context: {
+            step: 'continue-or-stop',
+            chosenRoomIds: [...chosenRoomIds, newRoomId],
+            chosenTargets,
+          },
+        },
+        source: ctx.source,
+      },
+    };
+  }
+
+  // continue-or-stop: target locked in; ask whether to chain another room.
+  if (step === 'continue-or-stop') {
+    if (ctx.resumeAnswer.kind !== 'mage-chosen') {
+      throw new Error(`${self} continue-or-stop expected mage-chosen`);
+    }
+    const newTarget = ctx.resumeAnswer.mageId;
+    const accumulatedTargets = [...chosenTargets, newTarget];
+
+    if (chosenRoomIds.length >= MAX_ROOMS) {
+      return applyBatchWound(ctx, self, accumulatedTargets);
+    }
+    const nextRooms = eligibleNextRoomIds();
+    if (nextRooms.length === 0) {
+      return applyBatchWound(ctx, self, accumulatedTargets);
+    }
+
+    return {
+      kind: 'pause',
+      pending: {
+        responderId: ctx.triggeringPlayerId,
+        prompt: {
+          kind: 'choose-from-options',
+          options: [
+            { id: 'continue', label: 'Pick another adjacent room', payload: {} },
+            {
+              id: 'stop',
+              label: `Stop (${accumulatedTargets.length} wound${accumulatedTargets.length === 1 ? '' : 's'} so far)`,
+              payload: {},
+            },
+          ],
+        },
+        resume: {
+          effectId: self,
+          context: {
+            step: 'after-continue-or-stop',
+            chosenRoomIds,
+            chosenTargets: accumulatedTargets,
+          },
+        },
+        source: ctx.source,
+      },
+    };
+  }
+
+  // after-continue-or-stop: route based on the player's choice.
+  if (step === 'after-continue-or-stop') {
+    if (ctx.resumeAnswer.kind !== 'option-chosen') {
+      throw new Error(`${self} after-continue-or-stop expected option-chosen`);
+    }
+    if (ctx.resumeAnswer.optionId === 'stop') {
+      return applyBatchWound(ctx, self, chosenTargets);
+    }
+    if (ctx.resumeAnswer.optionId === 'continue') {
+      const nextRooms = eligibleNextRoomIds();
+      if (nextRooms.length === 0) {
+        return applyBatchWound(ctx, self, chosenTargets);
+      }
+      return {
+        kind: 'pause',
+        pending: {
+          responderId: ctx.triggeringPlayerId,
+          prompt: {
+            kind: 'choose-from-options',
+            options: nextRooms.map(roomOption),
+          },
+          resume: {
+            effectId: self,
+            context: { step: 'pick-target', chosenRoomIds, chosenTargets },
+          },
+          source: ctx.source,
+        },
+      };
+    }
+    throw new Error(
+      `${self} after-continue-or-stop unknown option ${ctx.resumeAnswer.optionId}`,
+    );
+  }
+
+  throw new Error(`${self} unexpected step ${String(step)}`);
+});
+

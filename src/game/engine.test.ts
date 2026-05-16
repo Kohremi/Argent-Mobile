@@ -8215,3 +8215,271 @@ describe('Spell wiring — Wave 8b (two adjacent rooms)', () => {
     }
   });
 });
+
+// ============================================================================
+// Spell wiring — Wave 8c: Pestilence (up to 4 adjacent rooms)
+// ============================================================================
+
+describe('Spell wiring — Wave 8c (Pestilence)', () => {
+  /**
+   * Force the grid to put Library, Vault, Courtyard, Catacombs into a 2x4
+   * layout where the four are an orthogonally-connected component. Layout:
+   *
+   *   [Library, Vault    ]   <- row 0
+   *   [Courtyard, Catacombs] <- row 1
+   *   [...other rooms...]
+   *
+   * Adjacency: Library↔Vault (h), Library↔Courtyard (v), Vault↔Catacombs (v),
+   * Courtyard↔Catacombs (h). Forms a connected 2x2 block.
+   */
+  function forceFourRoomBlock(state: GameState): GameState {
+    const find = (name: string) =>
+      state.rooms.find((r) => r.name === name)?.id;
+    const ids = {
+      library: find('Library'),
+      vault: find('Vault'),
+      courtyard: find('Courtyard'),
+      catacombs: find('Catacombs'),
+    };
+    if (
+      !ids.library ||
+      !ids.vault ||
+      !ids.courtyard ||
+      !ids.catacombs
+    ) {
+      throw new Error('All four rooms must be in play');
+    }
+    const otherIds = state.rooms
+      .filter((r) => !Object.values(ids).includes(r.id))
+      .map((r) => r.id);
+    const grid: (string | null)[][] = [
+      [ids.library, ids.vault],
+      [ids.courtyard, ids.catacombs],
+      [otherIds[0] ?? null, otherIds[1] ?? null],
+      [otherIds[2] ?? null, otherIds[3] ?? null],
+    ];
+    return { ...state, roomLayout: { cols: 2, rows: 4, grid } };
+  }
+
+  function setupPestilence(opts: {
+    casterMana?: number;
+  } = {}): GameState {
+    let s = initGame(TWO_PLAYER_CONFIG);
+    s = forceLibrarySideA(s);
+    s = forceVaultSideA(s);
+    s = forceRoomSide(s, 'Courtyard', 'A');
+    s = forceRoomSide(s, 'Catacombs', 'A');
+    s = forceFourRoomBlock(s);
+    s = zeroPlayerResources(s, 'p1');
+    s = zeroPlayerResources(s, 'p2');
+    s = addOwnedSpell(s, 'p1', 'base.spell.on-the-weakness-of-flesh', {
+      intPlaced: true,
+      wisPlacedLevel2: true,
+      wisPlacedLevel3: true,
+    });
+    s = setMana(s, 'p1', opts.casterMana ?? 4);
+    s = {
+      ...s,
+      firstPlayerIndex: 0,
+      phase: {
+        kind: 'errands',
+        round: 1,
+        activePlayerIndex: 0,
+        actionUsed: false,
+        fastActionUsed: false,
+      },
+    };
+    return s;
+  }
+
+  function addPlacedRedMage(
+    s: GameState,
+    ownerId: string,
+    id: string,
+    spaceId: string,
+  ): GameState {
+    let next = addMage(s, ownerId, {
+      id,
+      cardId: 'base.mage.sorcery',
+      color: 'red',
+    });
+    next = placeMageOnSpace(next, ownerId, id, spaceId);
+    return next;
+  }
+
+  it('Pestilence: chains 3 adjacent rooms then stops; all 3 wounds applied atomically', () => {
+    let s = setupPestilence();
+    s = addPlacedRedMage(s, 'p2', 'b-lib', 'base.room.library.a.slot-1');
+    s = addPlacedRedMage(s, 'p2', 'b-vault', 'base.room.vault.a.slot-1');
+    s = addPlacedRedMage(s, 'p2', 'b-court', 'base.room.courtyard.a.slot-1');
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.on-the-weakness-of-flesh',
+      level: 3,
+    });
+    // Pick Library (room 1).
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: {
+        kind: 'option-chosen',
+        optionId: 'base.room.library.a',
+        payload: {},
+      },
+    });
+    // Target in Library.
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'mage-chosen', mageId: 'b-lib' },
+    });
+    // Continue prompt — eligible neighbors: Vault, Courtyard.
+    const cont1 = topPending(s);
+    expect(cont1.prompt.kind).toBe('choose-from-options');
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: cont1.id,
+      answer: { kind: 'option-chosen', optionId: 'continue', payload: {} },
+    });
+    // Room 2 picker — should include Vault and Courtyard (neighbors of Library).
+    const roomPicker = topPending(s);
+    if (roomPicker.prompt.kind === 'choose-from-options') {
+      const optionIds = roomPicker.prompt.options.map((o) => o.id);
+      expect(optionIds).toContain('base.room.vault.a');
+      expect(optionIds).toContain('base.room.courtyard.a');
+    }
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: roomPicker.id,
+      answer: {
+        kind: 'option-chosen',
+        optionId: 'base.room.vault.a',
+        payload: {},
+      },
+    });
+    // Target in Vault.
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'mage-chosen', mageId: 'b-vault' },
+    });
+    // Continue prompt #2.
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'option-chosen', optionId: 'continue', payload: {} },
+    });
+    // Room 3 picker — Courtyard now eligible (adjacent to Library), Catacombs also (adjacent to Vault).
+    const roomPicker3 = topPending(s);
+    if (roomPicker3.prompt.kind === 'choose-from-options') {
+      const optionIds = roomPicker3.prompt.options.map((o) => o.id);
+      expect(optionIds).toContain('base.room.courtyard.a');
+      // Catacombs has no target → excluded.
+      expect(optionIds).not.toContain('base.room.catacombs.a');
+    }
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: roomPicker3.id,
+      answer: {
+        kind: 'option-chosen',
+        optionId: 'base.room.courtyard.a',
+        payload: {},
+      },
+    });
+    // Target in Courtyard.
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'mage-chosen', mageId: 'b-court' },
+    });
+    // No more eligible rooms (Catacombs has no target) → auto-apply; wounds happen.
+    // All three should be wounded simultaneously now.
+    expect(findMageById(s, 'b-lib').isWounded).toBe(true);
+    expect(findMageById(s, 'b-vault').isWounded).toBe(true);
+    expect(findMageById(s, 'b-court').isWounded).toBe(true);
+    const reactionPrompt = topPending(s);
+    expect(reactionPrompt.prompt.kind).toBe('reaction-window');
+    if (reactionPrompt.prompt.kind === 'reaction-window') {
+      expect(reactionPrompt.prompt.triggerEvents.length).toBe(3);
+    }
+  });
+
+  it('Pestilence: stop after 1 room — only that wound is applied', () => {
+    let s = setupPestilence({ casterMana: 4 });
+    s = addPlacedRedMage(s, 'p2', 'b-lib', 'base.room.library.a.slot-1');
+    s = addPlacedRedMage(s, 'p2', 'b-vault', 'base.room.vault.a.slot-1');
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.on-the-weakness-of-flesh',
+      level: 3,
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: {
+        kind: 'option-chosen',
+        optionId: 'base.room.library.a',
+        payload: {},
+      },
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'mage-chosen', mageId: 'b-lib' },
+    });
+    // Stop.
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'option-chosen', optionId: 'stop', payload: {} },
+    });
+    // Only b-lib wounded.
+    expect(findMageById(s, 'b-lib').isWounded).toBe(true);
+    expect(findMageById(s, 'b-vault').isWounded).toBe(false);
+    const reactionPrompt = topPending(s);
+    expect(reactionPrompt.prompt.kind).toBe('reaction-window');
+    if (reactionPrompt.prompt.kind === 'reaction-window') {
+      expect(reactionPrompt.prompt.triggerEvents.length).toBe(1);
+    }
+  });
+
+  it('Pestilence: wounds are deferred until all rooms picked (atomic batch)', () => {
+    // This is the critical timing assertion: no reaction window appears
+    // between picks. The state mid-flow should show NO wounded mages until
+    // the final pick or stop.
+    let s = setupPestilence();
+    s = addPlacedRedMage(s, 'p2', 'b-lib', 'base.room.library.a.slot-1');
+    s = addPlacedRedMage(s, 'p2', 'b-vault', 'base.room.vault.a.slot-1');
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.on-the-weakness-of-flesh',
+      level: 3,
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: {
+        kind: 'option-chosen',
+        optionId: 'base.room.library.a',
+        payload: {},
+      },
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'mage-chosen', mageId: 'b-lib' },
+    });
+    // CRITICAL: b-lib should NOT yet be wounded — we're mid-pick.
+    expect(findMageById(s, 'b-lib').isWounded).toBe(false);
+    // Now stop. b-lib should be wounded.
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'option-chosen', optionId: 'stop', payload: {} },
+    });
+    expect(findMageById(s, 'b-lib').isWounded).toBe(true);
+  });
+});
