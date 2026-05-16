@@ -1395,10 +1395,11 @@ function PlayerCard({
             const inOffice = m.location.kind === 'office';
             const placeable =
               canAct && inOffice && !m.isWounded;
-            const colorIsPurple = m.color === 'purple';
-            const budgetOpen = colorIsPurple
-              ? !fastActionUsed
-              : !actionUsed;
+            // Purple (Planar Studies) mages prefer the Fast Action but can
+            // fall back to the Regular Action when Fast is spent — so the
+            // tile stays clickable as long as the Regular Action is still
+            // available. Non-purple mages always consume the Regular Action.
+            const budgetOpen = !actionUsed;
             const mageTargetable = mageMode?.eligibleIds.has(m.id) ?? false;
             // Prompt-driven targeting wins over placement selection: an
             // active prompt blocks normal play anyway, and the eligibility
@@ -1418,9 +1419,7 @@ function PlayerCard({
                 : !canAct
                   ? 'not your turn'
                   : !budgetOpen
-                    ? colorIsPurple
-                      ? 'Fast Action used'
-                      : 'Action used'
+                    ? 'Action used'
                     : null;
             return (
               <button
