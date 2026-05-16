@@ -32,6 +32,7 @@ import {
   gainResourcePatch,
   gainResourcesPatch,
   healMageToSpace,
+  isRoomAtPlayerCap,
   moveMageToSpace,
   placeOfficeMageAsShadow,
   playerHasAuricCatalyst,
@@ -2609,18 +2610,35 @@ registerEffect('base.supporter.rennel-pedrigor', (ctx): EffectResult => {
     );
   }
 
+  // Step 1: pick the opponent target. Exclude targets whose containing
+  // room is at the caster's per-round placement cap (shadow placement
+  // counts as placement).
   if (!ctx.resumeAnswer) {
     const targets: string[] = [];
     for (const p of ctx.state.players) {
       if (p.id === ctx.triggeringPlayerId) continue;
       for (const m of p.mages) {
         if (
-          m.location.kind === 'action-space' &&
-          !m.isWounded &&
-          !m.isShadowing
+          m.location.kind !== 'action-space' ||
+          m.isWounded ||
+          m.isShadowing
         ) {
-          targets.push(m.id);
+          continue;
         }
+        const room = ctx.state.rooms.find((r) =>
+          r.actionSpaces.some(
+            (s) =>
+              s.id ===
+              (m.location as { kind: 'action-space'; spaceId: string }).spaceId,
+          ),
+        );
+        if (
+          room &&
+          isRoomAtPlayerCap(ctx.state, ctx.triggeringPlayerId, room.id)
+        ) {
+          continue;
+        }
+        targets.push(m.id);
       }
     }
     if (targets.length === 0) return { kind: 'done', patch: {} };
@@ -3775,19 +3793,35 @@ registerEffect('base.spell.paralocation.l1', (ctx): EffectResult => {
     );
   }
 
-  // Step 1: pick the opponent target.
+  // Step 1: pick the opponent target. Exclude targets whose containing
+  // room is at the caster's per-round placement cap (shadow placement
+  // counts as placement).
   if (!ctx.resumeAnswer) {
     const targets: string[] = [];
     for (const p of ctx.state.players) {
       if (p.id === ctx.triggeringPlayerId) continue;
       for (const m of p.mages) {
         if (
-          m.location.kind === 'action-space' &&
-          !m.isWounded &&
-          !m.isShadowing
+          m.location.kind !== 'action-space' ||
+          m.isWounded ||
+          m.isShadowing
         ) {
-          targets.push(m.id);
+          continue;
         }
+        const room = ctx.state.rooms.find((r) =>
+          r.actionSpaces.some(
+            (s) =>
+              s.id ===
+              (m.location as { kind: 'action-space'; spaceId: string }).spaceId,
+          ),
+        );
+        if (
+          room &&
+          isRoomAtPlayerCap(ctx.state, ctx.triggeringPlayerId, room.id)
+        ) {
+          continue;
+        }
+        targets.push(m.id);
       }
     }
     if (targets.length === 0) {
@@ -4605,6 +4639,7 @@ registerEffect('base.vault.shadow-potion', (ctx): EffectResult => {
     const eligibleSpaces: string[] = [];
     for (const r of ctx.state.rooms) {
       if (r.cannotBePlacedInDirectly) continue;
+      if (isRoomAtPlayerCap(ctx.state, ctx.triggeringPlayerId, r.id)) continue;
       for (const s of r.actionSpaces) {
         if (s.occupant && !s.shadowOccupant) eligibleSpaces.push(s.id);
       }

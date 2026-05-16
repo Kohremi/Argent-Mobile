@@ -546,14 +546,31 @@ export function placeOfficeMageAsShadow(
   if (mage.location.kind !== 'office') {
     throw new Error(`placeOfficeMageAsShadow: mage ${mageId} not in office`);
   }
-  const targetSpace = state.rooms
-    .flatMap((r) => r.actionSpaces)
-    .find((s) => s.id === spaceId);
-  if (!targetSpace) {
+  const targetRoom = state.rooms.find((r) =>
+    r.actionSpaces.some((s) => s.id === spaceId),
+  );
+  if (!targetRoom) {
     throw new Error(`placeOfficeMageAsShadow: space ${spaceId} not found`);
   }
+  const targetSpace = targetRoom.actionSpaces.find((s) => s.id === spaceId)!;
   if (targetSpace.shadowOccupant) {
     throw new Error(`placeOfficeMageAsShadow: shadow slot already occupied`);
+  }
+  // Shadow placement counts as "placing a mage" — credit the room toward
+  // the player's per-round cap, and refuse if the cap would be exceeded.
+  // Callers should pre-filter via `isRoomAtPlayerCap` so the user never
+  // sees an ineligible option in the prompt; this throw is a safety net
+  // against any path that skipped the filter.
+  const cap = targetRoom.maxMagesPerPlayerPerRound ?? Infinity;
+  if (Number.isFinite(cap)) {
+    const placedHere = player.roundPlacements.filter(
+      (rid) => rid === targetRoom.id,
+    ).length;
+    if (placedHere >= cap) {
+      throw new Error(
+        `placeOfficeMageAsShadow: ${ownerId} already at per-round cap (${cap}) in ${targetRoom.name}`,
+      );
+    }
   }
   const occupancy: WorkerOccupancy = {
     mageId,
@@ -575,6 +592,7 @@ export function placeOfficeMageAsShadow(
                     location: { kind: 'action-space' as const, spaceId },
                   },
             ),
+            roundPlacements: [...p.roundPlacements, targetRoom.id],
           },
     ),
     rooms: state.rooms.map((r) => ({
@@ -584,6 +602,30 @@ export function placeOfficeMageAsShadow(
       ),
     })),
   };
+}
+
+/**
+ * True if `playerId` has already placed their per-room limit of mages in
+ * `roomId` this round. Used to filter eligibility for placement prompts
+ * (both base placement and shadow placement) so the player never sees an
+ * option that would break the cap. The cap is enforced as well at the
+ * placement helpers; this is the eligibility-side filter.
+ */
+export function isRoomAtPlayerCap(
+  state: GameState,
+  playerId: PlayerId,
+  roomId: string,
+): boolean {
+  const room = state.rooms.find((r) => r.id === roomId);
+  if (!room) return false;
+  const cap = room.maxMagesPerPlayerPerRound ?? Infinity;
+  if (!Number.isFinite(cap)) return false;
+  const player = findPlayer(state, playerId);
+  if (!player) return false;
+  const placedHere = player.roundPlacements.filter(
+    (rid) => rid === room.id,
+  ).length;
+  return placedHere >= cap;
 }
 
 /**

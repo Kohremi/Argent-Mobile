@@ -3057,6 +3057,97 @@ describe('Leader spells (unique single-level)', () => {
     expect(s.pendingResolutionStack).toHaveLength(0);
   });
 
+  it('Paralocation: shadow placement credits roundPlacements and respects the per-room cap', () => {
+    let s = setupLeaderTest();
+    s = forceRoomSide(s, 'Council Chamber', 'A');
+    s = addMage(s, 'p1', {
+      id: 'alice-mage-1',
+      cardId: 'base.mage.planar-studies',
+      color: 'purple',
+    });
+    // Bob has TWO mages on Council Chamber — both should be filtered out
+    // once Alice's per-room cap is hit. We test the cap by also placing
+    // Bob on a non-capped room as a control.
+    s = addMage(s, 'p2', {
+      id: 'bob-council',
+      cardId: 'base.mage.sorcery',
+      color: 'red',
+    });
+    s = addMage(s, 'p2', {
+      id: 'bob-library',
+      cardId: 'base.mage.sorcery',
+      color: 'red',
+    });
+    s = placeMageOnSpace(s, 'p2', 'bob-council', 'base.room.council-chamber.a.slot-1');
+    s = placeMageOnSpace(s, 'p2', 'bob-library', 'base.room.library.a.slot-1');
+    // Alice already used her one Council Chamber placement this round.
+    const councilRoom = s.rooms.find((r) => r.name === 'Council Chamber')!;
+    s = mapPlayer(s, 'p1', (p) => ({
+      ...p,
+      roundPlacements: [...p.roundPlacements, councilRoom.id],
+    }));
+    s = setMana(s, 'p1', 1);
+    s = addOwnedSpell(s, 'p1', 'base.spell.paralocation');
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.paralocation',
+      level: 1,
+    });
+    const pickTarget = topPending(s);
+    expect(pickTarget.prompt.kind).toBe('choose-target-mage');
+    if (pickTarget.prompt.kind === 'choose-target-mage') {
+      // Bob's Council Chamber mage is excluded; library mage is allowed.
+      expect(pickTarget.prompt.eligibleMageIds).not.toContain('bob-council');
+      expect(pickTarget.prompt.eligibleMageIds).toContain('bob-library');
+    }
+  });
+
+  it('Paralocation: shadow placement into an uncapped room still credits roundPlacements', () => {
+    let s = setupLeaderTest();
+    s = forceRoomSide(s, 'Council Chamber', 'A');
+    s = addMage(s, 'p1', {
+      id: 'alice-mage-1',
+      cardId: 'base.mage.planar-studies',
+      color: 'purple',
+    });
+    s = addMage(s, 'p2', {
+      id: 'bob-council',
+      cardId: 'base.mage.sorcery',
+      color: 'red',
+    });
+    s = placeMageOnSpace(s, 'p2', 'bob-council', 'base.room.council-chamber.a.slot-1');
+    s = setMana(s, 'p1', 1);
+    s = addOwnedSpell(s, 'p1', 'base.spell.paralocation');
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.paralocation',
+      level: 1,
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'mage-chosen', mageId: 'bob-council' },
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'mage-chosen', mageId: 'alice-mage-1' },
+    });
+    // Pass the mage-shadowed reaction.
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'reaction-passed' },
+    });
+    // Alice's shadow placement credits Council Chamber toward her cap;
+    // any further Paralocation/Shadow-Potion/PLACE_WORKER on that room
+    // would now be rejected.
+    const alice = s.players.find((p) => p.id === 'p1')!;
+    expect(alice.roundPlacements).toContain('base.room.council-chamber.a');
+  });
+
   it('Paralocation: shadowing into an instant room surfaces the slot reward prompt after the shadow-window closes', () => {
     let s = setupLeaderTest();
     // Force Guilds A and put Bob's mage onto a non-merit slot.
@@ -3954,6 +4045,53 @@ describe('PLAY_VAULT_CARD', () => {
       kind: 'action-space',
       spaceId: 'base.room.library.a.slot-1',
     });
+  });
+
+  it('Shadow Potion: slot picker excludes rooms where the caster is at per-round cap', () => {
+    let s = setupVaultPlay('base.vault.shadow-potion');
+    s = forceRoomSide(s, 'Council Chamber', 'A');
+    s = forceLibrarySideA(s);
+    s = addMage(s, 'p1', {
+      id: 'alice-mage-1',
+      cardId: 'base.mage.divinity',
+      color: 'blue',
+    });
+    s = addMage(s, 'p2', {
+      id: 'bob-council',
+      cardId: 'base.mage.sorcery',
+      color: 'red',
+    });
+    s = addMage(s, 'p2', {
+      id: 'bob-library',
+      cardId: 'base.mage.sorcery',
+      color: 'red',
+    });
+    s = placeMageOnSpace(s, 'p2', 'bob-council', 'base.room.council-chamber.a.slot-1');
+    s = placeMageOnSpace(s, 'p2', 'bob-library', 'base.room.library.a.slot-1');
+    // Alice already placed in Council Chamber this round.
+    const councilRoom = s.rooms.find((r) => r.name === 'Council Chamber')!;
+    s = mapPlayer(s, 'p1', (p) => ({
+      ...p,
+      roundPlacements: [...p.roundPlacements, councilRoom.id],
+    }));
+    s = applyAction(s, {
+      type: 'PLAY_VAULT_CARD',
+      playerId: 'p1',
+      vaultCardId: 'base.vault.shadow-potion',
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'mage-chosen', mageId: 'alice-mage-1' },
+    });
+    const slotPrompt = topPending(s);
+    expect(slotPrompt.prompt.kind).toBe('choose-target-action-space');
+    if (slotPrompt.prompt.kind === 'choose-target-action-space') {
+      const councilSlotIds = councilRoom.actionSpaces.map((sp) => sp.id);
+      for (const sid of councilSlotIds) {
+        expect(slotPrompt.prompt.eligibleSpaceIds).not.toContain(sid);
+      }
+    }
   });
 
   it('Shadow Potion: shadowing into an instant room surfaces the slot reward prompt', () => {
