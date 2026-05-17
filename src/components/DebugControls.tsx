@@ -3,7 +3,7 @@
 // spells, drain the bell tower, and answer prompts — enough to walk through
 // the Library and Burn vertical slices end-to-end without running tests.
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import clsx from 'clsx';
 import { useGameStore } from '../store/gameStore';
 import { baseGamePack } from '../content/packs/base';
@@ -2528,24 +2528,19 @@ function CandidateDraftScreen({
   dispatch: (action: GameAction) => void;
   reset: () => void;
 }) {
-  // Local "highlighted" candidate per active player. Reset when the active
-  // player changes (different player → different selection). Player clicks
-  // a card to highlight; clicks the "Pick as X" button to confirm.
+  // Local "highlighted" candidate per active player. Player clicks a card
+  // to highlight; clicks the "Pick as X" button to confirm.
   const [highlighted, setHighlighted] = useState<string | null>(null);
   const activeIdx =
     state.phase.kind === 'candidate-draft' ? state.phase.activePlayerIndex : -1;
-  // Stale selection cleanup when turn rotates.
   const activePlayerId = state.players[activeIdx]?.id ?? null;
-  const [, setLastActive] = useState<string | null>(null);
-  // Reset highlight when the choosing player changes.
-  if (highlighted && activePlayerId) {
-    setLastActive((prev) => {
-      if (prev !== activePlayerId) {
-        queueMicrotask(() => setHighlighted(null));
-      }
-      return activePlayerId;
-    });
-  }
+
+  // Reset highlight when the choosing player changes (turn rotated to the
+  // next picker). Effect runs after render so it never crashes the
+  // render-phase tree.
+  useEffect(() => {
+    setHighlighted(null);
+  }, [activePlayerId]);
 
   if (state.phase.kind !== 'candidate-draft') return null;
   const activePlayer = state.players[activeIdx];
