@@ -263,6 +263,35 @@ function drainBellTowerLastEventIfIdle(state: GameState): GameState {
 }
 
 /**
+ * Surfaces the next placement in a "place a Mage without using Mage powers"
+ * chain (Stop Time) once the previous placement's effect chain (including
+ * any instant-room reward) has fully resolved and the resolution stack /
+ * reaction windows are idle. Decrements `remaining`; clears the chain
+ * when it hits zero.
+ */
+function drainPendingPlaceChainIfIdle(state: GameState): GameState {
+  const chain = state.pendingPlaceChain;
+  if (!chain) return state;
+  if (state.pendingResolutionStack.length > 0) return state;
+  if (state.activeReactionWindows.length > 0) return state;
+  if (chain.remaining <= 0) {
+    return { ...state, pendingPlaceChain: null };
+  }
+  const decremented: GameState = {
+    ...state,
+    pendingPlaceChain: { ...chain, remaining: chain.remaining - 1 },
+  };
+  const ctx: EffectContext = {
+    state: decremented,
+    source: chain.source,
+    triggeringPlayerId: chain.playerId,
+    allowReactions: false,
+  };
+  const result = getEffect('base.system.place-mage-without-powers')(ctx);
+  return applyEffectResult(decremented, result, ctx);
+}
+
+/**
  * If the active player has spent their Regular Action and no prompts or
  * reaction windows are still open, the turn ends automatically (per
  * rulebook). Called at the end of every dispatch so that turns advance
@@ -276,6 +305,10 @@ function autoAdvanceIfTurnDone(state: GameState): GameState {
   // Open the bell-tower-last-claimed reaction window first if pending —
   // it lets opponents react before the active player's regular action ends.
   state = drainBellTowerLastEventIfIdle(state);
+  // Then surface the next placement in a Stop Time chain (if any) — its
+  // first placement may have left a pending entry once its instant-reward
+  // chain resolved.
+  state = drainPendingPlaceChainIfIdle(state);
   // Drain a queued research opportunity first — this may add to the stack,
   // in which case we stop and let the player resolve it before any further
   // turn advancement.

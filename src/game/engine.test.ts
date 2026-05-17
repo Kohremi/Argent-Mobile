@@ -1553,6 +1553,133 @@ describe('Bell Tower offerings', () => {
     expect(placedCount).toBe(2);
   });
 
+  it('Stop Time fires instant-room rewards for BOTH placements', () => {
+    let s = startErrands();
+    const activeId = () => {
+      if (s.phase.kind !== 'errands') throw new Error('not errands');
+      const id = s.players[s.phase.activePlayerIndex]?.id;
+      if (!id) throw new Error('no active player');
+      return id;
+    };
+    s = mapPlayer(s, 'p3', (p) => ({
+      ...p,
+      resources: { ...p.resources, mana: 3, gold: 0 },
+      mages: [
+        {
+          id: 'p3-mage-a',
+          cardId: 'base.mage.divinity',
+          color: 'blue',
+          location: { kind: 'office' as const, playerId: 'p3' },
+          isShadowing: false,
+          isWounded: false,
+        },
+        {
+          id: 'p3-mage-b',
+          cardId: 'base.mage.divinity',
+          color: 'blue',
+          location: { kind: 'office' as const, playerId: 'p3' },
+          isShadowing: false,
+          isWounded: false,
+        },
+      ],
+      ownedSpells: [
+        ...p.ownedSpells.filter(
+          (x) => x.cardId !== 'base.spell.temporal-calculus-6th-ed',
+        ),
+        {
+          cardId: 'base.spell.temporal-calculus-6th-ed',
+          intPlaced: true,
+          wisPlacedLevel2: true,
+          wisPlacedLevel3: false,
+          exhausted: false,
+        },
+      ],
+    }));
+    // Drain the tower, last claim opens the reaction window.
+    s = applyAction(s, {
+      type: 'CLAIM_BELL_TOWER',
+      playerId: activeId(),
+      bellTowerCardId: 'base.bell.gain-ip',
+    });
+    s = applyAction(s, {
+      type: 'CLAIM_BELL_TOWER',
+      playerId: activeId(),
+      bellTowerCardId: 'base.bell.first-player',
+    });
+    s = applyAction(s, {
+      type: 'CLAIM_BELL_TOWER',
+      playerId: activeId(),
+      bellTowerCardId: 'base.bell.gold-or-mana',
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'option-chosen', optionId: 'mana', payload: {} },
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: {
+        kind: 'reaction-played',
+        effectId: 'base.spell.temporal-calculus-6th-ed.l2.react',
+        reactionContext: {},
+      },
+    });
+
+    // Helper: route one placement onto a chosen Guilds slot and accept its
+    // gold reward. Returns gold delta for assertion.
+    const placeAndTakeGoldReward = (guildsSlotId: string, expectedGold: number) => {
+      const goldBefore = s.players.find((p) => p.id === 'p3')!.resources.gold;
+      // mage prompt
+      const mp = topPending(s);
+      expect(mp.prompt.kind).toBe('choose-target-mage');
+      if (mp.prompt.kind !== 'choose-target-mage') return;
+      s = applyAction(s, {
+        type: 'RESOLVE_PENDING',
+        resolutionId: mp.id,
+        answer: { kind: 'mage-chosen', mageId: mp.prompt.eligibleMageIds[0]! },
+      });
+      // slot prompt — confirm the chosen Guilds slot is offered, then pick it.
+      const sp = topPending(s);
+      expect(sp.prompt.kind).toBe('choose-target-action-space');
+      if (sp.prompt.kind !== 'choose-target-action-space') return;
+      expect(sp.prompt.eligibleSpaceIds).toContain(guildsSlotId);
+      s = applyAction(s, {
+        type: 'RESOLVE_PENDING',
+        resolutionId: sp.id,
+        answer: { kind: 'space-chosen', spaceId: guildsSlotId },
+      });
+      // Resolution-choice prompt (reward/forfeit) fires because Guilds is instant.
+      const rewardPrompt = topPending(s);
+      expect(rewardPrompt.prompt.kind).toBe('choose-from-options');
+      s = applyAction(s, {
+        type: 'RESOLVE_PENDING',
+        resolutionId: rewardPrompt.id,
+        answer: { kind: 'option-chosen', optionId: 'reward', payload: {} },
+      });
+      // Guilds slot's own Gold/Mana prompt.
+      const goldOrMana = topPending(s);
+      expect(goldOrMana.prompt.kind).toBe('choose-from-options');
+      s = applyAction(s, {
+        type: 'RESOLVE_PENDING',
+        resolutionId: goldOrMana.id,
+        answer: { kind: 'option-chosen', optionId: 'gold', payload: {} },
+      });
+      const goldAfter = s.players.find((p) => p.id === 'p3')!.resources.gold;
+      expect(goldAfter - goldBefore).toBe(expectedGold);
+    };
+
+    // slot-2 grants 4 Gold; slot-3 grants 2 Gold. Both placements collect.
+    placeAndTakeGoldReward('base.room.guilds.a.slot-2', 4);
+    placeAndTakeGoldReward('base.room.guilds.a.slot-3', 2);
+
+    // Stop Time chain fully drained — no pending placement remains.
+    expect(s.pendingPlaceChain).toBeNull();
+    const p3After = s.players.find((p) => p.id === 'p3')!;
+    expect(p3After.resources.gold).toBe(6);
+    expect(p3After.resources.mana).toBe(0);
+  });
+
   it('claimer who has Tardy does NOT get a reaction prompt (must be an opponent)', () => {
     let s = startErrands();
     const activeId = () => {

@@ -8316,19 +8316,20 @@ registerEffect('base.spell.gust-of-wind.l1', (ctx): EffectResult => {
 // "Without Mage powers" means we exclude shadow / wound slot types (those
 // require Sorcery powers to occupy) and we don't fire any color-based
 // placement abilities (no fast-action for purple, no Ars Magna for red).
-// The placement is otherwise a normal one: the slot's reward fires during
-// the resolution phase, and the per-room cap is honored.
+// The placement is otherwise a normal one: per-room cap is honored, and
+// every placement (Tardy's, both of Stop Time's) fires its instant-room
+// reward when applicable.
 //
-// Instant-room placement reward: applied only on the FINAL placement of the
-// chain (Tardy's only, or Stop Time's second). For Stop Time's first
-// placement onto an instant room, the mage sits in the slot without firing
-// the reward — a niche edge case acceptable in this iteration.
+// Stop Time's second placement is queued via `state.pendingPlaceChain` —
+// the engine's `drainPendingPlaceChainIfIdle` pump surfaces the next
+// mage prompt once the first placement (including any instant-room
+// reward chain) has fully resolved.
 // ============================================================================
 
 /** Eligible empty regular/merit base slots for a "place without Mage powers"
  *  step — excludes Infirmary, locked rooms, room-cap-exhausted rooms, and
  *  shadow/wound slot types. */
-function listBellTowerReactionPlacementSlots(
+export function listPlaceWithoutPowersSlots(
   state: GameState,
   playerId: string,
 ): string[] {
@@ -8354,7 +8355,7 @@ function listBellTowerReactionPlacementSlots(
 }
 
 /** Eligible office mages for a "place without Mage powers" step. */
-function listBellTowerReactionMages(
+export function listPlaceWithoutPowersMages(
   state: GameState,
   playerId: string,
 ): string[] {
@@ -8365,175 +8366,207 @@ function listBellTowerReactionMages(
     .map((m) => m.id);
 }
 
-/** Shared chain effect for Tardy / Stop Time reaction placements.
- *  Steps in `resumeContext`: undefined (initial) → 'pick-slot' → 'apply'.
- *  `remaining` counts placements still owed (including the current one). */
-function runBellTowerPlaceChain(
-  ctx: EffectContext,
-  selfEffectId: string,
-  spellCardId: string,
-  manaCost: number,
-): EffectResult {
-  const step = ctx.resumeContext?.['step'];
+/** Shared system effect for a single "place a Mage without using Mage powers"
+ *  step. Steps in `resumeContext`: undefined / 'pick-mage' (initial mage
+ *  prompt) → 'pick-slot' (after mage chosen, slot prompt) → 'apply' (after
+ *  slot chosen, place + instant reward). Used by Tardy.react, Stop Time.react,
+ *  and the engine's pendingPlaceChain drain pump. */
+registerEffect(
+  'base.system.place-mage-without-powers',
+  (ctx): EffectResult => {
+    const step = ctx.resumeContext?.['step'] ?? 'pick-mage';
 
-  if (!step) {
-    // Initial entry from reaction window — pay cost, exhaust, prompt for mage.
-    const player = ctx.state.players.find(
-      (p) => p.id === ctx.triggeringPlayerId,
-    );
-    if (!player) return { kind: 'done', patch: {} };
-    if (player.resources.mana < manaCost) return { kind: 'done', patch: {} };
-    const owned = player.ownedSpells.find((s) => s.cardId === spellCardId);
-    if (!owned || owned.exhausted) return { kind: 'done', patch: {} };
-
-    const totalPlacements = spellCardId === 'base.spell.tardy' ? 1 : 2;
-    const paidState: GameState = {
-      ...ctx.state,
-      players: ctx.state.players.map((p) =>
-        p.id !== ctx.triggeringPlayerId
-          ? p
-          : {
-              ...p,
-              resources: { ...p.resources, mana: p.resources.mana - manaCost },
-              ownedSpells: p.ownedSpells.map((s) =>
-                s.cardId !== spellCardId ? s : { ...s, exhausted: true },
-              ),
-            },
-      ),
-    };
-
-    const mages = listBellTowerReactionMages(paidState, ctx.triggeringPlayerId);
-    if (mages.length === 0) {
-      // No mage to place — spell fizzles after paying cost.
-      return { kind: 'done', patch: { players: paidState.players } };
-    }
-    return {
-      kind: 'pause',
-      patch: { players: paidState.players },
-      pending: {
-        responderId: ctx.triggeringPlayerId,
-        prompt: { kind: 'choose-target-mage', eligibleMageIds: mages },
-        resume: {
-          effectId: selfEffectId,
-          context: { step: 'pick-slot', remaining: totalPlacements },
-        },
-        source: ctx.source,
-      },
-    };
-  }
-
-  if (step === 'pick-slot') {
-    if (ctx.resumeAnswer?.kind !== 'mage-chosen') {
-      throw new Error(`${selfEffectId} pick-slot expected mage-chosen`);
-    }
-    const remaining = Number(ctx.resumeContext?.['remaining'] ?? 1);
-    const slots = listBellTowerReactionPlacementSlots(
-      ctx.state,
-      ctx.triggeringPlayerId,
-    );
-    if (slots.length === 0) return { kind: 'done', patch: {} };
-    return {
-      kind: 'pause',
-      pending: {
-        responderId: ctx.triggeringPlayerId,
-        prompt: { kind: 'choose-target-action-space', eligibleSpaceIds: slots },
-        resume: {
-          effectId: selfEffectId,
-          context: {
-            step: 'apply',
-            remaining,
-            placerMageId: ctx.resumeAnswer.mageId,
-          },
-        },
-        source: ctx.source,
-      },
-    };
-  }
-
-  if (step === 'apply') {
-    if (ctx.resumeAnswer?.kind !== 'space-chosen') {
-      throw new Error(`${selfEffectId} apply expected space-chosen`);
-    }
-    const placerMageId = ctx.resumeContext?.['placerMageId'];
-    if (typeof placerMageId !== 'string') {
-      throw new Error(`${selfEffectId} apply: missing placerMageId`);
-    }
-    const remaining = Number(ctx.resumeContext?.['remaining'] ?? 1);
-    const spaceId = ctx.resumeAnswer.spaceId;
-    const targetRoom = ctx.state.rooms.find((r) =>
-      r.actionSpaces.some((s) => s.id === spaceId),
-    );
-    if (!targetRoom) {
-      throw new Error(`${selfEffectId} apply: room for ${spaceId} not found`);
-    }
-    const placePatch = placeOfficeMageOnSpace(
-      ctx.state,
-      ctx.triggeringPlayerId,
-      placerMageId,
-      spaceId,
-    );
-    const updatedPlayers = (placePatch.players ?? ctx.state.players).map((p) =>
-      p.id !== ctx.triggeringPlayerId
-        ? p
-        : {
-            ...p,
-            roundPlacements: [...p.roundPlacements, targetRoom.id],
-          },
-    );
-    const finalPatch: GameStatePatch = {
-      ...placePatch,
-      players: updatedPlayers,
-    };
-
-    if (remaining > 1) {
-      // Stop Time's intermediate placement — chain to the next mage prompt.
-      // Instant-room reward is skipped here (see header comment); only the
-      // final placement of the chain gets `patchWithMaybeInstantReward`.
-      const nextState: GameState = { ...ctx.state, ...finalPatch };
-      const mages = listBellTowerReactionMages(
-        nextState,
+    if (step === 'pick-mage') {
+      const mages = listPlaceWithoutPowersMages(
+        ctx.state,
         ctx.triggeringPlayerId,
       );
-      if (mages.length === 0) return { kind: 'done', patch: finalPatch };
+      if (mages.length === 0) return { kind: 'done', patch: {} };
       return {
         kind: 'pause',
-        patch: finalPatch,
         pending: {
           responderId: ctx.triggeringPlayerId,
           prompt: { kind: 'choose-target-mage', eligibleMageIds: mages },
           resume: {
-            effectId: selfEffectId,
-            context: { step: 'pick-slot', remaining: remaining - 1 },
+            effectId: 'base.system.place-mage-without-powers',
+            context: { step: 'pick-slot' },
           },
           source: ctx.source,
         },
       };
     }
 
-    // Final placement of the chain — fire the instant-room reward if any.
-    return patchWithMaybeInstantReward(
-      ctx.state,
-      finalPatch,
-      spaceId,
-      ctx.triggeringPlayerId,
-      'base',
-    );
-  }
+    if (step === 'pick-slot') {
+      if (ctx.resumeAnswer?.kind !== 'mage-chosen') {
+        throw new Error('place-mage-without-powers pick-slot expected mage-chosen');
+      }
+      const slots = listPlaceWithoutPowersSlots(
+        ctx.state,
+        ctx.triggeringPlayerId,
+      );
+      if (slots.length === 0) return { kind: 'done', patch: {} };
+      return {
+        kind: 'pause',
+        pending: {
+          responderId: ctx.triggeringPlayerId,
+          prompt: {
+            kind: 'choose-target-action-space',
+            eligibleSpaceIds: slots,
+          },
+          resume: {
+            effectId: 'base.system.place-mage-without-powers',
+            context: { step: 'apply', placerMageId: ctx.resumeAnswer.mageId },
+          },
+          source: ctx.source,
+        },
+      };
+    }
 
-  throw new Error(`${selfEffectId} unexpected step ${String(step)}`);
+    if (step === 'apply') {
+      if (ctx.resumeAnswer?.kind !== 'space-chosen') {
+        throw new Error('place-mage-without-powers apply expected space-chosen');
+      }
+      const placerMageId = ctx.resumeContext?.['placerMageId'];
+      if (typeof placerMageId !== 'string') {
+        throw new Error('place-mage-without-powers apply: missing placerMageId');
+      }
+      const spaceId = ctx.resumeAnswer.spaceId;
+      const targetRoom = ctx.state.rooms.find((r) =>
+        r.actionSpaces.some((s) => s.id === spaceId),
+      );
+      if (!targetRoom) {
+        throw new Error(`place-mage-without-powers apply: room for ${spaceId} not found`);
+      }
+      const placePatch = placeOfficeMageOnSpace(
+        ctx.state,
+        ctx.triggeringPlayerId,
+        placerMageId,
+        spaceId,
+      );
+      const updatedPlayers = (placePatch.players ?? ctx.state.players).map(
+        (p) =>
+          p.id !== ctx.triggeringPlayerId
+            ? p
+            : {
+                ...p,
+                roundPlacements: [...p.roundPlacements, targetRoom.id],
+              },
+      );
+      return patchWithMaybeInstantReward(
+        ctx.state,
+        { ...placePatch, players: updatedPlayers },
+        spaceId,
+        ctx.triggeringPlayerId,
+        'base',
+      );
+    }
+
+    throw new Error(
+      `place-mage-without-powers: unexpected step ${String(step)}`,
+    );
+  },
+);
+
+/** Pays the spell's cost + exhausts it. Returns null if the player can't
+ *  afford or doesn't own the spell unexhausted. */
+function payAndExhaustSpell(
+  state: GameState,
+  playerId: string,
+  spellCardId: string,
+  manaCost: number,
+): GameState | null {
+  const player = state.players.find((p) => p.id === playerId);
+  if (!player) return null;
+  if (player.resources.mana < manaCost) return null;
+  const owned = player.ownedSpells.find((s) => s.cardId === spellCardId);
+  if (!owned || owned.exhausted) return null;
+  return {
+    ...state,
+    players: state.players.map((p) =>
+      p.id !== playerId
+        ? p
+        : {
+            ...p,
+            resources: { ...p.resources, mana: p.resources.mana - manaCost },
+            ownedSpells: p.ownedSpells.map((s) =>
+              s.cardId !== spellCardId ? s : { ...s, exhausted: true },
+            ),
+          },
+    ),
+  };
 }
 
-registerEffect('base.spell.tardy.l1.react', (ctx): EffectResult =>
-  runBellTowerPlaceChain(ctx, 'base.spell.tardy.l1.react', 'base.spell.tardy', 1),
-);
+/** Composes the paid-state patch with whatever the place-mage-without-powers
+ *  delegate returned (which may itself be a pause for the mage prompt). */
+function composeWithDelegate(
+  delegateResult: EffectResult,
+  baseUpdate: GameStatePatch,
+): EffectResult {
+  switch (delegateResult.kind) {
+    case 'done':
+      return { kind: 'done', patch: { ...baseUpdate, ...delegateResult.patch } };
+    case 'pause':
+      return {
+        kind: 'pause',
+        patch: { ...baseUpdate, ...(delegateResult.patch ?? {}) },
+        pending: delegateResult.pending,
+      };
+    case 'open-reaction':
+      // Shouldn't happen — delegate runs with allowReactions=false.
+      return {
+        kind: 'open-reaction',
+        patch: { ...baseUpdate, ...(delegateResult.patch ?? {}) },
+        window: delegateResult.window,
+      };
+  }
+}
+
+registerEffect('base.spell.tardy.l1.react', (ctx): EffectResult => {
+  const paid = payAndExhaustSpell(
+    ctx.state,
+    ctx.triggeringPlayerId,
+    'base.spell.tardy',
+    1,
+  );
+  if (!paid) return { kind: 'done', patch: {} };
+  const delegate = getEffect('base.system.place-mage-without-powers')({
+    state: paid,
+    source: ctx.source,
+    triggeringPlayerId: ctx.triggeringPlayerId,
+    allowReactions: false,
+  });
+  return composeWithDelegate(delegate, { players: paid.players });
+});
 
 registerEffect(
   'base.spell.temporal-calculus-6th-ed.l2.react',
-  (ctx): EffectResult =>
-    runBellTowerPlaceChain(
-      ctx,
-      'base.spell.temporal-calculus-6th-ed.l2.react',
+  (ctx): EffectResult => {
+    const paid = payAndExhaustSpell(
+      ctx.state,
+      ctx.triggeringPlayerId,
       'base.spell.temporal-calculus-6th-ed',
       3,
-    ),
+    );
+    if (!paid) return { kind: 'done', patch: {} };
+    // Queue the second placement — the engine's drain pump fires it once the
+    // first placement (and its instant-room reward chain) settles.
+    const withChain: GameState = {
+      ...paid,
+      pendingPlaceChain: {
+        playerId: ctx.triggeringPlayerId,
+        source: ctx.source,
+        remaining: 1,
+      },
+    };
+    const delegate = getEffect('base.system.place-mage-without-powers')({
+      state: withChain,
+      source: ctx.source,
+      triggeringPlayerId: ctx.triggeringPlayerId,
+      allowReactions: false,
+    });
+    return composeWithDelegate(delegate, {
+      players: withChain.players,
+      pendingPlaceChain: withChain.pendingPlaceChain,
+    });
+  },
 );

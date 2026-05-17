@@ -847,6 +847,19 @@ export interface GameState {
     byPlayerId: PlayerId;
     source: ResolutionSource;
   } | null;
+  /**
+   * Tracks "place a Mage without using Mage powers" chains (Stop Time —
+   * 2 placements). After each placement (and its potential instant-room
+   * reward chain) fully resolves and the stack is idle, the engine pump
+   * drains one entry from `remaining` and surfaces the next placement's
+   * mage prompt. Cleared when `remaining` hits 0. Tardy (1 placement)
+   * does not need this — its placement fires inline.
+   */
+  pendingPlaceChain: {
+    playerId: PlayerId;
+    source: ResolutionSource;
+    remaining: number;
+  } | null;
 
   voters: ConsortiumVoter[];
   voterMarks: VoterMark[];
