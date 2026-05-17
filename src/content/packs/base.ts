@@ -28,7 +28,7 @@ const mages: Mage[] = [
     color: 'red',
     department: 'sorcery',
     description:
-      'When placing this mage, you spend 1 Mana to wound a Mage and take its slot.',
+      'When placing this mage, you may spend 1 Mana to wound a Mage and take its slot.',
     aPowerEffectId: 'base.mage.sorcery.a',
     bPowerEffectId: 'base.mage.sorcery.b',
   },
