@@ -28,7 +28,7 @@ const mages: Mage[] = [
     color: 'red',
     department: 'sorcery',
     description:
-      'Ars Magna: as a fast action, spend 1 Mana to wound a Mage and take its slot.',
+      'When placing this mage, you spend 1 Mana to wound a Mage and take its slot.',
     aPowerEffectId: 'base.mage.sorcery.a',
     bPowerEffectId: 'base.mage.sorcery.b',
   },
@@ -58,7 +58,7 @@ const mages: Mage[] = [
     sourcePackId: PACK_ID,
     color: 'purple',
     department: 'planar-studies',
-    description: 'Place as a fast action.',
+    description: 'May place as a fast action',
     aPowerEffectId: 'base.mage.planar-studies.a',
     bPowerEffectId: 'base.mage.planar-studies.b',
   },
