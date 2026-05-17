@@ -903,6 +903,67 @@ describe('Endgame scoring', () => {
     expect(scorePlayerForCriterion(s, p1, 'most-treasures')).toBe(2);
   });
 
+  it('most-consumables counts unplayed copies in the office', () => {
+    let s = initGame(FOUR_PLAYER_CONFIG);
+    s = mapPlayer(s, 'p1', (p) => ({
+      ...p,
+      vaultCards: [
+        { cardId: 'base.vault.spirits', exhausted: false }, // consumable
+        { cardId: 'base.vault.runestone', exhausted: false }, // consumable
+        { cardId: 'base.vault.mana-crystal', exhausted: false }, // treasure
+      ],
+      personalDiscard: [],
+    }));
+    const p1 = s.players.find((p) => p.id === 'p1')!;
+    // 2 unplayed consumables + 0 played = 2.
+    expect(scorePlayerForCriterion(s, p1, 'most-consumables')).toBe(2);
+  });
+
+  it('most-consumables counts duplicates as separate entries (2 Spirits = 2)', () => {
+    let s = initGame(FOUR_PLAYER_CONFIG);
+    s = mapPlayer(s, 'p1', (p) => ({
+      ...p,
+      vaultCards: [
+        { cardId: 'base.vault.spirits', exhausted: false },
+        { cardId: 'base.vault.spirits', exhausted: false },
+      ],
+      personalDiscard: [],
+    }));
+    const p1 = s.players.find((p) => p.id === 'p1')!;
+    expect(scorePlayerForCriterion(s, p1, 'most-consumables')).toBe(2);
+  });
+
+  it('most-consumables: unplayed (vaultCards) + played (personalDiscard) both count', () => {
+    let s = initGame(FOUR_PLAYER_CONFIG);
+    s = mapPlayer(s, 'p1', (p) => ({
+      ...p,
+      vaultCards: [
+        { cardId: 'base.vault.spirits', exhausted: false },
+      ],
+      personalDiscard: [
+        { kind: 'consumable', cardId: 'base.vault.spirits' },
+        { kind: 'consumable', cardId: 'base.vault.healing-drops' },
+      ],
+    }));
+    const p1 = s.players.find((p) => p.id === 'p1')!;
+    // 1 in office + 2 in discard = 3.
+    expect(scorePlayerForCriterion(s, p1, 'most-consumables')).toBe(3);
+  });
+
+  it('most-consumables: a treasure-typed card never counts', () => {
+    let s = initGame(FOUR_PLAYER_CONFIG);
+    s = mapPlayer(s, 'p1', (p) => ({
+      ...p,
+      vaultCards: [
+        { cardId: 'base.vault.mana-crystal', exhausted: false }, // treasure
+        { cardId: 'base.vault.mana-crystal', exhausted: true },  // treasure (exhausted)
+      ],
+      personalDiscard: [],
+    }));
+    const p1 = s.players.find((p) => p.id === 'p1')!;
+    expect(scorePlayerForCriterion(s, p1, 'most-consumables')).toBe(0);
+  });
+
   it('second-most-influence picks the player below the top tier', () => {
     let s = initGame(FOUR_PLAYER_CONFIG);
     s = mapPlayer(s, 'p1', (p) => ({

@@ -40,7 +40,7 @@ export function scorePlayerForCriterion(
     case 'most-treasures':
       return countTreasures(state, player);
     case 'most-consumables':
-      return countConsumables(player);
+      return countConsumables(state, player);
     case 'most-diversity':
       return countDiversity(state, player);
     case 'most-sorcery':
@@ -79,8 +79,23 @@ function countTreasures(state: GameState, player: Player): number {
   return n;
 }
 
-function countConsumables(player: Player): number {
-  return player.personalDiscard.filter((d) => d.kind === 'consumable').length;
+/**
+ * Total Consumable Vault Cards the player has ever acquired this game —
+ * both unplayed copies still in their office (`vaultCards`) AND played
+ * copies that have moved to the personal discard. Duplicates count
+ * separately (two Spirits = 2). Used by the Wandering Apothecarist /
+ * "Most Consumables" voter.
+ *
+ * Previously this only counted played consumables; unplayed copies were
+ * silently missing from the tally.
+ */
+function countConsumables(state: GameState, player: Player): number {
+  let n = 0;
+  for (const owned of player.vaultCards) {
+    if (lookupVaultType(state, owned.cardId) === 'consumable') n += 1;
+  }
+  n += player.personalDiscard.filter((d) => d.kind === 'consumable').length;
+  return n;
 }
 
 /**
