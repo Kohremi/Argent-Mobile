@@ -915,20 +915,12 @@ export function buildReactionOptionsFor(
       'byPlayerId' in event && event.byPlayerId !== event.ownerId;
     const mageId = event.mageId;
 
-    // Phase Steppers / Invisibility Cloak always send the mage back to its
-    // original slot. If that slot's room is locked (e.g., Calval's L2 wounds
-    // then locks the same room), the reaction has no valid destination —
-    // don't offer it.
-    const originalSpaceId =
-      event.kind === 'mage-moved'
-        ? event.fromSpaceId
-        : event.kind === 'mage-shadowed'
-          ? event.spaceId
-          : event.originalSpaceId;
-    const originalRoomLocked =
-      originalSpaceId != null && isSpaceInLockedRoom(state, originalSpaceId);
-
-    if (isWoundBanishOrMove && hasPhaseSteppers && !originalRoomLocked) {
+    // Phase Steppers / Invisibility Cloak send the mage back to its original
+    // slot. That's always allowed — even if the room is now locked, the mage
+    // was already there before being affected (the lock applies *after* the
+    // wound), so the reaction effectively undoes the wound rather than
+    // crossing the lock.
+    if (isWoundBanishOrMove && hasPhaseSteppers) {
       options.push({
         sourceKind: 'vault-card',
         sourceId: 'base.vault.phase-steppers',
@@ -937,7 +929,7 @@ export function buildReactionOptionsFor(
         ...(multi ? { forMageId: mageId } : {}),
       });
     }
-    if (isWoundBanishOrMove && hasInvisibilityCloak && !originalRoomLocked) {
+    if (isWoundBanishOrMove && hasInvisibilityCloak) {
       options.push({
         sourceKind: 'vault-card',
         sourceId: 'base.vault.invisibility-cloak',

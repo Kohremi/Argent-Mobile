@@ -528,10 +528,40 @@ export function DebugControls() {
   if (reactionSlotActive && reactionAwaitingSlot && top) {
     const openSlots = new Set<string>();
     const lockedRoomIds = new Set(state.roomLocks.map((l) => l.roomId));
+    // Determine the affected mage's original room from the trigger event.
+    // A reaction's movement can return to the same room (always OK — the
+    // mage was already there), or move to any non-locked room as long as
+    // the original room isn't locked either. A locked room can only be
+    // exited if the destination IS the same room.
+    let fromRoomId: string | null = null;
+    if (top.prompt.kind === 'reaction-window') {
+      const ev = top.prompt.triggerEvents[0];
+      const originalSpaceId = ev
+        ? ev.kind === 'mage-moved'
+          ? ev.fromSpaceId
+          : ev.kind === 'mage-shadowed'
+            ? ev.spaceId
+            : 'originalSpaceId' in ev
+              ? ev.originalSpaceId
+              : null
+        : null;
+      if (originalSpaceId) {
+        for (const r of state.rooms) {
+          if (r.actionSpaces.some((s) => s.id === originalSpaceId)) {
+            fromRoomId = r.id;
+            break;
+          }
+        }
+      }
+    }
+    const fromLocked = fromRoomId !== null && lockedRoomIds.has(fromRoomId);
     for (const r of state.rooms) {
       if (r.cannotBePlacedInDirectly) continue;
-      // Reaction movement can't go into a newly locked room.
-      if (lockedRoomIds.has(r.id)) continue;
+      const sameRoom = r.id === fromRoomId;
+      const toLocked = lockedRoomIds.has(r.id);
+      // Allow if returning to the original room (sameRoom), regardless of
+      // lock state. Otherwise neither room may be locked.
+      if (!sameRoom && (fromLocked || toLocked)) continue;
       for (const s of r.actionSpaces) {
         if (!s.occupant) openSlots.add(s.id);
       }

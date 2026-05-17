@@ -9556,7 +9556,7 @@ describe('Room locking', () => {
     return s;
   }
 
-  it('Flamespout (Calval L2): wound + lock the previous room; Phase Steppers fizzles', () => {
+  it('Flamespout (Calval L2): wound + lock; Phase Steppers still returns the mage to its original slot in the locked room', () => {
     let s = setupLockSpell({
       spellCardId: 'base.spell.calvals-deadliest-magicks',
       level: 2,
@@ -9568,8 +9568,8 @@ describe('Room locking', () => {
       color: 'red',
     });
     s = placeMageOnSpace(s, 'p2', 'bob-mage-1', 'base.room.library.a.slot-1');
-    // Give Bob Phase Steppers — it should NOT be offered because the
-    // mage's original room (Library) is locked by the spell.
+    // Give Bob Phase Steppers — returning to the now-locked original slot
+    // is allowed (mage was already there before being affected).
     s = addVaultCard(s, 'p2', 'base.vault.phase-steppers');
     s = applyAction(s, {
       type: 'CAST_SPELL',
@@ -9584,15 +9584,35 @@ describe('Room locking', () => {
     });
     // Library is now locked.
     expect(s.roomLocks).toEqual([{ roomId: 'base.room.library.a' }]);
-    // Reaction window — Phase Steppers absent (room locked).
+    // Reaction window — Phase Steppers IS offered (returns to original slot,
+    // not crossing the lock).
     const reactionPrompt = topPending(s);
     expect(reactionPrompt.prompt.kind).toBe('reaction-window');
-    if (reactionPrompt.prompt.kind === 'reaction-window') {
-      const stepperOpt = reactionPrompt.prompt.reactionOptions.find(
-        (o) => o.effectId === 'base.vault.phase-steppers.react',
-      );
-      expect(stepperOpt).toBeUndefined();
-    }
+    if (reactionPrompt.prompt.kind !== 'reaction-window') return;
+    const stepperOpt = reactionPrompt.prompt.reactionOptions.find(
+      (o) => o.effectId === 'base.vault.phase-steppers.react',
+    );
+    expect(stepperOpt).toBeDefined();
+    // Play it — the mage is restored to the shadow position of the original
+    // slot inside the locked room.
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: reactionPrompt.id,
+      answer: {
+        kind: 'reaction-played',
+        effectId: 'base.vault.phase-steppers.react',
+        reactionContext: {},
+      },
+    });
+    const mage = findMageById(s, 'bob-mage-1');
+    expect(mage.isWounded).toBe(false);
+    expect(mage.isShadowing).toBe(true);
+    expect(mage.location).toEqual({
+      kind: 'action-space',
+      spaceId: 'base.room.library.a.slot-1',
+    });
+    // Library remains locked.
+    expect(s.roomLocks).toEqual([{ roomId: 'base.room.library.a' }]);
   });
 
   it('Meteor (Master Book L2): place a mage in a room + lock it', () => {

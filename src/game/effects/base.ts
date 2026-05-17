@@ -36,7 +36,6 @@ import {
   healMageToSpace,
   applyRoomLockPatch,
   isRoomAtPlayerCap,
-  isSpaceInLockedRoom,
   lookupSpellCardDef,
   moveMageToSpace,
   placeOfficeMageAsShadow,
@@ -887,12 +886,11 @@ registerEffect('base.vault.phase-steppers.react', (ctx: EffectContext): EffectRe
     // so Phase Steppers has nothing to do.
     return { kind: 'done', patch: {} };
   }
-  // Lock supersedes movement: a reaction can't relocate a mage into a
-  // newly locked room. Phase Steppers always targets the mage's original
-  // slot, so if THAT room is locked the reaction fizzles silently.
-  if (isSpaceInLockedRoom(ctx.state, originalSpaceId)) {
-    return { kind: 'done', patch: {} };
-  }
+  // Returning to the mage's original slot is always allowed — even if the
+  // room is now locked, the mage was already there before being wounded,
+  // so the lock isn't being "crossed". A reaction that puts the mage back
+  // in its original spot effectively undoes the wound; the lock then just
+  // prevents the mage from leaving the room later.
 
   return {
     kind: 'done',
@@ -1064,10 +1062,9 @@ registerEffect('base.vault.invisibility-cloak.react', (ctx): EffectResult => {
   }
   const originalSpaceId = originalSpaceFromEvent(event);
   if (!originalSpaceId) return { kind: 'done', patch: {} };
-  // Lock supersedes movement (see Phase Steppers).
-  if (isSpaceInLockedRoom(ctx.state, originalSpaceId)) {
-    return { kind: 'done', patch: {} };
-  }
+  // Returning to the mage's original slot is always allowed (see Phase
+  // Steppers comment): the mage was already in that room before being
+  // affected, so the lock isn't being crossed.
   return {
     kind: 'done',
     patch: applyReactionReposition(ctx.state, {
@@ -1096,23 +1093,48 @@ function resolveReactionDestination(
   event: ReactionTriggerEvent,
   reactionContext: SerializableContext | undefined,
 ): string | null {
-  // Per rulebook: a reaction's movement cannot go into a newly locked room.
-  // Both the UI-supplied destination AND the fallback to the original slot
-  // must be re-checked against the current lock state — Calval's "Flamespout"
-  // wounds and THEN locks the same room, so the original slot can be in a
-  // locked room by the time the reaction fires.
+  // Per rulebook: a reaction's movement cannot cross a lock. The mage's
+  // original slot lives in some "from" room; the requested destination
+  // lives in a "to" room. Movement is allowed iff:
+  //   - from === to (returning to the original room, no lock crossed), or
+  //   - neither the "from" nor the "to" room is locked.
+  // The fallback to the original slot is always allowed: the mage was
+  // already there before being affected (the lock applied AFTER the wound),
+  // so restoring them isn't "entering" the locked room.
+  const original = originalSpaceFromEvent(event);
+  const fromRoomId = original ? findRoomIdForSpace(state, original) : null;
   const requested = reactionContext?.['destinationSpaceId'];
   if (typeof requested === 'string') {
     const found = state.rooms
       .find((r) => !r.cannotBePlacedInDirectly && r.actionSpaces.some((s) => s.id === requested))
       ?.actionSpaces.find((s) => s.id === requested);
-    if (found && !found.occupant && !isSpaceInLockedRoom(state, requested)) {
-      return requested;
+    if (found && !found.occupant) {
+      const toRoomId = findRoomIdForSpace(state, requested);
+      const sameRoom = fromRoomId && toRoomId === fromRoomId;
+      if (sameRoom) return requested;
+      const fromLocked = fromRoomId
+        ? state.roomLocks.some((l) => l.roomId === fromRoomId)
+        : false;
+      const toLocked =
+        toRoomId !== null
+          ? state.roomLocks.some((l) => l.roomId === toRoomId)
+          : false;
+      if (!fromLocked && !toLocked) return requested;
+      // Movement would cross a lock — fall through to the original-slot
+      // fallback below.
     }
   }
-  const fallback = originalSpaceFromEvent(event);
-  if (fallback && isSpaceInLockedRoom(state, fallback)) return null;
-  return fallback;
+  return original;
+}
+
+function findRoomIdForSpace(
+  state: GameState,
+  spaceId: string,
+): string | null {
+  for (const r of state.rooms) {
+    if (r.actionSpaces.some((s) => s.id === spaceId)) return r.id;
+  }
+  return null;
 }
 
 /**
