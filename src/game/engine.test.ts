@@ -4015,7 +4015,7 @@ describe('Leader spells (unique single-level)', () => {
       answer: { kind: 'mage-chosen', mageId: 'bob-mage-1' },
     });
     const bobMage = findMageById(s, 'bob-mage-1');
-    expect(bobMage.location.kind).toBe('banished');
+    expect(bobMage.location.kind).toBe('office');
     expect(bobMage.isWounded).toBe(false);
     // The slot is vacated.
     const slot = s.rooms
@@ -4027,6 +4027,108 @@ describe('Leader spells (unique single-level)', () => {
     const reactionPrompt = topPending(s);
     expect(reactionPrompt.prompt.kind).toBe('reaction-window');
     expect(reactionPrompt.responderId).toBe('p2');
+  });
+
+  it('Banished mage returns to owner office and can be placed again the same round', () => {
+    let s = setupLeaderTest();
+    s = addMage(s, 'p1', {
+      id: 'alice-mage-1',
+      cardId: 'base.mage.sorcery',
+      color: 'red',
+    });
+    s = addMage(s, 'p2', {
+      id: 'bob-mage-1',
+      cardId: 'base.mage.sorcery',
+      color: 'red',
+    });
+    s = placeMageOnSpace(s, 'p2', 'bob-mage-1', 'base.room.library.a.slot-1');
+    s = setMana(s, 'p1', 1);
+    s = addOwnedSpell(s, 'p1', 'base.spell.flash-of-light');
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.flash-of-light',
+      level: 1,
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'mage-chosen', mageId: 'bob-mage-1' },
+    });
+    // Bob's mage returned to his office (not banished limbo).
+    const bob = findMageById(s, 'bob-mage-1');
+    expect(bob.location).toEqual({ kind: 'office', playerId: 'p2' });
+    expect(bob.isShadowing).toBe(false);
+    expect(bob.isWounded).toBe(false);
+    // The slot is vacated.
+    const slot = s.rooms
+      .flatMap((r) => r.actionSpaces)
+      .find((sp) => sp.id === 'base.room.library.a.slot-1');
+    expect(slot?.occupant).toBeNull();
+    // Bob passes the reaction; advance turns until Bob is active again, then
+    // verify the banished mage is placeable this round.
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'reaction-passed' },
+    });
+    while (s.phase.kind === 'errands') {
+      const activeId = s.players[s.phase.activePlayerIndex]!.id;
+      if (activeId === 'p2') break;
+      s = applyAction(s, { type: 'PASS_TURN', playerId: activeId });
+    }
+    if (s.phase.kind !== 'errands') throw new Error('expected errands');
+    expect(s.players[s.phase.activePlayerIndex]?.id).toBe('p2');
+    s = applyAction(s, {
+      type: 'PLACE_WORKER',
+      playerId: 'p2',
+      mageId: 'bob-mage-1',
+      actionSpaceId: 'base.room.library.a.slot-2',
+    });
+    expect(findMageById(s, 'bob-mage-1').location).toEqual({
+      kind: 'action-space',
+      spaceId: 'base.room.library.a.slot-2',
+    });
+  });
+
+  it('Banish targets a wounded mage in the Infirmary; mage returns to office healed', () => {
+    let s = setupLeaderTest();
+    // p2 has a wounded mage in the Infirmary.
+    s = mapPlayer(s, 'p2', (p) => ({
+      ...p,
+      mages: [
+        ...p.mages,
+        {
+          id: 'bob-infirmary',
+          cardId: 'base.mage.sorcery',
+          color: 'red',
+          location: { kind: 'infirmary' as const },
+          isShadowing: false,
+          isWounded: true,
+        },
+      ],
+    }));
+    s = setMana(s, 'p1', 1);
+    s = addOwnedSpell(s, 'p1', 'base.spell.flash-of-light');
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.flash-of-light',
+      level: 1,
+    });
+    const targetPrompt = topPending(s);
+    expect(targetPrompt.prompt.kind).toBe('choose-target-mage');
+    if (targetPrompt.prompt.kind !== 'choose-target-mage') return;
+    // Infirmary mage should appear in the eligible list.
+    expect(targetPrompt.prompt.eligibleMageIds).toContain('bob-infirmary');
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: targetPrompt.id,
+      answer: { kind: 'mage-chosen', mageId: 'bob-infirmary' },
+    });
+    const bob = findMageById(s, 'bob-infirmary');
+    expect(bob.location).toEqual({ kind: 'office', playerId: 'p2' });
+    expect(bob.isWounded).toBe(false);
   });
 
   it('Bless: moves an infirmary mage to a chosen open slot and clears the wound', () => {
@@ -8093,7 +8195,7 @@ describe('Spell wiring — Wave 2 (single-target wound)', () => {
       answer: { kind: 'reaction-passed' },
     });
     // Bob's mage is banished — no Infirmary bonus prompt.
-    expect(findMageById(s, 'bob-mage').location.kind).toBe('banished');
+    expect(findMageById(s, 'bob-mage').location.kind).toBe('office');
     expect(s.pendingResolutionStack).toHaveLength(0);
   });
 
@@ -8184,7 +8286,7 @@ describe('Spell wiring — Wave 2 (single-target wound)', () => {
       resolutionId: topPending(s).id,
       answer: { kind: 'reaction-passed' },
     });
-    expect(findMageById(s, 'bob-mage').location.kind).toBe('banished');
+    expect(findMageById(s, 'bob-mage').location.kind).toBe('office');
     expect(s.pendingResolutionStack).toHaveLength(0);
   });
 
@@ -8350,7 +8452,7 @@ describe('Spell wiring — Wave 4 (wound/banish + place)', () => {
       .flatMap((r) => r.actionSpaces)
       .find((sp) => sp.id === 'base.room.library.a.slot-1');
     expect(slot?.occupant?.mageId).toBe('alice-placer');
-    expect(findMageById(s, 'bob-target').location.kind).toBe('banished');
+    expect(findMageById(s, 'bob-target').location.kind).toBe('office');
     expect(s.pendingResolutionStack).toHaveLength(0);
   });
 
@@ -9367,8 +9469,8 @@ describe('Spell wiring — Wave 8 (area effects: Tsunami, Nox)', () => {
     });
     // Both Bob mages should already be banished — reaction window holds
     // both banish events.
-    expect(findMageById(s, 'bob-mage-a').location.kind).toBe('banished');
-    expect(findMageById(s, 'bob-mage-b').location.kind).toBe('banished');
+    expect(findMageById(s, 'bob-mage-a').location.kind).toBe('office');
+    expect(findMageById(s, 'bob-mage-b').location.kind).toBe('office');
     const reactionPrompt = topPending(s);
     expect(reactionPrompt.prompt.kind).toBe('reaction-window');
     if (reactionPrompt.prompt.kind === 'reaction-window') {
@@ -9509,8 +9611,8 @@ describe('Spell wiring — Wave 8 (area effects: Tsunami, Nox)', () => {
         payload: {},
       },
     });
-    expect(findMageById(s, 'bob-mage-a').location.kind).toBe('banished');
-    expect(findMageById(s, 'bob-mage-b').location.kind).toBe('banished');
+    expect(findMageById(s, 'bob-mage-a').location.kind).toBe('office');
+    expect(findMageById(s, 'bob-mage-b').location.kind).toBe('office');
     const reactionPrompt = topPending(s);
     expect(reactionPrompt.prompt.kind).toBe('reaction-window');
     s = applyAction(s, {
@@ -10828,7 +10930,7 @@ describe('Alt-leader spells', () => {
       resolutionId: topPending(s).id,
       answer: { kind: 'mage-chosen', mageId: 'alice-sac' },
     });
-    expect(findMageById(s, 'alice-sac').location.kind).toBe('banished');
+    expect(findMageById(s, 'alice-sac').location.kind).toBe('office');
     // Step 2: pick wound target.
     s = applyAction(s, {
       type: 'RESOLVE_PENDING',

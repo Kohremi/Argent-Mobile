@@ -8671,11 +8671,9 @@ registerEffect('base.spell.dark-pact.l1', (ctx): EffectResult => {
   // Step 1: pick own mage to banish.
   if (!ctx.resumeAnswer) {
     const player = ctx.state.players.find((p) => p.id === casterId);
-    // Own mages, anywhere except already banished.
-    const eligible =
-      player?.mages
-        .filter((m) => m.location.kind !== 'banished')
-        .map((m) => m.id) ?? [];
+    // Own mages, anywhere — banished mages return to office immediately so
+    // every owned mage is reachable here.
+    const eligible = player?.mages.map((m) => m.id) ?? [];
     if (eligible.length === 0) return { kind: 'done', patch: {} };
     return {
       kind: 'pause',

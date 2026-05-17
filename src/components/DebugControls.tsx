@@ -1446,9 +1446,7 @@ function PlayerCard({
             const dimReason = !inOffice
               ? m.location.kind === 'action-space'
                 ? 'on a slot'
-                : m.location.kind === 'infirmary'
-                  ? 'in infirmary'
-                  : 'banished'
+                : 'in infirmary'
               : m.isWounded
                 ? 'wounded'
                 : !canAct

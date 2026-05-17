@@ -129,8 +129,7 @@ export interface OwnedMage {
 export type MageLocation =
   | { kind: 'office'; playerId: PlayerId }
   | { kind: 'action-space'; spaceId: ActionSpaceId }
-  | { kind: 'infirmary'; slot?: number }
-  | { kind: 'banished' };
+  | { kind: 'infirmary'; slot?: number };
 
 /**
  * A Spell instance owned by a player. Research tokens (INT for level 1, WIS

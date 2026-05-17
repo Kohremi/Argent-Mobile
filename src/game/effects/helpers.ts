@@ -365,10 +365,11 @@ export function woundMage(
 }
 
 /**
- * Banishes a mage: moves it to `{ kind: 'banished' }`, clears the slot it
- * was on, and produces a `mage-banished` reaction trigger. Unlike wounding,
- * banished mages do NOT go to the Infirmary and do NOT grant an Infirmary
- * bonus to their owner.
+ * Banishes a mage: clears its slot (if placed) or its Infirmary entry (if
+ * wounded), returns it to its owner's office, and produces a
+ * `mage-banished` reaction trigger. Per rulebook, banished mages go back
+ * to their owner's mage pool and may be placed again that round. No
+ * Infirmary bonus fires (banish never grants the bonus).
  */
 export function banishMage(
   state: GameState,
@@ -393,7 +394,7 @@ export function banishMage(
                   ...m,
                   isWounded: false,
                   isShadowing: false,
-                  location: { kind: 'banished' as const },
+                  location: { kind: 'office' as const, playerId: owner.id },
                 },
           ),
         },
@@ -414,14 +415,26 @@ export function banishMage(
 }
 
 /**
- * Banish-targets list — same filter as Burn (target on a slot, not wounded,
- * not green, opposing blues are immune to rival spells).
+ * Banish-targets list — same color filters as Burn (green-immune to spells,
+ * opposing-blue-immune to spells), BUT banish also reaches mages in the
+ * Infirmary. Per rulebook, banish returns the mage to its owner's office
+ * regardless of whether they were placed or wounded.
  */
 export function buildBanishTargets(
   state: GameState,
   casterId: PlayerId,
 ): OwnedMageId[] {
-  return buildBurnTargets(state, casterId);
+  const targets = buildBurnTargets(state, casterId);
+  // Add wounded mages from the Infirmary (color immunities still apply).
+  for (const p of state.players) {
+    for (const m of p.mages) {
+      if (m.location.kind !== 'infirmary') continue;
+      if (m.color === 'green') continue;
+      if (m.color === 'blue' && p.id !== casterId) continue;
+      targets.push(m.id);
+    }
+  }
+  return targets;
 }
 
 /**
