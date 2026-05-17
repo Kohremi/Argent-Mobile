@@ -740,6 +740,16 @@ export type ReactionTriggerEvent =
       payingPlayerId: PlayerId;
       amount: number;
       purpose: 'vault-purchase';
+    }
+  | {
+      /**
+       * Fires AFTER an opponent takes the last Bell Tower card (the bell
+       * tower is now empty). Triggers Tardy and Stop Time reactions for
+       * opponents who have those spells researched and not exhausted.
+       */
+      kind: 'bell-tower-last-claimed';
+      cardId: BellTowerCardId;
+      byPlayerId: PlayerId;
     };
 
 export interface ReactionWindow {
@@ -826,6 +836,17 @@ export interface GameState {
    * prompt directly (existing behavior) or push one entry — both work.
    */
   researchQueue: { playerId: PlayerId; source: ResolutionSource }[];
+  /**
+   * Set when a `bell-tower-last-claimed` reaction window needs to open
+   * after the active claim chain settles. Drained by the engine pump on
+   * the next idle moment (similar to `researchQueue`). Cleared after the
+   * reaction window opens.
+   */
+  pendingBellTowerLastEvent: {
+    cardId: BellTowerCardId;
+    byPlayerId: PlayerId;
+    source: ResolutionSource;
+  } | null;
 
   voters: ConsortiumVoter[];
   voterMarks: VoterMark[];

@@ -1332,6 +1332,276 @@ describe('Bell Tower offerings', () => {
     expect(s.phase.kind).toBe('resolution');
   });
 
+  it('Tardy reaction triggers after an opponent claims the last bell tower card', () => {
+    let s = startErrands();
+    const activeId = () => {
+      if (s.phase.kind !== 'errands') throw new Error('not errands');
+      const id = s.players[s.phase.activePlayerIndex]?.id;
+      if (!id) throw new Error('no active player');
+      return id;
+    };
+    // First-player rotation puts p4, p1, p2 as the three claimers in this
+    // config (firstPlayerIndex starts at 3 with the test rng seed). p3 is
+    // the non-claimer we hang Tardy off of so the reaction can fire.
+    s = mapPlayer(s, 'p3', (p) => ({
+      ...p,
+      resources: { ...p.resources, mana: 1 },
+      mages: [
+        {
+          id: 'p3-mage',
+          cardId: 'base.mage.divinity',
+          color: 'blue',
+          location: { kind: 'office' as const, playerId: 'p3' },
+          isShadowing: false,
+          isWounded: false,
+        },
+      ],
+      ownedSpells: [
+        ...p.ownedSpells.filter((x) => x.cardId !== 'base.spell.tardy'),
+        {
+          cardId: 'base.spell.tardy',
+          intPlaced: true,
+          wisPlacedLevel2: false,
+          wisPlacedLevel3: false,
+          exhausted: false,
+        },
+      ],
+    }));
+    // Drain the first two bell tower cards uneventfully.
+    s = applyAction(s, {
+      type: 'CLAIM_BELL_TOWER',
+      playerId: activeId(),
+      bellTowerCardId: 'base.bell.gain-ip',
+    });
+    s = applyAction(s, {
+      type: 'CLAIM_BELL_TOWER',
+      playerId: activeId(),
+      bellTowerCardId: 'base.bell.first-player',
+    });
+    // Last claim — should open a reaction window for p2 (Tardy).
+    s = applyAction(s, {
+      type: 'CLAIM_BELL_TOWER',
+      playerId: activeId(),
+      bellTowerCardId: 'base.bell.gold-or-mana',
+    });
+    // Gold-or-Mana's own choice prompt fires first (LIFO); resolve it.
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'option-chosen', optionId: 'mana', payload: {} },
+    });
+    // Now the Tardy reaction window should be open and prompting p2.
+    expect(s.activeReactionWindows).toHaveLength(1);
+    const reactionPrompt = topPending(s);
+    expect(reactionPrompt.responderId).toBe('p3');
+    expect(reactionPrompt.prompt.kind).toBe('reaction-window');
+    if (reactionPrompt.prompt.kind !== 'reaction-window') return;
+    const tardyOption = reactionPrompt.prompt.reactionOptions.find(
+      (o) => o.effectId === 'base.spell.tardy.l1.react',
+    );
+    expect(tardyOption).toBeDefined();
+
+    // Play Tardy → mage prompt for p2.
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: reactionPrompt.id,
+      answer: {
+        kind: 'reaction-played',
+        effectId: 'base.spell.tardy.l1.react',
+        reactionContext: {},
+      },
+    });
+    const magePrompt = topPending(s);
+    expect(magePrompt.responderId).toBe('p3');
+    expect(magePrompt.prompt.kind).toBe('choose-target-mage');
+    if (magePrompt.prompt.kind !== 'choose-target-mage') return;
+    const mageToPlace = magePrompt.prompt.eligibleMageIds[0]!;
+
+    // Pick a mage → slot prompt.
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: magePrompt.id,
+      answer: { kind: 'mage-chosen', mageId: mageToPlace },
+    });
+    const slotPrompt = topPending(s);
+    expect(slotPrompt.prompt.kind).toBe('choose-target-action-space');
+    if (slotPrompt.prompt.kind !== 'choose-target-action-space') return;
+    const slotId = slotPrompt.prompt.eligibleSpaceIds[0]!;
+
+    // Pick a slot → mage gets placed, mana spent, spell exhausted.
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: slotPrompt.id,
+      answer: { kind: 'space-chosen', spaceId: slotId },
+    });
+    const p3After = s.players.find((p) => p.id === 'p3')!;
+    expect(p3After.resources.mana).toBe(0);
+    const tardyAfter = p3After.ownedSpells.find(
+      (x) => x.cardId === 'base.spell.tardy',
+    );
+    expect(tardyAfter?.exhausted).toBe(true);
+    const placedMage = p3After.mages.find((m) => m.id === mageToPlace);
+    expect(placedMage?.location).toEqual({ kind: 'action-space', spaceId: slotId });
+  });
+
+  it('Stop Time reaction places two mages after the last bell tower claim', () => {
+    let s = startErrands();
+    const activeId = () => {
+      if (s.phase.kind !== 'errands') throw new Error('not errands');
+      const id = s.players[s.phase.activePlayerIndex]?.id;
+      if (!id) throw new Error('no active player');
+      return id;
+    };
+    // p3 is the non-claimer holding Stop Time (claimers in this config: p4, p1, p2).
+    s = mapPlayer(s, 'p3', (p) => ({
+      ...p,
+      resources: { ...p.resources, mana: 3 },
+      mages: [
+        {
+          id: 'p3-mage-a',
+          cardId: 'base.mage.divinity',
+          color: 'blue',
+          location: { kind: 'office' as const, playerId: 'p3' },
+          isShadowing: false,
+          isWounded: false,
+        },
+        {
+          id: 'p3-mage-b',
+          cardId: 'base.mage.divinity',
+          color: 'blue',
+          location: { kind: 'office' as const, playerId: 'p3' },
+          isShadowing: false,
+          isWounded: false,
+        },
+      ],
+      ownedSpells: [
+        ...p.ownedSpells.filter(
+          (x) => x.cardId !== 'base.spell.temporal-calculus-6th-ed',
+        ),
+        {
+          cardId: 'base.spell.temporal-calculus-6th-ed',
+          intPlaced: true,
+          wisPlacedLevel2: true,
+          wisPlacedLevel3: false,
+          exhausted: false,
+        },
+      ],
+    }));
+    s = applyAction(s, {
+      type: 'CLAIM_BELL_TOWER',
+      playerId: activeId(),
+      bellTowerCardId: 'base.bell.gain-ip',
+    });
+    s = applyAction(s, {
+      type: 'CLAIM_BELL_TOWER',
+      playerId: activeId(),
+      bellTowerCardId: 'base.bell.first-player',
+    });
+    s = applyAction(s, {
+      type: 'CLAIM_BELL_TOWER',
+      playerId: activeId(),
+      bellTowerCardId: 'base.bell.gold-or-mana',
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'option-chosen', optionId: 'mana', payload: {} },
+    });
+    // Reaction window prompts p3 with the Stop Time option.
+    const reactionPrompt = topPending(s);
+    expect(reactionPrompt.responderId).toBe('p3');
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: reactionPrompt.id,
+      answer: {
+        kind: 'reaction-played',
+        effectId: 'base.spell.temporal-calculus-6th-ed.l2.react',
+        reactionContext: {},
+      },
+    });
+    // Walk through both placements.
+    for (let i = 0; i < 2; i++) {
+      const mp = topPending(s);
+      expect(mp.prompt.kind).toBe('choose-target-mage');
+      if (mp.prompt.kind !== 'choose-target-mage') return;
+      const mage = mp.prompt.eligibleMageIds[0]!;
+      s = applyAction(s, {
+        type: 'RESOLVE_PENDING',
+        resolutionId: mp.id,
+        answer: { kind: 'mage-chosen', mageId: mage },
+      });
+      const sp = topPending(s);
+      expect(sp.prompt.kind).toBe('choose-target-action-space');
+      if (sp.prompt.kind !== 'choose-target-action-space') return;
+      const spaceId = sp.prompt.eligibleSpaceIds[0]!;
+      s = applyAction(s, {
+        type: 'RESOLVE_PENDING',
+        resolutionId: sp.id,
+        answer: { kind: 'space-chosen', spaceId },
+      });
+    }
+    const p3After = s.players.find((p) => p.id === 'p3')!;
+    expect(p3After.resources.mana).toBe(0);
+    const stopTimeAfter = p3After.ownedSpells.find(
+      (x) => x.cardId === 'base.spell.temporal-calculus-6th-ed',
+    );
+    expect(stopTimeAfter?.exhausted).toBe(true);
+    // Two of p3's mages now occupy action spaces.
+    const placedCount = p3After.mages.filter(
+      (m) => m.location.kind === 'action-space',
+    ).length;
+    expect(placedCount).toBe(2);
+  });
+
+  it('claimer who has Tardy does NOT get a reaction prompt (must be an opponent)', () => {
+    let s = startErrands();
+    const activeId = () => {
+      if (s.phase.kind !== 'errands') throw new Error('not errands');
+      const id = s.players[s.phase.activePlayerIndex]?.id;
+      if (!id) throw new Error('no active player');
+      return id;
+    };
+    // The third (last-card) claimer in this config is p2 — give them Tardy
+    // and verify no reaction window opens for them on their own claim.
+    s = mapPlayer(s, 'p2', (p) => ({
+      ...p,
+      resources: { ...p.resources, mana: 1 },
+      ownedSpells: [
+        ...p.ownedSpells.filter((x) => x.cardId !== 'base.spell.tardy'),
+        {
+          cardId: 'base.spell.tardy',
+          intPlaced: true,
+          wisPlacedLevel2: false,
+          wisPlacedLevel3: false,
+          exhausted: false,
+        },
+      ],
+    }));
+    s = applyAction(s, {
+      type: 'CLAIM_BELL_TOWER',
+      playerId: activeId(),
+      bellTowerCardId: 'base.bell.gain-ip',
+    });
+    s = applyAction(s, {
+      type: 'CLAIM_BELL_TOWER',
+      playerId: activeId(),
+      bellTowerCardId: 'base.bell.first-player',
+    });
+    s = applyAction(s, {
+      type: 'CLAIM_BELL_TOWER',
+      playerId: activeId(),
+      bellTowerCardId: 'base.bell.gold-or-mana',
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'option-chosen', optionId: 'mana', payload: {} },
+    });
+    // No reaction window, claim wrapped up cleanly.
+    expect(s.activeReactionWindows).toHaveLength(0);
+    expect(s.phase.kind).toBe('resolution');
+  });
+
   it('rejects claiming a card that is not in the tower', () => {
     const s = startErrands();
     const activeId = s.players[s.firstPlayerIndex]?.id;

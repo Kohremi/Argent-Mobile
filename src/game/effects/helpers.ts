@@ -775,6 +775,43 @@ export function buildReactionOptionsFor(
     }
   }
 
+  // Bell-tower-last-claimed → Tardy (leader L1) and Stop Time (Temporal
+  // Calculus L2). Each is a researched spell on the responder, not exhausted,
+  // and affordable. The responder must NOT be the player who claimed.
+  for (const event of events) {
+    if (event.kind !== 'bell-tower-last-claimed') continue;
+    if (event.byPlayerId === responderId) continue;
+    const tardy = responder.ownedSpells.find(
+      (s) => s.cardId === 'base.spell.tardy',
+    );
+    if (tardy && !tardy.exhausted && responder.resources.mana >= 1) {
+      options.push({
+        sourceKind: 'spell',
+        sourceId: 'base.spell.tardy',
+        effectId: 'base.spell.tardy.l1.react',
+        label: 'Cast Tardy (place a Mage)',
+      });
+    }
+    const stopTime = responder.ownedSpells.find(
+      (s) => s.cardId === 'base.spell.temporal-calculus-6th-ed',
+    );
+    if (
+      stopTime &&
+      stopTime.intPlaced &&
+      stopTime.wisPlacedLevel2 &&
+      !stopTime.exhausted &&
+      responder.resources.mana >= 3
+    ) {
+      options.push({
+        sourceKind: 'spell',
+        sourceId: 'base.spell.temporal-calculus-6th-ed',
+        effectId: 'base.spell.temporal-calculus-6th-ed.l2.react',
+        label: 'Cast Stop Time (place 2 Mages)',
+      });
+    }
+    break; // single bell-tower-last-claimed event per window
+  }
+
   // Per-mage harm reactions. For each event that targets one of the
   // responder's mages, attach options labeled with the mage id (so the
   // multi-mage prompt can display "Phase Steppers on alice-mage-2").

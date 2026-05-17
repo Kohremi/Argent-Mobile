@@ -45,6 +45,8 @@ import type {
   PendingResolutionInput,
   PlaceWorkerAction,
   Player,
+  PlayerId,
+  ReactionTriggerEvent,
   ReactionWindow,
   ReactionWindowId,
   ResolutionAnswer,
@@ -200,6 +202,67 @@ function drainResearchQueueIfIdle(state: GameState): GameState {
 }
 
 /**
+ * Opens a `bell-tower-last-claimed` reaction window once the claim's own
+ * effect chain has fully resolved (stack idle, no nested reaction windows).
+ * Triggers Tardy / Stop Time for opponents who have those spells researched
+ * and unexhausted. Cleared on open so it fires at most once per claim.
+ */
+function drainBellTowerLastEventIfIdle(state: GameState): GameState {
+  if (!state.pendingBellTowerLastEvent) return state;
+  if (state.pendingResolutionStack.length > 0) return state;
+  if (state.activeReactionWindows.length > 0) return state;
+  const pending = state.pendingBellTowerLastEvent;
+  const withoutPending: GameState = { ...state, pendingBellTowerLastEvent: null };
+
+  const triggerEvent: ReactionTriggerEvent = {
+    kind: 'bell-tower-last-claimed',
+    cardId: pending.cardId,
+    byPlayerId: pending.byPlayerId,
+  };
+
+  // Reaction order: all OTHER players in turn order starting from the claimer.
+  // Filter to only those with at least one applicable option — otherwise the
+  // window would surface an empty "pass only" prompt that gates the turn for
+  // no reason. Tardy and Stop Time are the only reactions for this event.
+  const claimerIndex = withoutPending.players.findIndex(
+    (p) => p.id === pending.byPlayerId,
+  );
+  const responderIds: PlayerId[] = [];
+  if (claimerIndex >= 0) {
+    for (let i = 1; i <= withoutPending.players.length; i++) {
+      const p =
+        withoutPending.players[(claimerIndex + i) % withoutPending.players.length];
+      if (!p || p.id === pending.byPlayerId) continue;
+      const opts = buildReactionOptionsFor(withoutPending, p.id, [triggerEvent]);
+      if (opts.length > 0) responderIds.push(p.id);
+    }
+  }
+
+  if (responderIds.length === 0) return withoutPending;
+
+  const result: EffectResult = {
+    kind: 'open-reaction',
+    window: {
+      triggerEvents: [triggerEvent],
+      pendingResponderIds: responderIds,
+      reactedPlayerIds: [],
+      afterResume: {
+        effectId: 'base.system.noop',
+        context: {},
+      },
+      source: pending.source,
+    },
+  };
+  const ctx: EffectContext = {
+    state: withoutPending,
+    source: pending.source,
+    triggeringPlayerId: pending.byPlayerId,
+    allowReactions: true,
+  };
+  return applyEffectResult(withoutPending, result, ctx);
+}
+
+/**
  * If the active player has spent their Regular Action and no prompts or
  * reaction windows are still open, the turn ends automatically (per
  * rulebook). Called at the end of every dispatch so that turns advance
@@ -210,6 +273,9 @@ function drainResearchQueueIfIdle(state: GameState): GameState {
  * each opportunity surfaced in sequence.
  */
 function autoAdvanceIfTurnDone(state: GameState): GameState {
+  // Open the bell-tower-last-claimed reaction window first if pending —
+  // it lets opponents react before the active player's regular action ends.
+  state = drainBellTowerLastEventIfIdle(state);
   // Drain a queued research opportunity first — this may add to the stack,
   // in which case we stop and let the player resolve it before any further
   // turn advancement.
@@ -1553,6 +1619,17 @@ function handleClaimBellTower(
   }
   state = consumeActionBudget(state, 'action', 'CLAIM_BELL_TOWER');
 
+  // If this claim empties the bell tower, queue a `bell-tower-last-claimed`
+  // event so reactions (Tardy, Stop Time) can open AFTER the card's own
+  // effect chain settles — see `drainBellTowerLastEventIfIdle`.
+  const isLastCard = state.bellTower.available.length === 1;
+  const lastEventSource: ResolutionSource = {
+    kind: 'bell-tower',
+    id: card.id,
+    triggeringPlayerId: action.playerId,
+    description: card.name,
+  };
+
   const claimed: GameState = {
     ...state,
     bellTower: {
@@ -1564,6 +1641,15 @@ function handleClaimBellTower(
         ? p
         : { ...p, bellTowerCards: [...p.bellTowerCards, card.id] },
     ),
+    ...(isLastCard
+      ? {
+          pendingBellTowerLastEvent: {
+            cardId: card.id,
+            byPlayerId: action.playerId,
+            source: lastEventSource,
+          },
+        }
+      : {}),
   };
 
   if (!hasEffect(card.effectId)) return claimed;

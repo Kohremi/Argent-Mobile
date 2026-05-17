@@ -377,6 +377,7 @@ export function buildInitialState(config: GameConfig): GameState {
     pendingResolutionStack: [],
     activeReactionWindows: [],
     researchQueue: [],
+    pendingBellTowerLastEvent: null,
     nextSequenceId: 1,
     actionLog: [],
   };
