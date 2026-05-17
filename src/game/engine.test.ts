@@ -11046,4 +11046,92 @@ describe('Alt-leader spells', () => {
       spaceId: 'base.room.vault.a.slot-1',
     });
   });
+
+  it('Gust of Wind: green mage IS a valid target (green is only wound-immune)', () => {
+    let s = setupLeaderSpellTest('base.spell.gust-of-wind', 1);
+    s = forceVaultSideA(s);
+    const libraryId = s.rooms.find((r) => r.name === 'Library')!.id;
+    const vaultId = s.rooms.find((r) => r.name === 'Vault')!.id;
+    const otherIds = s.rooms
+      .filter((r) => r.id !== libraryId && r.id !== vaultId)
+      .map((r) => r.id);
+    const grid: (string | null)[][] = [
+      [libraryId, vaultId],
+      [otherIds[0] ?? null, otherIds[1] ?? null],
+      [otherIds[2] ?? null, otherIds[3] ?? null],
+      [otherIds[4] ?? null, otherIds[5] ?? null],
+    ];
+    s = { ...s, roomLayout: { cols: 2, rows: 4, grid } };
+    s = addMage(s, 'p2', {
+      id: 'bob-green-mage',
+      cardId: 'base.mage.natural-magick',
+      color: 'green',
+    });
+    s = placeMageOnSpace(
+      s,
+      'p2',
+      'bob-green-mage',
+      'base.room.library.a.slot-1',
+    );
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.gust-of-wind',
+      level: 1,
+    });
+    // Green mage should appear as a valid move target.
+    const targetPrompt = topPending(s);
+    expect(targetPrompt.prompt.kind).toBe('choose-target-mage');
+    if (targetPrompt.prompt.kind !== 'choose-target-mage') return;
+    expect(targetPrompt.prompt.eligibleMageIds).toContain('bob-green-mage');
+  });
+
+  it('Burn: green mage is NOT a valid target (green is wound-immune)', () => {
+    let s = setupLeaderSpellTest('base.spell.burn', 1);
+    s = addMage(s, 'p2', {
+      id: 'bob-green-mage',
+      cardId: 'base.mage.natural-magick',
+      color: 'green',
+    });
+    s = placeMageOnSpace(
+      s,
+      'p2',
+      'bob-green-mage',
+      'base.room.library.a.slot-1',
+    );
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.burn',
+      level: 1,
+    });
+    // No targets — Burn skips green. Spell fizzles (no prompt).
+    expect(s.pendingResolutionStack).toHaveLength(0);
+    expect(findMageById(s, 'bob-green-mage').isWounded).toBe(false);
+  });
+
+  it('Flash of Light: green mage IS a valid banish target', () => {
+    let s = setupLeaderSpellTest('base.spell.flash-of-light', 1);
+    s = addMage(s, 'p2', {
+      id: 'bob-green-mage',
+      cardId: 'base.mage.natural-magick',
+      color: 'green',
+    });
+    s = placeMageOnSpace(
+      s,
+      'p2',
+      'bob-green-mage',
+      'base.room.library.a.slot-1',
+    );
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.flash-of-light',
+      level: 1,
+    });
+    const targetPrompt = topPending(s);
+    expect(targetPrompt.prompt.kind).toBe('choose-target-mage');
+    if (targetPrompt.prompt.kind !== 'choose-target-mage') return;
+    expect(targetPrompt.prompt.eligibleMageIds).toContain('bob-green-mage');
+  });
 });

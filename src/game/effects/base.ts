@@ -35,6 +35,8 @@ import {
   buildRefreshOwnedSpellPrompt,
   healMageToSpace,
   applyRoomLockPatch,
+  buildSpellMoveTargets,
+  buildSpellShadowTargets,
   isRoomAtPlayerCap,
   lookupSpellCardDef,
   moveMageToSpace,
@@ -3769,15 +3771,17 @@ registerEffect('base.spell.bless.l1', (ctx): EffectResult => {
 registerEffect('base.spell.strength-of-earth.l1', (ctx): EffectResult => {
   const step = ctx.resumeContext?.['step'];
   if (!ctx.resumeAnswer) {
-    const targets: string[] = [];
-    for (const p of ctx.state.players) {
-      if (p.id === ctx.triggeringPlayerId) continue;
-      for (const m of p.mages) {
-        if (m.location.kind === 'action-space' && !m.isWounded) {
-          targets.push(m.id);
-        }
-      }
-    }
+    // Move is not wound — green mages are valid targets. Opposing blue
+    // remains spell-immune. Restrict to opponents per spell text.
+    const targets = buildSpellMoveTargets(
+      ctx.state,
+      ctx.triggeringPlayerId,
+    ).filter((mageId) => {
+      const owner = ctx.state.players.find((p) =>
+        p.mages.some((m) => m.id === mageId),
+      );
+      return owner !== undefined && owner.id !== ctx.triggeringPlayerId;
+    });
     if (targets.length === 0) {
       return { kind: 'done', patch: {} };
     }
@@ -3906,36 +3910,37 @@ function shadowOpponentMageEffect(selfEffectId: string) {
       );
     }
 
-    // Step 1: pick the opponent target. Exclude targets whose containing
-    // room is at the caster's per-round placement cap.
+    // Step 1: pick the opponent target. Shadow is not wound — green mages
+    // are valid shadow targets. Opposing blue remains spell-immune.
+    // Exclude targets whose containing room is at the caster's per-round
+    // placement cap (the caster's mage will land there as a shadow).
     if (!ctx.resumeAnswer) {
-      const targets: string[] = [];
-      for (const p of ctx.state.players) {
-        if (p.id === ctx.triggeringPlayerId) continue;
-        for (const m of p.mages) {
-          if (
-            m.location.kind !== 'action-space' ||
-            m.isWounded ||
-            m.isShadowing
-          ) {
-            continue;
-          }
-          const room = ctx.state.rooms.find((r) =>
-            r.actionSpaces.some(
-              (s) =>
-                s.id ===
-                (m.location as { kind: 'action-space'; spaceId: string }).spaceId,
-            ),
-          );
-          if (
-            room &&
-            isRoomAtPlayerCap(ctx.state, ctx.triggeringPlayerId, room.id)
-          ) {
-            continue;
-          }
-          targets.push(m.id);
+      const all = buildSpellShadowTargets(
+        ctx.state,
+        ctx.triggeringPlayerId,
+      ).filter((mageId) => {
+        const owner = ctx.state.players.find((p) =>
+          p.mages.some((m) => m.id === mageId),
+        );
+        return owner !== undefined && owner.id !== ctx.triggeringPlayerId;
+      });
+      const targets = all.filter((mageId) => {
+        const mage = ctx.state.players
+          .flatMap((p) => p.mages)
+          .find((m) => m.id === mageId);
+        if (!mage || mage.location.kind !== 'action-space') return false;
+        const spaceId = mage.location.spaceId;
+        const room = ctx.state.rooms.find((r) =>
+          r.actionSpaces.some((s) => s.id === spaceId),
+        );
+        if (
+          room &&
+          isRoomAtPlayerCap(ctx.state, ctx.triggeringPlayerId, room.id)
+        ) {
+          return false;
         }
-      }
+        return true;
+      });
       if (targets.length === 0) {
         return { kind: 'done', patch: {} };
       }
@@ -6190,11 +6195,17 @@ registerEffect('base.spell.everyday-paralocation.l3', (ctx): EffectResult => {
 registerEffect('base.spell.taming-of-the-storm.l1', (ctx): EffectResult => {
   const step = ctx.resumeContext?.['step'];
   if (!ctx.resumeAnswer) {
-    const targets = buildWoundTargetsFor(
+    // Move targets: green is wound-immune only, so it can be moved.
+    // Opposing blue is still spell-immune. Opponent-only per spell text.
+    const targets = buildSpellMoveTargets(
       ctx.state,
       ctx.triggeringPlayerId,
-      'opponent-only',
-    );
+    ).filter((mageId) => {
+      const owner = ctx.state.players.find((p) =>
+        p.mages.some((m) => m.id === mageId),
+      );
+      return owner !== undefined && owner.id !== ctx.triggeringPlayerId;
+    });
     if (targets.length === 0) return { kind: 'done', patch: {} };
     return {
       kind: 'pause',
@@ -8755,17 +8766,17 @@ registerEffect('base.spell.dark-pact.l1', (ctx): EffectResult => {
  */
 registerEffect('base.spell.shadow-bolt.l1', (ctx): EffectResult => {
   if (!ctx.resumeAnswer) {
-    // Pick an opponent's placed mage (not already shadowing, not wounded,
-    // spell-source filter via buildBurnTargets — green / opposing-blue
-    // immunities apply).
-    const targets = buildBurnTargets(ctx.state, ctx.triggeringPlayerId).filter(
-      (mageId) => {
-        const owner = ctx.state.players.find((p) =>
-          p.mages.some((m) => m.id === mageId),
-        );
-        return owner?.id !== ctx.triggeringPlayerId;
-      },
-    );
+    // Shadow is not wound — green mages CAN be shadowed. Opposing blue
+    // remains spell-immune. Opponent-only per spell text.
+    const targets = buildSpellShadowTargets(
+      ctx.state,
+      ctx.triggeringPlayerId,
+    ).filter((mageId) => {
+      const owner = ctx.state.players.find((p) =>
+        p.mages.some((m) => m.id === mageId),
+      );
+      return owner?.id !== ctx.triggeringPlayerId;
+    });
     if (targets.length === 0) return { kind: 'done', patch: {} };
     return {
       kind: 'pause',
@@ -8879,10 +8890,10 @@ registerEffect('base.spell.shadow-bolt.l1', (ctx): EffectResult => {
 registerEffect('base.spell.gust-of-wind.l1', (ctx): EffectResult => {
   const step = ctx.resumeContext?.['step'];
 
-  // Step 1: pick the target Mage (spell-source filter — green/opposing-
-  // blue immune; shadows excluded).
+  // Step 1: pick the target Mage. Move is NOT wound — green mages CAN be
+  // moved (green is wound-immune only). Opposing blue remains spell-immune.
   if (!ctx.resumeAnswer) {
-    const allTargets = buildBurnTargets(ctx.state, ctx.triggeringPlayerId);
+    const allTargets = buildSpellMoveTargets(ctx.state, ctx.triggeringPlayerId);
     // Filter to targets whose room has at least one placeable orthogonal
     // neighbor with an open slot — otherwise the move can't happen.
     const eligible = allTargets.filter((mageId) => {

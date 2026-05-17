@@ -168,33 +168,31 @@ export function buildReactionQueue(
 }
 
 /**
- * Returns the ids of every Mage that can legally be wounded by Burn L1
- * cast by `casterId`. Filters per rulebook:
- *   - Mage must be on an action space (can't wound a Mage in office / infirmary / banished).
- *   - Already-wounded Mages are skipped.
- *   - Green (Natural Magick) Mages cannot be wounded.
- *   - Blue (Divinity) Mages owned by an opponent are immune to rival spells.
- *     Blue Mages owned by the caster are NOT immune (you can target your own).
- */
-/**
- * Targeting filter for harmful effects (wound / banish / move).
+ * Targeting filter for harmful effects (wound / banish / move / shadow).
  *
  * Per the rulebook (as confirmed by the user):
- *  - Green mages are universally immune to harmful targeting while NOT
- *    shadowing. While shadowing, a green mage loses its color ability and
- *    is targetable.
- *  - Blue mages are immune to OPPONENTS' Spells (including legendary /
- *    unique spells), but NOT to supporters, vault cards, or mage abilities.
- *    A caster can target their own blue mages with spells. While shadowing,
- *    a blue mage loses its color ability.
- *  - Shadowing mages are not targetable by default; an effect must opt in
- *    via `includesShadows` to reach them. When included, the shadow's color
- *    protection no longer applies.
+ *  - Green (Natural Magick) Mages CANNOT BE WOUNDED — that's the only
+ *    protection. Green mages can still be banished, moved, and shadowed.
+ *    While shadowing, a green mage loses its colour ability anyway.
+ *  - Blue (Divinity) Mages owned by an opponent are immune to RIVAL
+ *    SPELLS — full stop, regardless of the effect kind (wound, banish,
+ *    move, shadow). Blue mages are NOT immune to supporters, vault cards,
+ *    or mage abilities. A caster can target their own blue mages with
+ *    spells. While shadowing, a blue mage loses its colour ability.
+ *  - Shadowing mages are not targetable by default; an effect must opt
+ *    in via `includesShadows` to reach them. When included, the shadow's
+ *    colour protection no longer applies.
  */
+export type HarmfulEffectKind = 'wound' | 'banish' | 'move' | 'shadow';
+
 export function buildHarmfulMageTargets(
   state: GameState,
   casterId: PlayerId,
-  opts: { source: 'spell' | 'non-spell'; includesShadows?: boolean },
+  opts: {
+    source: 'spell' | 'non-spell';
+    effect: HarmfulEffectKind;
+    includesShadows?: boolean;
+  },
 ): OwnedMageId[] {
   const targets: OwnedMageId[] = [];
   for (const p of state.players) {
@@ -207,11 +205,14 @@ export function buildHarmfulMageTargets(
       if (isMageInLockedRoom(state, m.id)) continue;
       if (m.isShadowing) {
         if (!opts.includesShadows) continue;
-        // Shadowing mage loses its color ability — no protections apply.
+        // Shadowing mage loses its colour ability — no protections apply.
         targets.push(m.id);
         continue;
       }
-      if (m.color === 'green') continue;
+      // Green: wound-immune only. Banish/move/shadow can still target a
+      // green mage.
+      if (opts.effect === 'wound' && m.color === 'green') continue;
+      // Blue: immune to rival spells across all effect kinds.
       if (
         m.color === 'blue' &&
         opts.source === 'spell' &&
@@ -264,12 +265,47 @@ export function applyRoomLockPatch(
   return { roomLocks: [...state.roomLocks, { roomId }] };
 }
 
-/** Spell-source targets (Burn, Flash of Light, etc.). */
+/**
+ * Wound-targets via a spell. Green mages are wound-immune, opposing blue
+ * mages are spell-immune. Used by Burn, Lightning, Gift of Fire, etc.
+ */
 export function buildBurnTargets(
   state: GameState,
   casterId: PlayerId,
 ): OwnedMageId[] {
-  return buildHarmfulMageTargets(state, casterId, { source: 'spell' });
+  return buildHarmfulMageTargets(state, casterId, {
+    source: 'spell',
+    effect: 'wound',
+  });
+}
+
+/**
+ * Move-targets via a spell (Gust of Wind, Strength of Earth, Zephyr, etc.).
+ * Green mages CAN be moved (green is only wound-immune); opposing blue
+ * remains spell-immune.
+ */
+export function buildSpellMoveTargets(
+  state: GameState,
+  casterId: PlayerId,
+): OwnedMageId[] {
+  return buildHarmfulMageTargets(state, casterId, {
+    source: 'spell',
+    effect: 'move',
+  });
+}
+
+/**
+ * Shadow-targets via a spell (Paralocation, Parallel Synchronicity L1,
+ * Shadow Bolt, etc.). Green is shadow-able (green is only wound-immune).
+ */
+export function buildSpellShadowTargets(
+  state: GameState,
+  casterId: PlayerId,
+): OwnedMageId[] {
+  return buildHarmfulMageTargets(state, casterId, {
+    source: 'spell',
+    effect: 'shadow',
+  });
 }
 
 /**
@@ -415,21 +451,25 @@ export function banishMage(
 }
 
 /**
- * Banish-targets list — same color filters as Burn (green-immune to spells,
- * opposing-blue-immune to spells), BUT banish also reaches mages in the
- * Infirmary. Per rulebook, banish returns the mage to its owner's office
- * regardless of whether they were placed or wounded.
+ * Banish-targets list. Banish reaches green mages (green is only wound-
+ * immune), and reaches into the Infirmary — per rulebook, banish returns
+ * the mage to its owner's office regardless of whether they were placed
+ * or wounded. Opposing blue mages remain spell-immune.
  */
 export function buildBanishTargets(
   state: GameState,
   casterId: PlayerId,
 ): OwnedMageId[] {
-  const targets = buildBurnTargets(state, casterId);
-  // Add wounded mages from the Infirmary (color immunities still apply).
+  const targets = buildHarmfulMageTargets(state, casterId, {
+    source: 'spell',
+    effect: 'banish',
+  });
+  // Add wounded mages from the Infirmary (only opposing-blue immunity
+  // applies; green is wound-immune, not banish-immune, so it can be
+  // banished out of the Infirmary too).
   for (const p of state.players) {
     for (const m of p.mages) {
       if (m.location.kind !== 'infirmary') continue;
-      if (m.color === 'green') continue;
       if (m.color === 'blue' && p.id !== casterId) continue;
       targets.push(m.id);
     }
@@ -439,14 +479,19 @@ export function buildBanishTargets(
 
 /**
  * Non-spell-source targets (supporter cards, vault cards, mage abilities).
- * Same shape as spell targets but does NOT filter opposing blue mages —
- * blue's spell immunity does not apply outside of spells.
+ * Defaults to the WOUND effect kind because that's where the bulk of
+ * non-spell harmful effects live (Sorcery Ars Magna, Bottled Rage, etc.).
+ * Pass an explicit effect kind for non-spell move / banish / shadow.
  */
 export function buildNonSpellHarmfulTargets(
   state: GameState,
   casterId: PlayerId,
+  effect: HarmfulEffectKind = 'wound',
 ): OwnedMageId[] {
-  return buildHarmfulMageTargets(state, casterId, { source: 'non-spell' });
+  return buildHarmfulMageTargets(state, casterId, {
+    source: 'non-spell',
+    effect,
+  });
 }
 
 /**
