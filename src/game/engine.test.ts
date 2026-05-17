@@ -1812,6 +1812,75 @@ describe('Bell Tower offerings', () => {
 });
 
 // ============================================================================
+// Influence track — 7-IP merit badge thresholds
+// ============================================================================
+
+describe('Influence track 7-IP Merit Badge bonus', () => {
+  it('grants 1 MB when a single bump crosses from 6 to 7 IP', async () => {
+    const { bumpInfluencePatch } = await import('./effects/helpers');
+    let s = initGame(FOUR_PLAYER_CONFIG);
+    s = mapPlayer(s, 'p1', (p) => ({
+      ...p,
+      resources: { ...p.resources, influence: 6, meritBadges: 0 },
+    }));
+    const patch = bumpInfluencePatch(s, 'p1', 1);
+    s = { ...s, ...patch };
+    const p1 = s.players.find((p) => p.id === 'p1')!;
+    expect(p1.resources.influence).toBe(7);
+    expect(p1.resources.meritBadges).toBe(1);
+  });
+
+  it('does NOT grant an MB when the bump stays under the next threshold', async () => {
+    const { bumpInfluencePatch } = await import('./effects/helpers');
+    let s = initGame(FOUR_PLAYER_CONFIG);
+    s = mapPlayer(s, 'p1', (p) => ({
+      ...p,
+      resources: { ...p.resources, influence: 7, meritBadges: 0 },
+    }));
+    const patch = bumpInfluencePatch(s, 'p1', 6); // 7 → 13, no crossing
+    s = { ...s, ...patch };
+    const p1 = s.players.find((p) => p.id === 'p1')!;
+    expect(p1.resources.influence).toBe(13);
+    expect(p1.resources.meritBadges).toBe(0);
+  });
+
+  it('grants multiple MBs when a single bump crosses multiple thresholds', async () => {
+    const { bumpInfluencePatch } = await import('./effects/helpers');
+    let s = initGame(FOUR_PLAYER_CONFIG);
+    s = mapPlayer(s, 'p1', (p) => ({
+      ...p,
+      resources: { ...p.resources, influence: 5, meritBadges: 0 },
+    }));
+    // 5 → 22 crosses 7, 14, and 21.
+    const patch = bumpInfluencePatch(s, 'p1', 17);
+    s = { ...s, ...patch };
+    const p1 = s.players.find((p) => p.id === 'p1')!;
+    expect(p1.resources.influence).toBe(22);
+    expect(p1.resources.meritBadges).toBe(3);
+  });
+
+  it('grants the MB threshold bonus end-to-end (claim IP bell tower card)', () => {
+    let s = initGame(FOUR_PLAYER_CONFIG);
+    s = applyAction(s, { type: 'ADVANCE_PHASE' });
+    if (s.phase.kind !== 'errands') throw new Error('not errands');
+    // Park the active player at 6 IP, no MBs.
+    const activeId = s.players[s.phase.activePlayerIndex]!.id;
+    s = mapPlayer(s, activeId, (p) => ({
+      ...p,
+      resources: { ...p.resources, influence: 6, meritBadges: 0 },
+    }));
+    s = applyAction(s, {
+      type: 'CLAIM_BELL_TOWER',
+      playerId: activeId,
+      bellTowerCardId: 'base.bell.gain-ip',
+    });
+    const after = s.players.find((p) => p.id === activeId)!;
+    expect(after.resources.influence).toBe(7);
+    expect(after.resources.meritBadges).toBe(1);
+  });
+});
+
+// ============================================================================
 // Action / Fast Action budget per turn
 // ============================================================================
 

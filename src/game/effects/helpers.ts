@@ -108,6 +108,10 @@ export function gainResourcesPatch(
  * `influenceArrivalSeq` to the next sequence value (so they "arrive" at the
  * new IP last, losing tiebreakers to anyone already there).
  *
+ * Crossing a multiple of 7 IP grants 1 Merit Badge per multiple crossed
+ * (rulebook: 7/14/21/...). The check is on the post-increase IP value, so
+ * a +14 bump from 0 grants 2 MBs.
+ *
  * Returns the patch only — it intentionally does NOT bump
  * `state.nextSequenceId`. The caller (engine) does that on apply.
  */
@@ -117,6 +121,11 @@ export function bumpInfluencePatch(
   amount: number,
 ): GameStatePatch {
   const newSeq = state.nextSequenceId + 1;
+  const player = state.players.find((p) => p.id === playerId);
+  const before = player?.resources.influence ?? 0;
+  const after = before + amount;
+  const meritBonus =
+    amount > 0 ? Math.floor(after / 7) - Math.floor(before / 7) : 0;
   return {
     nextSequenceId: newSeq,
     players: state.players.map((p) =>
@@ -124,7 +133,11 @@ export function bumpInfluencePatch(
         ? p
         : {
             ...p,
-            resources: { ...p.resources, influence: p.resources.influence + amount },
+            resources: {
+              ...p.resources,
+              influence: p.resources.influence + amount,
+              meritBadges: p.resources.meritBadges + meritBonus,
+            },
             influenceArrivalSeq: newSeq,
           },
     ),
