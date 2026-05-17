@@ -35,6 +35,7 @@ import {
   buildRefreshOwnedSpellPrompt,
   healMageToSpace,
   isRoomAtPlayerCap,
+  lookupSpellCardDef,
   moveMageToSpace,
   placeOfficeMageAsShadow,
   refreshOwnedSpellPatch,
@@ -328,6 +329,7 @@ function spawnResearchPrompt(
   state: GameState,
   playerId: string,
   source: ResolutionSource,
+  restrictDepartment?: Department,
 ): PendingResolutionInput {
   const player = state.players.find((p) => p.id === playerId);
   const intPool = player?.resources.intelligence ?? 0;
@@ -336,20 +338,30 @@ function spawnResearchPrompt(
   const upgradable = learned.filter(
     (s) => !(s.wisPlacedLevel2 && s.wisPlacedLevel3),
   );
-  const tableauNonEmpty = state.spellTableau.length > 0;
+  const matches = (cardId: string): boolean => {
+    if (!restrictDepartment) return true;
+    const def = lookupSpellCardDef(state, cardId);
+    return def?.department === restrictDepartment;
+  };
+  const tableauHasMatch = state.spellTableau.some(matches);
+  const upgradableHasMatch = upgradable.some((s) => matches(s.cardId));
 
   const options: ChoiceOption[] = [];
-  if (tableauNonEmpty && intPool >= 1) {
+  if (tableauHasMatch && intPool >= 1) {
     options.push({
       id: 'draft',
-      label: 'Draft a Spell from the tableau (spend 1 INT)',
+      label: restrictDepartment
+        ? `Draft a ${departmentLabel(restrictDepartment)} Spell (spend 1 INT)`
+        : 'Draft a Spell from the tableau (spend 1 INT)',
       payload: {},
     });
   }
-  if (wisPool >= 1 && upgradable.length > 0) {
+  if (wisPool >= 1 && upgradableHasMatch) {
     options.push({
       id: 'add-wis',
-      label: 'Place 1 WIS to unlock the next level of an owned Spell',
+      label: restrictDepartment
+        ? `Place 1 WIS on a ${departmentLabel(restrictDepartment)} Spell (unlock next level)`
+        : 'Place 1 WIS to unlock the next level of an owned Spell',
       payload: {},
     });
   }
@@ -361,9 +373,31 @@ function spawnResearchPrompt(
       kind: 'choose-from-options',
       options,
     },
-    resume: { effectId: 'base.system.spend-research', context: {} },
+    resume: {
+      effectId: 'base.system.spend-research',
+      context: restrictDepartment ? { restrictDepartment } : {},
+    },
     source,
   };
+}
+
+function departmentLabel(d: Department): string {
+  switch (d) {
+    case 'sorcery':
+      return 'Sorcery';
+    case 'mysticism':
+      return 'Mysticism';
+    case 'natural-magick':
+      return 'Natural Magick';
+    case 'planar-studies':
+      return 'Planar Studies';
+    case 'divinity':
+      return 'Divinity';
+    case 'students':
+      return 'Student';
+    case 'wild':
+      return 'Wild';
+  }
 }
 
 /**
@@ -375,10 +409,20 @@ function spawnResearchPrompt(
  * up-to-date menu (correct option visibility based on the state AFTER
  * the previous research was spent).
  */
-registerEffect('base.system.spawn-research-prompt', (ctx): EffectResult => ({
-  kind: 'pause',
-  pending: spawnResearchPrompt(ctx.state, ctx.triggeringPlayerId, ctx.source),
-}));
+registerEffect('base.system.spawn-research-prompt', (ctx): EffectResult => {
+  const restrictRaw = ctx.resumeContext?.['restrictDepartment'];
+  const restrict =
+    typeof restrictRaw === 'string' ? (restrictRaw as Department) : undefined;
+  return {
+    kind: 'pause',
+    pending: spawnResearchPrompt(
+      ctx.state,
+      ctx.triggeringPlayerId,
+      ctx.source,
+      restrict,
+    ),
+  };
+});
 
 /**
  * Router for the research-spend prompt. Dispatches to a per-action effect
@@ -392,6 +436,14 @@ registerEffect('base.system.spend-research', (ctx): EffectResult => {
       `spend-research expected option-chosen, got ${ctx.resumeAnswer?.kind}`,
     );
   }
+  const restrictRaw = ctx.resumeContext?.['restrictDepartment'];
+  const restrict =
+    typeof restrictRaw === 'string' ? (restrictRaw as Department) : undefined;
+  const matches = (cardId: string): boolean => {
+    if (!restrict) return true;
+    const def = lookupSpellCardDef(ctx.state, cardId);
+    return def?.department === restrict;
+  };
   const optionId = ctx.resumeAnswer.optionId;
   if (optionId === 'discard') return { kind: 'done', patch: {} };
   // Re-evaluate prerequisites and forward to the action-specific chain.
@@ -402,14 +454,15 @@ registerEffect('base.system.spend-research', (ctx): EffectResult => {
 
   if (optionId === 'draft') {
     if (player.resources.intelligence < 1) return { kind: 'done', patch: {} };
-    if (ctx.state.spellTableau.length === 0) return { kind: 'done', patch: {} };
+    const eligibleTableau = ctx.state.spellTableau.filter(matches);
+    if (eligibleTableau.length === 0) return { kind: 'done', patch: {} };
     return {
       kind: 'pause',
       pending: {
         responderId: ctx.triggeringPlayerId,
         prompt: {
           kind: 'choose-from-options',
-          options: ctx.state.spellTableau.map((cid) => ({
+          options: eligibleTableau.map((cid) => ({
             id: cid,
             label: `Draft ${spellLabel(ctx.state, cid)}`,
             payload: {},
@@ -417,7 +470,7 @@ registerEffect('base.system.spend-research', (ctx): EffectResult => {
         },
         resume: {
           effectId: 'base.system.research-draft',
-          context: {},
+          context: restrict ? { restrictDepartment: restrict } : {},
         },
         source: ctx.source,
       },
@@ -450,7 +503,10 @@ registerEffect('base.system.spend-research', (ctx): EffectResult => {
   if (optionId === 'add-wis') {
     if (player.resources.wisdom < 1) return { kind: 'done', patch: {} };
     const upgradable = player.ownedSpells.filter(
-      (s) => s.intPlaced && !(s.wisPlacedLevel2 && s.wisPlacedLevel3),
+      (s) =>
+        s.intPlaced &&
+        !(s.wisPlacedLevel2 && s.wisPlacedLevel3) &&
+        matches(s.cardId),
     );
     if (upgradable.length === 0) return { kind: 'done', patch: {} };
     return {
@@ -469,7 +525,7 @@ registerEffect('base.system.spend-research', (ctx): EffectResult => {
         },
         resume: {
           effectId: 'base.system.research-add-wis',
-          context: {},
+          context: restrict ? { restrictDepartment: restrict } : {},
         },
         source: ctx.source,
       },
@@ -528,6 +584,11 @@ registerEffect('base.system.research-draft', (ctx): EffectResult => {
   }
   if (!ctx.state.spellTableau.includes(spellCardId)) {
     return { kind: 'done', patch: {} };
+  }
+  const restrictRaw = ctx.resumeContext?.['restrictDepartment'];
+  if (typeof restrictRaw === 'string') {
+    const def = lookupSpellCardDef(ctx.state, spellCardId);
+    if (def?.department !== restrictRaw) return { kind: 'done', patch: {} };
   }
   return {
     kind: 'done',
@@ -620,6 +681,11 @@ registerEffect('base.system.research-add-wis', (ctx): EffectResult => {
   if (!owned || !owned.intPlaced) return { kind: 'done', patch: {} };
   if (owned.wisPlacedLevel2 && owned.wisPlacedLevel3) {
     return { kind: 'done', patch: {} };
+  }
+  const restrictRaw = ctx.resumeContext?.['restrictDepartment'];
+  if (typeof restrictRaw === 'string') {
+    const def = lookupSpellCardDef(ctx.state, spellCardId);
+    if (def?.department !== restrictRaw) return { kind: 'done', patch: {} };
   }
   return {
     kind: 'done',
@@ -2371,20 +2437,26 @@ function marksLoop(
  * then-current state so option visibility (INT/WIS pools, upgradable spell
  * list, etc.) is up to date after each spend.
  *
- * Department-restricted "Gain N Research on dept X spells only" cards
- * currently use this helper too — the type-restriction enforcement is a
- * TODO; the player can spend on any spell at the moment.
+ * `restrictDepartment` pins each queued entry to a single department — the
+ * draft prompt only offers spells of that department, and the WIS-upgrade
+ * prompt only offers owned spells of that department. Used by Adelaide
+ * Chivers, Jaimes Kalin, Jance Eylon, Kas Karrowary, and Vellimoor Cantz.
  */
 function appendResearchQueue(
   state: GameState,
   playerId: string,
   source: ResolutionSource,
   count: number,
+  restrictDepartment?: Department,
 ): GameStatePatch {
   if (count <= 0) return {};
   const entries: GameState['researchQueue'] = [];
   for (let i = 0; i < count; i++) {
-    entries.push({ playerId, source });
+    entries.push(
+      restrictDepartment
+        ? { playerId, source, restrictDepartment }
+        : { playerId, source },
+    );
   }
   return {
     researchQueue: [...state.researchQueue, ...entries],
@@ -2414,40 +2486,64 @@ registerEffect('base.supporter.batrov-wargrave', (ctx): EffectResult => ({
   patch: appendResearchQueue(ctx.state, ctx.triggeringPlayerId, ctx.source, 3),
 }));
 
-// TODO: the next 5 supporters restrict their Research to a specific
-// department. Right now we surface the unrestricted full research menu and
-// the restriction is informational only. Enforcing the department filter
-// requires either custom prompt variants per dept or a per-entry filter
-// field on the research queue; a follow-up will wire it up.
-
 /** Adelaide Chivers — Gain 2 Research, Planar (Purple) Spells only. */
 registerEffect('base.supporter.adelaide-chivers', (ctx): EffectResult => ({
   kind: 'done',
-  patch: appendResearchQueue(ctx.state, ctx.triggeringPlayerId, ctx.source, 2),
+  patch: appendResearchQueue(
+    ctx.state,
+    ctx.triggeringPlayerId,
+    ctx.source,
+    2,
+    'planar-studies',
+  ),
 }));
 
 /** Jaimes Kalin — Gain 2 Research, Natural Magick (Green) Spells only. */
 registerEffect('base.supporter.jaimes-kalin', (ctx): EffectResult => ({
   kind: 'done',
-  patch: appendResearchQueue(ctx.state, ctx.triggeringPlayerId, ctx.source, 2),
+  patch: appendResearchQueue(
+    ctx.state,
+    ctx.triggeringPlayerId,
+    ctx.source,
+    2,
+    'natural-magick',
+  ),
 }));
 
 /** Jance Eylon — Gain 2 Research, Mysticism (Grey) Spells only. */
 registerEffect('base.supporter.jance-eylon', (ctx): EffectResult => ({
   kind: 'done',
-  patch: appendResearchQueue(ctx.state, ctx.triggeringPlayerId, ctx.source, 2),
+  patch: appendResearchQueue(
+    ctx.state,
+    ctx.triggeringPlayerId,
+    ctx.source,
+    2,
+    'mysticism',
+  ),
 }));
 
 /** Kas Karrowary — Gain 2 Research, Divinity (Blue) Spells only. */
 registerEffect('base.supporter.kas-karrowary', (ctx): EffectResult => ({
   kind: 'done',
-  patch: appendResearchQueue(ctx.state, ctx.triggeringPlayerId, ctx.source, 2),
+  patch: appendResearchQueue(
+    ctx.state,
+    ctx.triggeringPlayerId,
+    ctx.source,
+    2,
+    'divinity',
+  ),
 }));
 
 /** Vellimoor Cantz — Gain 2 Research, Sorcery (Red) Spells only. */
 registerEffect('base.supporter.vellimoor-cantz', (ctx): EffectResult => ({
   kind: 'done',
-  patch: appendResearchQueue(ctx.state, ctx.triggeringPlayerId, ctx.source, 2),
+  patch: appendResearchQueue(
+    ctx.state,
+    ctx.triggeringPlayerId,
+    ctx.source,
+    2,
+    'sorcery',
+  ),
 }));
 
 // ---------------------------------------------------------------------------

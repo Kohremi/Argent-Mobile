@@ -6548,6 +6548,153 @@ describe('Spell research actions', () => {
     });
     expect(s.pendingResolutionStack).toHaveLength(0);
   });
+
+  it('department-restricted research only offers draft of matching-department spells', () => {
+    // Burn = sorcery; Living Image = divinity. Restricting to sorcery should
+    // only let the player draft Burn.
+    let s = setupResearchTest({
+      intelligence: 1,
+      spellTableau: ['base.spell.burn', 'base.spell.living-image'],
+    });
+    s = {
+      ...s,
+      researchQueue: [
+        {
+          playerId: 'p1',
+          source: {
+            kind: 'supporter',
+            id: 'base.supporter.vellimoor-cantz',
+            triggeringPlayerId: 'p1',
+            description: 'Vellimoor Cantz',
+          },
+          restrictDepartment: 'sorcery',
+        },
+      ],
+    };
+    // Run any pass — the drain pump fires on autoAdvanceIfTurnDone.
+    s = applyAction(s, { type: 'ADVANCE_PHASE' }); // round-setup → errands; drain runs
+    const menu = topPending(s);
+    expect(menu.prompt.kind).toBe('choose-from-options');
+    if (menu.prompt.kind !== 'choose-from-options') return;
+    // Pick 'draft' — sub-prompt should only list sorcery spells.
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: menu.id,
+      answer: { kind: 'option-chosen', optionId: 'draft', payload: {} },
+    });
+    const draftPrompt = topPending(s);
+    expect(draftPrompt.prompt.kind).toBe('choose-from-options');
+    if (draftPrompt.prompt.kind !== 'choose-from-options') return;
+    const optionIds = draftPrompt.prompt.options.map((o) => o.id);
+    expect(optionIds).toContain('base.spell.burn');
+    expect(optionIds).not.toContain('base.spell.living-image');
+  });
+
+  it('department-restricted research hides Draft entirely when no matching tableau spells', () => {
+    // Tableau is all-divinity, restriction is sorcery → Draft option absent.
+    let s = setupResearchTest({
+      intelligence: 1,
+      spellTableau: ['base.spell.living-image'],
+    });
+    s = {
+      ...s,
+      researchQueue: [
+        {
+          playerId: 'p1',
+          source: {
+            kind: 'supporter',
+            id: 'base.supporter.vellimoor-cantz',
+            triggeringPlayerId: 'p1',
+            description: 'Vellimoor Cantz',
+          },
+          restrictDepartment: 'sorcery',
+        },
+      ],
+    };
+    s = applyAction(s, { type: 'ADVANCE_PHASE' });
+    const menu = topPending(s);
+    expect(menu.prompt.kind).toBe('choose-from-options');
+    if (menu.prompt.kind !== 'choose-from-options') return;
+    expect(menu.prompt.options.map((o) => o.id)).not.toContain('draft');
+  });
+
+  it('department-restricted research only offers WIS upgrades on matching-department owned spells', () => {
+    // Player owns Burn (sorcery) + Trance (mysticism), both at L1. Restrict
+    // to sorcery and WIS-upgrade should only offer Burn.
+    let s = setupResearchTest({
+      wisdom: 1,
+      ownedSpells: [
+        { cardId: 'base.spell.burn', intPlaced: true },
+        { cardId: 'base.spell.trance', intPlaced: true },
+      ],
+    });
+    s = {
+      ...s,
+      researchQueue: [
+        {
+          playerId: 'p1',
+          source: {
+            kind: 'supporter',
+            id: 'base.supporter.vellimoor-cantz',
+            triggeringPlayerId: 'p1',
+            description: 'Vellimoor Cantz',
+          },
+          restrictDepartment: 'sorcery',
+        },
+      ],
+    };
+    s = applyAction(s, { type: 'ADVANCE_PHASE' });
+    const menu = topPending(s);
+    if (menu.prompt.kind !== 'choose-from-options') {
+      throw new Error('expected menu');
+    }
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: menu.id,
+      answer: { kind: 'option-chosen', optionId: 'add-wis', payload: {} },
+    });
+    const wisPrompt = topPending(s);
+    if (wisPrompt.prompt.kind !== 'choose-from-options') {
+      throw new Error('expected WIS sub-prompt');
+    }
+    const ids = wisPrompt.prompt.options.map((o) => o.id);
+    expect(ids).toContain('base.spell.burn');
+    expect(ids).not.toContain('base.spell.trance');
+  });
+
+  it('unrestricted research keeps the normal cross-department behavior', () => {
+    let s = setupResearchTest({
+      intelligence: 1,
+      spellTableau: ['base.spell.burn', 'base.spell.living-image'],
+    });
+    s = {
+      ...s,
+      researchQueue: [
+        {
+          playerId: 'p1',
+          source: {
+            kind: 'supporter',
+            id: 'base.supporter.welsie-acktern',
+            triggeringPlayerId: 'p1',
+            description: 'Welsie Acktern',
+          },
+        },
+      ],
+    };
+    s = applyAction(s, { type: 'ADVANCE_PHASE' });
+    const menu = topPending(s);
+    if (menu.prompt.kind !== 'choose-from-options') return;
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: menu.id,
+      answer: { kind: 'option-chosen', optionId: 'draft', payload: {} },
+    });
+    const draftPrompt = topPending(s);
+    if (draftPrompt.prompt.kind !== 'choose-from-options') return;
+    const ids = draftPrompt.prompt.options.map((o) => o.id);
+    expect(ids).toContain('base.spell.burn');
+    expect(ids).toContain('base.spell.living-image');
+  });
 });
 
 describe('Library A slot 3 (regular): Gain a Buy + Research', () => {

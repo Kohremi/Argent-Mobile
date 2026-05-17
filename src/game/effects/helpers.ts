@@ -20,6 +20,7 @@ import type {
   ResolutionSource,
   Room,
   SerializableContext,
+  SpellCard,
   SpellCardId,
   SupporterCard,
   SupporterCardId,
@@ -978,15 +979,24 @@ export function lookupSupporterCardDef(
 
 /** Returns the card name for a spell id, or the id itself as a fallback. */
 export function spellLabel(state: GameState, spellCardId: SpellCardId): string {
+  return lookupSpellCardDef(state, spellCardId)?.name ?? spellCardId;
+}
+
+/** Returns the SpellCard definition (across active packs) for a spell id, or
+ *  `null` if no active pack ships that spell. */
+export function lookupSpellCardDef(
+  state: GameState,
+  spellCardId: SpellCardId,
+): SpellCard | null {
   for (const packId of state.activePackIds) {
     const pack = getPack(packId);
     if (!pack) continue;
     const found =
       pack.spells.find((s) => s.id === spellCardId) ??
       pack.legendarySpells.find((s) => s.id === spellCardId);
-    if (found) return found.name;
+    if (found) return found;
   }
-  return spellCardId;
+  return null;
 }
 
 export function findActionSpace(

@@ -196,6 +196,9 @@ function drainResearchQueueIfIdle(state: GameState): GameState {
     source: next.source,
     triggeringPlayerId: next.playerId,
     allowReactions: false,
+    ...(next.restrictDepartment !== undefined
+      ? { resumeContext: { restrictDepartment: next.restrictDepartment } }
+      : {}),
   };
   const result = getEffect('base.system.spawn-research-prompt')(ctx);
   return applyEffectResult(withoutEntry, result, ctx);

@@ -835,7 +835,17 @@ export interface GameState {
    * idle. Single-research effects can either bypass this and surface the
    * prompt directly (existing behavior) or push one entry — both work.
    */
-  researchQueue: { playerId: PlayerId; source: ResolutionSource }[];
+  researchQueue: {
+    playerId: PlayerId;
+    source: ResolutionSource;
+    /**
+     * Optional department restriction (e.g., Adelaide Chivers grants Research
+     * usable only on Planar Studies spells). Filters draft tableau options and
+     * WIS-upgrade options to spells of the named department. Absent = no
+     * restriction (unrestricted research).
+     */
+    restrictDepartment?: Department;
+  }[];
   /**
    * Set when a `bell-tower-last-claimed` reaction window needs to open
    * after the active claim chain settles. Drained by the engine pump on
