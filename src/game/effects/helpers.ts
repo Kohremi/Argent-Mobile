@@ -927,6 +927,73 @@ export function buildReactionOptionsFor(
         ...(multi ? { forMageId: mageId } : {}),
       });
     }
+
+    // ----- Spell-based reactions -----
+    //
+    // Wrath of Heaven L1 "Justice": when your mage is moved or shadowed by
+    //   an opponent, wound any placed Mage belonging to that opponent.
+    //   Cost: 1 Mana. Researched at L1, unexhausted.
+    const wrath = responder.ownedSpells.find(
+      (s) => s.cardId === 'base.spell.wrath-of-heaven',
+    );
+    const wrathReady = wrath && wrath.intPlaced && !wrath.exhausted;
+    if (
+      wrathReady &&
+      triggeredByOpponent &&
+      (event.kind === 'mage-moved' || event.kind === 'mage-shadowed') &&
+      responder.resources.mana >= 1
+    ) {
+      options.push({
+        sourceKind: 'spell',
+        sourceId: 'base.spell.wrath-of-heaven',
+        effectId: 'base.spell.wrath-of-heaven.l1.react',
+        label: `Cast Justice (wound a mage of the attacker)${labelSuffix(mageId)}`,
+        ...(multi ? { forMageId: mageId } : {}),
+      });
+    }
+    // Wrath of Heaven L2 "Recompense": when your mage is banished, banish a
+    //   Mage of the player who banished it. Cost: 1 Mana. Researched at L2.
+    if (
+      wrathReady &&
+      wrath?.wisPlacedLevel2 &&
+      triggeredByOpponent &&
+      event.kind === 'mage-banished' &&
+      responder.resources.mana >= 1
+    ) {
+      options.push({
+        sourceKind: 'spell',
+        sourceId: 'base.spell.wrath-of-heaven',
+        effectId: 'base.spell.wrath-of-heaven.l2.react',
+        label: `Cast Recompense (banish a mage of the attacker)${labelSuffix(mageId)}`,
+        ...(multi ? { forMageId: mageId } : {}),
+      });
+    }
+
+    // Songs of Springtime L1 "Regeneration": when your mage is wounded or
+    //   moved, refresh an exhausted Spell or Treasure. Cost: 0 Mana.
+    const songs = responder.ownedSpells.find(
+      (s) => s.cardId === 'base.spell.songs-of-springtime',
+    );
+    const songsReady = songs && songs.intPlaced && !songs.exhausted;
+    if (
+      songsReady &&
+      (event.kind === 'mage-wounded' || event.kind === 'mage-moved')
+    ) {
+      // Only offer if the responder has at least one exhausted spell or treasure.
+      const hasExhaustedSpell = responder.ownedSpells.some((sp) => sp.exhausted);
+      const hasExhaustedTreasure = responder.vaultCards.some(
+        (v) => v.exhausted,
+      );
+      if (hasExhaustedSpell || hasExhaustedTreasure) {
+        options.push({
+          sourceKind: 'spell',
+          sourceId: 'base.spell.songs-of-springtime',
+          effectId: 'base.spell.songs-of-springtime.l1.react',
+          label: `Cast Regeneration (refresh a Spell or Treasure)${labelSuffix(mageId)}`,
+          ...(multi ? { forMageId: mageId } : {}),
+        });
+      }
+    }
   }
 
   return options;

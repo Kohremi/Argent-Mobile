@@ -5977,6 +5977,169 @@ registerEffect('base.spell.everyday-paralocation.l1', (ctx): EffectResult => {
 });
 
 /**
+ * Everyday Paralocation L3 "Teleport" — Move up to 2 of your Mages to any
+ * open slots; Infirmary mages are eligible. Loops up to twice; after the
+ * first move, a "stop" option is offered.
+ *
+ * No reaction windows are opened — these are self-moves of the caster's
+ * own mages and don't surface defensive reactions in practice. Per-room
+ * caps are respected via `listEligiblePlacementSlots`; healed mages are
+ * credited with a `roundPlacements` entry (the heal-place is a placement
+ * for cap purposes, unlike pure slot-to-slot moves).
+ */
+registerEffect('base.spell.everyday-paralocation.l3', (ctx): EffectResult => {
+  const step = ctx.resumeContext?.['step'] ?? 'pick-mage';
+  const done = Number(ctx.resumeContext?.['done'] ?? 0);
+  const self = 'base.spell.everyday-paralocation.l3';
+
+  if (step === 'pick-mage') {
+    const player = ctx.state.players.find(
+      (p) => p.id === ctx.triggeringPlayerId,
+    );
+    const candidates =
+      player?.mages
+        .filter(
+          (m) =>
+            (m.location.kind === 'action-space' && !m.isWounded) ||
+            m.location.kind === 'infirmary',
+        )
+        .map((m) => m.id) ?? [];
+    if (candidates.length === 0) return { kind: 'done', patch: {} };
+    const options: ChoiceOption[] = candidates.map((mid) => ({
+      id: mid,
+      label: `Move ${mid}`,
+      payload: {},
+    }));
+    options.push({ id: 'stop', label: 'Stop', payload: {} });
+    return {
+      kind: 'pause',
+      pending: {
+        responderId: ctx.triggeringPlayerId,
+        prompt: { kind: 'choose-from-options', options },
+        resume: { effectId: self, context: { step: 'after-mage', done } },
+        source: ctx.source,
+      },
+    };
+  }
+
+  if (step === 'after-mage') {
+    if (ctx.resumeAnswer?.kind !== 'option-chosen') {
+      throw new Error(`${self} after-mage expected option-chosen`);
+    }
+    if (ctx.resumeAnswer.optionId === 'stop') {
+      return { kind: 'done', patch: {} };
+    }
+    const sourceMageId = ctx.resumeAnswer.optionId;
+    const openSlots = listEligiblePlacementSlots(
+      ctx.state,
+      ctx.triggeringPlayerId,
+    );
+    if (openSlots.length === 0) return { kind: 'done', patch: {} };
+    return {
+      kind: 'pause',
+      pending: {
+        responderId: ctx.triggeringPlayerId,
+        prompt: {
+          kind: 'choose-target-action-space',
+          eligibleSpaceIds: openSlots,
+        },
+        resume: {
+          effectId: self,
+          context: { step: 'after-slot', done, sourceMageId },
+        },
+        source: ctx.source,
+      },
+    };
+  }
+
+  if (step === 'after-slot') {
+    if (ctx.resumeAnswer?.kind !== 'space-chosen') {
+      throw new Error(`${self} after-slot expected space-chosen`);
+    }
+    const sourceMageId = ctx.resumeContext?.['sourceMageId'];
+    if (typeof sourceMageId !== 'string') {
+      throw new Error(`${self} after-slot: missing sourceMageId`);
+    }
+    const destSpaceId = ctx.resumeAnswer.spaceId;
+    const sourceMage = ctx.state.players
+      .flatMap((p) => p.mages)
+      .find((m) => m.id === sourceMageId);
+    if (!sourceMage) return { kind: 'done', patch: {} };
+    const targetRoom = ctx.state.rooms.find((r) =>
+      r.actionSpaces.some((s) => s.id === destSpaceId),
+    );
+    if (!targetRoom) return { kind: 'done', patch: {} };
+
+    let movePatch: GameStatePatch;
+    if (sourceMage.location.kind === 'infirmary') {
+      // Heal-place: credit roundPlacements for the cap (this is the caster
+      // placing a mage they own, so the cap applies to them).
+      const healPatch = healMageToSpace(ctx.state, sourceMageId, destSpaceId);
+      const updatedPlayers = (healPatch.players ?? ctx.state.players).map(
+        (p) =>
+          p.id !== ctx.triggeringPlayerId
+            ? p
+            : {
+                ...p,
+                roundPlacements: [...p.roundPlacements, targetRoom.id],
+              },
+      );
+      movePatch = { ...healPatch, players: updatedPlayers };
+    } else {
+      // Slot-to-slot move via `moveMageToSpace`; per-room cap NOT credited
+      // since "move" is not "place" per rulebook conventions.
+      const moved = moveMageToSpace(
+        ctx.state,
+        sourceMageId,
+        destSpaceId,
+        ctx.triggeringPlayerId,
+      );
+      movePatch = moved.patch;
+    }
+
+    const stateAfter: GameState = { ...ctx.state, ...movePatch };
+    const newDone = done + 1;
+    if (newDone >= 2) {
+      return { kind: 'done', patch: movePatch };
+    }
+    // Surface the next pick-mage prompt with a 'stop' option.
+    const player = stateAfter.players.find(
+      (p) => p.id === ctx.triggeringPlayerId,
+    );
+    const candidates =
+      player?.mages
+        .filter(
+          (m) =>
+            (m.location.kind === 'action-space' && !m.isWounded) ||
+            m.location.kind === 'infirmary',
+        )
+        .map((m) => m.id) ?? [];
+    if (candidates.length === 0) return { kind: 'done', patch: movePatch };
+    const options: ChoiceOption[] = candidates.map((mid) => ({
+      id: mid,
+      label: `Move ${mid}`,
+      payload: {},
+    }));
+    options.push({ id: 'stop', label: 'Stop', payload: {} });
+    return {
+      kind: 'pause',
+      patch: movePatch,
+      pending: {
+        responderId: ctx.triggeringPlayerId,
+        prompt: { kind: 'choose-from-options', options },
+        resume: {
+          effectId: self,
+          context: { step: 'after-mage', done: newDone },
+        },
+        source: ctx.source,
+      },
+    };
+  }
+
+  throw new Error(`${self} unexpected step ${String(step)}`);
+});
+
+/**
  * Taming of the Storm L1 "Zephyr" — Move an opponent's Mage to another open
  * slot in the same room. Two prompts: pick target, then pick destination
  * slot (must be empty + in the target's current room + not the source slot).
@@ -6611,6 +6774,169 @@ registerEffect('base.spell.of-mortal-form.l2', (ctx): EffectResult => {
     };
   }
   throw new Error(`amelioration unexpected step ${String(step)}`);
+});
+
+/**
+ * Of Mortal Form L3 "Innervation" — Move a Mage from the Infirmary to any
+ * slot. You may wound an opponent's Mage to clear a slot for your placement.
+ *
+ * Steps:
+ *  1) pick a wounded mage (any owner — text says "Mage from the Infirmary"
+ *     unqualified; we restrict to the caster's own per common convention so
+ *     the caster doesn't accidentally heal an opponent. Mirrors L1/L2 — they
+ *     both use `buildWoundedTargets(_, 'any', _)`, so we follow that.)
+ *  2) pick a slot — empty OR occupied with a wound-eligible occupant
+ *  3) if occupied: wound the occupant (the wound is part of the spell, so a
+ *     reaction window fires; afterResume re-enters at step 'place' which
+ *     performs the heal-place into the now-empty slot). Infirmary bonus
+ *     applies on opposing wound.
+ *  4) if empty: heal-place directly via `healMageToSpace`.
+ */
+registerEffect('base.spell.of-mortal-form.l3', (ctx): EffectResult => {
+  const step = ctx.resumeContext?.['step'];
+  const self = 'base.spell.of-mortal-form.l3';
+
+  if (step === 'place') {
+    // afterResume from the wound's reaction window — perform the heal-place
+    // into the (now empty) slot regardless of resumeAnswer.
+    const targetMageId = ctx.resumeContext?.['targetMageId'];
+    const destSpaceId = ctx.resumeContext?.['destSpaceId'];
+    if (typeof targetMageId !== 'string' || typeof destSpaceId !== 'string') {
+      throw new Error(`${self} place: missing context fields`);
+    }
+    // Re-check the destination is still empty (a defensive reaction may have
+    // relocated the wounded mage into it or somewhere else).
+    const space = ctx.state.rooms
+      .flatMap((r) => r.actionSpaces)
+      .find((s) => s.id === destSpaceId);
+    if (!space || space.occupant) return { kind: 'done', patch: {} };
+    // Also re-check the source mage is still in the Infirmary.
+    const sourceMage = ctx.state.players
+      .flatMap((p) => p.mages)
+      .find((m) => m.id === targetMageId);
+    if (!sourceMage || sourceMage.location.kind !== 'infirmary') {
+      return { kind: 'done', patch: {} };
+    }
+    return {
+      kind: 'done',
+      patch: healMageToSpace(ctx.state, targetMageId, destSpaceId),
+    };
+  }
+
+  if (!ctx.resumeAnswer) {
+    const targets = buildWoundedTargets(ctx.state, 'any', ctx.triggeringPlayerId);
+    if (targets.length === 0) return { kind: 'done', patch: {} };
+    return {
+      kind: 'pause',
+      pending: {
+        responderId: ctx.triggeringPlayerId,
+        prompt: { kind: 'choose-target-mage', eligibleMageIds: targets },
+        resume: { effectId: self, context: { step: 'pick-slot' } },
+        source: ctx.source,
+      },
+    };
+  }
+
+  if (step === 'pick-slot') {
+    if (ctx.resumeAnswer.kind !== 'mage-chosen') {
+      throw new Error(`${self} pick-slot expected mage-chosen`);
+    }
+    const targetMageId = ctx.resumeAnswer.mageId;
+    // Empty slots: any slot whose room accepts direct placement and is
+    // unoccupied (we don't credit roundPlacements here — see L2 comment).
+    const emptySlots: string[] = [];
+    // Occupied slots: those with a wound-eligible occupant (non-green and
+    // not already wounded — `buildBurnTargets` style filter for opponents
+    // only, since wounding our own mage to clear a slot would be self-harm).
+    const woundCandidates = new Set(
+      buildBurnTargets(ctx.state, ctx.triggeringPlayerId).filter((mid) => {
+        const owner = ctx.state.players.find((p) =>
+          p.mages.some((m) => m.id === mid),
+        );
+        return owner?.id !== ctx.triggeringPlayerId;
+      }),
+    );
+    const occupiedSlots: string[] = [];
+    for (const r of ctx.state.rooms) {
+      if (r.cannotBePlacedInDirectly) continue;
+      for (const s of r.actionSpaces) {
+        if (!s.occupant) {
+          emptySlots.push(s.id);
+        } else if (woundCandidates.has(s.occupant.mageId)) {
+          occupiedSlots.push(s.id);
+        }
+      }
+    }
+    const allSlots = [...emptySlots, ...occupiedSlots];
+    if (allSlots.length === 0) return { kind: 'done', patch: {} };
+    return {
+      kind: 'pause',
+      pending: {
+        responderId: ctx.triggeringPlayerId,
+        prompt: {
+          kind: 'choose-target-action-space',
+          eligibleSpaceIds: allSlots,
+        },
+        resume: { effectId: self, context: { step: 'apply', targetMageId } },
+        source: ctx.source,
+      },
+    };
+  }
+
+  if (step === 'apply') {
+    if (ctx.resumeAnswer.kind !== 'space-chosen') {
+      throw new Error(`${self} apply expected space-chosen`);
+    }
+    const targetMageId = ctx.resumeContext?.['targetMageId'];
+    if (typeof targetMageId !== 'string') {
+      throw new Error(`${self} apply: missing targetMageId`);
+    }
+    const destSpaceId = ctx.resumeAnswer.spaceId;
+    const destSpace = ctx.state.rooms
+      .flatMap((r) => r.actionSpaces)
+      .find((s) => s.id === destSpaceId);
+    if (!destSpace) return { kind: 'done', patch: {} };
+
+    if (!destSpace.occupant) {
+      // Empty — heal directly.
+      return {
+        kind: 'done',
+        patch: healMageToSpace(ctx.state, targetMageId, destSpaceId),
+      };
+    }
+
+    // Occupied — wound the occupant + chain through reaction + Infirmary
+    // bonus, then heal-place into the now-empty slot.
+    const occupantMageId = destSpace.occupant.mageId;
+    const wounded = woundMage(
+      ctx.state,
+      occupantMageId,
+      ctx.triggeringPlayerId,
+    );
+    return {
+      kind: 'open-reaction',
+      patch: wounded.patch,
+      window: {
+        triggerEvents: [wounded.triggerEvent],
+        pendingResponderIds: buildReactionQueue(
+          ctx.state,
+          ctx.triggeringPlayerId,
+        ),
+        reactedPlayerIds: [],
+        afterResume: {
+          effectId: self,
+          context: {
+            step: 'place',
+            targetMageId,
+            destSpaceId,
+          },
+        },
+        source: ctx.source,
+      },
+    };
+  }
+
+  throw new Error(`${self} unexpected step ${String(step)}`);
 });
 
 /**
@@ -8898,5 +9224,238 @@ registerEffect(
       players: withChain.players,
       pendingPlaceChain: withChain.pendingPlaceChain,
     });
+  },
+);
+
+// ============================================================================
+// Wrath of Heaven (Divinity, reaction)
+//
+// Per rulebook, reactions cannot be reacted to. Each Wrath effect applies
+// its wound / banish patch directly (no `open-reaction`) so no defensive
+// reaction window opens against the retaliation. The Infirmary bonus
+// (post-wound-bonus prompt) still fires for L1 because it is a separate
+// bonus mechanic, not a reaction trigger.
+// ============================================================================
+
+/** Wrath of Heaven L1 "Justice" — Reaction. When one of your Mages is shadowed
+ *  or moved by an opponent, wound any placed Mage belonging to that
+ *  opponent. Cost: 1 Mana. */
+registerEffect('base.spell.wrath-of-heaven.l1.react', (ctx): EffectResult => {
+  const step = ctx.resumeContext?.['step'];
+  const self = 'base.spell.wrath-of-heaven.l1.react';
+
+  if (!step) {
+    const paid = payAndExhaustSpell(
+      ctx.state,
+      ctx.triggeringPlayerId,
+      'base.spell.wrath-of-heaven',
+      1,
+    );
+    if (!paid) return { kind: 'done', patch: {} };
+    const rawEvent = ctx.resumeContext?.['triggerEvent'];
+    if (!rawEvent || typeof rawEvent !== 'object') {
+      return { kind: 'done', patch: { players: paid.players } };
+    }
+    const event = rawEvent as unknown as ReactionTriggerEvent;
+    if (!('byPlayerId' in event)) {
+      return { kind: 'done', patch: { players: paid.players } };
+    }
+    const attackerId = event.byPlayerId;
+    const attacker = paid.players.find((p) => p.id === attackerId);
+    const targets =
+      attacker?.mages
+        .filter((m) => m.location.kind === 'action-space' && !m.isWounded)
+        .map((m) => m.id) ?? [];
+    if (targets.length === 0) {
+      return { kind: 'done', patch: { players: paid.players } };
+    }
+    return {
+      kind: 'pause',
+      patch: { players: paid.players },
+      pending: {
+        responderId: ctx.triggeringPlayerId,
+        prompt: { kind: 'choose-target-mage', eligibleMageIds: targets },
+        resume: { effectId: self, context: { step: 'apply' } },
+        source: ctx.source,
+      },
+    };
+  }
+
+  if (step === 'apply') {
+    if (ctx.resumeAnswer?.kind !== 'mage-chosen') {
+      throw new Error(`${self} apply expected mage-chosen`);
+    }
+    const wounded = woundMage(
+      ctx.state,
+      ctx.resumeAnswer.mageId,
+      ctx.triggeringPlayerId,
+    );
+    if (checkInfirmaryBonusApplies(ctx.state, wounded.triggerEvent)) {
+      return {
+        kind: 'pause',
+        patch: wounded.patch,
+        pending: bonusPromptFor(wounded.triggerEvent, ctx.triggeringPlayerId),
+      };
+    }
+    return { kind: 'done', patch: wounded.patch };
+  }
+
+  throw new Error(`${self} unexpected step ${String(step)}`);
+});
+
+/** Wrath of Heaven L2 "Recompense" — Reaction. When one of your Mages is
+ *  banished by an opponent, banish a Mage belonging to that opponent.
+ *  Cost: 1 Mana. No Infirmary bonus (banishing skips it). */
+registerEffect('base.spell.wrath-of-heaven.l2.react', (ctx): EffectResult => {
+  const step = ctx.resumeContext?.['step'];
+  const self = 'base.spell.wrath-of-heaven.l2.react';
+
+  if (!step) {
+    const paid = payAndExhaustSpell(
+      ctx.state,
+      ctx.triggeringPlayerId,
+      'base.spell.wrath-of-heaven',
+      1,
+    );
+    if (!paid) return { kind: 'done', patch: {} };
+    const rawEvent = ctx.resumeContext?.['triggerEvent'];
+    if (!rawEvent || typeof rawEvent !== 'object') {
+      return { kind: 'done', patch: { players: paid.players } };
+    }
+    const event = rawEvent as unknown as ReactionTriggerEvent;
+    if (!('byPlayerId' in event)) {
+      return { kind: 'done', patch: { players: paid.players } };
+    }
+    const attackerId = event.byPlayerId;
+    const attacker = paid.players.find((p) => p.id === attackerId);
+    const targets =
+      attacker?.mages
+        .filter((m) => m.location.kind === 'action-space' && !m.isWounded)
+        .map((m) => m.id) ?? [];
+    if (targets.length === 0) {
+      return { kind: 'done', patch: { players: paid.players } };
+    }
+    return {
+      kind: 'pause',
+      patch: { players: paid.players },
+      pending: {
+        responderId: ctx.triggeringPlayerId,
+        prompt: { kind: 'choose-target-mage', eligibleMageIds: targets },
+        resume: { effectId: self, context: { step: 'apply' } },
+        source: ctx.source,
+      },
+    };
+  }
+
+  if (step === 'apply') {
+    if (ctx.resumeAnswer?.kind !== 'mage-chosen') {
+      throw new Error(`${self} apply expected mage-chosen`);
+    }
+    const banished = banishMage(
+      ctx.state,
+      ctx.resumeAnswer.mageId,
+      ctx.triggeringPlayerId,
+    );
+    return { kind: 'done', patch: banished.patch };
+  }
+
+  throw new Error(`${self} unexpected step ${String(step)}`);
+});
+
+// ============================================================================
+// Songs of Springtime (Natural Magick, reaction)
+// ============================================================================
+
+/** Songs of Springtime L1 "Regeneration" — Reaction. When one of your Mages
+ *  is wounded or moved, refresh an exhausted Spell or Treasure. Cost: 0
+ *  Mana (still exhausts the spell). */
+registerEffect(
+  'base.spell.songs-of-springtime.l1.react',
+  (ctx): EffectResult => {
+    const step = ctx.resumeContext?.['step'];
+    const self = 'base.spell.songs-of-springtime.l1.react';
+
+    if (!step) {
+      const paid = payAndExhaustSpell(
+        ctx.state,
+        ctx.triggeringPlayerId,
+        'base.spell.songs-of-springtime',
+        0,
+      );
+      if (!paid) return { kind: 'done', patch: {} };
+      const reactor = paid.players.find(
+        (p) => p.id === ctx.triggeringPlayerId,
+      );
+      const exhaustedSpells =
+        reactor?.ownedSpells.filter((s) => s.exhausted) ?? [];
+      const exhaustedTreasures =
+        reactor?.vaultCards.filter((v) => v.exhausted) ?? [];
+      if (
+        exhaustedSpells.length + exhaustedTreasures.length === 0
+      ) {
+        return { kind: 'done', patch: { players: paid.players } };
+      }
+      const options: ChoiceOption[] = [
+        ...exhaustedSpells.map((s) => ({
+          id: `spell:${s.cardId}`,
+          label: `Refresh Spell — ${spellLabel(paid, s.cardId)}`,
+          payload: {},
+        })),
+        ...exhaustedTreasures.map((v) => ({
+          id: `treasure:${v.cardId}`,
+          label: `Refresh Treasure — ${v.cardId}`,
+          payload: {},
+        })),
+      ];
+      return {
+        kind: 'pause',
+        patch: { players: paid.players },
+        pending: {
+          responderId: ctx.triggeringPlayerId,
+          prompt: { kind: 'choose-from-options', options },
+          resume: { effectId: self, context: { step: 'apply' } },
+          source: ctx.source,
+        },
+      };
+    }
+
+    if (step === 'apply') {
+      if (ctx.resumeAnswer?.kind !== 'option-chosen') {
+        throw new Error(`${self} apply expected option-chosen`);
+      }
+      const choice = ctx.resumeAnswer.optionId;
+      if (choice.startsWith('spell:')) {
+        const cardId = choice.slice('spell:'.length);
+        return {
+          kind: 'done',
+          patch: refreshOwnedSpellPatch(
+            ctx.state,
+            ctx.triggeringPlayerId,
+            cardId,
+          ),
+        };
+      }
+      if (choice.startsWith('treasure:')) {
+        const cardId = choice.slice('treasure:'.length);
+        return {
+          kind: 'done',
+          patch: {
+            players: ctx.state.players.map((p) =>
+              p.id !== ctx.triggeringPlayerId
+                ? p
+                : {
+                    ...p,
+                    vaultCards: p.vaultCards.map((v) =>
+                      v.cardId !== cardId ? v : { ...v, exhausted: false },
+                    ),
+                  },
+            ),
+          },
+        };
+      }
+      throw new Error(`${self} apply: unknown option ${choice}`);
+    }
+
+    throw new Error(`${self} unexpected step ${String(step)}`);
   },
 );

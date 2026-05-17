@@ -3402,6 +3402,283 @@ describe('Reaction vault cards', () => {
 });
 
 // ============================================================================
+// Reaction spells — Wrath of Heaven L1/L2, Songs of Springtime L1
+// ============================================================================
+
+describe('Reaction spells', () => {
+  function setupReactionSpellTest(opts: {
+    reactionSpellId: string;
+    level: 1 | 2 | 3;
+    casterMana: number;
+  }): GameState {
+    let s = initGame(TWO_PLAYER_CONFIG);
+    s = forceLibrarySideA(s);
+    s = zeroPlayerResources(s, 'p1');
+    s = zeroPlayerResources(s, 'p2');
+    // Alice (p1) is the would-be attacker; Bob (p2) holds the reaction spell.
+    s = addOwnedSpell(s, 'p2', opts.reactionSpellId, {
+      intPlaced: true,
+      wisPlacedLevel2: opts.level >= 2,
+      wisPlacedLevel3: opts.level >= 3,
+    });
+    s = setMana(s, 'p2', opts.casterMana);
+    s = {
+      ...s,
+      firstPlayerIndex: 0,
+      phase: {
+        kind: 'errands',
+        round: 1,
+        activePlayerIndex: 0,
+        actionUsed: false,
+        fastActionUsed: false,
+      },
+    };
+    return s;
+  }
+
+  it('Wrath of Heaven L1 (Justice): triggered by shadow-bolt move, wounds attacker', () => {
+    // Alice owns Shadow Bolt; Bob owns Wrath of Heaven L1 + 1 mana.
+    let s = setupReactionSpellTest({
+      reactionSpellId: 'base.spell.wrath-of-heaven',
+      level: 1,
+      casterMana: 1,
+    });
+    s = addOwnedSpell(s, 'p1', 'base.spell.shadow-bolt');
+    s = setMana(s, 'p1', 1);
+    s = addMage(s, 'p1', {
+      id: 'alice-mage-1',
+      cardId: 'base.mage.planar-studies',
+      color: 'purple',
+    });
+    s = addMage(s, 'p1', {
+      id: 'alice-mage-2',
+      cardId: 'base.mage.planar-studies',
+      color: 'purple',
+    });
+    s = addMage(s, 'p2', {
+      id: 'bob-mage-1',
+      cardId: 'base.mage.sorcery',
+      color: 'red',
+    });
+    s = placeMageOnSpace(s, 'p1', 'alice-mage-1', 'base.room.library.a.slot-1');
+    s = placeMageOnSpace(s, 'p2', 'bob-mage-1', 'base.room.library.a.slot-2');
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.shadow-bolt',
+      level: 1,
+    });
+    // Alice picks Bob's mage.
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'mage-chosen', mageId: 'bob-mage-1' },
+    });
+    // Reaction window — Bob's options should include Justice.
+    const reactionPrompt = topPending(s);
+    expect(reactionPrompt.prompt.kind).toBe('reaction-window');
+    if (reactionPrompt.prompt.kind !== 'reaction-window') return;
+    const justice = reactionPrompt.prompt.reactionOptions.find(
+      (o) => o.effectId === 'base.spell.wrath-of-heaven.l1.react',
+    );
+    expect(justice).toBeDefined();
+    // Bob plays Justice.
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: reactionPrompt.id,
+      answer: {
+        kind: 'reaction-played',
+        effectId: 'base.spell.wrath-of-heaven.l1.react',
+        reactionContext: {},
+      },
+    });
+    // Mage-pick prompt for Bob — should list Alice's placed mages.
+    const targetPrompt = topPending(s);
+    expect(targetPrompt.prompt.kind).toBe('choose-target-mage');
+    if (targetPrompt.prompt.kind !== 'choose-target-mage') return;
+    expect(targetPrompt.prompt.eligibleMageIds).toContain('alice-mage-1');
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: targetPrompt.id,
+      answer: { kind: 'mage-chosen', mageId: 'alice-mage-1' },
+    });
+    // Alice's mage was wounded.
+    expect(findMageById(s, 'alice-mage-1').isWounded).toBe(true);
+    // 1 mana was paid, spell exhausted.
+    const bob = s.players.find((p) => p.id === 'p2')!;
+    expect(bob.resources.mana).toBe(0);
+    expect(
+      bob.ownedSpells.find((sp) => sp.cardId === 'base.spell.wrath-of-heaven')
+        ?.exhausted,
+    ).toBe(true);
+  });
+
+  it('Songs of Springtime L1 (Regeneration): refresh an exhausted treasure after own mage is wounded', () => {
+    let s = setupReactionSpellTest({
+      reactionSpellId: 'base.spell.songs-of-springtime',
+      level: 1,
+      casterMana: 0,
+    });
+    // Alice has Burn so she can wound Bob's mage; Bob holds Songs L1 +
+    // exhausted Mana Elixir treasure.
+    s = addOwnedSpell(s, 'p1', 'base.spell.burn');
+    s = setMana(s, 'p1', 1);
+    s = addMage(s, 'p2', {
+      id: 'bob-mage-1',
+      cardId: 'base.mage.sorcery',
+      color: 'red',
+    });
+    s = placeMageOnSpace(s, 'p2', 'bob-mage-1', 'base.room.library.a.slot-1');
+    s = mapPlayer(s, 'p2', (p) => ({
+      ...p,
+      vaultCards: [{ cardId: 'base.vault.mana-elixir', exhausted: true }],
+    }));
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.burn',
+      level: 1,
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'mage-chosen', mageId: 'bob-mage-1' },
+    });
+    const reactionPrompt = topPending(s);
+    expect(reactionPrompt.prompt.kind).toBe('reaction-window');
+    if (reactionPrompt.prompt.kind !== 'reaction-window') return;
+    const songs = reactionPrompt.prompt.reactionOptions.find(
+      (o) => o.effectId === 'base.spell.songs-of-springtime.l1.react',
+    );
+    expect(songs).toBeDefined();
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: reactionPrompt.id,
+      answer: {
+        kind: 'reaction-played',
+        effectId: 'base.spell.songs-of-springtime.l1.react',
+        reactionContext: {},
+      },
+    });
+    // After the reaction window closes, the Infirmary-bonus prompt fires
+    // (Bob's mage was wounded by an opponent). Resolve it first; the
+    // Regeneration refresh prompt is underneath it on the stack.
+    const bonusPrompt = topPending(s);
+    expect(bonusPrompt.prompt.kind).toBe('choose-from-options');
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: bonusPrompt.id,
+      answer: { kind: 'option-chosen', optionId: 'gold', payload: {} },
+    });
+    // Refresh prompt with one treasure option.
+    const refreshPrompt = topPending(s);
+    expect(refreshPrompt.prompt.kind).toBe('choose-from-options');
+    if (refreshPrompt.prompt.kind !== 'choose-from-options') return;
+    const ids = refreshPrompt.prompt.options.map((o) => o.id);
+    expect(ids).toContain('treasure:base.vault.mana-elixir');
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: refreshPrompt.id,
+      answer: {
+        kind: 'option-chosen',
+        optionId: 'treasure:base.vault.mana-elixir',
+        payload: {},
+      },
+    });
+    const bob = s.players.find((p) => p.id === 'p2')!;
+    expect(
+      bob.vaultCards.find((v) => v.cardId === 'base.vault.mana-elixir')
+        ?.exhausted,
+    ).toBe(false);
+    expect(
+      bob.ownedSpells.find((sp) => sp.cardId === 'base.spell.songs-of-springtime')
+        ?.exhausted,
+    ).toBe(true);
+  });
+
+  it('Teleport (Everyday Paralocation L3): moves a mage from Infirmary then stops', () => {
+    let s = initGame(TWO_PLAYER_CONFIG);
+    s = forceLibrarySideA(s);
+    s = zeroPlayerResources(s, 'p1');
+    s = addOwnedSpell(s, 'p1', 'base.spell.everyday-paralocation', {
+      intPlaced: true,
+      wisPlacedLevel2: true,
+      wisPlacedLevel3: true,
+    });
+    s = setMana(s, 'p1', 3);
+    s = mapPlayer(s, 'p1', (p) => ({
+      ...p,
+      mages: [
+        ...p.mages,
+        {
+          id: 'alice-mage-1',
+          cardId: 'base.mage.divinity',
+          color: 'blue',
+          location: { kind: 'infirmary' as const },
+          isShadowing: false,
+          isWounded: true,
+        },
+      ],
+    }));
+    s = {
+      ...s,
+      firstPlayerIndex: 0,
+      phase: {
+        kind: 'errands',
+        round: 1,
+        activePlayerIndex: 0,
+        actionUsed: false,
+        fastActionUsed: false,
+      },
+    };
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.everyday-paralocation',
+      level: 3,
+    });
+    // Step 1: pick the Infirmary mage from the menu.
+    const mageMenu = topPending(s);
+    expect(mageMenu.prompt.kind).toBe('choose-from-options');
+    if (mageMenu.prompt.kind !== 'choose-from-options') return;
+    expect(mageMenu.prompt.options.map((o) => o.id)).toContain('alice-mage-1');
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: mageMenu.id,
+      answer: { kind: 'option-chosen', optionId: 'alice-mage-1', payload: {} },
+    });
+    // Step 2: pick a slot.
+    const slotPrompt = topPending(s);
+    expect(slotPrompt.prompt.kind).toBe('choose-target-action-space');
+    if (slotPrompt.prompt.kind !== 'choose-target-action-space') return;
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: slotPrompt.id,
+      answer: {
+        kind: 'space-chosen',
+        spaceId: 'base.room.library.a.slot-1',
+      },
+    });
+    // Mage is healed and placed; second mage-pick prompt offers 'stop'.
+    expect(findMageById(s, 'alice-mage-1').isWounded).toBe(false);
+    expect(findMageById(s, 'alice-mage-1').location).toEqual({
+      kind: 'action-space',
+      spaceId: 'base.room.library.a.slot-1',
+    });
+    const stopMenu = topPending(s);
+    if (stopMenu.prompt.kind === 'choose-from-options') {
+      expect(stopMenu.prompt.options.map((o) => o.id)).toContain('stop');
+      s = applyAction(s, {
+        type: 'RESOLVE_PENDING',
+        resolutionId: stopMenu.id,
+        answer: { kind: 'option-chosen', optionId: 'stop', payload: {} },
+      });
+    }
+    expect(s.pendingResolutionStack).toHaveLength(0);
+  });
+});
+
+// ============================================================================
 // Leader (unique) spells — Trance, Living Image, Flash of Light, Bless,
 // Strength of Earth, Paralocation.
 // ============================================================================
