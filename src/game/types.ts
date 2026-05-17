@@ -188,13 +188,6 @@ export interface Player {
    */
   influenceArrivalSeq: number;
   /**
-   * Room ids this player has placed a mage in during the current round.
-   * Reset to `[]` at the start of round-setup. Read by PLACE_WORKER to
-   * enforce per-room per-round placement limits (e.g., Council Chamber's
-   * "single mage per round" rule).
-   */
-  roundPlacements: RoomId[];
-  /**
    * Buff flag: the next Spell this player casts during this turn costs 0
    * Mana. Set by vault cards like Mana Elixir. Consumed by CAST_SPELL on
    * the very next spell, and cleared unconditionally at turn end.

@@ -13,6 +13,7 @@ import {
   buildReactionQueue,
   buildSnakeDraftOrder,
   canArsMagnaTakeSpace,
+  countPlayerMagesInRoom,
   describeSpaceSource,
   lookupCandidate,
   MAGE_CARD_BY_COLOR,
@@ -757,12 +758,10 @@ function handlePlaceWorker(state: GameState, action: PlaceWorkerAction): GameSta
 
   const roomLimit = room.maxMagesPerPlayerPerRound ?? Infinity;
   if (Number.isFinite(roomLimit)) {
-    const placedHere = player.roundPlacements.filter(
-      (rid) => rid === room.id,
-    ).length;
-    if (placedHere >= roomLimit) {
+    const occupyingHere = countPlayerMagesInRoom(state, action.playerId, room.id);
+    if (occupyingHere >= roomLimit) {
       throw new Error(
-        `PLACE_WORKER: already placed ${placedHere} mage${placedHere === 1 ? '' : 's'} in ${room.name} this round (limit ${roomLimit})`,
+        `PLACE_WORKER: ${room.name} is at its per-round cap (${occupyingHere}/${roomLimit}) for ${action.playerId}`,
       );
     }
   }
@@ -793,7 +792,6 @@ function handlePlaceWorker(state: GameState, action: PlaceWorkerAction): GameSta
           : {
               ...p,
               resources: { ...p.resources, mana: p.resources.mana - 1 },
-              roundPlacements: [...p.roundPlacements, room.id],
             },
       ),
     };
@@ -870,7 +868,6 @@ function handlePlaceWorker(state: GameState, action: PlaceWorkerAction): GameSta
               isShadowing: false,
             },
       ),
-      roundPlacements: [...p.roundPlacements, room.id],
     };
   });
 
@@ -2058,7 +2055,6 @@ function refreshPlayerCardsAndMerit(state: GameState): GameState {
       meritBadgesSpent: 0,
     },
     bellTowerCards: [],
-    roundPlacements: [],
   }));
   return { ...state, players };
 }

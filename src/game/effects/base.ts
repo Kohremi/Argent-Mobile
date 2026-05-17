@@ -3398,35 +3398,15 @@ registerEffect(
         );
       }
       const spaceId = ctx.resumeAnswer.spaceId;
-      // Locate the target room so we can credit roundPlacements (per-room
-      // cap is enforced for subsequent placements via that field).
-      const targetRoom = ctx.state.rooms.find((r) =>
-        r.actionSpaces.some((s) => s.id === spaceId),
-      );
-      if (!targetRoom) {
-        throw new Error(`mysticism-place-after-cast: room for ${spaceId} not found`);
-      }
       const placePatch = placeOfficeMageOnSpace(
         ctx.state,
         ctx.triggeringPlayerId,
         placerMageId,
         spaceId,
       );
-      const updatedPlayers = (placePatch.players ?? ctx.state.players).map((p) =>
-        p.id !== ctx.triggeringPlayerId
-          ? p
-          : {
-              ...p,
-              roundPlacements: [...p.roundPlacements, targetRoom.id],
-            },
-      );
-      const finalPatch: GameStatePatch = {
-        ...placePatch,
-        players: updatedPlayers,
-      };
       return patchWithMaybeInstantReward(
         ctx.state,
-        finalPatch,
+        placePatch,
         spaceId,
         ctx.triggeringPlayerId,
         'base',
@@ -3448,17 +3428,10 @@ function listEligiblePlacementSlots(
   state: GameState,
   playerId: string,
 ): string[] {
-  const player = state.players.find((p) => p.id === playerId);
   const openSlots: string[] = [];
   for (const r of state.rooms) {
     if (r.cannotBePlacedInDirectly) continue;
-    const roomLimit = r.maxMagesPerPlayerPerRound ?? Infinity;
-    if (Number.isFinite(roomLimit) && player) {
-      const placedHere = player.roundPlacements.filter(
-        (rid) => rid === r.id,
-      ).length;
-      if (placedHere >= roomLimit) continue;
-    }
+    if (isRoomAtPlayerCap(state, playerId, r.id)) continue;
     for (const s of r.actionSpaces) {
       if (!s.occupant) openSlots.push(s.id);
     }
@@ -5996,29 +5969,15 @@ registerEffect('base.spell.everyday-paralocation.l1', (ctx): EffectResult => {
       throw new Error('celerity apply: missing placerMageId');
     }
     const spaceId = ctx.resumeAnswer.spaceId;
-    const targetRoom = ctx.state.rooms.find((r) =>
-      r.actionSpaces.some((s) => s.id === spaceId),
-    );
-    if (!targetRoom) {
-      throw new Error(`celerity: room for ${spaceId} not found`);
-    }
     const placePatch = placeOfficeMageOnSpace(
       ctx.state,
       ctx.triggeringPlayerId,
       placerMageId,
       spaceId,
     );
-    const updatedPlayers = (placePatch.players ?? ctx.state.players).map((p) =>
-      p.id !== ctx.triggeringPlayerId
-        ? p
-        : {
-            ...p,
-            roundPlacements: [...p.roundPlacements, targetRoom.id],
-          },
-    );
     return {
       kind: 'done',
-      patch: { ...placePatch, players: updatedPlayers },
+      patch: placePatch,
     };
   }
   throw new Error(`celerity unexpected step ${String(step)}`);
@@ -6120,22 +6079,8 @@ registerEffect('base.spell.everyday-paralocation.l3', (ctx): EffectResult => {
 
     let movePatch: GameStatePatch;
     if (sourceMage.location.kind === 'infirmary') {
-      // Heal-place: credit roundPlacements for the cap (this is the caster
-      // placing a mage they own, so the cap applies to them).
-      const healPatch = healMageToSpace(ctx.state, sourceMageId, destSpaceId);
-      const updatedPlayers = (healPatch.players ?? ctx.state.players).map(
-        (p) =>
-          p.id !== ctx.triggeringPlayerId
-            ? p
-            : {
-                ...p,
-                roundPlacements: [...p.roundPlacements, targetRoom.id],
-              },
-      );
-      movePatch = { ...healPatch, players: updatedPlayers };
+      movePatch = healMageToSpace(ctx.state, sourceMageId, destSpaceId);
     } else {
-      // Slot-to-slot move via `moveMageToSpace`; per-room cap NOT credited
-      // since "move" is not "place" per rulebook conventions.
       const moved = moveMageToSpace(
         ctx.state,
         sourceMageId,
@@ -6322,26 +6267,18 @@ function placeAnyOfficeMagePrompt(
   };
 }
 
-/** Apply a "place office mage on slot" with roundPlacements credit. */
+/**
+ * Apply a "place office mage on slot". Cap enforcement is occupancy-based
+ * (see `isRoomAtPlayerCap`), so no extra bookkeeping is needed beyond the
+ * underlying placement patch.
+ */
 function placeOfficeMageOnSpaceCrediting(
   state: GameState,
   playerId: string,
   mageId: string,
   spaceId: string,
 ): GameStatePatch {
-  const targetRoom = state.rooms.find((r) =>
-    r.actionSpaces.some((s) => s.id === spaceId),
-  );
-  if (!targetRoom) {
-    throw new Error(`placeOfficeMageOnSpaceCrediting: room for ${spaceId} not found`);
-  }
-  const placePatch = placeOfficeMageOnSpace(state, playerId, mageId, spaceId);
-  const updatedPlayers = (placePatch.players ?? state.players).map((p) =>
-    p.id !== playerId
-      ? p
-      : { ...p, roundPlacements: [...p.roundPlacements, targetRoom.id] },
-  );
-  return { ...placePatch, players: updatedPlayers };
+  return placeOfficeMageOnSpace(state, playerId, mageId, spaceId);
 }
 
 /**
@@ -9041,18 +8978,11 @@ export function listPlaceWithoutPowersSlots(
   state: GameState,
   playerId: string,
 ): string[] {
-  const player = state.players.find((p) => p.id === playerId);
   const slots: string[] = [];
   for (const r of state.rooms) {
     if (r.cannotBePlacedInDirectly) continue;
     if (state.roomLocks.some((l) => l.roomId === r.id)) continue;
-    const roomLimit = r.maxMagesPerPlayerPerRound ?? Infinity;
-    if (Number.isFinite(roomLimit) && player) {
-      const placedHere = player.roundPlacements.filter(
-        (rid) => rid === r.id,
-      ).length;
-      if (placedHere >= roomLimit) continue;
-    }
+    if (isRoomAtPlayerCap(state, playerId, r.id)) continue;
     for (const s of r.actionSpaces) {
       if (s.occupant) continue;
       if (s.slotType !== 'regular' && s.slotType !== 'merit') continue;
@@ -9139,30 +9069,15 @@ registerEffect(
         throw new Error('place-mage-without-powers apply: missing placerMageId');
       }
       const spaceId = ctx.resumeAnswer.spaceId;
-      const targetRoom = ctx.state.rooms.find((r) =>
-        r.actionSpaces.some((s) => s.id === spaceId),
-      );
-      if (!targetRoom) {
-        throw new Error(`place-mage-without-powers apply: room for ${spaceId} not found`);
-      }
       const placePatch = placeOfficeMageOnSpace(
         ctx.state,
         ctx.triggeringPlayerId,
         placerMageId,
         spaceId,
       );
-      const updatedPlayers = (placePatch.players ?? ctx.state.players).map(
-        (p) =>
-          p.id !== ctx.triggeringPlayerId
-            ? p
-            : {
-                ...p,
-                roundPlacements: [...p.roundPlacements, targetRoom.id],
-              },
-      );
       return patchWithMaybeInstantReward(
         ctx.state,
-        { ...placePatch, players: updatedPlayers },
+        placePatch,
         spaceId,
         ctx.triggeringPlayerId,
         'base',
@@ -9694,21 +9609,11 @@ registerEffect(
         placerMageId,
         spaceId,
       );
-      const updatedPlayers = (placePatch.players ?? ctx.state.players).map(
-        (p) =>
-          p.id !== ctx.triggeringPlayerId
-            ? p
-            : { ...p, roundPlacements: [...p.roundPlacements, roomId] },
-      );
-      const afterPlace: GameState = {
-        ...ctx.state,
-        ...placePatch,
-        players: updatedPlayers,
-      };
+      const afterPlace: GameState = { ...ctx.state, ...placePatch };
       const lockPatch = applyRoomLockPatch(afterPlace, roomId);
       return {
         kind: 'done',
-        patch: { ...placePatch, players: updatedPlayers, ...lockPatch },
+        patch: { ...placePatch, ...lockPatch },
       };
     }
     throw new Error(`${self} unexpected step ${String(step)}`);
@@ -9911,19 +9816,10 @@ registerEffect('base.spell.moste-holie-litanies.l3', (ctx): EffectResult => {
       placerMageId,
       spaceId,
     );
-    const updatedPlayers = (placePatch.players ?? ctx.state.players).map((p) =>
-      p.id !== ctx.triggeringPlayerId
-        ? p
-        : { ...p, roundPlacements: [...p.roundPlacements, roomId] },
-    );
-    const afterPlace: GameState = {
-      ...ctx.state,
-      ...placePatch,
-      players: updatedPlayers,
-    };
+    const afterPlace: GameState = { ...ctx.state, ...placePatch };
     // After each placement, re-enter the mage prompt; if no more mages or
     // room is full, apply lock and finish.
-    const stillOfficeMage = updatedPlayers
+    const stillOfficeMage = afterPlace.players
       .find((p) => p.id === ctx.triggeringPlayerId)
       ?.mages.some((m) => m.location.kind === 'office' && !m.isWounded);
     const stillHasSlot = afterPlace.rooms
@@ -9934,7 +9830,6 @@ registerEffect('base.spell.moste-holie-litanies.l3', (ctx): EffectResult => {
         kind: 'done',
         patch: {
           ...placePatch,
-          players: updatedPlayers,
           ...applyRoomLockPatch(afterPlace, roomId),
         },
       };
@@ -9950,14 +9845,13 @@ registerEffect('base.spell.moste-holie-litanies.l3', (ctx): EffectResult => {
         kind: 'done',
         patch: {
           ...placePatch,
-          players: updatedPlayers,
           ...applyRoomLockPatch(afterPlace, roomId),
         },
       };
     }
     return {
       kind: 'pause',
-      patch: { ...placePatch, players: updatedPlayers },
+      patch: placePatch,
       pending: next.pending,
     };
   }

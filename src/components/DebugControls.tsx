@@ -9,6 +9,7 @@ import { useGameStore } from '../store/gameStore';
 import { baseGamePack } from '../content/packs/base';
 import { listPacks } from '../content/registry';
 import { computeFinalScoring } from '../game/scoring';
+import { countPlayerMagesInRoom } from '../game/effects/helpers';
 import { BellIcon, LockIcon, MageIcon, ResourceIcon, type ResourceKind } from './icons';
 import type {
   Candidate,
@@ -334,10 +335,8 @@ function placementBlockedReason(
   if (!owner) return 'mage owner not found';
   const roomLimit = room.maxMagesPerPlayerPerRound ?? Infinity;
   if (Number.isFinite(roomLimit)) {
-    const placedHere = owner.roundPlacements.filter(
-      (rid) => rid === room.id,
-    ).length;
-    if (placedHere >= roomLimit) return `${room.name}: already at room limit this round`;
+    const occupyingHere = countPlayerMagesInRoom(state, owner.id, room.id);
+    if (occupyingHere >= roomLimit) return `${room.name}: already at room limit this round`;
   }
   // Action budget. Purple (Planar Studies) Mages prefer the Fast Action
   // but can fall back to the Regular Action when the Fast Action is

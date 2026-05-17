@@ -3860,12 +3860,18 @@ describe('Leader spells (unique single-level)', () => {
       color: 'grey',
     });
     s = addOwnedSpell(s, 'p1', 'base.spell.trance');
-    // Pretend Alice already placed in Council Chamber this round (cap=1).
-    const councilRoom = s.rooms.find((r) => r.name === 'Council Chamber')!;
-    s = mapPlayer(s, 'p1', (p) => ({
-      ...p,
-      roundPlacements: [...p.roundPlacements, councilRoom.id],
-    }));
+    // Have Alice already occupy a Council Chamber slot (cap=1 → at-cap).
+    s = addMage(s, 'p1', {
+      id: 'alice-grey-incumbent',
+      cardId: 'base.mage.mysticism',
+      color: 'grey',
+    });
+    s = placeMageOnSpace(
+      s,
+      'p1',
+      'alice-grey-incumbent',
+      'base.room.council-chamber.a.slot-2',
+    );
     s = applyAction(s, {
       type: 'CAST_SPELL',
       playerId: 'p1',
@@ -3880,7 +3886,8 @@ describe('Leader spells (unique single-level)', () => {
     const slotPrompt = topPending(s);
     expect(slotPrompt.prompt.kind).toBe('choose-target-action-space');
     if (slotPrompt.prompt.kind === 'choose-target-action-space') {
-      const councilSlotIds = councilRoom.actionSpaces.map((sp) => sp.id);
+      const council = s.rooms.find((r) => r.name === 'Council Chamber')!;
+      const councilSlotIds = council.actionSpaces.map((sp) => sp.id);
       for (const cid of councilSlotIds) {
         expect(slotPrompt.prompt.eligibleSpaceIds).not.toContain(cid);
       }
@@ -3927,10 +3934,12 @@ describe('Leader spells (unique single-level)', () => {
     });
     const rewardPrompt = topPending(s);
     expect(rewardPrompt.resume.effectId).toBe('base.system.resolution-choice');
-    // The placement was credited to roundPlacements so per-room caps work
-    // on subsequent placements this round.
-    const alice = s.players.find((p) => p.id === 'p1');
-    expect(alice?.roundPlacements).toContain(guildsRoom.id);
+    // The mage now occupies the Guilds slot — per-room caps (which read
+    // live occupancy) will correctly enforce against further placements.
+    const guildsAfter = s.rooms.find((r) => r.id === guildsRoom.id)!;
+    expect(
+      guildsAfter.actionSpaces.some((sp) => sp.occupant?.mageId === 'alice-grey'),
+    ).toBe(true);
   });
 
   it('Living Image: adds an off-white mage and decrements the supply', () => {
@@ -4386,12 +4395,18 @@ describe('Leader spells (unique single-level)', () => {
     });
     s = placeMageOnSpace(s, 'p2', 'bob-council', 'base.room.council-chamber.a.slot-1');
     s = placeMageOnSpace(s, 'p2', 'bob-library', 'base.room.library.a.slot-1');
-    // Alice already used her one Council Chamber placement this round.
-    const councilRoom = s.rooms.find((r) => r.name === 'Council Chamber')!;
-    s = mapPlayer(s, 'p1', (p) => ({
-      ...p,
-      roundPlacements: [...p.roundPlacements, councilRoom.id],
-    }));
+    // Alice already occupies a Council Chamber slot (cap=1 → at-cap).
+    s = addMage(s, 'p1', {
+      id: 'alice-council-incumbent',
+      cardId: 'base.mage.planar-studies',
+      color: 'purple',
+    });
+    s = placeMageOnSpace(
+      s,
+      'p1',
+      'alice-council-incumbent',
+      'base.room.council-chamber.a.slot-3',
+    );
     s = setMana(s, 'p1', 1);
     s = addOwnedSpell(s, 'p1', 'base.spell.paralocation');
     s = applyAction(s, {
@@ -4409,7 +4424,7 @@ describe('Leader spells (unique single-level)', () => {
     }
   });
 
-  it('Paralocation: shadow placement into an uncapped room still credits roundPlacements', () => {
+  it('Paralocation: shadow placement occupies the slot (cap reflected via live occupancy)', () => {
     let s = setupLeaderTest();
     s = forceRoomSide(s, 'Council Chamber', 'A');
     s = addMage(s, 'p1', {
@@ -4447,11 +4462,14 @@ describe('Leader spells (unique single-level)', () => {
       resolutionId: topPending(s).id,
       answer: { kind: 'reaction-passed' },
     });
-    // Alice's shadow placement credits Council Chamber toward her cap;
-    // any further Paralocation/Shadow-Potion/PLACE_WORKER on that room
-    // would now be rejected.
-    const alice = s.players.find((p) => p.id === 'p1')!;
-    expect(alice.roundPlacements).toContain('base.room.council-chamber.a');
+    // Alice's mage now occupies the shadow slot in Council Chamber. The
+    // cap is computed from live occupancy, so further placements there
+    // would be rejected while this mage remains.
+    const slot = s.rooms
+      .flatMap((r) => r.actionSpaces)
+      .find((sp) => sp.id === 'base.room.council-chamber.a.slot-1');
+    expect(slot?.shadowOccupant?.mageId).toBe('alice-mage-1');
+    expect(slot?.shadowOccupant?.ownerId).toBe('p1');
   });
 
   it('Paralocation: shadowing into an instant room surfaces the slot reward prompt after the shadow-window closes', () => {
@@ -5475,12 +5493,18 @@ describe('PLAY_VAULT_CARD', () => {
     });
     s = placeMageOnSpace(s, 'p2', 'bob-council', 'base.room.council-chamber.a.slot-1');
     s = placeMageOnSpace(s, 'p2', 'bob-library', 'base.room.library.a.slot-1');
-    // Alice already placed in Council Chamber this round.
-    const councilRoom = s.rooms.find((r) => r.name === 'Council Chamber')!;
-    s = mapPlayer(s, 'p1', (p) => ({
-      ...p,
-      roundPlacements: [...p.roundPlacements, councilRoom.id],
-    }));
+    // Alice already occupies a Council Chamber slot (cap=1 → at-cap).
+    s = addMage(s, 'p1', {
+      id: 'alice-council-incumbent',
+      cardId: 'base.mage.divinity',
+      color: 'blue',
+    });
+    s = placeMageOnSpace(
+      s,
+      'p1',
+      'alice-council-incumbent',
+      'base.room.council-chamber.a.slot-3',
+    );
     s = applyAction(s, {
       type: 'PLAY_VAULT_CARD',
       playerId: 'p1',
@@ -5494,7 +5518,8 @@ describe('PLAY_VAULT_CARD', () => {
     const slotPrompt = topPending(s);
     expect(slotPrompt.prompt.kind).toBe('choose-target-action-space');
     if (slotPrompt.prompt.kind === 'choose-target-action-space') {
-      const councilSlotIds = councilRoom.actionSpaces.map((sp) => sp.id);
+      const council = s.rooms.find((r) => r.name === 'Council Chamber')!;
+      const councilSlotIds = council.actionSpaces.map((sp) => sp.id);
       for (const sid of councilSlotIds) {
         expect(slotPrompt.prompt.eligibleSpaceIds).not.toContain(sid);
       }
@@ -6221,8 +6246,30 @@ describe('Ars Magna (Sorcery Mage power)', () => {
       mageId: 'alice-red',
       actionSpaceId: 'base.room.council-chamber.a.slot-2',
     });
-    const alice = s.players.find((p) => p.id === 'p1');
-    expect(alice?.roundPlacements).toContain('base.room.council-chamber.a');
+    // Ars Magna wounds Bob's mage and opens a reaction window before Alice's
+    // mage takes the slot. Pass Bob's reaction, skip the Infirmary bonus.
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'reaction-passed' },
+    });
+    if (
+      s.pendingResolutionStack.length > 0 &&
+      topPending(s).prompt.kind === 'choose-from-options'
+    ) {
+      s = applyAction(s, {
+        type: 'RESOLVE_PENDING',
+        resolutionId: topPending(s).id,
+        answer: { kind: 'option-chosen', optionId: 'gold', payload: {} },
+      });
+    }
+    // Alice's mage now occupies the Council slot — cap is at 1/1.
+    const council = s.rooms.find((r) => r.name === 'Council Chamber')!;
+    expect(
+      council.actionSpaces.some(
+        (sp) => sp.occupant?.mageId === 'alice-red',
+      ),
+    ).toBe(true);
   });
 
   it('Ars Magna placement into an instant room surfaces the slot reward prompt', () => {
@@ -7559,12 +7606,104 @@ describe('Council Chamber A', () => {
         mageId: 'alice-mage-2',
         actionSpaceId: 'base.room.council-chamber.a.slot-3',
       }),
-    ).toThrow(/already placed.*Council Chamber/);
+    ).toThrow(/per-round cap/);
   });
 });
 
-describe('Round-setup clears roundPlacements', () => {
-  it('lets a player place again in a once-per-round room next round', () => {
+describe('Council Chamber cap is occupancy-based', () => {
+  it('after your mage is wounded out of Council Chamber, you may place there again the same round', () => {
+    // Setup: Council Chamber A in play; Alice has a mage placed there; Bob
+    // has Burn ready to wound it. After the wound + Infirmary chain, Alice
+    // must be able to place a different mage into Council Chamber.
+    let s = initGame(TWO_PLAYER_CONFIG);
+    s = forceRoomSide(s, 'Council Chamber', 'A');
+    s = forceLibrarySideA(s);
+    s = zeroPlayerResources(s, 'p1');
+    s = zeroPlayerResources(s, 'p2');
+    s = addMage(s, 'p1', {
+      id: 'alice-incumbent',
+      cardId: 'base.mage.sorcery',
+      color: 'red',
+    });
+    s = addMage(s, 'p1', {
+      id: 'alice-replacement',
+      cardId: 'base.mage.sorcery',
+      color: 'red',
+    });
+    s = placeMageOnSpace(
+      s,
+      'p1',
+      'alice-incumbent',
+      'base.room.council-chamber.a.slot-2',
+    );
+    // Bob wounds Alice's incumbent via Burn.
+    s = addOwnedSpell(s, 'p2', 'base.spell.burn');
+    s = setMana(s, 'p2', 1);
+    s = {
+      ...s,
+      firstPlayerIndex: 1,
+      phase: {
+        kind: 'errands',
+        round: 1,
+        activePlayerIndex: 1,
+        actionUsed: false,
+        fastActionUsed: false,
+      },
+    };
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p2',
+      spellCardId: 'base.spell.burn',
+      level: 1,
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'mage-chosen', mageId: 'alice-incumbent' },
+    });
+    // Pass Alice's defensive reaction (none equipped, but the window opens).
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'reaction-passed' },
+    });
+    // Alice picks the Infirmary bonus (any will do).
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'option-chosen', optionId: 'gold', payload: {} },
+    });
+    // Alice's incumbent is now in the Infirmary; the council slot is empty.
+    expect(findMageById(s, 'alice-incumbent').isWounded).toBe(true);
+    const councilA = () =>
+      s.rooms.find((r) => r.id === 'base.room.council-chamber.a')!;
+    expect(
+      councilA().actionSpaces.every((sp) => sp.occupant === null),
+    ).toBe(true);
+    // Bob's turn ends; cycle back to Alice and have her place her other mage
+    // in Council Chamber — this should succeed (cap is occupancy-based).
+    while (s.phase.kind === 'errands') {
+      const activeId = s.players[s.phase.activePlayerIndex]!.id;
+      if (activeId === 'p1') break;
+      s = applyAction(s, { type: 'PASS_TURN', playerId: activeId });
+    }
+    if (s.phase.kind !== 'errands') throw new Error('expected errands');
+    expect(s.players[s.phase.activePlayerIndex]?.id).toBe('p1');
+    s = applyAction(s, {
+      type: 'PLACE_WORKER',
+      playerId: 'p1',
+      mageId: 'alice-replacement',
+      actionSpaceId: 'base.room.council-chamber.a.slot-3',
+    });
+    expect(findMageById(s, 'alice-replacement').location).toEqual({
+      kind: 'action-space',
+      spaceId: 'base.room.council-chamber.a.slot-3',
+    });
+  });
+});
+
+describe('Council Chamber cap resets between rounds', () => {
+  it('lets a player place again in Council Chamber next round (cap is occupancy-based)', () => {
     let s = initGame(TWO_PLAYER_CONFIG);
     s = forceRoomSide(s, 'Council Chamber', 'A');
     s = addMage(s, 'p1', {
@@ -7579,7 +7718,12 @@ describe('Round-setup clears roundPlacements', () => {
       mageId: 'alice-mage-1',
       actionSpaceId: 'base.room.council-chamber.a.slot-2',
     });
-    expect(s.players[0]?.roundPlacements).toContain('base.room.council-chamber.a');
+    // Alice currently occupies Council Chamber → cap is at 1/1.
+    const councilA = () =>
+      s.rooms.find((r) => r.id === 'base.room.council-chamber.a')!;
+    expect(
+      councilA().actionSpaces.some((sp) => sp.occupant?.ownerId === 'p1'),
+    ).toBe(true);
 
     // Drain bell tower; drive through resolution → mid-game → round 2 setup.
     s = { ...s, bellTower: { ...s.bellTower, available: [] } };
@@ -7604,7 +7748,10 @@ describe('Round-setup clears roundPlacements', () => {
     s = applyAction(s, { type: 'ADVANCE_PHASE' }); // round-setup → errands round 2
 
     expect(s.phase.kind).toBe('errands');
-    expect(s.players[0]?.roundPlacements).toEqual([]);
+    // After Resolution mages return to office; cap is at 0 again.
+    expect(
+      councilA().actionSpaces.every((sp) => sp.occupant === null),
+    ).toBe(true);
   });
 });
 
@@ -8544,8 +8691,7 @@ describe('Spell wiring — Wave 5a (place / move)', () => {
       .flatMap((r) => r.actionSpaces)
       .find((sp) => sp.id === 'base.room.library.a.slot-1');
     expect(slot?.occupant?.mageId).toBe('alice-placer');
-    const alice = s.players.find((p) => p.id === 'p1')!;
-    expect(alice.roundPlacements).toContain('base.room.library.a');
+    expect(slot?.occupant?.ownerId).toBe('p1');
     expect(s.pendingResolutionStack).toHaveLength(0);
   });
 
@@ -8563,11 +8709,18 @@ describe('Spell wiring — Wave 5a (place / move)', () => {
       cardId: 'base.mage.divinity',
       color: 'blue',
     });
-    const councilRoom = s.rooms.find((r) => r.name === 'Council Chamber')!;
-    s = mapPlayer(s, 'p1', (p) => ({
-      ...p,
-      roundPlacements: [...p.roundPlacements, councilRoom.id],
-    }));
+    // Alice already occupies Council Chamber (cap=1 → at-cap).
+    s = addMage(s, 'p1', {
+      id: 'alice-council-incumbent',
+      cardId: 'base.mage.divinity',
+      color: 'blue',
+    });
+    s = placeMageOnSpace(
+      s,
+      'p1',
+      'alice-council-incumbent',
+      'base.room.council-chamber.a.slot-3',
+    );
     s = {
       ...s,
       firstPlayerIndex: 0,
@@ -8592,7 +8745,8 @@ describe('Spell wiring — Wave 5a (place / move)', () => {
     });
     const slotPrompt = topPending(s);
     if (slotPrompt.prompt.kind === 'choose-target-action-space') {
-      const councilIds = councilRoom.actionSpaces.map((sp) => sp.id);
+      const council = s.rooms.find((r) => r.name === 'Council Chamber')!;
+      const councilIds = council.actionSpaces.map((sp) => sp.id);
       for (const cid of councilIds) {
         expect(slotPrompt.prompt.eligibleSpaceIds).not.toContain(cid);
       }
