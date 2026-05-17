@@ -9197,6 +9197,52 @@ describe('Spell wiring — Wave 8 (area effects: Tsunami, Nox)', () => {
     });
     expect(s.pendingResolutionStack).toHaveLength(0);
   });
+
+  it('Planar Disjunction (Parallel Synchronicity L3): banishes every mage in chosen room', () => {
+    let s = setupBatchSpell({
+      spellCardId: 'base.spell.parallel-synchronicity',
+      level: 3,
+      casterMana: 4,
+    });
+    s = addMage(s, 'p2', {
+      id: 'bob-mage-a',
+      cardId: 'base.mage.sorcery',
+      color: 'red',
+    });
+    s = addMage(s, 'p2', {
+      id: 'bob-mage-b',
+      cardId: 'base.mage.sorcery',
+      color: 'red',
+    });
+    s = placeMageOnSpace(s, 'p2', 'bob-mage-a', 'base.room.library.a.slot-1');
+    s = placeMageOnSpace(s, 'p2', 'bob-mage-b', 'base.room.library.a.slot-2');
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.parallel-synchronicity',
+      level: 3,
+    });
+    const roomPrompt = topPending(s);
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: roomPrompt.id,
+      answer: {
+        kind: 'option-chosen',
+        optionId: 'base.room.library.a',
+        payload: {},
+      },
+    });
+    expect(findMageById(s, 'bob-mage-a').location.kind).toBe('banished');
+    expect(findMageById(s, 'bob-mage-b').location.kind).toBe('banished');
+    const reactionPrompt = topPending(s);
+    expect(reactionPrompt.prompt.kind).toBe('reaction-window');
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: reactionPrompt.id,
+      answer: { kind: 'reaction-passed' },
+    });
+    expect(s.pendingResolutionStack).toHaveLength(0);
+  });
 });
 
 // ============================================================================
@@ -9869,6 +9915,148 @@ describe('Multi-Research cards', () => {
     expect(s.pendingResolutionStack).toHaveLength(1);
     expect(s.researchQueue).toHaveLength(1);
     expect(topPending(s).resume.effectId).toBe('base.system.spend-research');
+  });
+
+  it('Radiance (Sorcerous Inspiration L3): refresh → mark → research-spend chain', () => {
+    let s = initGame(TWO_PLAYER_CONFIG);
+    s = zeroPlayerResources(s, 'p1');
+    s = addOwnedSpell(s, 'p1', 'base.spell.sorcerous-inspiration', {
+      intPlaced: true,
+      wisPlacedLevel2: true,
+      wisPlacedLevel3: true,
+    });
+    // Park an exhausted spell so the refresh prompt has a target.
+    s = addOwnedSpell(s, 'p1', 'base.spell.burn', {
+      intPlaced: true,
+      exhausted: true,
+    });
+    s = setMana(s, 'p1', 3);
+    s = {
+      ...s,
+      firstPlayerIndex: 0,
+      phase: {
+        kind: 'errands',
+        round: 1,
+        activePlayerIndex: 0,
+        actionUsed: false,
+        fastActionUsed: false,
+      },
+    };
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.sorcerous-inspiration',
+      level: 3,
+    });
+    // Step 1: refresh prompt on stack; research queued; no mark prompt yet.
+    let top = topPending(s);
+    expect(top.prompt.kind).toBe('choose-from-options');
+    expect(top.resume.effectId).toBe('base.spell.sorcerous-inspiration.l3');
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: top.id,
+      answer: { kind: 'option-chosen', optionId: 'base.spell.burn', payload: {} },
+    });
+    // Burn is now refreshed.
+    expect(
+      s.players
+        .find((p) => p.id === 'p1')!
+        .ownedSpells.find((sp) => sp.cardId === 'base.spell.burn')?.exhausted,
+    ).toBe(false);
+    // Step 2: mark prompt on stack, research still queued.
+    top = topPending(s);
+    expect(top.prompt.kind).toBe('choose-voter');
+    expect(s.researchQueue).toHaveLength(1);
+    // Pick any voter to apply the mark.
+    if (top.prompt.kind !== 'choose-voter') return;
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: top.id,
+      answer: { kind: 'voter-chosen', voterId: top.prompt.eligibleVoterIds[0]! },
+    });
+    // Step 3: research prompt now surfaced (queue drained).
+    top = topPending(s);
+    expect(top.prompt.kind).toBe('choose-from-options');
+    expect(top.resume.effectId).toBe('base.system.spend-research');
+    expect(s.researchQueue).toHaveLength(0);
+  });
+
+  it('Mana Drain (Thirteen Greater Mysteries L1): transfers 1 mana from a chosen opponent', () => {
+    let s = initGame(TWO_PLAYER_CONFIG);
+    s = zeroPlayerResources(s, 'p1');
+    s = zeroPlayerResources(s, 'p2');
+    s = addOwnedSpell(s, 'p1', 'base.spell.thirteen-greater-mysteries', {
+      intPlaced: true,
+    });
+    s = setMana(s, 'p1', 0);
+    s = setMana(s, 'p2', 2);
+    s = {
+      ...s,
+      firstPlayerIndex: 0,
+      phase: {
+        kind: 'errands',
+        round: 1,
+        activePlayerIndex: 0,
+        actionUsed: false,
+        fastActionUsed: false,
+      },
+    };
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.thirteen-greater-mysteries',
+      level: 1,
+    });
+    // Should prompt for the opponent to drain.
+    const opponentPrompt = topPending(s);
+    expect(opponentPrompt.prompt.kind).toBe('choose-from-options');
+    if (opponentPrompt.prompt.kind !== 'choose-from-options') return;
+    expect(opponentPrompt.prompt.options.map((o) => o.id)).toContain('p2');
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: opponentPrompt.id,
+      answer: { kind: 'option-chosen', optionId: 'p2', payload: {} },
+    });
+    const p1 = s.players.find((p) => p.id === 'p1')!;
+    const p2 = s.players.find((p) => p.id === 'p2')!;
+    expect(p1.resources.mana).toBe(1);
+    expect(p2.resources.mana).toBe(1);
+  });
+
+  it('Mana Drain: fizzles silently if no opponent has mana', () => {
+    let s = initGame(TWO_PLAYER_CONFIG);
+    s = zeroPlayerResources(s, 'p1');
+    s = zeroPlayerResources(s, 'p2');
+    s = addOwnedSpell(s, 'p1', 'base.spell.thirteen-greater-mysteries', {
+      intPlaced: true,
+    });
+    s = setMana(s, 'p1', 0);
+    s = setMana(s, 'p2', 0);
+    s = {
+      ...s,
+      firstPlayerIndex: 0,
+      phase: {
+        kind: 'errands',
+        round: 1,
+        activePlayerIndex: 0,
+        actionUsed: false,
+        fastActionUsed: false,
+      },
+    };
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.thirteen-greater-mysteries',
+      level: 1,
+    });
+    // No prompt surfaced; cast still exhausted the spell.
+    expect(s.pendingResolutionStack).toHaveLength(0);
+    const owned = s.players
+      .find((p) => p.id === 'p1')!
+      .ownedSpells.find(
+        (sp) => sp.cardId === 'base.spell.thirteen-greater-mysteries',
+      );
+    expect(owned?.exhausted).toBe(true);
   });
 
   it('Each surfaced prompt sees the current state — drafting one spell updates options for the next', () => {

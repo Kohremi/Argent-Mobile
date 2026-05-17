@@ -7903,6 +7903,240 @@ registerEffect(
   }),
 );
 
+/**
+ * Sorcerous Inspiration L3 "Radiance" — Gain a Research, refresh an
+ * exhausted Spell, then gain a Mark.
+ *
+ * Step order: refresh prompt fires first, then a Mark prompt is queued
+ * on top of the research entry. After the player resolves the Mark, the
+ * resolution stack idles and the engine's research drain pump surfaces
+ * the queued Research opportunity.
+ *
+ * (Player-visible outcome: refresh → mark → research-spend. The spell
+ * text lists research first, but `appendResearchQueue` queues it
+ * lazily so it surfaces after the in-line prompts settle.)
+ *
+ * Fizzles gracefully: no exhausted spells → skip the refresh prompt
+ * and only the mark + research fire; no eligible voters → skip the
+ * mark prompt and only the research is queued.
+ */
+registerEffect(
+  'base.spell.sorcerous-inspiration.l3',
+  (ctx): EffectResult => {
+    const step = ctx.resumeContext?.['step'];
+
+    if (!ctx.resumeAnswer) {
+      // Initial entry: try to surface the refresh prompt first.
+      const refreshPrompt = buildRefreshOwnedSpellPrompt(
+        ctx.state,
+        ctx.triggeringPlayerId,
+        {
+          effectId: 'base.spell.sorcerous-inspiration.l3',
+          context: { step: 'after-refresh' },
+        },
+        ctx.source,
+      );
+      if (refreshPrompt) return { kind: 'pause', pending: refreshPrompt };
+      // No exhausted spells — queue research + surface the mark prompt.
+      const researchPatch = appendResearchQueue(
+        ctx.state,
+        ctx.triggeringPlayerId,
+        ctx.source,
+        1,
+      );
+      const markPrompt = spawnGainMarkPrompt(
+        ctx.state,
+        ctx.triggeringPlayerId,
+        ctx.source,
+      );
+      if (!markPrompt) return { kind: 'done', patch: researchPatch };
+      return { kind: 'pause', patch: researchPatch, pending: markPrompt };
+    }
+    if (step === 'after-refresh') {
+      if (ctx.resumeAnswer.kind !== 'option-chosen') {
+        throw new Error(
+          `sorcerous-inspiration.l3 after-refresh expected option-chosen, got ${ctx.resumeAnswer.kind}`,
+        );
+      }
+      const refreshPatch = refreshOwnedSpellPatch(
+        ctx.state,
+        ctx.triggeringPlayerId,
+        ctx.resumeAnswer.optionId,
+      );
+      const stateAfter: GameState = { ...ctx.state, ...refreshPatch };
+      const researchPatch = appendResearchQueue(
+        stateAfter,
+        ctx.triggeringPlayerId,
+        ctx.source,
+        1,
+      );
+      const markPrompt = spawnGainMarkPrompt(
+        stateAfter,
+        ctx.triggeringPlayerId,
+        ctx.source,
+      );
+      const combined: GameStatePatch = { ...refreshPatch, ...researchPatch };
+      if (!markPrompt) return { kind: 'done', patch: combined };
+      return { kind: 'pause', patch: combined, pending: markPrompt };
+    }
+    throw new Error(`sorcerous-inspiration.l3 unexpected step ${String(step)}`);
+  },
+);
+
+/**
+ * Parallel Synchronicity L3 "Planar Disjunction" — Choose a room. All
+ * Mages in that room are banished.
+ *
+ * Mirrors Book of One Hundred Seas L3 / Tsunami L3: prompt for a room
+ * (only rooms with at least one banishable mage are offered), then
+ * banish every eligible mage in that room and open a batch reaction
+ * window so each affected player gets one reaction across the cast.
+ *
+ * The spell text's "Any that were shadowing move into normal spaces"
+ * is rendered moot here — banished shadow occupants leave the slot
+ * entirely, so there is no shadow→base slide to apply.
+ */
+registerEffect(
+  'base.spell.parallel-synchronicity.l3',
+  (ctx): EffectResult => {
+    const step = ctx.resumeContext?.['step'];
+    const self = 'base.spell.parallel-synchronicity.l3';
+
+    if (!ctx.resumeAnswer) {
+      const eligibleRoomIds: string[] = [];
+      for (const r of ctx.state.rooms) {
+        if (
+          buildBanishableMagesInRoom(ctx.state, ctx.triggeringPlayerId, r.id)
+            .length > 0
+        ) {
+          eligibleRoomIds.push(r.id);
+        }
+      }
+      if (eligibleRoomIds.length === 0) return { kind: 'done', patch: {} };
+      return {
+        kind: 'pause',
+        pending: {
+          responderId: ctx.triggeringPlayerId,
+          prompt: {
+            kind: 'choose-from-options',
+            options: eligibleRoomIds.map((rid) => {
+              const r = ctx.state.rooms.find((rr) => rr.id === rid)!;
+              return { id: rid, label: r.name, payload: {} };
+            }),
+          },
+          resume: { effectId: self, context: { step: 'apply' } },
+          source: ctx.source,
+        },
+      };
+    }
+    if (step === 'apply') {
+      if (ctx.resumeAnswer.kind !== 'option-chosen') {
+        throw new Error(`${self} apply expected option-chosen`);
+      }
+      const roomId = ctx.resumeAnswer.optionId;
+      const mageIds = buildBanishableMagesInRoom(
+        ctx.state,
+        ctx.triggeringPlayerId,
+        roomId,
+      );
+      if (mageIds.length === 0) return { kind: 'done', patch: {} };
+      const banished = banishManyMages(
+        ctx.state,
+        mageIds,
+        ctx.triggeringPlayerId,
+      );
+      const reactorQueue = buildBatchReactorQueue(
+        ctx.state,
+        ctx.triggeringPlayerId,
+        banished.events,
+      );
+      return {
+        kind: 'open-reaction',
+        patch: banished.patch,
+        window: {
+          triggerEvents: banished.events,
+          pendingResponderIds: reactorQueue,
+          reactedPlayerIds: [],
+          afterResume: { effectId: 'base.system.noop', context: {} },
+          source: ctx.source,
+        },
+      };
+    }
+    throw new Error(`${self} unexpected step ${String(step)}`);
+  },
+);
+
+/**
+ * Thirteen Greater Mysteries L1 "Mana Drain" — Steal 1 mana from a single
+ * opponent. Prompts for an opponent with ≥1 unspent Mana; the caster
+ * gains 1 Mana and the target loses 1 Mana. Fizzles if no opponent has
+ * any mana.
+ *
+ * No reaction window opens — stealing resources is not a recognized
+ * reaction trigger in the base set.
+ */
+registerEffect(
+  'base.spell.thirteen-greater-mysteries.l1',
+  (ctx): EffectResult => {
+    const step = ctx.resumeContext?.['step'];
+    const self = 'base.spell.thirteen-greater-mysteries.l1';
+
+    if (!ctx.resumeAnswer) {
+      const candidates = ctx.state.players.filter(
+        (p) => p.id !== ctx.triggeringPlayerId && p.resources.mana >= 1,
+      );
+      if (candidates.length === 0) return { kind: 'done', patch: {} };
+      return {
+        kind: 'pause',
+        pending: {
+          responderId: ctx.triggeringPlayerId,
+          prompt: {
+            kind: 'choose-from-options',
+            options: candidates.map((p) => ({
+              id: p.id,
+              label: `Steal 1 Mana from ${p.name} (${p.resources.mana} Mana)`,
+              payload: {},
+            })),
+          },
+          resume: { effectId: self, context: { step: 'apply' } },
+          source: ctx.source,
+        },
+      };
+    }
+    if (step === 'apply') {
+      if (ctx.resumeAnswer.kind !== 'option-chosen') {
+        throw new Error(`${self} apply expected option-chosen`);
+      }
+      const victimId = ctx.resumeAnswer.optionId;
+      const victim = ctx.state.players.find((p) => p.id === victimId);
+      if (!victim || victim.resources.mana < 1) {
+        return { kind: 'done', patch: {} };
+      }
+      return {
+        kind: 'done',
+        patch: {
+          players: ctx.state.players.map((p) => {
+            if (p.id === victimId) {
+              return {
+                ...p,
+                resources: { ...p.resources, mana: p.resources.mana - 1 },
+              };
+            }
+            if (p.id === ctx.triggeringPlayerId) {
+              return {
+                ...p,
+                resources: { ...p.resources, mana: p.resources.mana + 1 },
+              };
+            }
+            return p;
+          }),
+        },
+      };
+    }
+    throw new Error(`${self} unexpected step ${String(step)}`);
+  },
+);
+
 // ============================================================================
 // Alt-leader spells (Rihki Kanhamme, Mannheim Wildern, Jesca Renetton,
 // Lavanina, Monad Riverime, Jion Erjon).
