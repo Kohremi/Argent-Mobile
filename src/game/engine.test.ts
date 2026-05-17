@@ -9523,6 +9523,196 @@ describe('Spell wiring — Wave 8 (area effects: Tsunami, Nox)', () => {
 });
 
 // ============================================================================
+// Room locking — Flamespout / Meteor / Cataclysm / Consecration
+// ============================================================================
+
+describe('Room locking', () => {
+  function setupLockSpell(opts: {
+    spellCardId: string;
+    level: 1 | 2 | 3;
+    casterMana: number;
+  }): GameState {
+    let s = initGame(TWO_PLAYER_CONFIG);
+    s = forceLibrarySideA(s);
+    s = zeroPlayerResources(s, 'p1');
+    s = zeroPlayerResources(s, 'p2');
+    s = addOwnedSpell(s, 'p1', opts.spellCardId, {
+      intPlaced: true,
+      wisPlacedLevel2: opts.level >= 2,
+      wisPlacedLevel3: opts.level >= 3,
+    });
+    s = setMana(s, 'p1', opts.casterMana);
+    s = {
+      ...s,
+      firstPlayerIndex: 0,
+      phase: {
+        kind: 'errands',
+        round: 1,
+        activePlayerIndex: 0,
+        actionUsed: false,
+        fastActionUsed: false,
+      },
+    };
+    return s;
+  }
+
+  it('Flamespout (Calval L2): wound + lock the previous room; Phase Steppers fizzles', () => {
+    let s = setupLockSpell({
+      spellCardId: 'base.spell.calvals-deadliest-magicks',
+      level: 2,
+      casterMana: 4,
+    });
+    s = addMage(s, 'p2', {
+      id: 'bob-mage-1',
+      cardId: 'base.mage.sorcery',
+      color: 'red',
+    });
+    s = placeMageOnSpace(s, 'p2', 'bob-mage-1', 'base.room.library.a.slot-1');
+    // Give Bob Phase Steppers — it should NOT be offered because the
+    // mage's original room (Library) is locked by the spell.
+    s = addVaultCard(s, 'p2', 'base.vault.phase-steppers');
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.calvals-deadliest-magicks',
+      level: 2,
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'mage-chosen', mageId: 'bob-mage-1' },
+    });
+    // Library is now locked.
+    expect(s.roomLocks).toEqual([{ roomId: 'base.room.library.a' }]);
+    // Reaction window — Phase Steppers absent (room locked).
+    const reactionPrompt = topPending(s);
+    expect(reactionPrompt.prompt.kind).toBe('reaction-window');
+    if (reactionPrompt.prompt.kind === 'reaction-window') {
+      const stepperOpt = reactionPrompt.prompt.reactionOptions.find(
+        (o) => o.effectId === 'base.vault.phase-steppers.react',
+      );
+      expect(stepperOpt).toBeUndefined();
+    }
+  });
+
+  it('Meteor (Master Book L2): place a mage in a room + lock it', () => {
+    let s = setupLockSpell({
+      spellCardId: 'base.spell.master-book-of-starcalling',
+      level: 2,
+      casterMana: 4,
+    });
+    s = addMage(s, 'p1', {
+      id: 'alice-mage-1',
+      cardId: 'base.mage.natural-magick',
+      color: 'green',
+    });
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.master-book-of-starcalling',
+      level: 2,
+    });
+    // Room prompt.
+    let top = topPending(s);
+    expect(top.prompt.kind).toBe('choose-from-options');
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: top.id,
+      answer: {
+        kind: 'option-chosen',
+        optionId: 'base.room.library.a',
+        payload: {},
+      },
+    });
+    // Mage prompt.
+    top = topPending(s);
+    expect(top.prompt.kind).toBe('choose-target-mage');
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: top.id,
+      answer: { kind: 'mage-chosen', mageId: 'alice-mage-1' },
+    });
+    // Slot prompt — pick an empty slot in Library.
+    top = topPending(s);
+    expect(top.prompt.kind).toBe('choose-target-action-space');
+    if (top.prompt.kind !== 'choose-target-action-space') return;
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: top.id,
+      answer: {
+        kind: 'space-chosen',
+        spaceId: top.prompt.eligibleSpaceIds[0]!,
+      },
+    });
+    // Mage is placed; Library is locked.
+    expect(findMageById(s, 'alice-mage-1').location.kind).toBe('action-space');
+    expect(s.roomLocks).toEqual([{ roomId: 'base.room.library.a' }]);
+  });
+
+  it('Locked rooms block PLACE_WORKER; locks clear at start of Resolution', () => {
+    let s = initGame(TWO_PLAYER_CONFIG);
+    s = forceLibrarySideA(s);
+    s = addMage(s, 'p1', {
+      id: 'alice-mage-1',
+      cardId: 'base.mage.natural-magick',
+      color: 'green',
+    });
+    s = {
+      ...s,
+      roomLocks: [{ roomId: 'base.room.library.a' }],
+      firstPlayerIndex: 0,
+      phase: {
+        kind: 'errands',
+        round: 1,
+        activePlayerIndex: 0,
+        actionUsed: false,
+        fastActionUsed: false,
+      },
+    };
+    // Attempting to place a worker into a locked room is rejected.
+    expect(() =>
+      applyAction(s, {
+        type: 'PLACE_WORKER',
+        playerId: 'p1',
+        mageId: 'alice-mage-1',
+        actionSpaceId: 'base.room.library.a.slot-1',
+      }),
+    ).toThrow(/room .* is locked/);
+    // Drain the bell tower to force Resolution — locks should clear.
+    // Bell tower starts with 3 cards; clearing all and passing the active
+    // player's last action drops us into Resolution.
+    s = emptyBellTower(s);
+    s = applyAction(s, { type: 'PASS_TURN', playerId: 'p1' });
+    expect(s.phase.kind).toBe('resolution');
+    expect(s.roomLocks).toEqual([]);
+  });
+
+  it('Mages in a locked room are not targetable by spells (Burn skips them)', () => {
+    let s = setupLockSpell({
+      spellCardId: 'base.spell.burn',
+      level: 1,
+      casterMana: 1,
+    });
+    s = addMage(s, 'p2', {
+      id: 'bob-mage-1',
+      cardId: 'base.mage.sorcery',
+      color: 'red',
+    });
+    s = placeMageOnSpace(s, 'p2', 'bob-mage-1', 'base.room.library.a.slot-1');
+    s = { ...s, roomLocks: [{ roomId: 'base.room.library.a' }] };
+    // Burn should fizzle — no targets (locked-room mage filtered out).
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.burn',
+      level: 1,
+    });
+    expect(s.pendingResolutionStack).toHaveLength(0);
+    expect(findMageById(s, 'bob-mage-1').isWounded).toBe(false);
+  });
+});
+
+// ============================================================================
 // Spell wiring — Wave 8b: two-adjacent-room spells (Plague, Fireball, Inferno)
 // ============================================================================
 

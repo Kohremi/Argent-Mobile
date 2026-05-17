@@ -447,6 +447,41 @@ function robeAccent(color: MageColor) {
 // Bell icon — used by the Bell Tower panel
 // ============================================================================
 
+/**
+ * Lock icon — rendered on a room header when the room is in `state.roomLocks`.
+ * Mages already inside still complete their Errands at Resolution; placement
+ * is blocked while the lock is in effect.
+ */
+export function LockIcon({
+  className,
+  size = 14,
+}: IconProps) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      role="img"
+      aria-label="Locked"
+      className={clsx('inline-block flex-shrink-0 text-rose-400', className)}
+      fill="currentColor"
+    >
+      <title>Room locked</title>
+      {/* Lock body */}
+      <rect x="5" y="11" width="14" height="9" rx="1.5" />
+      {/* Shackle */}
+      <path
+        d="M8 11 V7 a4 4 0 0 1 8 0 V11"
+        stroke="currentColor"
+        strokeWidth="2"
+        fill="none"
+      />
+      {/* Keyhole */}
+      <circle cx="12" cy="15" r="1.5" fill="rgba(0,0,0,0.45)" />
+    </svg>
+  );
+}
+
 export function BellIcon({
   className,
   size = 14,

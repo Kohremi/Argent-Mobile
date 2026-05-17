@@ -19,6 +19,7 @@ import type {
   ReactionTriggerEvent,
   ResolutionSource,
   Room,
+  RoomId,
   SerializableContext,
   SpellCard,
   SpellCardId,
@@ -200,6 +201,10 @@ export function buildHarmfulMageTargets(
     for (const m of p.mages) {
       if (m.location.kind !== 'action-space') continue;
       if (m.isWounded) continue;
+      // A locked room prevents any mage inside it from being affected
+      // (wounded, banished, moved, shadowed). Mages in locked rooms still
+      // perform their Errands at Resolution per the rulebook.
+      if (isMageInLockedRoom(state, m.id)) continue;
       if (m.isShadowing) {
         if (!opts.includesShadows) continue;
         // Shadowing mage loses its color ability — no protections apply.
@@ -218,6 +223,45 @@ export function buildHarmfulMageTargets(
     }
   }
   return targets;
+}
+
+/** Returns true when `roomId` is currently locked. */
+export function isRoomLocked(state: GameState, roomId: RoomId): boolean {
+  return state.roomLocks.some((l) => l.roomId === roomId);
+}
+
+/** Returns true when the given action-space sits inside a locked room. */
+export function isSpaceInLockedRoom(
+  state: GameState,
+  spaceId: ActionSpaceId,
+): boolean {
+  for (const r of state.rooms) {
+    if (!r.actionSpaces.some((s) => s.id === spaceId)) continue;
+    return isRoomLocked(state, r.id);
+  }
+  return false;
+}
+
+/** Returns true when the mage is currently on a slot in a locked room. */
+export function isMageInLockedRoom(
+  state: GameState,
+  mageId: OwnedMageId,
+): boolean {
+  const lookup = findMageSlotPosition(state, mageId);
+  if (!lookup) return false;
+  return isSpaceInLockedRoom(state, lookup.spaceId);
+}
+
+/**
+ * Patch that adds a room to `state.roomLocks` (no-op if already locked).
+ * Locks clear at the start of the Resolution phase.
+ */
+export function applyRoomLockPatch(
+  state: GameState,
+  roomId: RoomId,
+): GameStatePatch {
+  if (state.roomLocks.some((l) => l.roomId === roomId)) return {};
+  return { roomLocks: [...state.roomLocks, { roomId }] };
 }
 
 /** Spell-source targets (Burn, Flash of Light, etc.). */
@@ -871,7 +915,20 @@ export function buildReactionOptionsFor(
       'byPlayerId' in event && event.byPlayerId !== event.ownerId;
     const mageId = event.mageId;
 
-    if (isWoundBanishOrMove && hasPhaseSteppers) {
+    // Phase Steppers / Invisibility Cloak always send the mage back to its
+    // original slot. If that slot's room is locked (e.g., Calval's L2 wounds
+    // then locks the same room), the reaction has no valid destination —
+    // don't offer it.
+    const originalSpaceId =
+      event.kind === 'mage-moved'
+        ? event.fromSpaceId
+        : event.kind === 'mage-shadowed'
+          ? event.spaceId
+          : event.originalSpaceId;
+    const originalRoomLocked =
+      originalSpaceId != null && isSpaceInLockedRoom(state, originalSpaceId);
+
+    if (isWoundBanishOrMove && hasPhaseSteppers && !originalRoomLocked) {
       options.push({
         sourceKind: 'vault-card',
         sourceId: 'base.vault.phase-steppers',
@@ -880,7 +937,7 @@ export function buildReactionOptionsFor(
         ...(multi ? { forMageId: mageId } : {}),
       });
     }
-    if (isWoundBanishOrMove && hasInvisibilityCloak) {
+    if (isWoundBanishOrMove && hasInvisibilityCloak && !originalRoomLocked) {
       options.push({
         sourceKind: 'vault-card',
         sourceId: 'base.vault.invisibility-cloak',
@@ -1905,6 +1962,8 @@ export function buildArsMagnaTargets(
     for (const m of p.mages) {
       if (m.location.kind !== 'action-space') continue;
       if (m.isWounded) continue;
+      // Locked rooms prevent any mage inside from being affected.
+      if (isMageInLockedRoom(state, m.id)) continue;
       if (m.color === 'green') continue;
       if (m.color === 'blue') continue; // Always opposing here.
       targets.push(m.id);

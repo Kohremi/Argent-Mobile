@@ -9,7 +9,7 @@ import { useGameStore } from '../store/gameStore';
 import { baseGamePack } from '../content/packs/base';
 import { listPacks } from '../content/registry';
 import { computeFinalScoring } from '../game/scoring';
-import { BellIcon, MageIcon, ResourceIcon, type ResourceKind } from './icons';
+import { BellIcon, LockIcon, MageIcon, ResourceIcon, type ResourceKind } from './icons';
 import type {
   Candidate,
   Department,
@@ -527,8 +527,11 @@ export function DebugControls() {
   let selectionMode = deriveSelectionMode(top, dispatch);
   if (reactionSlotActive && reactionAwaitingSlot && top) {
     const openSlots = new Set<string>();
+    const lockedRoomIds = new Set(state.roomLocks.map((l) => l.roomId));
     for (const r of state.rooms) {
       if (r.cannotBePlacedInDirectly) continue;
+      // Reaction movement can't go into a newly locked room.
+      if (lockedRoomIds.has(r.id)) continue;
       for (const s of r.actionSpaces) {
         if (!s.occupant) openSlots.add(s.id);
       }
@@ -3307,19 +3310,28 @@ function RoomsPanel({
   function renderRoomCell(room: typeof state.rooms[number], ri: number) {
           const isCurrent =
             state.phase.kind === 'resolution' && state.phase.pendingRoomIndex === ri;
+          const isLocked = state.roomLocks.some((l) => l.roomId === room.id);
           return (
             <div
               key={room.id}
               className={clsx(
                 'rounded border p-3 text-xs space-y-1',
-                isCurrent
-                  ? 'border-amber-400 bg-amber-400/10'
-                  : 'border-slate-700 bg-slate-900',
+                isLocked
+                  ? 'border-rose-500 bg-rose-900/20'
+                  : isCurrent
+                    ? 'border-amber-400 bg-amber-400/10'
+                    : 'border-slate-700 bg-slate-900',
               )}
             >
               <div className="flex items-baseline gap-2">
+                {isLocked && <LockIcon size={14} />}
                 <span className="text-sm font-medium">{room.name}</span>
                 <span className="text-slate-500">side {room.side}</span>
+                {isLocked && (
+                  <span className="text-[10px] uppercase tracking-wide text-rose-300">
+                    locked
+                  </span>
+                )}
                 {room.isUniversityCentral && (
                   <span className="text-[10px] uppercase tracking-wide text-amber-300/70">
                     UC

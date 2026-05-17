@@ -2128,9 +2128,13 @@ function processErrandsAdvance(state: GameState): GameState {
       )
     : state.players;
   if (state.bellTower.available.length === 0) {
+    // Per rulebook: locks automatically clear at the start of the
+    // Resolution phase. Mages that were inside still complete their
+    // Errands (resolution walks slots; lock state isn't checked there).
     return {
       ...state,
       players,
+      roomLocks: [],
       phase: {
         kind: 'resolution',
         round: errandsPhase.round,
