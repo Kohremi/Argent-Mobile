@@ -1494,8 +1494,8 @@ const candidates: Candidate[] = [
     startingExtraMeritBadge: false,
   }),
   candidate({
-    id: 'base.candidate.divinity-alt',
-    name: 'Divinity Leader (TBD)',
+    id: 'base.candidate.monad-riverime',
+    name: 'Monad Riverime',
     title: 'Divinity',
     department: 'divinity',
     starterSpellId: 'base.spell.holy-smite',
@@ -1503,8 +1503,8 @@ const candidates: Candidate[] = [
     startingExtraMeritBadge: false,
   }),
   candidate({
-    id: 'base.candidate.students-alt',
-    name: 'Student Council Leader (TBD)',
+    id: 'base.candidate.jion-erjon',
+    name: 'Jion Erjon',
     title: 'Students — Body President',
     department: 'students',
     starterSpellId: 'base.spell.tardy',
