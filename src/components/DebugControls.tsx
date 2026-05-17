@@ -12,8 +12,10 @@ import { computeFinalScoring } from '../game/scoring';
 import { BellIcon, MageIcon, ResourceIcon, type ResourceKind } from './icons';
 import type {
   Candidate,
+  Department,
   GameAction,
   GameState,
+  Mage,
   MageColor,
   OwnedMage,
   PendingPrompt,
@@ -2526,8 +2528,26 @@ function CandidateDraftScreen({
   dispatch: (action: GameAction) => void;
   reset: () => void;
 }) {
+  // Local "highlighted" candidate per active player. Reset when the active
+  // player changes (different player → different selection). Player clicks
+  // a card to highlight; clicks the "Pick as X" button to confirm.
+  const [highlighted, setHighlighted] = useState<string | null>(null);
+  const activeIdx =
+    state.phase.kind === 'candidate-draft' ? state.phase.activePlayerIndex : -1;
+  // Stale selection cleanup when turn rotates.
+  const activePlayerId = state.players[activeIdx]?.id ?? null;
+  const [, setLastActive] = useState<string | null>(null);
+  // Reset highlight when the choosing player changes.
+  if (highlighted && activePlayerId) {
+    setLastActive((prev) => {
+      if (prev !== activePlayerId) {
+        queueMicrotask(() => setHighlighted(null));
+      }
+      return activePlayerId;
+    });
+  }
+
   if (state.phase.kind !== 'candidate-draft') return null;
-  const activeIdx = state.phase.activePlayerIndex;
   const activePlayer = state.players[activeIdx];
   const candidates = collectAvailableCandidates(state);
   const taken = new Map<string, string>();
@@ -2535,13 +2555,55 @@ function CandidateDraftScreen({
     if (p.candidateId) taken.set(p.candidateId, p.name);
   }
 
+  // Build the spell/mage lookup once.
+  const spellById = new Map<string, SpellCard>();
+  const mageByDept = new Map<Department | 'students', Mage | undefined>();
+  for (const pack of listPacks()) {
+    if (!state.activePackIds.includes(pack.id)) continue;
+    for (const sp of pack.legendarySpells) spellById.set(sp.id, sp);
+    for (const sp of pack.spells) spellById.set(sp.id, sp);
+    for (const m of pack.mages) {
+      if (m.department) mageByDept.set(m.department, m);
+    }
+  }
+
+  // Group candidates by department to render pairs side by side.
+  const departmentOrder: Department[] = [
+    'sorcery',
+    'natural-magick',
+    'mysticism',
+    'planar-studies',
+    'divinity',
+    'students',
+  ];
+  const byDept = new Map<Department, Candidate[]>();
+  for (const c of candidates) {
+    if (!byDept.has(c.department)) byDept.set(c.department, []);
+    byDept.get(c.department)!.push(c);
+  }
+
+  const departmentLabel: Record<Department, string> = {
+    sorcery: 'Sorcery',
+    'natural-magick': 'Natural Magick',
+    mysticism: 'Mysticism',
+    'planar-studies': 'Planar Studies',
+    divinity: 'Divinity',
+    students: 'Student Council',
+    wild: 'Wild',
+  };
+
+  const highlightedCandidate = highlighted
+    ? candidates.find((c) => c.id === highlighted) ?? null
+    : null;
+
   return (
     <div className="min-h-full p-6 max-w-5xl mx-auto space-y-5">
       <header className="flex items-center justify-between flex-wrap gap-3">
         <div>
           <h1 className="text-2xl font-semibold">Argent — candidate draft</h1>
           <p className="text-slate-400 text-sm">
-            {activePlayer?.name ?? '?'} is choosing a faction leader.
+            {activePlayer?.name ?? '?'} is choosing a faction leader. Click a
+            leader to preview, then confirm with the Pick button.
           </p>
         </div>
         <button
@@ -2584,83 +2646,153 @@ function CandidateDraftScreen({
         </ul>
       </section>
 
-      <section>
-        <h2 className="text-lg font-medium mb-2">Candidates</h2>
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-          {candidates.map((c) => {
-            const takenBy = taken.get(c.id);
-            const disabled = takenBy !== undefined || !activePlayer;
-            return (
-              <div
-                key={c.id}
-                className={clsx(
-                  'p-3 rounded border space-y-1',
-                  takenBy
-                    ? 'border-slate-800 bg-slate-900/40 opacity-60'
-                    : 'border-slate-700 bg-slate-900',
-                )}
-              >
-                <div className="flex items-center justify-between">
-                  <h3 className="font-medium">{c.name}</h3>
-                  <span className="text-xs text-slate-500">{c.title}</span>
-                </div>
-                <div className="text-xs text-slate-400 flex items-center gap-2 flex-wrap">
-                  <span>Department: {c.department} · Mages:</span>
-                  <MageIcon
-                    color={
-                      c.startingMageColor === 'neutral'
-                        ? 'off-white'
-                        : c.startingMageColor
-                    }
-                    size={32}
-                  />
-                  <MageIcon
-                    color={
-                      c.startingMageColor === 'neutral'
-                        ? 'off-white'
-                        : c.startingMageColor
-                    }
-                    size={32}
-                  />
-                  <span className="capitalize">{c.startingMageColor}</span>
-                  {c.startingExtraMeritBadge && (
-                    <span className="inline-flex items-center gap-1">
-                      ·
-                      <ResourceIcon kind="merit-badge" size={14} />
-                      +1
-                    </span>
-                  )}
-                </div>
-                <p className="text-xs text-slate-500">
-                  Starter spell: {c.starterSpellId}
-                </p>
-                {takenBy ? (
-                  <p className="text-xs text-amber-300/70">
-                    chosen by {takenBy}
-                  </p>
-                ) : (
-                  <button
-                    type="button"
-                    disabled={disabled}
-                    onClick={() => {
-                      if (!activePlayer) return;
-                      dispatch({
-                        type: 'CHOOSE_CANDIDATE',
-                        playerId: activePlayer.id,
-                        candidateId: c.id,
-                      });
-                    }}
-                    className="px-2.5 py-1 rounded bg-amber-500 text-slate-950 text-sm hover:bg-amber-400 disabled:opacity-40 disabled:cursor-not-allowed"
-                  >
-                    Pick (as {activePlayer?.name})
-                  </button>
+      <section className="space-y-3">
+        <div className="flex items-center justify-between flex-wrap gap-2">
+          <h2 className="text-lg font-medium">Faction Leaders</h2>
+          {activePlayer && (
+            <button
+              type="button"
+              disabled={
+                !highlightedCandidate || taken.has(highlightedCandidate.id)
+              }
+              onClick={() => {
+                if (!highlightedCandidate || !activePlayer) return;
+                dispatch({
+                  type: 'CHOOSE_CANDIDATE',
+                  playerId: activePlayer.id,
+                  candidateId: highlightedCandidate.id,
+                });
+                setHighlighted(null);
+              }}
+              className="px-4 py-2 rounded bg-amber-500 text-slate-950 font-medium hover:bg-amber-400 disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              {highlightedCandidate
+                ? `Pick ${highlightedCandidate.name} (as ${activePlayer.name})`
+                : `Pick (as ${activePlayer.name}) — select a leader first`}
+            </button>
+          )}
+        </div>
+
+        {departmentOrder.map((dept) => {
+          const pair = byDept.get(dept) ?? [];
+          if (pair.length === 0) return null;
+          return (
+            <div key={dept}>
+              <h3 className="text-sm font-semibold text-slate-300 uppercase tracking-wide mb-1.5">
+                {departmentLabel[dept]}
+              </h3>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                {pair.map((c) =>
+                  renderCandidateCard({
+                    c,
+                    spell: spellById.get(c.starterSpellId) ?? null,
+                    mage: mageByDept.get(dept) ?? null,
+                    isHighlighted: highlighted === c.id,
+                    takenBy: taken.get(c.id),
+                    onClick: () => {
+                      if (taken.has(c.id)) return;
+                      setHighlighted((cur) => (cur === c.id ? null : c.id));
+                    },
+                  }),
                 )}
               </div>
-            );
-          })}
-        </div>
+            </div>
+          );
+        })}
       </section>
     </div>
+  );
+}
+
+function renderCandidateCard(args: {
+  c: Candidate;
+  spell: SpellCard | null;
+  mage: Mage | null;
+  isHighlighted: boolean;
+  takenBy: string | undefined;
+  onClick: () => void;
+}) {
+  const { c, spell, mage, isHighlighted, takenBy, onClick } = args;
+  const mageColor =
+    c.startingMageColor === 'neutral' ? 'off-white' : c.startingMageColor;
+  const level1 = spell?.levels[0];
+  const timingLabel =
+    level1 === undefined
+      ? null
+      : level1.timing === 'fast-action'
+        ? 'Fast Action'
+        : level1.timing === 'reaction'
+          ? 'Reaction'
+          : 'Action';
+  return (
+    <button
+      key={c.id}
+      type="button"
+      onClick={onClick}
+      disabled={takenBy !== undefined}
+      className={clsx(
+        'text-left p-3 rounded border space-y-2 w-full transition-colors',
+        takenBy
+          ? 'border-slate-800 bg-slate-900/40 opacity-60 cursor-not-allowed'
+          : isHighlighted
+            ? 'border-amber-400 bg-amber-400/10 ring-2 ring-amber-400/40'
+            : 'border-slate-700 bg-slate-900 hover:border-slate-500',
+      )}
+    >
+      <div className="flex items-baseline justify-between">
+        <h4 className="text-base font-semibold">{c.name}</h4>
+        {c.startingExtraMeritBadge && (
+          <span className="inline-flex items-center gap-1 text-xs">
+            <ResourceIcon kind="merit-badge" size={12} />
+            +1
+          </span>
+        )}
+      </div>
+
+      {/* Spell preview — styled like an in-game spell card. */}
+      {spell && level1 ? (
+        <div className="rounded border border-violet-500/40 bg-violet-500/5 p-2 space-y-0.5">
+          <div className="flex items-baseline justify-between gap-2">
+            <span className="text-sm font-medium text-violet-200">
+              {spell.name}
+            </span>
+            <span className="text-[10px] text-slate-400 inline-flex items-center gap-1">
+              {timingLabel}
+              {' · '}
+              <ResourceIcon kind="mana" size={11} />
+              {level1.manaCost}
+            </span>
+          </div>
+          <p className="text-[11px] text-slate-200/90 italic leading-snug">
+            {level1.description}
+          </p>
+        </div>
+      ) : (
+        <p className="text-[11px] text-slate-500 italic">
+          spell: {c.starterSpellId}
+        </p>
+      )}
+
+      {/* Department mage + ability. */}
+      <div className="rounded border border-slate-700 bg-slate-950/40 p-2 space-y-1">
+        <div className="flex items-center gap-2">
+          <MageIcon color={mageColor} size={28} />
+          <MageIcon color={mageColor} size={28} />
+          <span className="text-xs text-slate-400">
+            ×2 {mage?.name ?? `${c.startingMageColor} mages`}
+          </span>
+        </div>
+        {mage?.description && (
+          <p className="text-[11px] text-slate-200/90 italic leading-snug">
+            {mage.description}
+          </p>
+        )}
+      </div>
+
+      {takenBy && (
+        <p className="text-xs text-amber-300/70">chosen by {takenBy}</p>
+      )}
+    </button>
   );
 }
 

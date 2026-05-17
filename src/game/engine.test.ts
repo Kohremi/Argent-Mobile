@@ -1698,11 +1698,7 @@ describe('Candidate draft', () => {
     );
   });
 
-  it('Xal Ezra is now in base, Lavanina is now in Mancers', () => {
-    const s = initGame(DRAFT_CONFIG_4P);
-    s; // silence unused
-    // Reach into the base pack via lookup helper indirectly: we know the
-    // candidate ids should resolve.
+  it('Xal Ezra and Lavanina both ship in base now (alt leader per department)', () => {
     let s1 = withFirstPlayer(initGame(DRAFT_CONFIG_4P), 0);
     s1 = applyAction(s1, {
       type: 'CHOOSE_CANDIDATE',
@@ -1712,14 +1708,16 @@ describe('Candidate draft', () => {
     expect(s1.players[0]?.candidateStartingSpellId).toBe(
       'base.spell.paralocation',
     );
-    // Lavanina lives in Mancers now — base alone doesn't expose her.
-    expect(() =>
-      applyAction(withFirstPlayer(initGame(DRAFT_CONFIG_4P), 0), {
-        type: 'CHOOSE_CANDIDATE',
-        playerId: 'p1',
-        candidateId: 'base.candidate.lavanina',
-      }),
-    ).toThrow(/not in active packs/);
+    // Lavanina is the Planar Studies alt leader; picking her loads Shadow Bolt.
+    let s2 = withFirstPlayer(initGame(DRAFT_CONFIG_4P), 0);
+    s2 = applyAction(s2, {
+      type: 'CHOOSE_CANDIDATE',
+      playerId: 'p1',
+      candidateId: 'base.candidate.lavanina',
+    });
+    expect(s2.players[0]?.candidateStartingSpellId).toBe(
+      'base.spell.shadow-bolt',
+    );
   });
 });
 
@@ -4430,8 +4428,8 @@ describe('PLAY_VAULT_CARD', () => {
     }
   });
 
-  it('the base pack ships 11 legendary spell books (6 candidate starters + 5 from the sheet)', () => {
-    expect(baseGamePack.legendarySpells).toHaveLength(11);
+  it('the base pack ships 17 legendary spell books (12 candidate starters: 6 depts × 2 leaders, + 5 from the sheet)', () => {
+    expect(baseGamePack.legendarySpells).toHaveLength(17);
     // Each candidate's starter must appear in the legendary list AND be
     // marked unique with a single level.
     const ids = new Set(baseGamePack.legendarySpells.map((s) => s.id));

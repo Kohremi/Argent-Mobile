@@ -145,7 +145,7 @@ function leaderSpell(args: {
   name: string;
   department: Department;
   manaCost: number;
-  timing: 'action' | 'fast-action';
+  timing: 'action' | 'fast-action' | 'reaction';
   description: string;
 }): SpellCard {
   return {
@@ -225,6 +225,77 @@ const paralocation: SpellCard = leaderSpell({
   manaCost: 1,
   timing: 'action',
   description: "Shadow an opponent's Mage on its current slot.",
+});
+
+// ---------------------------------------------------------------------------
+// Alternate leader spells (second leader per department).
+//
+// Effect wiring for these is deferred — for now CAST_SPELL on these will
+// pay the cost + exhaust the spell with no further behavior. Each effect
+// has a TODO ticket implied by the description.
+// ---------------------------------------------------------------------------
+
+/** Rihki Kanhamme — Sorcery alt leader. */
+const burnout: SpellCard = leaderSpell({
+  id: 'base.spell.burnout',
+  name: 'Burnout',
+  department: 'sorcery',
+  manaCost: 0,
+  timing: 'action',
+  description:
+    'Send one of your own Mages from your office to the Infirmary (no Infirmary bonus), then gain 3 Mana.',
+});
+
+/** Mannheim Wildern — Natural Magick alt leader. */
+const gustOfWind: SpellCard = leaderSpell({
+  id: 'base.spell.gust-of-wind',
+  name: 'Gust of Wind',
+  department: 'natural-magick',
+  manaCost: 1,
+  timing: 'action',
+  description:
+    'Move any Mage to an open slot in an adjacent room (excluding the Infirmary or Great Hall).',
+});
+
+/** Jesca Renetton — Mysticism alt leader. */
+const darkPact: SpellCard = leaderSpell({
+  id: 'base.spell.dark-pact',
+  name: 'Dark Pact',
+  department: 'mysticism',
+  manaCost: 1,
+  timing: 'action',
+  description: 'Banish one of your own Mages, then Wound a Mage.',
+});
+
+/** Lavanina — Planar Studies alt leader. */
+const shadowBolt: SpellCard = leaderSpell({
+  id: 'base.spell.shadow-bolt',
+  name: 'Shadow Bolt',
+  department: 'planar-studies',
+  manaCost: 1,
+  timing: 'fast-action',
+  description: "An opponent's Mage is now shadowing its slot.",
+});
+
+/** Divinity alt leader (name TBD by user). */
+const holySmite: SpellCard = leaderSpell({
+  id: 'base.spell.holy-smite',
+  name: 'Holy Smite',
+  department: 'divinity',
+  manaCost: 1,
+  timing: 'action',
+  description: 'Wound a Mage and gain 1 IP.',
+});
+
+/** Students alt leader (name TBD by user). */
+const tardy: SpellCard = leaderSpell({
+  id: 'base.spell.tardy',
+  name: 'Tardy',
+  department: 'students',
+  manaCost: 1,
+  timing: 'reaction',
+  description:
+    'When an opponent takes the last Bell Tower card, place a Mage without using Mage powers.',
 });
 
 // ============================================================================
@@ -575,13 +646,19 @@ const baseLegendarySpellBooks: SpellCard[] = [
 ];
 
 const legendarySpells: SpellCard[] = [
-  // Candidate starter spells (one per faction leader).
+  // Candidate starter spells (one per faction leader; two per department).
   flashOfLight,
   livingImage,
   trance,
   strengthOfEarth,
   bless,
   paralocation,
+  burnout,
+  gustOfWind,
+  darkPact,
+  shadowBolt,
+  holySmite,
+  tardy,
   // Legendary books from the data sheet — research these via Sealed Scroll, etc.
   ...baseLegendarySpellBooks,
 ];
@@ -1376,6 +1453,62 @@ const candidates: Candidate[] = [
     startingMageColor: 'neutral',
     // Students leaders receive an extra Merit Badge per the earlier
     // rulebook reading. Easy to flip if the room file revises this later.
+    startingExtraMeritBadge: true,
+  }),
+  // Alt leaders — second leader per department. Names TBD for Divinity and
+  // Students; placeholders below.
+  candidate({
+    id: 'base.candidate.rihki-kanhamme',
+    name: 'Rihki Kanhamme',
+    title: 'Sorcery',
+    department: 'sorcery',
+    starterSpellId: 'base.spell.burnout',
+    startingMageColor: 'red',
+    startingExtraMeritBadge: false,
+  }),
+  candidate({
+    id: 'base.candidate.mannheim-wildern',
+    name: 'Mannheim Wildern',
+    title: 'Natural Magick',
+    department: 'natural-magick',
+    starterSpellId: 'base.spell.gust-of-wind',
+    startingMageColor: 'green',
+    startingExtraMeritBadge: false,
+  }),
+  candidate({
+    id: 'base.candidate.jesca-renetton',
+    name: 'Jesca Renetton',
+    title: 'Mysticism',
+    department: 'mysticism',
+    starterSpellId: 'base.spell.dark-pact',
+    startingMageColor: 'grey',
+    startingExtraMeritBadge: false,
+  }),
+  candidate({
+    id: 'base.candidate.lavanina',
+    name: 'Lavanina',
+    title: 'Planar Studies',
+    department: 'planar-studies',
+    starterSpellId: 'base.spell.shadow-bolt',
+    startingMageColor: 'purple',
+    startingExtraMeritBadge: false,
+  }),
+  candidate({
+    id: 'base.candidate.divinity-alt',
+    name: 'Divinity Leader (TBD)',
+    title: 'Divinity',
+    department: 'divinity',
+    starterSpellId: 'base.spell.holy-smite',
+    startingMageColor: 'blue',
+    startingExtraMeritBadge: false,
+  }),
+  candidate({
+    id: 'base.candidate.students-alt',
+    name: 'Student Council Leader (TBD)',
+    title: 'Students — Body President',
+    department: 'students',
+    starterSpellId: 'base.spell.tardy',
+    startingMageColor: 'neutral',
     startingExtraMeritBadge: true,
   }),
 ];
