@@ -7806,3 +7806,501 @@ registerEffect(
     ),
   }),
 );
+
+// ============================================================================
+// Alt-leader spells (Rihki Kanhamme, Mannheim Wildern, Jesca Renetton,
+// Lavanina, Monad Riverime, Jion Erjon).
+// ============================================================================
+
+/**
+ * Monad Riverime — Holy Smite (Divinity alt). Wound a Mage and gain 1 IP.
+ * The +1 IP is granted alongside the wound patch (immediate, before the
+ * reaction window resolves). Standard post-wound-bonus flow follows.
+ */
+registerEffect('base.spell.holy-smite.l1', (ctx): EffectResult => {
+  if (!ctx.resumeAnswer) {
+    const targets = buildBurnTargets(ctx.state, ctx.triggeringPlayerId);
+    if (targets.length === 0) {
+      // No target — still grant the IP per spell text (cost already paid).
+      return {
+        kind: 'done',
+        patch: bumpInfluencePatch(ctx.state, ctx.triggeringPlayerId, 1),
+      };
+    }
+    return {
+      kind: 'pause',
+      pending: {
+        responderId: ctx.triggeringPlayerId,
+        prompt: { kind: 'choose-target-mage', eligibleMageIds: targets },
+        resume: {
+          effectId: 'base.spell.holy-smite.l1',
+          context: { step: 'apply' },
+        },
+        source: ctx.source,
+      },
+    };
+  }
+  if (ctx.resumeAnswer.kind !== 'mage-chosen') {
+    throw new Error(
+      `holy-smite expected mage-chosen, got ${ctx.resumeAnswer.kind}`,
+    );
+  }
+  const wounded = woundMage(
+    ctx.state,
+    ctx.resumeAnswer.mageId,
+    ctx.triggeringPlayerId,
+  );
+  const ipPatch = bumpInfluencePatch(
+    { ...ctx.state, ...wounded.patch },
+    ctx.triggeringPlayerId,
+    1,
+  );
+  return {
+    kind: 'open-reaction',
+    patch: { ...wounded.patch, ...ipPatch },
+    window: {
+      triggerEvents: [wounded.triggerEvent],
+      pendingResponderIds: buildReactionQueue(
+        ctx.state,
+        ctx.triggeringPlayerId,
+      ),
+      reactedPlayerIds: [],
+      afterResume: {
+        effectId: 'base.system.post-wound-bonus',
+        context: {
+          triggerEvent: triggerEventToContext(wounded.triggerEvent),
+        },
+      },
+      source: ctx.source,
+    },
+  };
+});
+
+/**
+ * Rihki Kanhamme — Burnout (Sorcery alt). Send one of your own office
+ * Mages to the Infirmary (no Infirmary bonus), then gain 3 Mana. The
+ * mage starts in office (not on a slot), so this is a flag flip + a
+ * location change — no reaction window opens (no opponent triggered it).
+ */
+registerEffect('base.spell.burnout.l1', (ctx): EffectResult => {
+  if (!ctx.resumeAnswer) {
+    const player = ctx.state.players.find(
+      (p) => p.id === ctx.triggeringPlayerId,
+    );
+    const eligible =
+      player?.mages
+        .filter((m) => m.location.kind === 'office' && !m.isWounded)
+        .map((m) => m.id) ?? [];
+    if (eligible.length === 0) {
+      // No mage to sacrifice — spell still grants the 3 Mana per text.
+      return {
+        kind: 'done',
+        patch: gainResourcePatch(
+          ctx.state,
+          ctx.triggeringPlayerId,
+          'mana',
+          3,
+        ),
+      };
+    }
+    return {
+      kind: 'pause',
+      pending: {
+        responderId: ctx.triggeringPlayerId,
+        prompt: { kind: 'choose-target-mage', eligibleMageIds: eligible },
+        resume: {
+          effectId: 'base.spell.burnout.l1',
+          context: { step: 'apply' },
+        },
+        source: ctx.source,
+      },
+    };
+  }
+  if (ctx.resumeAnswer.kind !== 'mage-chosen') {
+    throw new Error(
+      `burnout expected mage-chosen, got ${ctx.resumeAnswer.kind}`,
+    );
+  }
+  const mageId = ctx.resumeAnswer.mageId;
+  const casterId = ctx.triggeringPlayerId;
+  // Move the chosen office mage straight into the infirmary with
+  // isWounded=true. No reaction window — opponent didn't cause this and
+  // the spell text suppresses the Infirmary bonus.
+  const infirmaryPatch: GameStatePatch = {
+    players: ctx.state.players.map((p) =>
+      p.id !== casterId
+        ? p
+        : {
+            ...p,
+            mages: p.mages.map((m) =>
+              m.id !== mageId
+                ? m
+                : {
+                    ...m,
+                    isWounded: true,
+                    isShadowing: false,
+                    location: { kind: 'infirmary' as const },
+                  },
+            ),
+          },
+    ),
+  };
+  const afterInfirmary: GameState = { ...ctx.state, ...infirmaryPatch };
+  const manaPatch = gainResourcePatch(afterInfirmary, casterId, 'mana', 3);
+  return {
+    kind: 'done',
+    patch: { ...infirmaryPatch, ...manaPatch },
+  };
+});
+
+/**
+ * Jesca Renetton — Dark Pact (Mysticism alt). Banish one of your own
+ * Mages, then Wound a Mage. Multi-step prompt chain.
+ *
+ *   step 1 (no resumeAnswer): pick your own mage to banish.
+ *   step 2 ('pick-wound'): apply the banish, then prompt for wound target.
+ *   step 3 ('apply-wound'): wound + open reaction window with the standard
+ *     post-wound-bonus afterResume.
+ *
+ * The banish is self-inflicted so no reaction window opens for it (Mystic
+ * Amulet requires opponent trigger).
+ */
+registerEffect('base.spell.dark-pact.l1', (ctx): EffectResult => {
+  const step = ctx.resumeContext?.['step'];
+  const casterId = ctx.triggeringPlayerId;
+
+  // Step 1: pick own mage to banish.
+  if (!ctx.resumeAnswer) {
+    const player = ctx.state.players.find((p) => p.id === casterId);
+    // Own mages, anywhere except already banished.
+    const eligible =
+      player?.mages
+        .filter((m) => m.location.kind !== 'banished')
+        .map((m) => m.id) ?? [];
+    if (eligible.length === 0) return { kind: 'done', patch: {} };
+    return {
+      kind: 'pause',
+      pending: {
+        responderId: casterId,
+        prompt: { kind: 'choose-target-mage', eligibleMageIds: eligible },
+        resume: {
+          effectId: 'base.spell.dark-pact.l1',
+          context: { step: 'pick-wound' },
+        },
+        source: ctx.source,
+      },
+    };
+  }
+
+  // Step 2: banish, then prompt for wound target.
+  if (step === 'pick-wound') {
+    if (ctx.resumeAnswer.kind !== 'mage-chosen') {
+      throw new Error('dark-pact pick-wound expected mage-chosen');
+    }
+    const banished = banishMage(ctx.state, ctx.resumeAnswer.mageId, casterId);
+    const afterBanish: GameState = { ...ctx.state, ...banished.patch };
+    const wTargets = buildBurnTargets(afterBanish, casterId);
+    if (wTargets.length === 0) {
+      return { kind: 'done', patch: banished.patch };
+    }
+    return {
+      kind: 'pause',
+      patch: banished.patch,
+      pending: {
+        responderId: casterId,
+        prompt: { kind: 'choose-target-mage', eligibleMageIds: wTargets },
+        resume: {
+          effectId: 'base.spell.dark-pact.l1',
+          context: { step: 'apply-wound' },
+        },
+        source: ctx.source,
+      },
+    };
+  }
+
+  // Step 3: wound + reaction window.
+  if (step === 'apply-wound') {
+    if (ctx.resumeAnswer.kind !== 'mage-chosen') {
+      throw new Error('dark-pact apply-wound expected mage-chosen');
+    }
+    const wounded = woundMage(ctx.state, ctx.resumeAnswer.mageId, casterId);
+    return {
+      kind: 'open-reaction',
+      patch: wounded.patch,
+      window: {
+        triggerEvents: [wounded.triggerEvent],
+        pendingResponderIds: buildReactionQueue(ctx.state, casterId),
+        reactedPlayerIds: [],
+        afterResume: {
+          effectId: 'base.system.post-wound-bonus',
+          context: {
+            triggerEvent: triggerEventToContext(wounded.triggerEvent),
+          },
+        },
+        source: ctx.source,
+      },
+    };
+  }
+
+  throw new Error(`dark-pact unexpected step ${String(step)}`);
+});
+
+/**
+ * Lavanina — Shadow Bolt (Planar Studies alt). "An opponent's Mage is now
+ * shadowing its slot." Mechanically: the mage moves from the base
+ * position of its slot to the shadow position of the SAME slot.
+ *
+ * Per the user spec this counts as a MOVE for reaction triggering — so a
+ * `mage-moved` event fires (Phase Steppers / Invisibility Cloak / Shield
+ * Potion / Ancient Armor are all eligible to react). The `fromSpaceId`
+ * and `toSpaceId` are the same — defensive reactions that target "any
+ * open slot" can still relocate the mage elsewhere via their slot-pick.
+ */
+registerEffect('base.spell.shadow-bolt.l1', (ctx): EffectResult => {
+  if (!ctx.resumeAnswer) {
+    // Pick an opponent's placed mage (not already shadowing, not wounded,
+    // spell-source filter via buildBurnTargets — green / opposing-blue
+    // immunities apply).
+    const targets = buildBurnTargets(ctx.state, ctx.triggeringPlayerId).filter(
+      (mageId) => {
+        const owner = ctx.state.players.find((p) =>
+          p.mages.some((m) => m.id === mageId),
+        );
+        return owner?.id !== ctx.triggeringPlayerId;
+      },
+    );
+    if (targets.length === 0) return { kind: 'done', patch: {} };
+    return {
+      kind: 'pause',
+      pending: {
+        responderId: ctx.triggeringPlayerId,
+        prompt: { kind: 'choose-target-mage', eligibleMageIds: targets },
+        resume: {
+          effectId: 'base.spell.shadow-bolt.l1',
+          context: { step: 'apply' },
+        },
+        source: ctx.source,
+      },
+    };
+  }
+  if (ctx.resumeAnswer.kind !== 'mage-chosen') {
+    throw new Error('shadow-bolt expected mage-chosen');
+  }
+  const targetMageId = ctx.resumeAnswer.mageId;
+  const targetMage = ctx.state.players
+    .flatMap((p) => p.mages)
+    .find((m) => m.id === targetMageId);
+  if (
+    !targetMage ||
+    targetMage.location.kind !== 'action-space'
+  ) {
+    return { kind: 'done', patch: {} };
+  }
+  const targetOwner = ctx.state.players.find((p) =>
+    p.mages.some((m) => m.id === targetMageId),
+  );
+  if (!targetOwner) return { kind: 'done', patch: {} };
+  const spaceId = targetMage.location.spaceId;
+  const targetSpace = ctx.state.rooms
+    .flatMap((r) => r.actionSpaces)
+    .find((s) => s.id === spaceId);
+  if (!targetSpace || targetSpace.shadowOccupant) {
+    // Shadow slot already filled — spell fizzles (the mage can't move into
+    // an occupied shadow slot).
+    return { kind: 'done', patch: {} };
+  }
+  // Build the patch: clear the base occupant, set the shadow occupant,
+  // flip the mage's isShadowing flag.
+  const patch: GameStatePatch = {
+    players: ctx.state.players.map((p) =>
+      p.id !== targetOwner.id
+        ? p
+        : {
+            ...p,
+            mages: p.mages.map((m) =>
+              m.id !== targetMageId
+                ? m
+                : { ...m, isShadowing: true },
+            ),
+          },
+    ),
+    rooms: ctx.state.rooms.map((r) => ({
+      ...r,
+      actionSpaces: r.actionSpaces.map((s) =>
+        s.id !== spaceId
+          ? s
+          : {
+              ...s,
+              occupant: null,
+              shadowOccupant: {
+                mageId: targetMageId,
+                ownerId: targetOwner.id,
+                isShadowing: true,
+              },
+            },
+      ),
+    })),
+  };
+  // Per spec: emit a mage-moved event for reaction triggering, fromSpaceId
+  // === toSpaceId. Defensive reactions key off the event kind, not the
+  // origin/destination, so this is enough to trigger them.
+  const event: ReactionTriggerEvent = {
+    kind: 'mage-moved',
+    mageId: targetMageId,
+    ownerId: targetOwner.id,
+    fromSpaceId: spaceId,
+    toSpaceId: spaceId,
+    byPlayerId: ctx.triggeringPlayerId,
+  };
+  return {
+    kind: 'open-reaction',
+    patch,
+    window: {
+      triggerEvents: [event],
+      pendingResponderIds: buildReactionQueue(
+        ctx.state,
+        ctx.triggeringPlayerId,
+      ),
+      reactedPlayerIds: [],
+      // mage-moved doesn't grant an Infirmary bonus; close out silently.
+      afterResume: { effectId: 'base.system.noop', context: {} },
+      source: ctx.source,
+    },
+  };
+});
+
+/**
+ * Mannheim Wildern — Gust of Wind (Natural Magick alt). Move any Mage to an
+ * open slot in an adjacent room. The destination room must:
+ *   - be orthogonally adjacent to the target's current room,
+ *   - be placeable (not `cannotBePlacedInDirectly` — that excludes the
+ *     Infirmary).
+ * TODO: the spell text also excludes "Great Hall"; current room data has
+ * no such room, so for now the cannotBePlacedInDirectly filter alone covers
+ * the exclusion set.
+ */
+registerEffect('base.spell.gust-of-wind.l1', (ctx): EffectResult => {
+  const step = ctx.resumeContext?.['step'];
+
+  // Step 1: pick the target Mage (spell-source filter — green/opposing-
+  // blue immune; shadows excluded).
+  if (!ctx.resumeAnswer) {
+    const allTargets = buildBurnTargets(ctx.state, ctx.triggeringPlayerId);
+    // Filter to targets whose room has at least one placeable orthogonal
+    // neighbor with an open slot — otherwise the move can't happen.
+    const eligible = allTargets.filter((mageId) => {
+      const mage = ctx.state.players
+        .flatMap((p) => p.mages)
+        .find((m) => m.id === mageId);
+      if (!mage || mage.location.kind !== 'action-space') return false;
+      const sourceSpaceId = mage.location.spaceId;
+      const sourceRoom = ctx.state.rooms.find((r) =>
+        r.actionSpaces.some((s) => s.id === sourceSpaceId),
+      );
+      if (!sourceRoom) return false;
+      const neighbors = getOrthogonallyAdjacentRoomIds(
+        ctx.state.roomLayout,
+        sourceRoom.id,
+      );
+      for (const nid of neighbors) {
+        const neighbor = ctx.state.rooms.find((r) => r.id === nid);
+        if (!neighbor || neighbor.cannotBePlacedInDirectly) continue;
+        if (neighbor.actionSpaces.some((s) => !s.occupant)) return true;
+      }
+      return false;
+    });
+    if (eligible.length === 0) return { kind: 'done', patch: {} };
+    return {
+      kind: 'pause',
+      pending: {
+        responderId: ctx.triggeringPlayerId,
+        prompt: { kind: 'choose-target-mage', eligibleMageIds: eligible },
+        resume: {
+          effectId: 'base.spell.gust-of-wind.l1',
+          context: { step: 'pick-destination' },
+        },
+        source: ctx.source,
+      },
+    };
+  }
+
+  // Step 2: pick destination slot (open slot in an adjacent placeable room).
+  if (step === 'pick-destination') {
+    if (ctx.resumeAnswer.kind !== 'mage-chosen') {
+      throw new Error('gust-of-wind pick-destination expected mage-chosen');
+    }
+    const targetMageId = ctx.resumeAnswer.mageId;
+    const targetMage = ctx.state.players
+      .flatMap((p) => p.mages)
+      .find((m) => m.id === targetMageId);
+    if (!targetMage || targetMage.location.kind !== 'action-space') {
+      return { kind: 'done', patch: {} };
+    }
+    const sourceSpaceId = targetMage.location.spaceId;
+    const sourceRoom = ctx.state.rooms.find((r) =>
+      r.actionSpaces.some((s) => s.id === sourceSpaceId),
+    );
+    if (!sourceRoom) return { kind: 'done', patch: {} };
+    const neighbors = getOrthogonallyAdjacentRoomIds(
+      ctx.state.roomLayout,
+      sourceRoom.id,
+    );
+    const openSlots: string[] = [];
+    for (const nid of neighbors) {
+      const neighbor = ctx.state.rooms.find((r) => r.id === nid);
+      if (!neighbor || neighbor.cannotBePlacedInDirectly) continue;
+      for (const s of neighbor.actionSpaces) {
+        if (!s.occupant) openSlots.push(s.id);
+      }
+    }
+    if (openSlots.length === 0) return { kind: 'done', patch: {} };
+    return {
+      kind: 'pause',
+      pending: {
+        responderId: ctx.triggeringPlayerId,
+        prompt: {
+          kind: 'choose-target-action-space',
+          eligibleSpaceIds: openSlots,
+        },
+        resume: {
+          effectId: 'base.spell.gust-of-wind.l1',
+          context: { step: 'apply', targetMageId },
+        },
+        source: ctx.source,
+      },
+    };
+  }
+
+  // Step 3: apply the move + open the mage-moved reaction window.
+  if (step === 'apply') {
+    if (ctx.resumeAnswer.kind !== 'space-chosen') {
+      throw new Error('gust-of-wind apply expected space-chosen');
+    }
+    const targetMageId = ctx.resumeContext?.['targetMageId'];
+    if (typeof targetMageId !== 'string') {
+      throw new Error('gust-of-wind apply: missing targetMageId');
+    }
+    const moved = moveMageToSpace(
+      ctx.state,
+      targetMageId,
+      ctx.resumeAnswer.spaceId,
+      ctx.triggeringPlayerId,
+    );
+    return {
+      kind: 'open-reaction',
+      patch: moved.patch,
+      window: {
+        triggerEvents: [moved.triggerEvent],
+        pendingResponderIds: buildReactionQueue(
+          ctx.state,
+          ctx.triggeringPlayerId,
+        ),
+        reactedPlayerIds: [],
+        afterResume: { effectId: 'base.system.noop', context: {} },
+        source: ctx.source,
+      },
+    };
+  }
+
+  throw new Error(`gust-of-wind unexpected step ${String(step)}`);
+});

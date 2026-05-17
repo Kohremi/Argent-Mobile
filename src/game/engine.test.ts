@@ -9419,3 +9419,241 @@ describe('Most-INT voter — bug repro', () => {
     expect(computeVoterWinner(s, intVoter)).toBe('p1');
   });
 });
+
+// ============================================================================
+// Alt-leader spells (Holy Smite, Burnout, Dark Pact, Shadow Bolt, Gust of Wind)
+// ============================================================================
+
+describe('Alt-leader spells', () => {
+  function setupLeaderSpellTest(spellCardId: string, mana: number): GameState {
+    let s = initGame(TWO_PLAYER_CONFIG);
+    s = forceLibrarySideA(s);
+    s = zeroPlayerResources(s, 'p1');
+    s = zeroPlayerResources(s, 'p2');
+    s = addOwnedSpell(s, 'p1', spellCardId, { intPlaced: true });
+    s = setMana(s, 'p1', mana);
+    s = {
+      ...s,
+      firstPlayerIndex: 0,
+      phase: {
+        kind: 'errands',
+        round: 1,
+        activePlayerIndex: 0,
+        actionUsed: false,
+        fastActionUsed: false,
+      },
+    };
+    return s;
+  }
+
+  it('Holy Smite: wounds a target AND grants caster +1 IP', () => {
+    let s = setupLeaderSpellTest('base.spell.holy-smite', 1);
+    s = addMage(s, 'p2', {
+      id: 'bob-mage',
+      cardId: 'base.mage.sorcery',
+      color: 'red',
+    });
+    s = placeMageOnSpace(s, 'p2', 'bob-mage', 'base.room.library.a.slot-1');
+    const ipBefore =
+      s.players.find((p) => p.id === 'p1')?.resources.influence ?? 0;
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.holy-smite',
+      level: 1,
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'mage-chosen', mageId: 'bob-mage' },
+    });
+    // Caster's +1 IP applied immediately; wound resolves with reaction window.
+    const ipAfter =
+      s.players.find((p) => p.id === 'p1')?.resources.influence ?? 0;
+    expect(ipAfter).toBe(ipBefore + 1);
+    expect(findMageById(s, 'bob-mage').isWounded).toBe(true);
+  });
+
+  it('Burnout: sends a chosen office mage to the infirmary and grants 3 Mana', () => {
+    let s = setupLeaderSpellTest('base.spell.burnout', 0);
+    s = addMage(s, 'p1', {
+      id: 'alice-sacrifice',
+      cardId: 'base.mage.divinity',
+      color: 'blue',
+    });
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.burnout',
+      level: 1,
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'mage-chosen', mageId: 'alice-sacrifice' },
+    });
+    const sacrificed = findMageById(s, 'alice-sacrifice');
+    expect(sacrificed.isWounded).toBe(true);
+    expect(sacrificed.location.kind).toBe('infirmary');
+    const alice = s.players.find((p) => p.id === 'p1');
+    expect(alice?.resources.mana).toBe(3);
+    // No Infirmary bonus prompt (self-wound).
+    expect(s.pendingResolutionStack).toHaveLength(0);
+  });
+
+  it('Burnout: still grants 3 Mana when caster has no eligible office mage to sacrifice', () => {
+    let s = setupLeaderSpellTest('base.spell.burnout', 0);
+    // Alice has no mages at all.
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.burnout',
+      level: 1,
+    });
+    const alice = s.players.find((p) => p.id === 'p1');
+    expect(alice?.resources.mana).toBe(3);
+    expect(s.pendingResolutionStack).toHaveLength(0);
+  });
+
+  it('Dark Pact: banishes own mage, then wounds a chosen mage', () => {
+    let s = setupLeaderSpellTest('base.spell.dark-pact', 1);
+    s = addMage(s, 'p1', {
+      id: 'alice-sac',
+      cardId: 'base.mage.divinity',
+      color: 'blue',
+    });
+    s = addMage(s, 'p2', {
+      id: 'bob-mage',
+      cardId: 'base.mage.sorcery',
+      color: 'red',
+    });
+    s = placeMageOnSpace(s, 'p2', 'bob-mage', 'base.room.library.a.slot-1');
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.dark-pact',
+      level: 1,
+    });
+    // Step 1: pick own mage to banish.
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'mage-chosen', mageId: 'alice-sac' },
+    });
+    expect(findMageById(s, 'alice-sac').location.kind).toBe('banished');
+    // Step 2: pick wound target.
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'mage-chosen', mageId: 'bob-mage' },
+    });
+    expect(findMageById(s, 'bob-mage').isWounded).toBe(true);
+  });
+
+  it('Shadow Bolt: opponent mage transitions to the shadow position of its own slot; mage-moved event fires', () => {
+    let s = setupLeaderSpellTest('base.spell.shadow-bolt', 1);
+    s = addMage(s, 'p2', {
+      id: 'bob-mage',
+      cardId: 'base.mage.sorcery',
+      color: 'red',
+    });
+    s = placeMageOnSpace(s, 'p2', 'bob-mage', 'base.room.library.a.slot-1');
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.shadow-bolt',
+      level: 1,
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'mage-chosen', mageId: 'bob-mage' },
+    });
+    // Reaction window with a mage-moved event (from===to).
+    const reactionPrompt = topPending(s);
+    expect(reactionPrompt.prompt.kind).toBe('reaction-window');
+    if (reactionPrompt.prompt.kind === 'reaction-window') {
+      const event = reactionPrompt.prompt.triggerEvents[0];
+      expect(event?.kind).toBe('mage-moved');
+      if (event && event.kind === 'mage-moved') {
+        expect(event.fromSpaceId).toBe('base.room.library.a.slot-1');
+        expect(event.toSpaceId).toBe('base.room.library.a.slot-1');
+      }
+    }
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: reactionPrompt.id,
+      answer: { kind: 'reaction-passed' },
+    });
+    const slot = s.rooms
+      .flatMap((r) => r.actionSpaces)
+      .find((sp) => sp.id === 'base.room.library.a.slot-1');
+    expect(slot?.occupant).toBeNull();
+    expect(slot?.shadowOccupant?.mageId).toBe('bob-mage');
+    expect(findMageById(s, 'bob-mage').isShadowing).toBe(true);
+  });
+
+  it('Gust of Wind: moves a mage to an open slot in an adjacent room', () => {
+    let s = setupLeaderSpellTest('base.spell.gust-of-wind', 1);
+    // Force a 2-room adjacency: put Library at (0,0) and Vault at (0,1).
+    s = forceVaultSideA(s);
+    const libraryId = s.rooms.find((r) => r.name === 'Library')!.id;
+    const vaultId = s.rooms.find((r) => r.name === 'Vault')!.id;
+    const otherIds = s.rooms
+      .filter((r) => r.id !== libraryId && r.id !== vaultId)
+      .map((r) => r.id);
+    const grid: (string | null)[][] = [
+      [libraryId, vaultId],
+      [otherIds[0] ?? null, otherIds[1] ?? null],
+      [otherIds[2] ?? null, otherIds[3] ?? null],
+      [otherIds[4] ?? null, otherIds[5] ?? null],
+    ];
+    s = { ...s, roomLayout: { cols: 2, rows: 4, grid } };
+    s = addMage(s, 'p2', {
+      id: 'bob-mage',
+      cardId: 'base.mage.sorcery',
+      color: 'red',
+    });
+    s = placeMageOnSpace(s, 'p2', 'bob-mage', 'base.room.library.a.slot-1');
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.gust-of-wind',
+      level: 1,
+    });
+    // Pick the target.
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'mage-chosen', mageId: 'bob-mage' },
+    });
+    // Pick destination — Vault is one of the orthogonal neighbors of
+    // Library. (Other neighbors from the random layout may also appear
+    // as eligible options; we just need Vault to be in the list.)
+    const slotPrompt = topPending(s);
+    expect(slotPrompt.prompt.kind).toBe('choose-target-action-space');
+    if (slotPrompt.prompt.kind === 'choose-target-action-space') {
+      expect(slotPrompt.prompt.eligibleSpaceIds).toContain(
+        'base.room.vault.a.slot-1',
+      );
+    }
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: slotPrompt.id,
+      answer: {
+        kind: 'space-chosen',
+        spaceId: 'base.room.vault.a.slot-1',
+      },
+    });
+    // Pass the reaction window.
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'reaction-passed' },
+    });
+    expect(findMageById(s, 'bob-mage').location).toEqual({
+      kind: 'action-space',
+      spaceId: 'base.room.vault.a.slot-1',
+    });
+  });
+});
