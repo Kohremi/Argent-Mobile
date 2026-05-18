@@ -2004,6 +2004,7 @@ function handleAdvancePhase(state: GameState): GameState {
 function processRoundSetup(state: GameState, round: RoundNumber): GameState {
   let updated = state;
   if (round > 1) {
+    updated = returnSummonedMagesToSupply(updated);
     updated = refreshPlayerCardsAndMerit(updated);
     updated = redealTableaus(updated);
     updated = restoreBellTower(updated);
@@ -2019,6 +2020,38 @@ function processRoundSetup(state: GameState, round: RoundNumber): GameState {
       fastActionUsed: false,
     },
   };
+}
+
+/**
+ * Returns every summoned Mage (e.g., from Living Image) to its colour's
+ * supply pool. Runs at the start of round-setup for rounds 2+ — by that
+ * point Resolution has already collected slot rewards and returned mages
+ * to their owner's office, so any remaining `isSummoned: true` mage is
+ * safe to remove and recycle into the draft pool.
+ *
+ * Wounded summons (in the Infirmary) are also recycled, before
+ * `healInfirmaryMages` runs.
+ */
+function returnSummonedMagesToSupply(state: GameState): GameState {
+  const returnedByColor: Partial<Record<OwnedMage['color'], number>> = {};
+  const players = state.players.map((p) => {
+    const keep: OwnedMage[] = [];
+    for (const m of p.mages) {
+      if (m.isSummoned) {
+        returnedByColor[m.color] = (returnedByColor[m.color] ?? 0) + 1;
+      } else {
+        keep.push(m);
+      }
+    }
+    if (keep.length === p.mages.length) return p;
+    return { ...p, mages: keep };
+  });
+  const mageDraftPool = { ...state.mageDraftPool };
+  for (const [color, n] of Object.entries(returnedByColor)) {
+    mageDraftPool[color as OwnedMage['color']] =
+      (mageDraftPool[color as OwnedMage['color']] ?? 0) + (n ?? 0);
+  }
+  return { ...state, players, mageDraftPool };
 }
 
 /**

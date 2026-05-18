@@ -184,7 +184,8 @@ const livingImage: SpellCard = leaderSpell({
   department: 'students',
   manaCost: 1,
   timing: 'action',
-  description: 'Place a Neutral Mage from the supply into your Office.',
+  description:
+    'Place a Neutral Mage from the supply into an empty slot. Return this Mage to the supply at the end of the round.',
 });
 
 /** Byron Krane — Mysticism faction leader. */

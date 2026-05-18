@@ -3973,10 +3973,8 @@ describe('Leader spells (unique single-level)', () => {
     ).toBe(true);
   });
 
-  it('Living Image: adds an off-white mage and decrements the supply', () => {
+  it('Living Image: prompts for a slot, places a Neutral Mage there, decrements the supply, and flags it summoned', () => {
     let s = setupLeaderTest();
-    // Caster mage is intentionally NOT off-white so the new off-white mage
-    // is easy to identify in the assertions below.
     s = addMage(s, 'p1', {
       id: 'alice-mage-1',
       cardId: 'base.mage.divinity',
@@ -3991,12 +3989,87 @@ describe('Leader spells (unique single-level)', () => {
       spellCardId: 'base.spell.living-image',
       level: 1,
     });
-    expect(s.pendingResolutionStack).toHaveLength(0);
+    // The cast surfaces a slot picker.
+    const slotPrompt = topPending(s);
+    expect(slotPrompt.prompt.kind).toBe('choose-target-action-space');
+    if (slotPrompt.prompt.kind !== 'choose-target-action-space') return;
+    const targetSlot = slotPrompt.prompt.eligibleSpaceIds.find((id) =>
+      id.startsWith('base.room.library.a.'),
+    )!;
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: slotPrompt.id,
+      answer: { kind: 'space-chosen', spaceId: targetSlot },
+    });
     expect(s.mageDraftPool['off-white']).toBe(poolBefore - 1);
     const alice = s.players.find((p) => p.id === 'p1');
     const newMage = alice?.mages.find((m) => m.color === 'off-white');
     expect(newMage).toBeTruthy();
-    expect(newMage?.location).toEqual({ kind: 'office', playerId: 'p1' });
+    expect(newMage?.isSummoned).toBe(true);
+    expect(newMage?.location).toEqual({
+      kind: 'action-space',
+      spaceId: targetSlot,
+    });
+    // Slot now hosts the new mage.
+    const slot = s.rooms
+      .flatMap((r) => r.actionSpaces)
+      .find((sp) => sp.id === targetSlot);
+    expect(slot?.occupant?.mageId).toBe(newMage?.id);
+  });
+
+  it('Living Image: summoned mage is returned to the supply at round-end', () => {
+    let s = setupLeaderTest();
+    s = addMage(s, 'p1', {
+      id: 'alice-mage-1',
+      cardId: 'base.mage.divinity',
+      color: 'blue',
+    });
+    s = setMana(s, 'p1', 1);
+    s = addOwnedSpell(s, 'p1', 'base.spell.living-image');
+    const poolBefore = s.mageDraftPool['off-white'];
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.living-image',
+      level: 1,
+    });
+    const slotPrompt = topPending(s);
+    if (slotPrompt.prompt.kind !== 'choose-target-action-space') return;
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: slotPrompt.id,
+      answer: {
+        kind: 'space-chosen',
+        spaceId: slotPrompt.prompt.eligibleSpaceIds.find((id) =>
+          id.startsWith('base.room.library.a.'),
+        )!,
+      },
+    });
+    expect(s.mageDraftPool['off-white']).toBe(poolBefore - 1);
+    // Drive the game through to round-setup of round 2.
+    s = { ...s, bellTower: { ...s.bellTower, available: [] } };
+    while (s.phase.kind === 'errands') {
+      const activeId = s.players[s.phase.activePlayerIndex]!.id;
+      s = applyAction(s, { type: 'PASS_TURN', playerId: activeId });
+    }
+    // Pump through resolution prompts until mid-game-scoring.
+    while (s.phase.kind === 'resolution') {
+      if (s.pendingResolutionStack.length > 0) {
+        s = applyAction(s, {
+          type: 'RESOLVE_PENDING',
+          resolutionId: topPending(s).id,
+          answer: { kind: 'option-chosen', optionId: 'forfeit', payload: {} },
+        });
+      } else {
+        s = applyAction(s, { type: 'ADVANCE_PHASE' });
+      }
+    }
+    s = applyAction(s, { type: 'ADVANCE_PHASE' }); // mid-game → round-setup
+    s = applyAction(s, { type: 'ADVANCE_PHASE' }); // round-setup → errands r2
+    // Summoned mage should now be gone; supply restored.
+    const alice = s.players.find((p) => p.id === 'p1');
+    expect(alice?.mages.some((m) => m.isSummoned)).toBe(false);
+    expect(s.mageDraftPool['off-white']).toBe(poolBefore);
   });
 
   it('Living Image: fizzles silently when the off-white supply is empty', () => {

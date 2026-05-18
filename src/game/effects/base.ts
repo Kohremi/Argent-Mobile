@@ -3576,25 +3576,61 @@ registerEffect('base.spell.trance.l1', (ctx): EffectResult => ({
   patch: gainResourcePatch(ctx.state, ctx.triggeringPlayerId, 'mana', 2),
 }));
 
-/** Trias Blackwind — Living Image: place a neutral mage from the supply
- *  into the caster's office. Fizzles silently if the supply is empty. */
+/** Trias Blackwind — Living Image: place a Neutral Mage from the supply
+ *  into an empty slot of the caster's choice. The mage is flagged
+ *  `isSummoned: true` and returned to the supply at the start of the
+ *  next round-setup (see `endOfRoundCleanupForSummons`). Fizzles
+ *  silently if the supply is empty or no eligible slots exist. */
 registerEffect('base.spell.living-image.l1', (ctx): EffectResult => {
-  const poolNow = ctx.state.mageDraftPool['off-white'] ?? 0;
-  if (poolNow === 0) {
-    return { kind: 'done', patch: {} };
+  const step = ctx.resumeContext?.['step'];
+  const self = 'base.spell.living-image.l1';
+
+  if (!ctx.resumeAnswer) {
+    if ((ctx.state.mageDraftPool['off-white'] ?? 0) === 0) {
+      return { kind: 'done', patch: {} };
+    }
+    const slots = listEligiblePlacementSlots(
+      ctx.state,
+      ctx.triggeringPlayerId,
+    );
+    if (slots.length === 0) return { kind: 'done', patch: {} };
+    return {
+      kind: 'pause',
+      pending: {
+        responderId: ctx.triggeringPlayerId,
+        prompt: {
+          kind: 'choose-target-action-space',
+          eligibleSpaceIds: slots,
+        },
+        resume: { effectId: self, context: { step: 'apply' } },
+        source: ctx.source,
+      },
+    };
   }
-  const seq = ctx.state.nextSequenceId;
-  const newMage: OwnedMage = {
-    id: `m-${seq}`,
-    cardId: 'base.mage.neutral',
-    color: 'off-white',
-    location: { kind: 'office', playerId: ctx.triggeringPlayerId },
-    isShadowing: false,
-    isWounded: false,
-  };
-  return {
-    kind: 'done',
-    patch: {
+
+  if (step === 'apply') {
+    if (ctx.resumeAnswer.kind !== 'space-chosen') {
+      throw new Error(`${self} apply expected space-chosen`);
+    }
+    const spaceId = ctx.resumeAnswer.spaceId;
+    const poolNow = ctx.state.mageDraftPool['off-white'] ?? 0;
+    if (poolNow === 0) return { kind: 'done', patch: {} };
+    const seq = ctx.state.nextSequenceId;
+    const newMage: OwnedMage = {
+      id: `m-${seq}`,
+      cardId: 'base.mage.neutral',
+      color: 'off-white',
+      location: { kind: 'action-space' as const, spaceId },
+      isShadowing: false,
+      isWounded: false,
+      isSummoned: true,
+    };
+    const occupancy: WorkerOccupancy = {
+      mageId: newMage.id,
+      ownerId: ctx.triggeringPlayerId,
+      isShadowing: false,
+    };
+    const patch: GameStatePatch = {
       nextSequenceId: seq + 1,
       mageDraftPool: {
         ...ctx.state.mageDraftPool,
@@ -3605,8 +3641,23 @@ registerEffect('base.spell.living-image.l1', (ctx): EffectResult => {
           ? p
           : { ...p, mages: [...p.mages, newMage] },
       ),
-    },
-  };
+      rooms: ctx.state.rooms.map((r) => ({
+        ...r,
+        actionSpaces: r.actionSpaces.map((s) =>
+          s.id !== spaceId ? s : { ...s, occupant: occupancy },
+        ),
+      })),
+    };
+    return patchWithMaybeInstantReward(
+      ctx.state,
+      patch,
+      spaceId,
+      ctx.triggeringPlayerId,
+      'base',
+    );
+  }
+
+  throw new Error(`${self} unexpected step ${String(step)}`);
 });
 
 /** Larimore Burman — Flash of Light: prompt for a banish target, then

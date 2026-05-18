@@ -124,6 +124,12 @@ export interface OwnedMage {
   location: MageLocation;
   isShadowing: boolean;
   isWounded: boolean;
+  /**
+   * Marks a Mage as a temporary summon (e.g., Living Image's neutral mage
+   * from the supply). At round-end, the round-setup step removes every
+   * summoned mage and returns one to the off-white supply pool.
+   */
+  isSummoned?: boolean;
 }
 
 export type MageLocation =
