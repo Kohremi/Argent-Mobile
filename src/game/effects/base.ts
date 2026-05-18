@@ -9947,3 +9947,171 @@ function openMosteHolieMagePrompt(
     },
   };
 }
+
+// ============================================================================
+// Burn L2 / L3 — wider Sorcery wound spells
+// ============================================================================
+//
+// L1 (Burn) is the vertical-slice single-target wound spell above. L2 and L3
+// extend the same theme to multi-mage hits in a single room.
+
+/** Burn L2 "Conflagration" — Wound up to two Mages in the same room.
+ *  Steps: pick a room (must have at least one woundable mage) → pick the
+ *  first target → optionally pick a second target in the same room (or
+ *  stop after one). Wound chosen mage(s) and open the batch reaction +
+ *  Infirmary bonus chain. */
+registerEffect('base.spell.burn.l2', (ctx): EffectResult => {
+  const step = ctx.resumeContext?.['step'];
+  const self = 'base.spell.burn.l2';
+
+  if (!ctx.resumeAnswer) {
+    const eligibleRoomIds: string[] = [];
+    for (const r of ctx.state.rooms) {
+      if (
+        buildWoundableMagesInRoom(ctx.state, ctx.triggeringPlayerId, r.id)
+          .length > 0
+      ) {
+        eligibleRoomIds.push(r.id);
+      }
+    }
+    if (eligibleRoomIds.length === 0) return { kind: 'done', patch: {} };
+    return {
+      kind: 'pause',
+      pending: {
+        responderId: ctx.triggeringPlayerId,
+        prompt: {
+          kind: 'choose-from-options',
+          options: eligibleRoomIds.map((rid) => {
+            const r = ctx.state.rooms.find((rr) => rr.id === rid)!;
+            return { id: rid, label: r.name, payload: {} };
+          }),
+        },
+        resume: { effectId: self, context: { step: 'pick-first' } },
+        source: ctx.source,
+      },
+    };
+  }
+
+  if (step === 'pick-first') {
+    if (ctx.resumeAnswer.kind !== 'option-chosen') {
+      throw new Error(`${self} pick-first expected option-chosen`);
+    }
+    const roomId = ctx.resumeAnswer.optionId;
+    const targets = buildWoundableMagesInRoom(
+      ctx.state,
+      ctx.triggeringPlayerId,
+      roomId,
+    );
+    if (targets.length === 0) return { kind: 'done', patch: {} };
+    return {
+      kind: 'pause',
+      pending: {
+        responderId: ctx.triggeringPlayerId,
+        prompt: { kind: 'choose-target-mage', eligibleMageIds: targets },
+        resume: { effectId: self, context: { step: 'pick-second', roomId } },
+        source: ctx.source,
+      },
+    };
+  }
+
+  if (step === 'pick-second') {
+    if (ctx.resumeAnswer.kind !== 'mage-chosen') {
+      throw new Error(`${self} pick-second expected mage-chosen`);
+    }
+    const firstId = ctx.resumeAnswer.mageId;
+    const roomId = ctx.resumeContext?.['roomId'];
+    if (typeof roomId !== 'string') {
+      throw new Error(`${self} pick-second: missing roomId`);
+    }
+    const remaining = buildWoundableMagesInRoom(
+      ctx.state,
+      ctx.triggeringPlayerId,
+      roomId,
+    ).filter((m) => m !== firstId);
+    if (remaining.length === 0) {
+      // Only one woundable mage in the room — wound just the first target.
+      return applyBatchWound(ctx, self, [firstId]);
+    }
+    // Offer a second target plus 'stop' to wound just one.
+    const options: ChoiceOption[] = remaining.map((mid) => ({
+      id: mid,
+      label: `Also wound ${mid}`,
+      payload: {},
+    }));
+    options.push({ id: 'stop', label: 'Stop after one', payload: {} });
+    return {
+      kind: 'pause',
+      pending: {
+        responderId: ctx.triggeringPlayerId,
+        prompt: { kind: 'choose-from-options', options },
+        resume: { effectId: self, context: { step: 'apply', firstId } },
+        source: ctx.source,
+      },
+    };
+  }
+
+  if (step === 'apply') {
+    if (ctx.resumeAnswer.kind !== 'option-chosen') {
+      throw new Error(`${self} apply expected option-chosen`);
+    }
+    const firstId = ctx.resumeContext?.['firstId'];
+    if (typeof firstId !== 'string') {
+      throw new Error(`${self} apply: missing firstId`);
+    }
+    if (ctx.resumeAnswer.optionId === 'stop') {
+      return applyBatchWound(ctx, self, [firstId]);
+    }
+    return applyBatchWound(ctx, self, [firstId, ctx.resumeAnswer.optionId]);
+  }
+
+  throw new Error(`${self} unexpected step ${String(step)}`);
+});
+
+/** Burn L3 "Inferno" — Wound all Mages in a room. Mirrors Lamentations'
+ *  Nox shape but DOES grant the standard Infirmary bonus per the spell
+ *  text (no "owner gains no bonus" clause). */
+registerEffect('base.spell.burn.l3', (ctx): EffectResult => {
+  const step = ctx.resumeContext?.['step'];
+  const self = 'base.spell.burn.l3';
+
+  if (!ctx.resumeAnswer) {
+    const eligibleRoomIds: string[] = [];
+    for (const r of ctx.state.rooms) {
+      if (
+        buildWoundableMagesInRoom(ctx.state, ctx.triggeringPlayerId, r.id)
+          .length > 0
+      ) {
+        eligibleRoomIds.push(r.id);
+      }
+    }
+    if (eligibleRoomIds.length === 0) return { kind: 'done', patch: {} };
+    return {
+      kind: 'pause',
+      pending: {
+        responderId: ctx.triggeringPlayerId,
+        prompt: {
+          kind: 'choose-from-options',
+          options: eligibleRoomIds.map((rid) => {
+            const r = ctx.state.rooms.find((rr) => rr.id === rid)!;
+            return { id: rid, label: r.name, payload: {} };
+          }),
+        },
+        resume: { effectId: self, context: { step: 'apply' } },
+        source: ctx.source,
+      },
+    };
+  }
+  if (step === 'apply') {
+    if (ctx.resumeAnswer.kind !== 'option-chosen') {
+      throw new Error(`${self} apply expected option-chosen`);
+    }
+    const roomId = ctx.resumeAnswer.optionId;
+    const mageIds = buildWoundableMagesInRoom(
+      ctx.state,
+      ctx.triggeringPlayerId,
+      roomId,
+    );
+    return applyBatchWound(ctx, self, mageIds);
+  }
+  throw new Error(`${self} unexpected step ${String(step)}`);
+});

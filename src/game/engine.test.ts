@@ -9880,6 +9880,143 @@ describe('Spell wiring — Wave 8 (area effects: Tsunami, Nox)', () => {
     });
     expect(s.pendingResolutionStack).toHaveLength(0);
   });
+
+  it('Conflagration (Burn L2): wounds up to two mages in the chosen room', () => {
+    let s = setupBatchSpell({
+      spellCardId: 'base.spell.burn',
+      level: 2,
+      casterMana: 2,
+    });
+    s = addMage(s, 'p2', {
+      id: 'bob-mage-a',
+      cardId: 'base.mage.sorcery',
+      color: 'red',
+    });
+    s = addMage(s, 'p2', {
+      id: 'bob-mage-b',
+      cardId: 'base.mage.sorcery',
+      color: 'red',
+    });
+    s = placeMageOnSpace(s, 'p2', 'bob-mage-a', 'base.room.library.a.slot-1');
+    s = placeMageOnSpace(s, 'p2', 'bob-mage-b', 'base.room.library.a.slot-2');
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.burn',
+      level: 2,
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: {
+        kind: 'option-chosen',
+        optionId: 'base.room.library.a',
+        payload: {},
+      },
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'mage-chosen', mageId: 'bob-mage-a' },
+    });
+    const secondPrompt = topPending(s);
+    expect(secondPrompt.prompt.kind).toBe('choose-from-options');
+    if (secondPrompt.prompt.kind !== 'choose-from-options') return;
+    expect(secondPrompt.prompt.options.map((o) => o.id)).toContain('stop');
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: secondPrompt.id,
+      answer: { kind: 'option-chosen', optionId: 'bob-mage-b', payload: {} },
+    });
+    expect(findMageById(s, 'bob-mage-a').isWounded).toBe(true);
+    expect(findMageById(s, 'bob-mage-b').isWounded).toBe(true);
+    expect(topPending(s).prompt.kind).toBe('reaction-window');
+  });
+
+  it('Conflagration: "stop after one" wounds only the first target', () => {
+    let s = setupBatchSpell({
+      spellCardId: 'base.spell.burn',
+      level: 2,
+      casterMana: 2,
+    });
+    s = addMage(s, 'p2', {
+      id: 'bob-mage-a',
+      cardId: 'base.mage.sorcery',
+      color: 'red',
+    });
+    s = addMage(s, 'p2', {
+      id: 'bob-mage-b',
+      cardId: 'base.mage.sorcery',
+      color: 'red',
+    });
+    s = placeMageOnSpace(s, 'p2', 'bob-mage-a', 'base.room.library.a.slot-1');
+    s = placeMageOnSpace(s, 'p2', 'bob-mage-b', 'base.room.library.a.slot-2');
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.burn',
+      level: 2,
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: {
+        kind: 'option-chosen',
+        optionId: 'base.room.library.a',
+        payload: {},
+      },
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'mage-chosen', mageId: 'bob-mage-a' },
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'option-chosen', optionId: 'stop', payload: {} },
+    });
+    expect(findMageById(s, 'bob-mage-a').isWounded).toBe(true);
+    expect(findMageById(s, 'bob-mage-b').isWounded).toBe(false);
+  });
+
+  it('Inferno (Burn L3): wounds ALL woundable mages in a single room', () => {
+    let s = setupBatchSpell({
+      spellCardId: 'base.spell.burn',
+      level: 3,
+      casterMana: 4,
+    });
+    s = addMage(s, 'p2', {
+      id: 'bob-mage-a',
+      cardId: 'base.mage.sorcery',
+      color: 'red',
+    });
+    s = addMage(s, 'p2', {
+      id: 'bob-mage-b',
+      cardId: 'base.mage.sorcery',
+      color: 'red',
+    });
+    s = placeMageOnSpace(s, 'p2', 'bob-mage-a', 'base.room.library.a.slot-1');
+    s = placeMageOnSpace(s, 'p2', 'bob-mage-b', 'base.room.library.a.slot-2');
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.burn',
+      level: 3,
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: {
+        kind: 'option-chosen',
+        optionId: 'base.room.library.a',
+        payload: {},
+      },
+    });
+    expect(findMageById(s, 'bob-mage-a').isWounded).toBe(true);
+    expect(findMageById(s, 'bob-mage-b').isWounded).toBe(true);
+    expect(topPending(s).prompt.kind).toBe('reaction-window');
+  });
 });
 
 // ============================================================================

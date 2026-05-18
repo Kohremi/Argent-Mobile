@@ -112,6 +112,7 @@ const burnSpell: SpellCard = {
       manaCost: 1,
       effectId: 'base.spell.burn.l1',
       timing: 'action',
+      description: 'Wound a Mage.',
     },
     {
       level: 2,
@@ -119,6 +120,7 @@ const burnSpell: SpellCard = {
       manaCost: 2,
       effectId: 'base.spell.burn.l2',
       timing: 'action',
+      description: 'Wound up to two Mages in the same room.',
     },
     {
       level: 3,
@@ -126,6 +128,7 @@ const burnSpell: SpellCard = {
       manaCost: 4,
       effectId: 'base.spell.burn.l3',
       timing: 'action',
+      description: 'Wound all Mages in a room.',
     },
   ],
 };
