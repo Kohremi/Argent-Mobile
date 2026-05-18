@@ -371,34 +371,38 @@ function resolveByInfluence(
  *      value first" (lowest `influenceArrivalSeq`) as the inner step.
  *   3. Still tied → voter abstains.
  */
+/** Result of resolving a per-voter tie: the winner (or null if abstain),
+ *  and which tiebreaker step picked them. */
+export type VoterTiebreaker = 'marks' | 'influence' | 'influence-arrival';
+
 function breakVoterTie(
   state: GameState,
   voter: ConsortiumVoter,
   candidates: Player[],
-): PlayerId | null {
+): { winner: PlayerId; via: VoterTiebreaker } | null {
   const markers = candidates.filter(
     (p) => countMarksOnVoter(state, voter.id, p.id) > 0,
   );
 
   // Step 1: marks (binary).
-  if (markers.length === 1) return markers[0]!.id;
+  if (markers.length === 1) return { winner: markers[0]!.id, via: 'marks' };
 
   // Step 2 + 3: IP tiebreak on the appropriate subset.
   const ipPool = markers.length === 0 ? candidates : markers;
-  return resolveByInfluence(ipPool)?.winner ?? null;
+  return resolveByInfluence(ipPool);
 }
 
 /**
  * For "Most X" voters: returns the single player with the highest score for
- * the criterion (above 0), with tiebreakers applied. Returns null if every
- * player scored 0 or the tiebreakers exhaust without a winner.
+ * the criterion (above 0), with tiebreakers applied. Returns `null` winner
+ * if every player scored 0 or the tiebreakers exhaust without a winner.
  */
 function computeMostWinner(
   state: GameState,
   voter: ConsortiumVoter,
   criterion: ScoringCriterion,
-): PlayerId | null {
-  if (state.players.length === 0) return null;
+): { winner: PlayerId | null; tiebreaker?: VoterTiebreaker } {
+  if (state.players.length === 0) return { winner: null };
 
   const scored = state.players.map((p) => ({
     player: p,
@@ -409,12 +413,14 @@ function computeMostWinner(
   for (const s of scored) {
     if (s.score > max) max = s.score;
   }
-  if (max <= 0) return null;
+  if (max <= 0) return { winner: null };
 
   const tied = scored.filter((s) => s.score === max).map((s) => s.player);
-  if (tied.length === 1) return tied[0]!.id;
+  if (tied.length === 1) return { winner: tied[0]!.id };
 
-  return breakVoterTie(state, voter, tied);
+  const result = breakVoterTie(state, voter, tied);
+  if (!result) return { winner: null };
+  return { winner: result.winner, tiebreaker: result.via };
 }
 
 /**
@@ -427,8 +433,8 @@ function computeSecondMostWinner(
   state: GameState,
   voter: ConsortiumVoter,
   baseCriterion: ScoringCriterion,
-): PlayerId | null {
-  if (state.players.length === 0) return null;
+): { winner: PlayerId | null; tiebreaker?: VoterTiebreaker } {
+  if (state.players.length === 0) return { winner: null };
 
   const scored = state.players.map((p) => ({
     player: p,
@@ -439,18 +445,20 @@ function computeSecondMostWinner(
   for (const s of scored) {
     if (s.score > top) top = s.score;
   }
-  if (top <= 0) return null;
+  if (top <= 0) return { winner: null };
   // Find the highest score strictly below `top`.
   let second = -1;
   for (const s of scored) {
     if (s.score < top && s.score > second) second = s.score;
   }
-  if (second <= 0) return null;
+  if (second <= 0) return { winner: null };
   const secondTier = scored
     .filter((s) => s.score === second)
     .map((s) => s.player);
-  if (secondTier.length === 1) return secondTier[0]!.id;
-  return breakVoterTie(state, voter, secondTier);
+  if (secondTier.length === 1) return { winner: secondTier[0]!.id };
+  const result = breakVoterTie(state, voter, secondTier);
+  if (!result) return { winner: null };
+  return { winner: result.winner, tiebreaker: result.via };
 }
 
 /**
@@ -460,7 +468,7 @@ function computeSecondMostWinner(
 export function computeVoterWinner(
   state: GameState,
   voter: ConsortiumVoter,
-): PlayerId | null {
+): { winner: PlayerId | null; tiebreaker?: VoterTiebreaker } {
   if (voter.criterion === 'second-most-influence') {
     return computeSecondMostWinner(state, voter, 'most-influence');
   }
@@ -480,6 +488,23 @@ export interface VoterAward {
   voterName: string;
   votes: number;
   winnerPlayerId: PlayerId | null;
+  /**
+   * Per-player score for this voter's criterion (e.g. for the "Most IP"
+   * voter this is each player's total Influence). The UI shows these next
+   * to each player's column so the result is auditable at a glance.
+   *
+   * For the "Second-Most X" voters the score is still each player's value
+   * on the base criterion (most-influence / most-supporters); the
+   * second-place selection logic lives inside `computeSecondMostWinner`.
+   */
+  scores: Record<PlayerId, number>;
+  /**
+   * Set when the winner emerged from a tiebreaker (more than one player
+   * shared the top score). `'marks'` = decided by mark on this voter,
+   * `'influence'` = total IP, `'influence-arrival'` = "reached that IP
+   * value first". Absent when the top score was already unique.
+   */
+  tiebreaker?: VoterTiebreaker;
 }
 
 export interface FinalScoringResult {
@@ -508,15 +533,29 @@ export function computeFinalScoring(state: GameState): FinalScoringResult {
 
   const voterAwards: VoterAward[] = [];
   for (const voter of state.voters) {
-    const winner = computeVoterWinner(state, voter);
+    const { winner, tiebreaker } = computeVoterWinner(state, voter);
     if (winner !== null) {
       votesPerPlayer[winner] = (votesPerPlayer[winner] ?? 0) + voter.votes;
+    }
+    // For Second-Most voters we score on the base criterion so the UI
+    // displays the same value the selection logic considered.
+    const scoringCriterion =
+      voter.criterion === 'second-most-influence'
+        ? 'most-influence'
+        : voter.criterion === 'second-most-supporters'
+          ? 'most-supporters'
+          : voter.criterion;
+    const scores: Record<PlayerId, number> = {};
+    for (const p of state.players) {
+      scores[p.id] = scorePlayerForCriterion(state, p, scoringCriterion);
     }
     voterAwards.push({
       voterId: voter.id,
       voterName: voter.name,
       votes: voter.votes,
       winnerPlayerId: winner,
+      scores,
+      ...(tiebreaker ? { tiebreaker } : {}),
     });
   }
 

@@ -8,7 +8,7 @@ import clsx from 'clsx';
 import { useGameStore } from '../store/gameStore';
 import { baseGamePack } from '../content/packs/base';
 import { listPacks } from '../content/registry';
-import { computeFinalScoring } from '../game/scoring';
+import { computeFinalScoring, type VoterAward } from '../game/scoring';
 import { countPlayerMagesInRoom } from '../game/effects/helpers';
 import { BellIcon, LockIcon, MageIcon, ResourceIcon, type ResourceKind } from './icons';
 import type {
@@ -2133,17 +2133,18 @@ function VoterTableauPanel({
   // mid-game-scoring is a pass-through phase between rounds and must NOT
   // expose face-down voters.
   const scoringRevealed = state.phase.kind === 'complete';
-  // Pre-compute per-voter winners so each row can highlight the awarded
-  // player's column. Only done when the game is complete; mid-game we
-  // don't show would-be winners (voters could still be marked).
-  const voterWinners: Record<string, string | null> = scoringRevealed
+  // Pre-compute per-voter awards so each row can highlight the winner,
+  // show per-player scores, and surface the tiebreaker that decided ties.
+  const voterAwardById: Record<string, VoterAward> = scoringRevealed
     ? Object.fromEntries(
-        computeFinalScoring(state).voterAwards.map((a) => [
-          a.voterId,
-          a.winnerPlayerId,
-        ]),
+        computeFinalScoring(state).voterAwards.map((a) => [a.voterId, a]),
       )
     : {};
+  const tiebreakerLabel: Record<NonNullable<VoterAward['tiebreaker']>, string> = {
+    marks: 'Marks',
+    influence: 'Total Influence',
+    'influence-arrival': 'Reached Influence first',
+  };
 
   const playerHasMark = (playerId: string, voterId: string) =>
     state.voterMarks.some(
@@ -2224,10 +2225,19 @@ function VoterTableauPanel({
                             {v.description}
                           </div>
                         )}
-                        {scoringRevealed && voterWinners[v.id] === null && (
-                          <div className="text-[10px] uppercase tracking-wide text-slate-500 mt-0.5">
-                            abstained
-                          </div>
+                        {scoringRevealed && voterAwardById[v.id] && (
+                          <>
+                            {voterAwardById[v.id]!.winnerPlayerId === null && (
+                              <div className="text-[10px] uppercase tracking-wide text-slate-500 mt-0.5">
+                                abstained
+                              </div>
+                            )}
+                            {voterAwardById[v.id]!.tiebreaker && (
+                              <div className="text-[10px] text-amber-300/80 italic mt-0.5">
+                                Tiebreaker: {tiebreakerLabel[voterAwardById[v.id]!.tiebreaker!]}
+                              </div>
+                            )}
+                          </>
                         )}
                       </div>
                     ) : (
@@ -2262,8 +2272,12 @@ function VoterTableauPanel({
                     const marked = playerHasMark(p.id, v.id);
                     const colorClass =
                       PLAYER_COLOR_BG[p.color] ?? 'bg-slate-400';
+                    const award = scoringRevealed
+                      ? voterAwardById[v.id]
+                      : undefined;
                     const wonThisVoter =
-                      scoringRevealed && voterWinners[v.id] === p.id;
+                      scoringRevealed && award?.winnerPlayerId === p.id;
+                    const score = award?.scores[p.id];
                     return (
                       <td
                         key={p.id}
@@ -2285,9 +2299,17 @@ function VoterTableauPanel({
                               : `${p.name} has not marked this voter`
                           }
                         />
-                        {wonThisVoter && (
-                          <div className="text-[10px] text-amber-300 font-medium mt-1">
-                            +{v.votes}
+                        {scoringRevealed && score !== undefined && (
+                          <div
+                            className={clsx(
+                              'text-[10px] tabular-nums mt-1',
+                              wonThisVoter
+                                ? 'text-amber-300 font-medium'
+                                : 'text-slate-400',
+                            )}
+                            title={`${p.name}'s value for this voter's criterion`}
+                          >
+                            ({score}){wonThisVoter && ` +${v.votes}`}
                           </div>
                         )}
                       </td>

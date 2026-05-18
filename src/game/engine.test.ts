@@ -589,7 +589,7 @@ describe('Endgame scoring', () => {
     });
     const voter = s.voters.find((v) => v.criterion === 'most-gold');
     if (!voter) throw new Error('most-gold voter not seated this game');
-    expect(computeVoterWinner(s, voter)).toBe('p2');
+    expect(computeVoterWinner(s, voter).winner).toBe('p2');
   });
 
   it('most-research counts total researched levels across owned spells', () => {
@@ -805,7 +805,7 @@ describe('Endgame scoring', () => {
       ...s,
       voterMarks: [{ playerId: 'p2', voterId: diversityVoter.id }],
     };
-    expect(computeVoterWinner(oneMarker, diversityVoter)).toBe('p2');
+    expect(computeVoterWinner(oneMarker, diversityVoter).winner).toBe('p2');
 
     // Case B: multiple markers → IP runs ONLY among them. p4 doesn't have
     // the diversity to be a candidate; among p1/p3 (both marked), p3 has
@@ -826,7 +826,7 @@ describe('Endgame scoring', () => {
       // p2 has the most Influence but no mark — not in the IP pool.
       resources: { ...p.resources, influence: 100 },
     }));
-    expect(computeVoterWinner(multipleMarkers, diversityVoter)).toBe('p3');
+    expect(computeVoterWinner(multipleMarkers, diversityVoter).winner).toBe('p3');
 
     // Case C: zero markers → IP runs across ALL tied candidates. Highest
     // IP wins regardless of marks.
@@ -834,7 +834,7 @@ describe('Endgame scoring', () => {
       ...p,
       resources: { ...p.resources, influence: 9 },
     }));
-    expect(computeVoterWinner(zeroMarkers, diversityVoter)).toBe('p3');
+    expect(computeVoterWinner(zeroMarkers, diversityVoter).winner).toBe('p3');
   });
 
   it('per-voter tiebreaker: tied IP falls through to arrival-seq (who reached that IP first wins)', () => {
@@ -860,7 +860,7 @@ describe('Endgame scoring', () => {
       resources: { ...p.resources, influence: 5 },
       influenceArrivalSeq: 7,
     }));
-    expect(computeVoterWinner(s, diversityVoter)).toBe('p1');
+    expect(computeVoterWinner(s, diversityVoter).winner).toBe('p1');
   });
 
   it('per-voter tiebreaker: tied IP AND tied arrival-seq → voter abstains', () => {
@@ -886,7 +886,7 @@ describe('Endgame scoring', () => {
       resources: { ...p.resources, influence: 5 },
       influenceArrivalSeq: 3,
     }));
-    expect(computeVoterWinner(s, diversityVoter)).toBe(null);
+    expect(computeVoterWinner(s, diversityVoter).winner).toBe(null);
   });
 
   it('most-treasures only counts vault cards of type treasure', () => {
@@ -981,7 +981,7 @@ describe('Endgame scoring', () => {
     const voter = baseGamePack.voters.find(
       (v) => v.criterion === 'second-most-influence',
     )!;
-    expect(computeVoterWinner(s, voter)).toBe('p2');
+    expect(computeVoterWinner(s, voter).winner).toBe('p2');
   });
 
   it('second-most awards no one if all players tied for first', () => {
@@ -1005,7 +1005,7 @@ describe('Endgame scoring', () => {
     const voter = baseGamePack.voters.find(
       (v) => v.criterion === 'second-most-influence',
     )!;
-    expect(computeVoterWinner(s, voter)).toBeNull();
+    expect(computeVoterWinner(s, voter).winner).toBeNull();
   });
 
   it('voter-level tiebreaker uses marks on this voter', () => {
@@ -1031,7 +1031,7 @@ describe('Endgame scoring', () => {
       voterMarks: [{ voterId: goldVoter.id, playerId: 'p2' }],
     };
     const seated = s.voters.find((v) => v.criterion === 'most-gold')!;
-    expect(computeVoterWinner(s, seated)).toBe('p2');
+    expect(computeVoterWinner(s, seated).winner).toBe('p2');
   });
 
   it('computeFinalScoring picks the archmage by total votes', () => {
@@ -1075,6 +1075,37 @@ describe('Endgame scoring', () => {
     if (manaVoter) {
       expect(manaVoter.winnerPlayerId).toBe(null);
     }
+    // Per-player scores surface on every voter award (gold totals here:
+    // p2 was bumped to 10, the others kept the starting 6).
+    expect(goldVoter?.scores.p2).toBe(10);
+    expect(goldVoter?.scores.p1).toBeLessThan(10);
+    // No tiebreaker — p2's gold was strictly highest.
+    expect(goldVoter?.tiebreaker).toBeUndefined();
+  });
+
+  it('VoterAward.tiebreaker reports `marks` when the marked player wins a tied criterion', () => {
+    let s = initGame(FOUR_PLAYER_CONFIG);
+    // Two players tied at 5 IP; only one of them is marked on the IP voter.
+    s = mapPlayer(s, 'p1', (p) => ({
+      ...p,
+      resources: { ...p.resources, influence: 5 },
+      influenceArrivalSeq: 10,
+    }));
+    s = mapPlayer(s, 'p2', (p) => ({
+      ...p,
+      resources: { ...p.resources, influence: 5 },
+      influenceArrivalSeq: 5,
+    }));
+    s = {
+      ...s,
+      voters: s.voters.map((v) => ({ ...v, revealed: true })),
+    };
+    const ipVoter = s.voters.find((v) => v.criterion === 'most-influence')!;
+    s = { ...s, voterMarks: [{ voterId: ipVoter.id, playerId: 'p1' }] };
+    const result = computeFinalScoring(s);
+    const award = result.voterAwards.find((a) => a.voterId === ipVoter.id)!;
+    expect(award.winnerPlayerId).toBe('p1');
+    expect(award.tiebreaker).toBe('marks');
   });
 
   it('computeFinalScoring: votes-tied final tiebreaker breaks on total Influence', () => {
@@ -10894,7 +10925,7 @@ describe('Most-INT voter — bug repro', () => {
       ...s,
       voterMarks: [{ playerId: 'p1', voterId: intVoter.id }],
     };
-    expect(computeVoterWinner(s, intVoter)).toBe('p1');
+    expect(computeVoterWinner(s, intVoter).winner).toBe('p1');
   });
 
   it('total WIS counts unspent pool + placed levels (symmetric)', () => {
@@ -10960,7 +10991,7 @@ describe('Most-INT voter — bug repro', () => {
       ...s,
       voterMarks: [{ playerId: 'p1', voterId: intVoter.id }],
     };
-    expect(computeVoterWinner(s, intVoter)).toBe('p1');
+    expect(computeVoterWinner(s, intVoter).winner).toBe('p1');
   });
 });
 
