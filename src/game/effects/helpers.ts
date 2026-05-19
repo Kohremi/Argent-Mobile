@@ -1182,6 +1182,22 @@ export function lookupSpellCardDef(
   return null;
 }
 
+/** Returns true when `spellCardId` is in any active pack's
+ *  `legendarySpells` list (covers leader/unique spells AND data-sheet
+ *  legendary books). Used by Repeating Hex / Telepathy to filter out
+ *  spells that aren't swappable / discardable. */
+export function isLegendarySpell(
+  state: GameState,
+  spellCardId: SpellCardId,
+): boolean {
+  for (const packId of state.activePackIds) {
+    const pack = getPack(packId);
+    if (!pack) continue;
+    if (pack.legendarySpells.some((s) => s.id === spellCardId)) return true;
+  }
+  return false;
+}
+
 export function findActionSpace(
   state: GameState,
   spaceId: ActionSpaceId,

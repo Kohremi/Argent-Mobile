@@ -10764,6 +10764,197 @@ describe('Spell wiring — Wave 8c (Pestilence)', () => {
 });
 
 // ============================================================================
+// The Grasping Darkness L1 "Repeating Hex"
+// ============================================================================
+
+describe('Repeating Hex (The Grasping Darkness L1)', () => {
+  function setupRepeatingHex(opts?: {
+    casterWisL2?: boolean;
+    casterWisL3?: boolean;
+    casterStartingWisdom?: number;
+  }): GameState {
+    let s = initGame(TWO_PLAYER_CONFIG);
+    s = zeroPlayerResources(s, 'p1');
+    s = zeroPlayerResources(s, 'p2');
+    // Caster owns Grasping Darkness (with optional upgrades).
+    s = addOwnedSpell(s, 'p1', 'base.spell.the-grasping-darkness', {
+      intPlaced: true,
+      wisPlacedLevel2: opts?.casterWisL2 ?? false,
+      wisPlacedLevel3: opts?.casterWisL3 ?? false,
+    });
+    s = setMana(s, 'p1', 2);
+    if (opts?.casterStartingWisdom !== undefined) {
+      s = mapPlayer(s, 'p1', (p) => ({
+        ...p,
+        resources: { ...p.resources, wisdom: opts.casterStartingWisdom! },
+      }));
+    }
+    return {
+      ...s,
+      firstPlayerIndex: 0,
+      phase: {
+        kind: 'errands',
+        round: 1,
+        activePlayerIndex: 0,
+        actionUsed: false,
+        fastActionUsed: false,
+      },
+    };
+  }
+
+  it('swaps Grasping Darkness with an opponent\'s eligible L1 spell; both end exhausted', () => {
+    let s = setupRepeatingHex();
+    // Opponent has Burn at L1 only (non-starter, non-legendary).
+    s = addOwnedSpell(s, 'p2', 'base.spell.burn', { intPlaced: true });
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.the-grasping-darkness',
+      level: 1,
+    });
+    const prompt = topPending(s);
+    expect(prompt.prompt.kind).toBe('choose-from-options');
+    if (prompt.prompt.kind !== 'choose-from-options') return;
+    expect(prompt.prompt.options.map((o) => o.id)).toEqual([
+      'p2:base.spell.burn',
+    ]);
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: prompt.id,
+      answer: {
+        kind: 'option-chosen',
+        optionId: 'p2:base.spell.burn',
+        payload: {},
+      },
+    });
+    const alice = s.players.find((p) => p.id === 'p1')!;
+    const bob = s.players.find((p) => p.id === 'p2')!;
+    // Burn is now Alice's, Grasping Darkness is now Bob's; both exhausted.
+    const aliceBurn = alice.ownedSpells.find(
+      (sp) => sp.cardId === 'base.spell.burn',
+    );
+    expect(aliceBurn).toBeTruthy();
+    expect(aliceBurn?.intPlaced).toBe(true);
+    expect(aliceBurn?.exhausted).toBe(true);
+    const bobGrasping = bob.ownedSpells.find(
+      (sp) => sp.cardId === 'base.spell.the-grasping-darkness',
+    );
+    expect(bobGrasping).toBeTruthy();
+    expect(bobGrasping?.intPlaced).toBe(true);
+    expect(bobGrasping?.exhausted).toBe(true);
+    // Originals are gone from each player.
+    expect(
+      alice.ownedSpells.find(
+        (sp) => sp.cardId === 'base.spell.the-grasping-darkness',
+      ),
+    ).toBeUndefined();
+    expect(
+      bob.ownedSpells.find((sp) => sp.cardId === 'base.spell.burn'),
+    ).toBeUndefined();
+  });
+
+  it("excludes opponent's starter spell from the swap candidates", () => {
+    let s = setupRepeatingHex();
+    // Make Burn p2's starter — should be excluded.
+    s = mapPlayer(s, 'p2', (p) => ({
+      ...p,
+      candidateStartingSpellId: 'base.spell.burn',
+    }));
+    s = addOwnedSpell(s, 'p2', 'base.spell.burn', { intPlaced: true });
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.the-grasping-darkness',
+      level: 1,
+    });
+    // No candidates → spell fizzles, no prompt surfaced.
+    expect(s.pendingResolutionStack).toHaveLength(0);
+  });
+
+  it("excludes legendary spells (including leader/unique spells)", () => {
+    let s = setupRepeatingHex();
+    // Tardy is a leader (unique) spell — counts as legendary.
+    s = addOwnedSpell(s, 'p2', 'base.spell.tardy', { intPlaced: true });
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.the-grasping-darkness',
+      level: 1,
+    });
+    expect(s.pendingResolutionStack).toHaveLength(0);
+  });
+
+  it("excludes opponent spells researched beyond L1 (WIS placed)", () => {
+    let s = setupRepeatingHex();
+    s = addOwnedSpell(s, 'p2', 'base.spell.burn', {
+      intPlaced: true,
+      wisPlacedLevel2: true,
+    });
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.the-grasping-darkness',
+      level: 1,
+    });
+    expect(s.pendingResolutionStack).toHaveLength(0);
+  });
+
+  it('errata: casting Repeating Hex with an upgraded Grasping Darkness refunds the WIS tokens', () => {
+    // Caster's Grasping Darkness has both L2 and L3 WIS (2 tokens total).
+    let s = setupRepeatingHex({
+      casterWisL2: true,
+      casterWisL3: true,
+      casterStartingWisdom: 1,
+    });
+    s = addOwnedSpell(s, 'p2', 'base.spell.burn', { intPlaced: true });
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.the-grasping-darkness',
+      level: 1,
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: {
+        kind: 'option-chosen',
+        optionId: 'p2:base.spell.burn',
+        payload: {},
+      },
+    });
+    const alice = s.players.find((p) => p.id === 'p1')!;
+    // Started with 1 WIS; refund of 2 (one each from L2 + L3) → 3.
+    expect(alice.resources.wisdom).toBe(3);
+    // Grasping Darkness handed to Bob at L1 only (no WIS).
+    const bob = s.players.find((p) => p.id === 'p2')!;
+    const bobGrasping = bob.ownedSpells.find(
+      (sp) => sp.cardId === 'base.spell.the-grasping-darkness',
+    )!;
+    expect(bobGrasping.wisPlacedLevel2).toBe(false);
+    expect(bobGrasping.wisPlacedLevel3).toBe(false);
+  });
+
+  it('fizzles silently when no opponent has an eligible L1 spell', () => {
+    let s = setupRepeatingHex();
+    // p2 has no extra spells beyond their starter (filtered out elsewhere).
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.the-grasping-darkness',
+      level: 1,
+    });
+    expect(s.pendingResolutionStack).toHaveLength(0);
+    // Spell is exhausted (cast cost paid).
+    const alice = s.players.find((p) => p.id === 'p1')!;
+    const gd = alice.ownedSpells.find(
+      (sp) => sp.cardId === 'base.spell.the-grasping-darkness',
+    )!;
+    expect(gd.exhausted).toBe(true);
+    expect(alice.resources.mana).toBe(0);
+  });
+});
+
+// ============================================================================
 // Multi-Research cards — queue + drain pump
 // ============================================================================
 

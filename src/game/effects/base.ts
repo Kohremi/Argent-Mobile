@@ -37,6 +37,7 @@ import {
   applyRoomLockPatch,
   buildSpellMoveTargets,
   buildSpellShadowTargets,
+  isLegendarySpell,
   isRoomAtPlayerCap,
   lookupSpellCardDef,
   moveMageToSpace,
@@ -65,6 +66,7 @@ import type {
   ResolutionSource,
   ResumeContinuation,
   SerializableContext,
+  SpellCardId,
   WorkerOccupancy,
 } from '../types';
 
@@ -10115,3 +10117,153 @@ registerEffect('base.spell.burn.l3', (ctx): EffectResult => {
   }
   throw new Error(`${self} unexpected step ${String(step)}`);
 });
+
+// ============================================================================
+// The Grasping Darkness L1 "Repeating Hex"
+//
+// Swap this Spell for a non-starter, non-legendary level-1 Spell from
+// another player. Both Spells are exhausted after the swap.
+//
+// Errata (per the rulebook FAQ): if the caster has upgraded their
+// Grasping Darkness (WIS placed at L2/L3) before casting Repeating Hex,
+// the caster KEEPS those WIS tokens — they return to the caster's unspent
+// WIS pool and may be spent later — but the research itself is lost (the
+// spell goes to the opponent at L1-only). The opponent's spell coming
+// over is L1-only by definition (the swap filter requires it).
+// ============================================================================
+
+interface RepeatingHexCandidate {
+  ownerId: PlayerId;
+  spellCardId: SpellCardId;
+}
+
+function buildRepeatingHexCandidates(
+  state: GameState,
+  casterId: PlayerId,
+): RepeatingHexCandidate[] {
+  const candidates: RepeatingHexCandidate[] = [];
+  for (const p of state.players) {
+    if (p.id === casterId) continue;
+    for (const owned of p.ownedSpells) {
+      if (!owned.intPlaced) continue; // must be researched
+      if (owned.wisPlacedLevel2) continue; // L1 only
+      if (owned.wisPlacedLevel3) continue;
+      if (owned.cardId === p.candidateStartingSpellId) continue; // non-starter
+      if (isLegendarySpell(state, owned.cardId)) continue;
+      candidates.push({ ownerId: p.id, spellCardId: owned.cardId });
+    }
+  }
+  return candidates;
+}
+
+registerEffect(
+  'base.spell.the-grasping-darkness.l1',
+  (ctx): EffectResult => {
+    const step = ctx.resumeContext?.['step'];
+    const self = 'base.spell.the-grasping-darkness.l1';
+    const casterId = ctx.triggeringPlayerId;
+
+    if (!ctx.resumeAnswer) {
+      const candidates = buildRepeatingHexCandidates(ctx.state, casterId);
+      if (candidates.length === 0) return { kind: 'done', patch: {} };
+      const opponentNameOf = (id: PlayerId) =>
+        ctx.state.players.find((p) => p.id === id)?.name ?? id;
+      const options: ChoiceOption[] = candidates.map((c) => ({
+        id: `${c.ownerId}:${c.spellCardId}`,
+        label: `${spellLabel(ctx.state, c.spellCardId)} — ${opponentNameOf(c.ownerId)}`,
+        payload: {},
+      }));
+      return {
+        kind: 'pause',
+        pending: {
+          responderId: casterId,
+          prompt: { kind: 'choose-from-options', options },
+          resume: { effectId: self, context: { step: 'apply' } },
+          source: ctx.source,
+        },
+      };
+    }
+
+    if (step === 'apply') {
+      if (ctx.resumeAnswer.kind !== 'option-chosen') {
+        throw new Error(`${self} apply expected option-chosen`);
+      }
+      const sepIdx = ctx.resumeAnswer.optionId.indexOf(':');
+      if (sepIdx < 0) {
+        throw new Error(`${self} apply: malformed optionId`);
+      }
+      const targetPlayerId = ctx.resumeAnswer.optionId.slice(0, sepIdx);
+      const targetSpellCardId = ctx.resumeAnswer.optionId.slice(sepIdx + 1);
+
+      // Re-validate (state could have changed between prompt + resolve).
+      const caster = ctx.state.players.find((p) => p.id === casterId);
+      const target = ctx.state.players.find((p) => p.id === targetPlayerId);
+      if (!caster || !target) return { kind: 'done', patch: {} };
+      const myGrasping = caster.ownedSpells.find(
+        (s) => s.cardId === 'base.spell.the-grasping-darkness',
+      );
+      const theirSpell = target.ownedSpells.find(
+        (s) => s.cardId === targetSpellCardId,
+      );
+      if (
+        !myGrasping ||
+        !theirSpell ||
+        !theirSpell.intPlaced ||
+        theirSpell.wisPlacedLevel2 ||
+        theirSpell.wisPlacedLevel3 ||
+        theirSpell.cardId === target.candidateStartingSpellId ||
+        isLegendarySpell(ctx.state, theirSpell.cardId)
+      ) {
+        return { kind: 'done', patch: {} };
+      }
+
+      // Per errata: caster keeps WIS tokens that were on Grasping Darkness.
+      const refundedWis =
+        (myGrasping.wisPlacedLevel2 ? 1 : 0) +
+        (myGrasping.wisPlacedLevel3 ? 1 : 0);
+
+      const players: Player[] = ctx.state.players.map((p) => {
+        if (p.id === casterId) {
+          return {
+            ...p,
+            ownedSpells: [
+              ...p.ownedSpells.filter(
+                (s) => s.cardId !== 'base.spell.the-grasping-darkness',
+              ),
+              {
+                cardId: targetSpellCardId,
+                intPlaced: true,
+                wisPlacedLevel2: false,
+                wisPlacedLevel3: false,
+                exhausted: true,
+              },
+            ],
+            resources: {
+              ...p.resources,
+              wisdom: p.resources.wisdom + refundedWis,
+            },
+          };
+        }
+        if (p.id === targetPlayerId) {
+          return {
+            ...p,
+            ownedSpells: [
+              ...p.ownedSpells.filter((s) => s.cardId !== targetSpellCardId),
+              {
+                cardId: 'base.spell.the-grasping-darkness',
+                intPlaced: true,
+                wisPlacedLevel2: false,
+                wisPlacedLevel3: false,
+                exhausted: true,
+              },
+            ],
+          };
+        }
+        return p;
+      });
+      return { kind: 'done', patch: { players } };
+    }
+
+    throw new Error(`${self} unexpected step ${String(step)}`);
+  },
+);
