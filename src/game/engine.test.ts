@@ -10041,6 +10041,212 @@ describe('Spell wiring — Wave 8 (area effects: Tsunami, Nox)', () => {
 });
 
 // ============================================================================
+// Calval's Deadliest Magicks — L1 Pyre, L3 Volcano (legendary)
+// ============================================================================
+
+describe("Calval's Deadliest Magicks (legendary)", () => {
+  function setupCalvals(opts: {
+    level: 1 | 2 | 3;
+    casterMana: number;
+  }): GameState {
+    let s = initGame(TWO_PLAYER_CONFIG);
+    s = forceLibrarySideA(s);
+    s = zeroPlayerResources(s, 'p1');
+    s = zeroPlayerResources(s, 'p2');
+    s = addOwnedSpell(s, 'p1', 'base.spell.calvals-deadliest-magicks', {
+      intPlaced: true,
+      wisPlacedLevel2: opts.level >= 2,
+      wisPlacedLevel3: opts.level >= 3,
+    });
+    s = setMana(s, 'p1', opts.casterMana);
+    return {
+      ...s,
+      firstPlayerIndex: 0,
+      phase: {
+        kind: 'errands',
+        round: 1,
+        activePlayerIndex: 0,
+        actionUsed: false,
+        fastActionUsed: false,
+      },
+    };
+  }
+
+  it('Pyre (L1): wounds up to two mages in the chosen room', () => {
+    let s = setupCalvals({ level: 1, casterMana: 2 });
+    s = addMage(s, 'p2', {
+      id: 'bob-a',
+      cardId: 'base.mage.sorcery',
+      color: 'red',
+    });
+    s = addMage(s, 'p2', {
+      id: 'bob-b',
+      cardId: 'base.mage.sorcery',
+      color: 'red',
+    });
+    s = placeMageOnSpace(s, 'p2', 'bob-a', 'base.room.library.a.slot-1');
+    s = placeMageOnSpace(s, 'p2', 'bob-b', 'base.room.library.a.slot-2');
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.calvals-deadliest-magicks',
+      level: 1,
+    });
+    // Room → first target → second-or-stop.
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: {
+        kind: 'option-chosen',
+        optionId: 'base.room.library.a',
+        payload: {},
+      },
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'mage-chosen', mageId: 'bob-a' },
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'option-chosen', optionId: 'bob-b', payload: {} },
+    });
+    expect(findMageById(s, 'bob-a').isWounded).toBe(true);
+    expect(findMageById(s, 'bob-b').isWounded).toBe(true);
+    expect(topPending(s).prompt.kind).toBe('reaction-window');
+  });
+
+  it('Volcano (L3): banishes one mage per opponent, opens one batched reaction window', () => {
+    let s = initGame(FOUR_PLAYER_CONFIG);
+    s = forceLibrarySideA(s);
+    s = zeroPlayerResources(s, 'p1');
+    s = addOwnedSpell(s, 'p1', 'base.spell.calvals-deadliest-magicks', {
+      intPlaced: true,
+      wisPlacedLevel2: true,
+      wisPlacedLevel3: true,
+    });
+    s = setMana(s, 'p1', 0); // Volcano costs 0 mana.
+    // Each opponent has one placed mage.
+    s = addMage(s, 'p2', {
+      id: 'p2-mage',
+      cardId: 'base.mage.sorcery',
+      color: 'red',
+    });
+    s = addMage(s, 'p3', {
+      id: 'p3-mage',
+      cardId: 'base.mage.sorcery',
+      color: 'red',
+    });
+    s = addMage(s, 'p4', {
+      id: 'p4-mage',
+      cardId: 'base.mage.sorcery',
+      color: 'red',
+    });
+    s = placeMageOnSpace(s, 'p2', 'p2-mage', 'base.room.library.a.slot-1');
+    s = placeMageOnSpace(s, 'p3', 'p3-mage', 'base.room.library.a.slot-2');
+    s = placeMageOnSpace(s, 'p4', 'p4-mage', 'base.room.library.a.slot-3');
+    s = {
+      ...s,
+      firstPlayerIndex: 0,
+      phase: {
+        kind: 'errands',
+        round: 1,
+        activePlayerIndex: 0,
+        actionUsed: false,
+        fastActionUsed: false,
+      },
+    };
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.calvals-deadliest-magicks',
+      level: 3,
+    });
+    // Caster gets prompted once per opponent (in turn order: p2 → p3 → p4).
+    for (const expected of ['p2-mage', 'p3-mage', 'p4-mage']) {
+      const prompt = topPending(s);
+      expect(prompt.prompt.kind).toBe('choose-target-mage');
+      if (prompt.prompt.kind !== 'choose-target-mage') return;
+      expect(prompt.prompt.eligibleMageIds).toEqual([expected]);
+      s = applyAction(s, {
+        type: 'RESOLVE_PENDING',
+        resolutionId: prompt.id,
+        answer: { kind: 'mage-chosen', mageId: expected },
+      });
+    }
+    // All three are banished; one batched reaction window opens.
+    expect(findMageById(s, 'p2-mage').location.kind).toBe('office');
+    expect(findMageById(s, 'p3-mage').location.kind).toBe('office');
+    expect(findMageById(s, 'p4-mage').location.kind).toBe('office');
+    expect(topPending(s).prompt.kind).toBe('reaction-window');
+  });
+
+  it('Volcano: opponents with no banishable mage are skipped silently', () => {
+    let s = initGame(FOUR_PLAYER_CONFIG);
+    s = forceLibrarySideA(s);
+    s = zeroPlayerResources(s, 'p1');
+    s = addOwnedSpell(s, 'p1', 'base.spell.calvals-deadliest-magicks', {
+      intPlaced: true,
+      wisPlacedLevel2: true,
+      wisPlacedLevel3: true,
+    });
+    s = setMana(s, 'p1', 0);
+    // Only p3 has a placed mage; p2 and p4 are empty.
+    s = addMage(s, 'p3', {
+      id: 'p3-mage',
+      cardId: 'base.mage.sorcery',
+      color: 'red',
+    });
+    s = placeMageOnSpace(s, 'p3', 'p3-mage', 'base.room.library.a.slot-1');
+    s = {
+      ...s,
+      firstPlayerIndex: 0,
+      phase: {
+        kind: 'errands',
+        round: 1,
+        activePlayerIndex: 0,
+        actionUsed: false,
+        fastActionUsed: false,
+      },
+    };
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.calvals-deadliest-magicks',
+      level: 3,
+    });
+    // Only one prompt — for p3's mage.
+    const prompt = topPending(s);
+    expect(prompt.prompt.kind).toBe('choose-target-mage');
+    if (prompt.prompt.kind !== 'choose-target-mage') return;
+    expect(prompt.prompt.eligibleMageIds).toEqual(['p3-mage']);
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: prompt.id,
+      answer: { kind: 'mage-chosen', mageId: 'p3-mage' },
+    });
+    expect(findMageById(s, 'p3-mage').location.kind).toBe('office');
+  });
+
+  it('Volcano: fizzles silently when no opponent has a banishable mage', () => {
+    let s = setupCalvals({ level: 3, casterMana: 0 });
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.calvals-deadliest-magicks',
+      level: 3,
+    });
+    expect(s.pendingResolutionStack).toHaveLength(0);
+    const alice = s.players.find((p) => p.id === 'p1')!;
+    const spell = alice.ownedSpells.find(
+      (sp) => sp.cardId === 'base.spell.calvals-deadliest-magicks',
+    )!;
+    expect(spell.exhausted).toBe(true);
+  });
+});
+
+// ============================================================================
 // Room locking — Flamespout / Meteor / Cataclysm / Consecration
 // ============================================================================
 
