@@ -10267,3 +10267,233 @@ registerEffect(
     throw new Error(`${self} unexpected step ${String(step)}`);
   },
 );
+
+/**
+ * The Grasping Darkness L2 "Telepathy" — Discard an opponent's
+ * non-starter, non-legendary level-1 Spell to the bottom of the Spell
+ * Deck. The opponent keeps the INT they spent on it (it returns to
+ * their unspent pool).
+ *
+ * Reuses the L1 candidate filter (`buildRepeatingHexCandidates`) since
+ * the eligibility rules are identical. `applyDiscardOwnedSpell` already
+ * sends the card to the bottom of the deck AND refunds INT (and any
+ * WIS, but the L1-only filter means none is present).
+ */
+registerEffect(
+  'base.spell.the-grasping-darkness.l2',
+  (ctx): EffectResult => {
+    const step = ctx.resumeContext?.['step'];
+    const self = 'base.spell.the-grasping-darkness.l2';
+    const casterId = ctx.triggeringPlayerId;
+
+    if (!ctx.resumeAnswer) {
+      const candidates = buildRepeatingHexCandidates(ctx.state, casterId);
+      if (candidates.length === 0) return { kind: 'done', patch: {} };
+      const opponentNameOf = (id: PlayerId) =>
+        ctx.state.players.find((p) => p.id === id)?.name ?? id;
+      const options: ChoiceOption[] = candidates.map((c) => ({
+        id: `${c.ownerId}:${c.spellCardId}`,
+        label: `${spellLabel(ctx.state, c.spellCardId)} — ${opponentNameOf(c.ownerId)}`,
+        payload: {},
+      }));
+      return {
+        kind: 'pause',
+        pending: {
+          responderId: casterId,
+          prompt: { kind: 'choose-from-options', options },
+          resume: { effectId: self, context: { step: 'apply' } },
+          source: ctx.source,
+        },
+      };
+    }
+
+    if (step === 'apply') {
+      if (ctx.resumeAnswer.kind !== 'option-chosen') {
+        throw new Error(`${self} apply expected option-chosen`);
+      }
+      const sepIdx = ctx.resumeAnswer.optionId.indexOf(':');
+      if (sepIdx < 0) throw new Error(`${self} apply: malformed optionId`);
+      const targetPlayerId = ctx.resumeAnswer.optionId.slice(0, sepIdx);
+      const targetSpellCardId = ctx.resumeAnswer.optionId.slice(sepIdx + 1);
+
+      // Re-validate.
+      const target = ctx.state.players.find((p) => p.id === targetPlayerId);
+      if (!target) return { kind: 'done', patch: {} };
+      const theirSpell = target.ownedSpells.find(
+        (s) => s.cardId === targetSpellCardId,
+      );
+      if (
+        !theirSpell ||
+        !theirSpell.intPlaced ||
+        theirSpell.wisPlacedLevel2 ||
+        theirSpell.wisPlacedLevel3 ||
+        theirSpell.cardId === target.candidateStartingSpellId ||
+        isLegendarySpell(ctx.state, theirSpell.cardId)
+      ) {
+        return { kind: 'done', patch: {} };
+      }
+
+      return {
+        kind: 'done',
+        patch: applyDiscardOwnedSpell(
+          ctx.state,
+          targetPlayerId,
+          targetSpellCardId,
+        ),
+      };
+    }
+    throw new Error(`${self} unexpected step ${String(step)}`);
+  },
+);
+
+/**
+ * The Grasping Darkness L3 "Deathly Paling" — Steal 1 unspent INT from
+ * a player with more INT than you, OR steal 1 unspent WIS from a player
+ * with more WIS than you.
+ *
+ * Steps:
+ *   1. Pick resource (INT / WIS). Only offered if at least one opponent
+ *      has strictly more of that resource than the caster.
+ *   2. Pick victim from the list of eligible opponents.
+ *   3. Transfer 1 token from victim → caster.
+ *
+ * Fizzles silently if neither resource has an eligible victim.
+ */
+registerEffect(
+  'base.spell.the-grasping-darkness.l3',
+  (ctx): EffectResult => {
+    const step = ctx.resumeContext?.['step'];
+    const self = 'base.spell.the-grasping-darkness.l3';
+    const casterId = ctx.triggeringPlayerId;
+
+    if (!ctx.resumeAnswer) {
+      const caster = ctx.state.players.find((p) => p.id === casterId);
+      if (!caster) return { kind: 'done', patch: {} };
+      const eligibleForInt = ctx.state.players.some(
+        (p) =>
+          p.id !== casterId &&
+          p.resources.intelligence > caster.resources.intelligence,
+      );
+      const eligibleForWis = ctx.state.players.some(
+        (p) =>
+          p.id !== casterId && p.resources.wisdom > caster.resources.wisdom,
+      );
+      if (!eligibleForInt && !eligibleForWis) {
+        return { kind: 'done', patch: {} };
+      }
+      const options: ChoiceOption[] = [];
+      if (eligibleForInt) {
+        options.push({
+          id: 'int',
+          label: 'Steal 1 INT from a player with more INT than you',
+          payload: {},
+        });
+      }
+      if (eligibleForWis) {
+        options.push({
+          id: 'wis',
+          label: 'Steal 1 WIS from a player with more WIS than you',
+          payload: {},
+        });
+      }
+      return {
+        kind: 'pause',
+        pending: {
+          responderId: casterId,
+          prompt: { kind: 'choose-from-options', options },
+          resume: { effectId: self, context: { step: 'pick-victim' } },
+          source: ctx.source,
+        },
+      };
+    }
+
+    if (step === 'pick-victim') {
+      if (ctx.resumeAnswer.kind !== 'option-chosen') {
+        throw new Error(`${self} pick-victim expected option-chosen`);
+      }
+      const resource = ctx.resumeAnswer.optionId;
+      if (resource !== 'int' && resource !== 'wis') {
+        throw new Error(`${self} pick-victim: unknown resource ${resource}`);
+      }
+      const caster = ctx.state.players.find((p) => p.id === casterId);
+      if (!caster) return { kind: 'done', patch: {} };
+      const casterValue =
+        resource === 'int'
+          ? caster.resources.intelligence
+          : caster.resources.wisdom;
+      const victims = ctx.state.players.filter(
+        (p) =>
+          p.id !== casterId &&
+          (resource === 'int'
+            ? p.resources.intelligence > casterValue
+            : p.resources.wisdom > casterValue),
+      );
+      if (victims.length === 0) return { kind: 'done', patch: {} };
+      return {
+        kind: 'pause',
+        pending: {
+          responderId: casterId,
+          prompt: {
+            kind: 'choose-from-options',
+            options: victims.map((v) => ({
+              id: v.id,
+              label: `${v.name} (${
+                resource === 'int' ? v.resources.intelligence : v.resources.wisdom
+              } ${resource.toUpperCase()})`,
+              payload: {},
+            })),
+          },
+          resume: { effectId: self, context: { step: 'apply', resource } },
+          source: ctx.source,
+        },
+      };
+    }
+
+    if (step === 'apply') {
+      if (ctx.resumeAnswer.kind !== 'option-chosen') {
+        throw new Error(`${self} apply expected option-chosen`);
+      }
+      const resource = ctx.resumeContext?.['resource'];
+      if (resource !== 'int' && resource !== 'wis') {
+        throw new Error(`${self} apply: missing/invalid resource`);
+      }
+      const victimId = ctx.resumeAnswer.optionId;
+      const caster = ctx.state.players.find((p) => p.id === casterId);
+      const victim = ctx.state.players.find((p) => p.id === victimId);
+      if (!caster || !victim) return { kind: 'done', patch: {} };
+      // Re-validate the inequality (state could change between prompts).
+      const casterValue =
+        resource === 'int'
+          ? caster.resources.intelligence
+          : caster.resources.wisdom;
+      const victimValue =
+        resource === 'int'
+          ? victim.resources.intelligence
+          : victim.resources.wisdom;
+      if (victimValue <= casterValue) return { kind: 'done', patch: {} };
+      const field = resource === 'int' ? 'intelligence' : 'wisdom';
+      return {
+        kind: 'done',
+        patch: {
+          players: ctx.state.players.map((p) => {
+            if (p.id === victimId) {
+              return {
+                ...p,
+                resources: { ...p.resources, [field]: p.resources[field] - 1 },
+              };
+            }
+            if (p.id === casterId) {
+              return {
+                ...p,
+                resources: { ...p.resources, [field]: p.resources[field] + 1 },
+              };
+            }
+            return p;
+          }),
+        },
+      };
+    }
+
+    throw new Error(`${self} unexpected step ${String(step)}`);
+  },
+);

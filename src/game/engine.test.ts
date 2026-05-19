@@ -10955,6 +10955,194 @@ describe('Repeating Hex (The Grasping Darkness L1)', () => {
 });
 
 // ============================================================================
+// Telepathy (The Grasping Darkness L2)
+// ============================================================================
+
+describe('Telepathy (The Grasping Darkness L2)', () => {
+  function setupTelepathy(): GameState {
+    let s = initGame(TWO_PLAYER_CONFIG);
+    s = zeroPlayerResources(s, 'p1');
+    s = zeroPlayerResources(s, 'p2');
+    s = addOwnedSpell(s, 'p1', 'base.spell.the-grasping-darkness', {
+      intPlaced: true,
+      wisPlacedLevel2: true,
+    });
+    s = setMana(s, 'p1', 3);
+    return {
+      ...s,
+      firstPlayerIndex: 0,
+      phase: {
+        kind: 'errands',
+        round: 1,
+        activePlayerIndex: 0,
+        actionUsed: false,
+        fastActionUsed: false,
+      },
+    };
+  }
+
+  it('sends the opponent\'s L1 spell to the bottom of the deck and refunds their INT', () => {
+    let s = setupTelepathy();
+    s = addOwnedSpell(s, 'p2', 'base.spell.burn', { intPlaced: true });
+    const deckBefore = s.spellDeck.length;
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.the-grasping-darkness',
+      level: 2,
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: {
+        kind: 'option-chosen',
+        optionId: 'p2:base.spell.burn',
+        payload: {},
+      },
+    });
+    const bob = s.players.find((p) => p.id === 'p2')!;
+    // Burn is gone from Bob's spellbook; INT refunded.
+    expect(
+      bob.ownedSpells.find((sp) => sp.cardId === 'base.spell.burn'),
+    ).toBeUndefined();
+    expect(bob.resources.intelligence).toBe(1);
+    // Burn now at the bottom of the spell deck.
+    expect(s.spellDeck[s.spellDeck.length - 1]).toBe('base.spell.burn');
+    expect(s.spellDeck.length).toBe(deckBefore + 1);
+  });
+
+  it('fizzles when no opponent has an eligible L1 spell', () => {
+    let s = setupTelepathy();
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.the-grasping-darkness',
+      level: 2,
+    });
+    expect(s.pendingResolutionStack).toHaveLength(0);
+  });
+});
+
+// ============================================================================
+// Deathly Paling (The Grasping Darkness L3)
+// ============================================================================
+
+describe('Deathly Paling (The Grasping Darkness L3)', () => {
+  function setupDeathly(opts: {
+    casterInt: number;
+    casterWis: number;
+    victimInt: number;
+    victimWis: number;
+  }): GameState {
+    let s = initGame(TWO_PLAYER_CONFIG);
+    s = zeroPlayerResources(s, 'p1');
+    s = zeroPlayerResources(s, 'p2');
+    s = addOwnedSpell(s, 'p1', 'base.spell.the-grasping-darkness', {
+      intPlaced: true,
+      wisPlacedLevel2: true,
+      wisPlacedLevel3: true,
+    });
+    s = setMana(s, 'p1', 3);
+    s = mapPlayer(s, 'p1', (p) => ({
+      ...p,
+      resources: {
+        ...p.resources,
+        intelligence: opts.casterInt,
+        wisdom: opts.casterWis,
+      },
+    }));
+    s = mapPlayer(s, 'p2', (p) => ({
+      ...p,
+      resources: {
+        ...p.resources,
+        intelligence: opts.victimInt,
+        wisdom: opts.victimWis,
+      },
+    }));
+    return {
+      ...s,
+      firstPlayerIndex: 0,
+      phase: {
+        kind: 'errands',
+        round: 1,
+        activePlayerIndex: 0,
+        actionUsed: false,
+        fastActionUsed: false,
+      },
+    };
+  }
+
+  it('steals 1 INT from a player with strictly more INT than the caster', () => {
+    let s = setupDeathly({
+      casterInt: 1,
+      casterWis: 0,
+      victimInt: 3,
+      victimWis: 0,
+    });
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.the-grasping-darkness',
+      level: 3,
+    });
+    // Resource pick — only INT is eligible (victim WIS == caster WIS).
+    const resourcePrompt = topPending(s);
+    expect(resourcePrompt.prompt.kind).toBe('choose-from-options');
+    if (resourcePrompt.prompt.kind !== 'choose-from-options') return;
+    expect(resourcePrompt.prompt.options.map((o) => o.id)).toEqual(['int']);
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: resourcePrompt.id,
+      answer: { kind: 'option-chosen', optionId: 'int', payload: {} },
+    });
+    // Victim pick.
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'option-chosen', optionId: 'p2', payload: {} },
+    });
+    const alice = s.players.find((p) => p.id === 'p1')!;
+    const bob = s.players.find((p) => p.id === 'p2')!;
+    expect(alice.resources.intelligence).toBe(2);
+    expect(bob.resources.intelligence).toBe(2);
+  });
+
+  it('only offers WIS path when no opponent has strictly more INT', () => {
+    let s = setupDeathly({
+      casterInt: 3,
+      casterWis: 0,
+      victimInt: 3,
+      victimWis: 4,
+    });
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.the-grasping-darkness',
+      level: 3,
+    });
+    const resourcePrompt = topPending(s);
+    if (resourcePrompt.prompt.kind !== 'choose-from-options') return;
+    expect(resourcePrompt.prompt.options.map((o) => o.id)).toEqual(['wis']);
+  });
+
+  it('fizzles when neither resource has a strictly-greater opponent', () => {
+    let s = setupDeathly({
+      casterInt: 5,
+      casterWis: 5,
+      victimInt: 5,
+      victimWis: 5,
+    });
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.the-grasping-darkness',
+      level: 3,
+    });
+    expect(s.pendingResolutionStack).toHaveLength(0);
+  });
+});
+
+// ============================================================================
 // Multi-Research cards — queue + drain pump
 // ============================================================================
 
