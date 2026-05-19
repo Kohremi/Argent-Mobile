@@ -71,6 +71,12 @@ interface ResearchInputMode {
   /** Player who's spending the Research (for filtering tokens / slots). */
   /** Set after the player clicks an INT or WIS token. Cleared on cancel. */
   source: { kind: 'int' | 'wis'; cardId: string } | null;
+  /** Department restriction inherited from the queued research entry
+   *  (Adelaide Chivers / Jaimes Kalin / Jance Eylon / Kas Karrowary /
+   *  Vellimoor Cantz). When set, only spells of the matching department
+   *  are valid drafts / WIS-upgrade targets — the UI uses this to
+   *  highlight ONLY the eligible cards. */
+  restrictDepartment: string | null;
   onClickTableauSpell: (cardId: string) => void;
   onClickIntToken: (cardId: string) => void;
   onClickWisToken: (cardId: string) => void;
@@ -598,6 +604,9 @@ export function DebugControls() {
     const responderId = top.responderId;
     const responderLabel =
       state.players.find((p) => p.id === responderId)?.name ?? responderId;
+    const restrictRaw = top.resume.context?.['restrictDepartment'];
+    const restrictDepartment =
+      typeof restrictRaw === 'string' ? restrictRaw : null;
     // Chains a sequence of option-chosen RESOLVE_PENDING dispatches.
     // Reads fresh state between dispatches so we always target the
     // current top-of-stack prompt id.
@@ -624,8 +633,17 @@ export function DebugControls() {
       responderId,
       availableOptions,
       responderLabel,
+      restrictDepartment,
       source: researchMoveSource,
       onClickTableauSpell: (cardId: string) => {
+        // Department-restricted research: bail early if the picked card
+        // doesn't match — the engine would reject it anyway.
+        if (restrictDepartment) {
+          const card =
+            useGameStore.getState().state &&
+            findSpellCard(useGameStore.getState().state!, cardId);
+          if (card && card.department !== restrictDepartment) return;
+        }
         if (researchMoveSource === null) {
           if (!availableOptions.has('draft')) return;
           chain(['draft', cardId]);
@@ -654,6 +672,12 @@ export function DebugControls() {
         setResearchMoveSource({ kind: 'wis', cardId });
       },
       onClickEmptyWisSlot: (cardId: string) => {
+        if (restrictDepartment) {
+          const card =
+            useGameStore.getState().state &&
+            findSpellCard(useGameStore.getState().state!, cardId);
+          if (card && card.department !== restrictDepartment) return;
+        }
         if (researchMoveSource === null) {
           if (!availableOptions.has('add-wis')) return;
           chain(['add-wis', cardId]);
@@ -1587,8 +1611,15 @@ function PlayerCard({
                       researchTargetsThisPlayer &&
                       !card.unique
                     ) {
+                      // Department-restricted Research (Adelaide Chivers /
+                      // Jaimes Kalin / Jance Eylon / Kas Karrowary / Vellimoor
+                      // Cantz): only spells of the matching department are
+                      // valid WIS-upgrade or move targets.
+                      const matchesRestriction =
+                        !researchMode.restrictDepartment ||
+                        card.department === researchMode.restrictDepartment;
                       const src = researchMode.source;
-                      if (src === null) {
+                      if (src === null && matchesRestriction) {
                         // Idle: clickable if this slot/token can start a
                         // valid action.
                         if (
@@ -1619,7 +1650,7 @@ function PlayerCard({
                             researchMode.onClickEmptyWisSlot(s.cardId);
                           researchHint = `Add WIS to unlock L${lv.level}`;
                         }
-                      } else if (src.kind === 'wis') {
+                      } else if (src && src.kind === 'wis' && matchesRestriction) {
                         // Move-WIS in progress — destination must be a
                         // different owned learned spell's next empty WIS.
                         if (
@@ -2362,6 +2393,12 @@ function TableauPanel({
               if (!card) {
                 return <li key={`${cid}-${i}`}>{cid}</li>;
               }
+              // A department-restricted Research entry only lets the
+              // player draft spells of the matching department — exclude
+              // non-matching cards from the highlight + click target.
+              const matchesRestriction =
+                !researchMode?.restrictDepartment ||
+                card.department === researchMode.restrictDepartment;
               const body = (
                 <>
                   <div className="flex items-baseline gap-1.5 flex-wrap">
@@ -2394,7 +2431,7 @@ function TableauPanel({
                   </ul>
                 </>
               );
-              if (spellResearchClickable && researchMode) {
+              if (spellResearchClickable && researchMode && matchesRestriction) {
                 return (
                   <li key={`${cid}-${i}`}>
                     <button
