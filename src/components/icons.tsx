@@ -482,6 +482,38 @@ export function LockIcon({
   );
 }
 
+/**
+ * Shield icon — rendered next to a player's name when one or more
+ * immunity buffs (Sanctification / Stoneskin / Spell Shield / Wall etc.)
+ * are active. Hovering shows the buff tooltip the caller passes as
+ * `title`/aria-label.
+ */
+export function ShieldIcon({
+  className,
+  size = 14,
+}: IconProps) {
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      role="img"
+      aria-label="Active immunity buff"
+      className={clsx('inline-block flex-shrink-0 text-emerald-300', className)}
+      fill="currentColor"
+    >
+      <title>Active buff</title>
+      {/* Heater-style shield outline. */}
+      <path d="M12 2 L20 5 V12 C20 17 16 21 12 22 C8 21 4 17 4 12 V5 Z" />
+      {/* Inner highlight. */}
+      <path
+        d="M12 5 L17 7 V12 C17 16 14 19 12 19.5 C10 19 7 16 7 12 V7 Z"
+        fill="rgba(255,255,255,0.18)"
+      />
+    </svg>
+  );
+}
+
 export function BellIcon({
   className,
   size = 14,

@@ -393,6 +393,7 @@ export function buildInitialState(config: GameConfig): GameState {
     pendingBellTowerLastEvent: null,
     pendingPlaceChain: null,
     pendingContractResearch: null,
+    activeBuffs: [],
     nextSequenceId: 1,
     actionLog: [],
   };

@@ -2198,10 +2198,14 @@ function processErrandsAdvance(state: GameState): GameState {
     // Per rulebook: locks automatically clear at the start of the
     // Resolution phase. Mages that were inside still complete their
     // Errands (resolution walks slots; lock state isn't checked there).
+    // Sustained "rest of the round" immunity buffs also expire here.
     return {
       ...state,
       players,
       roomLocks: [],
+      activeBuffs: state.activeBuffs.filter(
+        (b) => b.expiresAt.kind !== 'round-end',
+      ),
       phase: {
         kind: 'resolution',
         round: errandsPhase.round,
@@ -2211,9 +2215,18 @@ function processErrandsAdvance(state: GameState): GameState {
     };
   }
   const next = (errandsPhase.activePlayerIndex + 1) % state.players.length;
+  const incomingId = state.players[next]?.id;
+  // "Until your next turn" buffs expire the moment their owner's next
+  // turn begins. Strip any buff whose `turn-start.playerId` matches the
+  // incoming active player.
+  const trimmedBuffs = state.activeBuffs.filter(
+    (b) =>
+      !(b.expiresAt.kind === 'turn-start' && b.expiresAt.playerId === incomingId),
+  );
   return {
     ...state,
     players,
+    activeBuffs: trimmedBuffs,
     phase: {
       ...errandsPhase,
       activePlayerIndex: next,

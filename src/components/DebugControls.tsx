@@ -10,7 +10,7 @@ import { baseGamePack } from '../content/packs/base';
 import { listPacks } from '../content/registry';
 import { computeFinalScoring, type VoterAward } from '../game/scoring';
 import { countPlayerMagesInRoom } from '../game/effects/helpers';
-import { BellIcon, LockIcon, MageIcon, ResourceIcon, type ResourceKind } from './icons';
+import { BellIcon, LockIcon, MageIcon, ResourceIcon, ShieldIcon, type ResourceKind } from './icons';
 import type {
   Candidate,
   Department,
@@ -1349,6 +1349,47 @@ function ResourcePill({
   );
 }
 
+/**
+ * Renders a small shield + buff-label list next to a player's name when
+ * they have one or more active immunity buffs. Hover over the row to see
+ * the full effect text (kinds blocked, source restriction, duration).
+ */
+function PlayerBuffBadges({
+  state,
+  playerId,
+}: {
+  state: GameState;
+  playerId: string;
+}) {
+  const mine = state.activeBuffs.filter((b) => b.ownerId === playerId);
+  if (mine.length === 0) return null;
+  return (
+    <span className="inline-flex items-center gap-1 flex-wrap">
+      {mine.map((b, i) => {
+        const kinds = b.immuneTo.join(' / ');
+        const dur =
+          b.expiresAt.kind === 'turn-start'
+            ? 'until your next turn'
+            : 'rest of round';
+        const sourceLabel =
+          b.source === 'spell' ? 'spell-source only' : 'any source';
+        const title = `${b.label} — your mages immune to ${kinds} (${sourceLabel}, ${dur})`;
+        return (
+          <span
+            key={`${b.spellCardId}-${i}`}
+            title={title}
+            aria-label={title}
+            className="inline-flex items-center gap-0.5 text-[10px] text-emerald-300 rounded px-1 bg-emerald-500/10 border border-emerald-500/30"
+          >
+            <ShieldIcon size={11} />
+            {b.label}
+          </span>
+        );
+      })}
+    </span>
+  );
+}
+
 function PlayerCard({
   state,
   player,
@@ -1401,7 +1442,10 @@ function PlayerCard({
     >
       <div className="flex items-center justify-between">
         <div>
-          <h3 className="font-medium">{playerDisplayName(state, player)}</h3>
+          <h3 className="font-medium inline-flex items-baseline gap-1.5 flex-wrap">
+            <span>{playerDisplayName(state, player)}</span>
+            <PlayerBuffBadges state={state} playerId={player.id} />
+          </h3>
           <p className="text-xs text-slate-500">
             {player.id} · color {player.color} · init {player.initiativeOrder}
           </p>

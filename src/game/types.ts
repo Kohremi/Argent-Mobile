@@ -691,6 +691,35 @@ export interface PendingResolution {
 /** Engine input (effects don't generate IDs; the engine does). */
 export type PendingResolutionInput = Omit<PendingResolution, 'id'>;
 
+/**
+ * Sustained "immunity" buff (Moste Holie Litanies, Heart of the Mountain,
+ * Tome of Protection, etc.). Protects every mage owned by `ownerId` from
+ * the listed harmful effect kinds. `source: 'spell'` means only spell
+ * sources are blocked (Tome of Protection L1); `'any'` blocks every
+ * source (Tome of Protection L2, Heart of the Mountain L3).
+ *
+ * Duration:
+ *   - `turn-start` expires the moment the named player's next turn begins
+ *     (so the protection covers the caster's turn after cast + every
+ *     intervening opponent turn).
+ *   - `round-end` expires when the round transitions to Resolution.
+ */
+export type HarmfulEffectKind = 'wound' | 'banish' | 'move' | 'shadow';
+
+export interface MageImmunityBuff {
+  ownerId: PlayerId;
+  spellCardId: SpellCardId;
+  /** Display name shown in tooltips ("Sanctification", "Stoneskin", ...). */
+  label: string;
+  /** Effects this buff blocks. */
+  immuneTo: HarmfulEffectKind[];
+  /** `'spell'` blocks only spell-source effects; `'any'` blocks everything. */
+  source: 'spell' | 'any';
+  expiresAt:
+    | { kind: 'turn-start'; playerId: PlayerId }
+    | { kind: 'round-end' };
+}
+
 export type ReactionTriggerEvent =
   | {
       kind: 'mage-wounded';
@@ -880,6 +909,16 @@ export interface GameState {
     remaining: number;
     lockedDepartment?: Department;
   } | null;
+
+  /**
+   * Active "immunity" buffs (Moste Holie Litanies / Heart of the Mountain
+   * / Tome of Protection). Each buff protects its owner's mages from one
+   * or more harmful effect kinds for a bounded duration.
+   *
+   * Read by `isMageImmuneToEffect`; expired by `processErrandsAdvance`
+   * (turn-start kind) and the resolution-start hook (round-end kind).
+   */
+  activeBuffs: MageImmunityBuff[];
 
   voters: ConsortiumVoter[];
   voterMarks: VoterMark[];

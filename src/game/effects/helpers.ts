@@ -11,6 +11,7 @@ import type {
   ConsortiumVoterId,
   GameState,
   GameStatePatch,
+  HarmfulEffectKind,
   MageColor,
   OwnedMage,
   OwnedMageId,
@@ -183,8 +184,6 @@ export function buildReactionQueue(
  *    in via `includesShadows` to reach them. When included, the shadow's
  *    colour protection no longer applies.
  */
-export type HarmfulEffectKind = 'wound' | 'banish' | 'move' | 'shadow';
-
 export function buildHarmfulMageTargets(
   state: GameState,
   casterId: PlayerId,
@@ -203,6 +202,9 @@ export function buildHarmfulMageTargets(
       // (wounded, banished, moved, shadowed). Mages in locked rooms still
       // perform their Errands at Resolution per the rulebook.
       if (isMageInLockedRoom(state, m.id)) continue;
+      // Sustained immunity buffs (Sanctification / Stoneskin / Spell Shield
+      // / Wall / Diamondskin) protect the owner's mages.
+      if (isMageImmuneByBuff(state, p.id, opts.effect, opts.source)) continue;
       if (m.isShadowing) {
         if (!opts.includesShadows) continue;
         // Shadowing mage loses its colour ability — no protections apply.
@@ -229,6 +231,30 @@ export function buildHarmfulMageTargets(
 /** Returns true when `roomId` is currently locked. */
 export function isRoomLocked(state: GameState, roomId: RoomId): boolean {
   return state.roomLocks.some((l) => l.roomId === roomId);
+}
+
+/**
+ * Returns true when an active immunity buff on `ownerId` protects against
+ * `effect` from the given `source`. Used by target builders (Burn, Banish,
+ * Move, Shadow) to skip protected mages and by reaction options where
+ * applicable.
+ *
+ * - `'spell'` source: buffs with `source: 'spell'` OR `source: 'any'` apply.
+ * - `'non-spell'` source: only buffs with `source: 'any'` apply.
+ */
+export function isMageImmuneByBuff(
+  state: GameState,
+  ownerId: PlayerId,
+  effect: HarmfulEffectKind,
+  source: 'spell' | 'non-spell',
+): boolean {
+  for (const buff of state.activeBuffs) {
+    if (buff.ownerId !== ownerId) continue;
+    if (!buff.immuneTo.includes(effect)) continue;
+    if (buff.source === 'spell' && source !== 'spell') continue;
+    return true;
+  }
+  return false;
 }
 
 /** Returns true when the given action-space sits inside a locked room. */
@@ -2039,6 +2065,10 @@ export function buildArsMagnaTargets(
       if (m.isWounded) continue;
       // Locked rooms prevent any mage inside from being affected.
       if (isMageInLockedRoom(state, m.id)) continue;
+      // Ars Magna is a non-spell mage power. Buffs with `source: 'any'`
+      // block it (Tome of Protection L2 / Heart of the Mountain L3);
+      // spell-only buffs don't.
+      if (isMageImmuneByBuff(state, p.id, 'wound', 'non-spell')) continue;
       if (m.color === 'green') continue;
       if (m.color === 'blue') continue; // Always opposing here.
       targets.push(m.id);

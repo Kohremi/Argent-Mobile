@@ -10247,6 +10247,160 @@ describe("Calval's Deadliest Magicks (legendary)", () => {
 });
 
 // ============================================================================
+// Sustained immunity buffs — Moste Holie / Heart of the Mountain / Tome
+// ============================================================================
+
+describe('Sustained immunity buffs', () => {
+  function setupBuffTest(
+    casterSpell: string,
+    level: 1 | 2 | 3,
+    mana: number,
+  ): GameState {
+    let s = initGame(TWO_PLAYER_CONFIG);
+    s = forceLibrarySideA(s);
+    s = zeroPlayerResources(s, 'p1');
+    s = zeroPlayerResources(s, 'p2');
+    // p1 is the caster of the buff.
+    s = addOwnedSpell(s, 'p1', casterSpell, {
+      intPlaced: true,
+      wisPlacedLevel2: level >= 2,
+      wisPlacedLevel3: level >= 3,
+    });
+    s = setMana(s, 'p1', mana);
+    // p2 will try to wound p1's mage (place an attacker spell on p2).
+    s = addOwnedSpell(s, 'p2', 'base.spell.burn', { intPlaced: true });
+    s = setMana(s, 'p2', 1);
+    // p1 has a placed mage on Library — the target of attempted wounds.
+    s = addMage(s, 'p1', {
+      id: 'alice-mage',
+      cardId: 'base.mage.sorcery',
+      color: 'red',
+    });
+    s = placeMageOnSpace(s, 'p1', 'alice-mage', 'base.room.library.a.slot-1');
+    return {
+      ...s,
+      firstPlayerIndex: 0,
+      phase: {
+        kind: 'errands',
+        round: 1,
+        activePlayerIndex: 0,
+        actionUsed: false,
+        fastActionUsed: false,
+      },
+    };
+  }
+
+  it('Moste Holie L1 (Sanctification): wound-immunity until caster\'s next turn', () => {
+    let s = setupBuffTest('base.spell.moste-holie-litanies', 1, 1);
+    // Alice casts Sanctification (fast action, costs 1 mana).
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.moste-holie-litanies',
+      level: 1,
+    });
+    expect(s.activeBuffs).toHaveLength(1);
+    expect(s.activeBuffs[0]!.label).toBe('Sanctification');
+    expect(s.activeBuffs[0]!.expiresAt).toEqual({
+      kind: 'turn-start',
+      playerId: 'p1',
+    });
+    // Alice passes her turn (used the fast action; regular still open).
+    s = applyAction(s, { type: 'PASS_TURN', playerId: 'p1' });
+    if (s.phase.kind !== 'errands') throw new Error('expected errands');
+    expect(s.players[s.phase.activePlayerIndex]?.id).toBe('p2');
+    // Bob tries to cast Burn on Alice's mage — but the mage is immune.
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p2',
+      spellCardId: 'base.spell.burn',
+      level: 1,
+    });
+    // No targets → spell fizzles (no prompt).
+    expect(s.pendingResolutionStack).toHaveLength(0);
+    expect(findMageById(s, 'alice-mage').isWounded).toBe(false);
+  });
+
+  it('Sanctification expires when caster\'s next turn begins', () => {
+    let s = setupBuffTest('base.spell.moste-holie-litanies', 1, 1);
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.moste-holie-litanies',
+      level: 1,
+    });
+    s = applyAction(s, { type: 'PASS_TURN', playerId: 'p1' });
+    s = applyAction(s, { type: 'PASS_TURN', playerId: 'p2' });
+    // Back to Alice — her turn-start buff expires.
+    if (s.phase.kind !== 'errands') throw new Error('expected errands');
+    expect(s.players[s.phase.activePlayerIndex]?.id).toBe('p1');
+    expect(s.activeBuffs).toHaveLength(0);
+  });
+
+  it('Heart of the Mountain L2 (Stoneskin): wound+move immunity for the rest of the round', () => {
+    let s = setupBuffTest('base.spell.heart-of-the-mountain', 2, 4);
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.heart-of-the-mountain',
+      level: 2,
+    });
+    expect(s.activeBuffs).toHaveLength(1);
+    expect(s.activeBuffs[0]!.immuneTo).toEqual(['wound', 'move']);
+    expect(s.activeBuffs[0]!.expiresAt).toEqual({ kind: 'round-end' });
+    // After the action cast, Alice's turn auto-advanced. Empty the bell
+    // tower so p2's pass-turn drops us into Resolution.
+    s = emptyBellTower(s);
+    if (s.phase.kind !== 'errands') throw new Error('expected errands');
+    s = applyAction(s, {
+      type: 'PASS_TURN',
+      playerId: s.players[s.phase.activePlayerIndex]!.id,
+    });
+    expect(s.phase.kind).toBe('resolution');
+    // Round-end buffs expire at the start of resolution.
+    expect(s.activeBuffs).toHaveLength(0);
+  });
+
+  it('Tome of Protection L1 (Spell Shield): immunity is spell-source only', () => {
+    let s = setupBuffTest('base.spell.tome-of-protection', 1, 1);
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.tome-of-protection',
+      level: 1,
+    });
+    expect(s.activeBuffs[0]!.source).toBe('spell');
+    // Tome L1 is an action — Alice's turn already ended; it's Bob's turn.
+    if (s.phase.kind !== 'errands') throw new Error('expected errands');
+    expect(s.players[s.phase.activePlayerIndex]?.id).toBe('p2');
+    // Bob casts Burn — Alice's mage is spell-immune.
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p2',
+      spellCardId: 'base.spell.burn',
+      level: 1,
+    });
+    expect(s.pendingResolutionStack).toHaveLength(0);
+    expect(findMageById(s, 'alice-mage').isWounded).toBe(false);
+  });
+
+  it('Tome of Protection L2 (Wall): blocks non-spell sources too (Ars Magna)', async () => {
+    let s = setupBuffTest('base.spell.tome-of-protection', 2, 2);
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.tome-of-protection',
+      level: 2,
+    });
+    expect(s.activeBuffs[0]!.source).toBe('any');
+    // Direct check: Ars Magna can't target the protected mage.
+    const { buildArsMagnaTargets } = await import('./effects/helpers');
+    const arsMagnaTargets = buildArsMagnaTargets(s, 'p2');
+    expect(arsMagnaTargets).not.toContain('alice-mage');
+  });
+});
+
+// ============================================================================
 // Room locking — Flamespout / Meteor / Cataclysm / Consecration
 // ============================================================================
 

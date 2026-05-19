@@ -56,7 +56,9 @@ import type {
   EffectResult,
   GameState,
   GameStatePatch,
+  HarmfulEffectKind,
   MageColor,
+  MageImmunityBuff,
   OwnedMage,
   OwnedMageId,
   PendingResolutionInput,
@@ -10681,4 +10683,130 @@ registerEffect(
 
     throw new Error(`${self} unexpected step ${String(step)}`);
   },
+);
+
+// ============================================================================
+// Sustained immunity buffs — Moste Holie Litanies, Heart of the Mountain,
+// Tome of Protection
+// ============================================================================
+//
+// Each effect appends one entry to `state.activeBuffs`. The buff protects
+// the caster's mages from a list of effect kinds (wound / banish / move /
+// shadow) for a bounded duration:
+//   - `turn-start`: expires when the buff's owner begins their next turn
+//   - `round-end`: expires when the round transitions to Resolution
+//
+// The target-build filters (`buildHarmfulMageTargets`, `buildArsMagnaTargets`)
+// skip mages whose owner has a matching active buff, so protected mages
+// don't appear as eligible targets anywhere in the engine or UI.
+
+function immunityBuffSpell(opts: {
+  spellCardId: string;
+  label: string;
+  immuneTo: HarmfulEffectKind[];
+  source: 'spell' | 'any';
+  duration: 'turn-start' | 'round-end';
+}) {
+  return (ctx: EffectContext): EffectResult => {
+    const newBuff: MageImmunityBuff = {
+      ownerId: ctx.triggeringPlayerId,
+      spellCardId: opts.spellCardId,
+      label: opts.label,
+      immuneTo: opts.immuneTo,
+      source: opts.source,
+      expiresAt:
+        opts.duration === 'turn-start'
+          ? { kind: 'turn-start', playerId: ctx.triggeringPlayerId }
+          : { kind: 'round-end' },
+    };
+    return {
+      kind: 'done',
+      patch: {
+        activeBuffs: [...ctx.state.activeBuffs, newBuff],
+      },
+    };
+  };
+}
+
+// Moste Holie Litanies (Divinity, legendary)
+registerEffect(
+  'base.spell.moste-holie-litanies.l1',
+  immunityBuffSpell({
+    spellCardId: 'base.spell.moste-holie-litanies',
+    label: 'Sanctification',
+    immuneTo: ['wound'],
+    source: 'any',
+    duration: 'turn-start',
+  }),
+);
+registerEffect(
+  'base.spell.moste-holie-litanies.l2',
+  immunityBuffSpell({
+    spellCardId: 'base.spell.moste-holie-litanies',
+    label: 'Protective Aura',
+    immuneTo: ['wound'],
+    source: 'any',
+    duration: 'round-end',
+  }),
+);
+
+// Heart of the Mountain (Natural Magick)
+registerEffect(
+  'base.spell.heart-of-the-mountain.l1',
+  immunityBuffSpell({
+    spellCardId: 'base.spell.heart-of-the-mountain',
+    label: 'Oakskin',
+    immuneTo: ['wound', 'move'],
+    source: 'any',
+    duration: 'turn-start',
+  }),
+);
+registerEffect(
+  'base.spell.heart-of-the-mountain.l2',
+  immunityBuffSpell({
+    spellCardId: 'base.spell.heart-of-the-mountain',
+    label: 'Stoneskin',
+    immuneTo: ['wound', 'move'],
+    source: 'any',
+    duration: 'round-end',
+  }),
+);
+
+// Heart of the Mountain L3 "Diamondskin": "your Mages lose their innate
+// powers, but become immune to all negative effects." The "lose innate
+// powers" side requires suppressing colour-based mage abilities (purple
+// fast-action, red Ars Magna, etc.) — that's a separate mechanic and is
+// NOT yet implemented. The immunity portion is wired here; expanding to
+// power-suppression is a follow-up.
+registerEffect(
+  'base.spell.heart-of-the-mountain.l3',
+  immunityBuffSpell({
+    spellCardId: 'base.spell.heart-of-the-mountain',
+    label: 'Diamondskin',
+    immuneTo: ['wound', 'banish', 'move', 'shadow'],
+    source: 'any',
+    duration: 'round-end',
+  }),
+);
+
+// Tome of Protection
+registerEffect(
+  'base.spell.tome-of-protection.l1',
+  immunityBuffSpell({
+    spellCardId: 'base.spell.tome-of-protection',
+    label: 'Spell Shield',
+    immuneTo: ['wound', 'banish', 'move', 'shadow'],
+    source: 'spell',
+    duration: 'turn-start',
+  }),
+);
+registerEffect(
+  'base.spell.tome-of-protection.l2',
+  immunityBuffSpell({
+    spellCardId: 'base.spell.tome-of-protection',
+    label: 'Wall',
+    immuneTo: ['wound', 'banish', 'move', 'shadow'],
+    source: 'any',
+    duration: 'turn-start',
+  }),
 );
