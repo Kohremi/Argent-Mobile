@@ -271,6 +271,20 @@ export function buildInitialState(config: GameConfig): GameState {
   const grid = placeRoomsInGrid(roomSelection.rooms, cols, rows, rng);
   rng = grid.rng;
   const roomLayout: RoomLayout = { cols, rows, grid: grid.grid };
+  // Reorder rooms to match the grid's row-major traversal (left to right,
+  // top to bottom). The Resolution pump walks `state.rooms` by index, so
+  // this guarantees rooms resolve in the canonical board order regardless
+  // of how the random grid placement scrambled the selection list.
+  const gridOrderedRooms: Room[] = [];
+  const byId = new Map(roomSelection.rooms.map((r) => [r.id, r] as const));
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      const cell = grid.grid[r]?.[c];
+      if (cell == null) continue;
+      const room = byId.get(cell);
+      if (room) gridOrderedRooms.push(room);
+    }
+  }
 
   // ---- Players ----
   const players: Player[] = playerNames.map((name, i) => ({
@@ -295,7 +309,7 @@ export function buildInitialState(config: GameConfig): GameState {
   rng = firstStep.state;
   const firstPlayerIndex = Math.floor(firstStep.value * playerCount);
 
-  const rooms: Room[] = roomSelection.rooms;
+  const rooms: Room[] = gridOrderedRooms;
 
   // ---- Voters ----
   let faceDownPool = allVoters.filter((v) => !v.isAlwaysFaceUp);

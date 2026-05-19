@@ -395,6 +395,27 @@ describe('Room layout', () => {
     expect(s.rooms.every((r) => r.side === 'A')).toBe(true);
   });
 
+  it('orders state.rooms left-to-right, top-to-bottom to match the grid', () => {
+    // Tries a handful of seeds so we don't rely on any single shuffle.
+    for (let seed = 1; seed <= 8; seed++) {
+      const s = initGame({
+        activePackIds: ['base'],
+        playerNames: ['Alice', 'Bob', 'Cara', 'Dan'],
+        rngSeed: seed,
+      });
+      // Walk the grid row-major and collect the non-null room ids.
+      const expected: string[] = [];
+      for (let r = 0; r < s.roomLayout.rows; r++) {
+        for (let c = 0; c < s.roomLayout.cols; c++) {
+          const cell = s.roomLayout.grid[r]?.[c];
+          if (cell != null) expected.push(cell);
+        }
+      }
+      const actual = s.rooms.map((r) => r.id);
+      expect(actual).toEqual(expected);
+    }
+  });
+
   it('uses 8 rooms (no placeholders) for a 2-3 player game', () => {
     const s = initGame(TWO_PLAYER_CONFIG);
     expect(s.rooms.length).toBe(8);
