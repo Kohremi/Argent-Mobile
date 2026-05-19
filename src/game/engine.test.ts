@@ -11482,6 +11482,150 @@ describe('Multi-Research cards', () => {
 });
 
 // ============================================================================
+// The Contract (consumable) — 3 Research, first pick locks the department
+// ============================================================================
+
+describe('The Contract', () => {
+  function setupContract(): GameState {
+    let s = initGame(TWO_PLAYER_CONFIG);
+    s = zeroPlayerResources(s, 'p1');
+    s = setMana(s, 'p1', 0);
+    s = mapPlayer(s, 'p1', (p) => ({
+      ...p,
+      resources: { ...p.resources, intelligence: 2 },
+      vaultCards: [{ cardId: 'base.vault.the-contract', exhausted: false }],
+    }));
+    // Pin the tableau so we know which cards are draftable.
+    s = {
+      ...s,
+      spellTableau: [
+        'base.spell.burn', // sorcery
+        'base.spell.living-image', // divinity (leader/unique — would be excluded by Repeating Hex but not from a draft pool; included here)
+        'base.spell.trance', // mysticism (leader)
+      ],
+      // Replace tableau with regular spells so the test doesn't hit unique flags.
+      // Use non-unique spell cards.
+    };
+    // Override with non-unique spells for predictable behaviour.
+    s = {
+      ...s,
+      spellTableau: [
+        'base.spell.burn', // sorcery (non-unique vertical-slice test spell)
+        'base.spell.book-of-one-hundred-seas', // mysticism
+        'base.spell.wrath-of-heaven', // divinity
+      ],
+    };
+    return {
+      ...s,
+      firstPlayerIndex: 0,
+      phase: {
+        kind: 'errands',
+        round: 1,
+        activePlayerIndex: 0,
+        actionUsed: false,
+        fastActionUsed: false,
+      },
+    };
+  }
+
+  it('sets pendingContractResearch with remaining=3 and surfaces an unrestricted first prompt', () => {
+    let s = setupContract();
+    s = applyAction(s, {
+      type: 'PLAY_VAULT_CARD',
+      playerId: 'p1',
+      vaultCardId: 'base.vault.the-contract',
+    });
+    // Chain set up + first prompt drained.
+    expect(s.pendingContractResearch).toBeTruthy();
+    expect(s.pendingContractResearch?.remaining).toBe(2);
+    expect(s.pendingContractResearch?.lockedDepartment).toBeUndefined();
+    const top = topPending(s);
+    expect(top.prompt.kind).toBe('choose-from-options');
+    expect(top.resume.effectId).toBe('base.system.spend-research');
+    // First prompt has no restrictDepartment.
+    expect(top.resume.context?.['restrictDepartment']).toBeUndefined();
+    expect(top.resume.context?.['contractChain']).toBe(true);
+  });
+
+  it('drafting a sorcery spell locks the chain to sorcery; second prompt restricts to sorcery', () => {
+    let s = setupContract();
+    s = applyAction(s, {
+      type: 'PLAY_VAULT_CARD',
+      playerId: 'p1',
+      vaultCardId: 'base.vault.the-contract',
+    });
+    // First prompt → pick "draft".
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'option-chosen', optionId: 'draft', payload: {} },
+    });
+    // Tableau pick — first prompt is unrestricted so all 3 cards offered.
+    const draftPrompt = topPending(s);
+    if (draftPrompt.prompt.kind !== 'choose-from-options') return;
+    expect(draftPrompt.prompt.options.map((o) => o.id)).toEqual([
+      'base.spell.burn',
+      'base.spell.book-of-one-hundred-seas',
+      'base.spell.wrath-of-heaven',
+    ]);
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: draftPrompt.id,
+      answer: {
+        kind: 'option-chosen',
+        optionId: 'base.spell.burn',
+        payload: {},
+      },
+    });
+    // Burn drafted; chain locked to sorcery.
+    expect(s.pendingContractResearch?.lockedDepartment).toBe('sorcery');
+    // Second prompt drained — should have restrictDepartment=sorcery.
+    const second = topPending(s);
+    expect(second.resume.context?.['restrictDepartment']).toBe('sorcery');
+    expect(second.resume.context?.['contractChain']).toBe(true);
+  });
+
+  it('discarding the first Research keeps the chain unlocked (second pick still unrestricted)', () => {
+    let s = setupContract();
+    s = applyAction(s, {
+      type: 'PLAY_VAULT_CARD',
+      playerId: 'p1',
+      vaultCardId: 'base.vault.the-contract',
+    });
+    // First prompt → discard.
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'option-chosen', optionId: 'discard', payload: {} },
+    });
+    expect(s.pendingContractResearch?.lockedDepartment).toBeUndefined();
+    // Second prompt is still unrestricted.
+    const second = topPending(s);
+    expect(second.resume.context?.['restrictDepartment']).toBeUndefined();
+    expect(s.pendingContractResearch?.remaining).toBe(1);
+  });
+
+  it('after all 3 Researches resolve, pendingContractResearch clears', () => {
+    let s = setupContract();
+    s = applyAction(s, {
+      type: 'PLAY_VAULT_CARD',
+      playerId: 'p1',
+      vaultCardId: 'base.vault.the-contract',
+    });
+    // Discard all 3 to keep things simple.
+    for (let i = 0; i < 3; i++) {
+      s = applyAction(s, {
+        type: 'RESOLVE_PENDING',
+        resolutionId: topPending(s).id,
+        answer: { kind: 'option-chosen', optionId: 'discard', payload: {} },
+      });
+    }
+    expect(s.pendingContractResearch).toBeNull();
+    expect(s.pendingResolutionStack).toHaveLength(0);
+  });
+});
+
+// ============================================================================
 // Bug repro: 'most-intelligence' voter with 2 players tied on INT
 // ============================================================================
 

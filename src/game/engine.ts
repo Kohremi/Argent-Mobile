@@ -296,6 +296,40 @@ function drainPendingPlaceChainIfIdle(state: GameState): GameState {
 }
 
 /**
+ * Surfaces the next Research opportunity in a The Contract chain. The
+ * first non-discard pick locks the department for the remaining picks
+ * (research-draft / research-add-wis populate `lockedDepartment` after
+ * the player drafts or upgrades a spell — see those effects).
+ */
+function drainContractResearchIfIdle(state: GameState): GameState {
+  const chain = state.pendingContractResearch;
+  if (!chain) return state;
+  if (state.pendingResolutionStack.length > 0) return state;
+  if (state.activeReactionWindows.length > 0) return state;
+  if (chain.remaining <= 0) {
+    return { ...state, pendingContractResearch: null };
+  }
+  const decremented: GameState = {
+    ...state,
+    pendingContractResearch: { ...chain, remaining: chain.remaining - 1 },
+  };
+  const ctx: EffectContext = {
+    state: decremented,
+    source: chain.source,
+    triggeringPlayerId: chain.playerId,
+    allowReactions: false,
+    resumeContext: {
+      contractChain: true,
+      ...(chain.lockedDepartment !== undefined
+        ? { restrictDepartment: chain.lockedDepartment }
+        : {}),
+    },
+  };
+  const result = getEffect('base.system.spawn-research-prompt')(ctx);
+  return applyEffectResult(decremented, result, ctx);
+}
+
+/**
  * If the active player has spent their Regular Action and no prompts or
  * reaction windows are still open, the turn ends automatically (per
  * rulebook). Called at the end of every dispatch so that turns advance
@@ -317,6 +351,10 @@ function autoAdvanceIfTurnDone(state: GameState): GameState {
   // in which case we stop and let the player resolve it before any further
   // turn advancement.
   state = drainResearchQueueIfIdle(state);
+  // The Contract chain is parallel to the regular research queue — drain
+  // one entry per cycle. Its first non-discard pick locks the department
+  // for the remaining picks.
+  state = drainContractResearchIfIdle(state);
   if (state.phase.kind !== 'errands') return state;
   if (!state.phase.actionUsed) return state;
   if (state.pendingResolutionStack.length > 0) return state;

@@ -335,6 +335,7 @@ function spawnResearchPrompt(
   playerId: string,
   source: ResolutionSource,
   restrictDepartment?: Department,
+  contractChain?: boolean,
 ): PendingResolutionInput {
   const player = state.players.find((p) => p.id === playerId);
   const intPool = player?.resources.intelligence ?? 0;
@@ -380,7 +381,10 @@ function spawnResearchPrompt(
     },
     resume: {
       effectId: 'base.system.spend-research',
-      context: restrictDepartment ? { restrictDepartment } : {},
+      context: {
+        ...(restrictDepartment ? { restrictDepartment } : {}),
+        ...(contractChain ? { contractChain: true } : {}),
+      },
     },
     source,
   };
@@ -418,6 +422,7 @@ registerEffect('base.system.spawn-research-prompt', (ctx): EffectResult => {
   const restrictRaw = ctx.resumeContext?.['restrictDepartment'];
   const restrict =
     typeof restrictRaw === 'string' ? (restrictRaw as Department) : undefined;
+  const contractChain = ctx.resumeContext?.['contractChain'] === true;
   return {
     kind: 'pause',
     pending: spawnResearchPrompt(
@@ -425,6 +430,7 @@ registerEffect('base.system.spawn-research-prompt', (ctx): EffectResult => {
       ctx.triggeringPlayerId,
       ctx.source,
       restrict,
+      contractChain,
     ),
   };
 });
@@ -444,6 +450,7 @@ registerEffect('base.system.spend-research', (ctx): EffectResult => {
   const restrictRaw = ctx.resumeContext?.['restrictDepartment'];
   const restrict =
     typeof restrictRaw === 'string' ? (restrictRaw as Department) : undefined;
+  const contractChain = ctx.resumeContext?.['contractChain'] === true;
   const matches = (cardId: string): boolean => {
     if (!restrict) return true;
     const def = lookupSpellCardDef(ctx.state, cardId);
@@ -475,7 +482,10 @@ registerEffect('base.system.spend-research', (ctx): EffectResult => {
         },
         resume: {
           effectId: 'base.system.research-draft',
-          context: restrict ? { restrictDepartment: restrict } : {},
+          context: {
+            ...(restrict ? { restrictDepartment: restrict } : {}),
+            ...(contractChain ? { contractChain: true } : {}),
+          },
         },
         source: ctx.source,
       },
@@ -530,7 +540,10 @@ registerEffect('base.system.spend-research', (ctx): EffectResult => {
         },
         resume: {
           effectId: 'base.system.research-add-wis',
-          context: restrict ? { restrictDepartment: restrict } : {},
+          context: {
+            ...(restrict ? { restrictDepartment: restrict } : {}),
+            ...(contractChain ? { contractChain: true } : {}),
+          },
         },
         source: ctx.source,
       },
@@ -595,11 +608,41 @@ registerEffect('base.system.research-draft', (ctx): EffectResult => {
     const def = lookupSpellCardDef(ctx.state, spellCardId);
     if (def?.department !== restrictRaw) return { kind: 'done', patch: {} };
   }
-  return {
-    kind: 'done',
-    patch: applyDraftSpell(ctx.state, ctx.triggeringPlayerId, spellCardId),
-  };
+  const patch = applyDraftSpell(
+    ctx.state,
+    ctx.triggeringPlayerId,
+    spellCardId,
+  );
+  // The Contract: if this draft was sourced from the contract chain, lock
+  // the remaining picks to the drafted spell's department.
+  const contractChain = ctx.resumeContext?.['contractChain'] === true;
+  if (contractChain) {
+    const lockPatch = maybeLockContractDepartment(
+      ctx.state,
+      ctx.triggeringPlayerId,
+      spellCardId,
+    );
+    if (lockPatch) patch.pendingContractResearch = lockPatch;
+  }
+  return { kind: 'done', patch };
 });
+
+/** Returns the updated `pendingContractResearch` (with `lockedDepartment`
+ *  set) if the chain is active for `playerId` and doesn't yet have a
+ *  locked department. Returns `null` to signal "no update needed". */
+function maybeLockContractDepartment(
+  state: GameState,
+  playerId: string,
+  spellCardId: string,
+): GameState['pendingContractResearch'] | null {
+  const chain = state.pendingContractResearch;
+  if (!chain) return null;
+  if (chain.playerId !== playerId) return null;
+  if (chain.lockedDepartment !== undefined) return null;
+  const def = lookupSpellCardDef(state, spellCardId);
+  if (!def) return null;
+  return { ...chain, lockedDepartment: def.department };
+}
 
 /**
  * Spell-research action: discard a learned spell (refunding its INT + any
@@ -692,10 +735,21 @@ registerEffect('base.system.research-add-wis', (ctx): EffectResult => {
     const def = lookupSpellCardDef(ctx.state, spellCardId);
     if (def?.department !== restrictRaw) return { kind: 'done', patch: {} };
   }
-  return {
-    kind: 'done',
-    patch: applyAddWisToSpell(ctx.state, ctx.triggeringPlayerId, spellCardId),
-  };
+  const patch = applyAddWisToSpell(
+    ctx.state,
+    ctx.triggeringPlayerId,
+    spellCardId,
+  );
+  const contractChain = ctx.resumeContext?.['contractChain'] === true;
+  if (contractChain) {
+    const lockPatch = maybeLockContractDepartment(
+      ctx.state,
+      ctx.triggeringPlayerId,
+      spellCardId,
+    );
+    if (lockPatch) patch.pendingContractResearch = lockPatch;
+  }
+  return { kind: 'done', patch };
 });
 
 /**
@@ -4959,13 +5013,24 @@ registerEffect('base.vault.mystic-lantern', (ctx): EffectResult => {
 });
 
 /**
- * The Contract (consumable, fast-action) — Gain 3 Research. Use this
- * Research on spells of a single chosen type. The department restriction
- * is informational for now; same TODO as the dept-restricted supporters.
+ * The Contract (consumable, fast-action) — Gain 3 Research. The first
+ * non-discard pick (draft or WIS-upgrade) locks the department of the
+ * spell chosen; the remaining 2 Researches must target that same
+ * department.
+ *
+ * Drained one entry at a time by `drainContractResearchIfIdle` in the
+ * engine. `research-draft` / `research-add-wis` set the lock when
+ * `contractChain` is threaded through their resume context.
  */
 registerEffect('base.vault.the-contract', (ctx): EffectResult => ({
   kind: 'done',
-  patch: appendResearchQueue(ctx.state, ctx.triggeringPlayerId, ctx.source, 3),
+  patch: {
+    pendingContractResearch: {
+      playerId: ctx.triggeringPlayerId,
+      source: ctx.source,
+      remaining: 3,
+    },
+  },
 }));
 
 // ---------------------------------------------------------------------------

@@ -378,6 +378,7 @@ export function buildInitialState(config: GameConfig): GameState {
     researchQueue: [],
     pendingBellTowerLastEvent: null,
     pendingPlaceChain: null,
+    pendingContractResearch: null,
     nextSequenceId: 1,
     actionLog: [],
   };

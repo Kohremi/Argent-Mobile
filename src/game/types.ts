@@ -868,6 +868,18 @@ export interface GameState {
     source: ResolutionSource;
     remaining: number;
   } | null;
+  /**
+   * The Contract chain (3 Research, all locked to a single department of
+   * the player's implicit choice). The first non-discard pick locks the
+   * department for the remaining picks. Drained one Research at a time
+   * by the engine pump.
+   */
+  pendingContractResearch: {
+    playerId: PlayerId;
+    source: ResolutionSource;
+    remaining: number;
+    lockedDepartment?: Department;
+  } | null;
 
   voters: ConsortiumVoter[];
   voterMarks: VoterMark[];
