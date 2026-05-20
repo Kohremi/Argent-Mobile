@@ -11732,6 +11732,7 @@ describe('Malaise (The Darkness Within L1)', () => {
       level: 1,
     });
     // CAST_SPELL consumed Alice's action — turn auto-advanced to Bob.
+    if (s.phase.kind !== 'errands') throw new Error('expected errands');
     expect(s.players[s.phase.activePlayerIndex]!.id).toBe('p2');
     expect(() =>
       applyAction(s, {
@@ -11780,12 +11781,14 @@ describe('Malaise (The Darkness Within L1)', () => {
       level: 1,
     });
     // After Alice's cast the turn auto-advances to Bob; Malaise is still up.
+    if (s.phase.kind !== 'errands') throw new Error('expected errands');
     expect(s.players[s.phase.activePlayerIndex]!.id).toBe('p2');
     expect(s.activeBuffs.some((b) => b.kind === 'placements-blocked')).toBe(
       true,
     );
     // Bob passes → Alice's next turn begins → Malaise clears.
     s = applyAction(s, { type: 'PASS_TURN', playerId: 'p2' });
+    if (s.phase.kind !== 'errands') throw new Error('expected errands');
     expect(s.players[s.phase.activePlayerIndex]!.id).toBe('p1');
     expect(s.activeBuffs.some((b) => b.kind === 'placements-blocked')).toBe(
       false,
@@ -11813,6 +11816,420 @@ describe('Malaise (The Darkness Within L1)', () => {
       .find((r) => r.id === 'base.room.library.a')!
       .actionSpaces.find((sp) => sp.id === 'base.room.library.a.slot-1')!;
     expect(slot1.occupant?.mageId).toBe('alice-grey');
+  });
+});
+
+// ============================================================================
+// Haunt (The Darkness Within L2) — reaction: shadow original slot instead of
+// being wounded / moved / banished.
+// ============================================================================
+
+describe('Haunt (The Darkness Within L2)', () => {
+  function setupHauntScenario(): GameState {
+    let s = initGame(TWO_PLAYER_CONFIG);
+    s = forceLibrarySideA(s);
+    s = zeroPlayerResources(s, 'p1');
+    s = zeroPlayerResources(s, 'p2');
+    // p1 (Alice) owns The Darkness Within researched at L2 + 2 mana.
+    s = addOwnedSpell(s, 'p1', 'base.spell.the-darkness-within', {
+      intPlaced: true,
+      wisPlacedLevel2: true,
+    });
+    s = setMana(s, 'p1', 2);
+    // p1 also has a placed mage on Library A slot 1 (target of Burn).
+    s = addMage(s, 'p1', {
+      id: 'alice-red-1',
+      cardId: 'base.mage.sorcery',
+      color: 'red',
+    });
+    s = placeMageOnSpace(s, 'p1', 'alice-red-1', 'base.room.library.a.slot-1');
+    // p2 (Bob) owns Burn so they can wound Alice's mage.
+    s = addOwnedSpell(s, 'p2', 'base.spell.burn', { intPlaced: true });
+    s = setMana(s, 'p2', 2);
+    return {
+      ...s,
+      firstPlayerIndex: 1, // Bob first so he can cast Burn.
+      phase: {
+        kind: 'errands',
+        round: 1,
+        activePlayerIndex: 1,
+        actionUsed: false,
+        fastActionUsed: false,
+      },
+    };
+  }
+
+  it('surfaces a Haunt reaction option when the caster\'s mage is wounded', () => {
+    let s = setupHauntScenario();
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p2',
+      spellCardId: 'base.spell.burn',
+      level: 1,
+    });
+    // Resolve Burn's target prompt by picking Alice's mage.
+    const top = topPending(s);
+    expect(top.prompt.kind).toBe('choose-target-mage');
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: top.id,
+      answer: { kind: 'mage-chosen', mageId: 'alice-red-1' },
+    });
+    // Reaction window opens for p1.
+    const reactionPrompt = topPending(s);
+    expect(reactionPrompt.prompt.kind).toBe('reaction-window');
+    if (reactionPrompt.prompt.kind !== 'reaction-window') throw new Error('unreachable');
+    const haunt = reactionPrompt.prompt.reactionOptions.find(
+      (o) => o.effectId === 'base.spell.the-darkness-within.l2.react',
+    );
+    expect(haunt).toBeDefined();
+  });
+
+  it('casting Haunt sends the wounded mage back to its original slot as a shadow + clears wound', () => {
+    let s = setupHauntScenario();
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p2',
+      spellCardId: 'base.spell.burn',
+      level: 1,
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'mage-chosen', mageId: 'alice-red-1' },
+    });
+    // Alice picks Haunt.
+    const reactionPrompt = topPending(s);
+    if (reactionPrompt.prompt.kind !== 'reaction-window') throw new Error('unreachable');
+    const haunt = reactionPrompt.prompt.reactionOptions.find(
+      (o) => o.effectId === 'base.spell.the-darkness-within.l2.react',
+    )!;
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: reactionPrompt.id,
+      answer: {
+        kind: 'reaction-played',
+        effectId: haunt.effectId,
+        reactionContext: {},
+      },
+    });
+    // Mage is back on slot-1 as a shadow, wound cleared.
+    const p1 = s.players.find((p) => p.id === 'p1')!;
+    const aliceMage = p1.mages.find((m) => m.id === 'alice-red-1')!;
+    expect(aliceMage.isWounded).toBe(false);
+    expect(aliceMage.isShadowing).toBe(true);
+    expect(aliceMage.location).toEqual({
+      kind: 'action-space',
+      spaceId: 'base.room.library.a.slot-1',
+    });
+    const slot1 = s.rooms
+      .find((r) => r.id === 'base.room.library.a')!
+      .actionSpaces.find((sp) => sp.id === 'base.room.library.a.slot-1')!;
+    expect(slot1.shadowOccupant?.mageId).toBe('alice-red-1');
+    // Mana spent + spell exhausted.
+    expect(p1.resources.mana).toBe(0);
+    expect(
+      p1.ownedSpells.find((s) => s.cardId === 'base.spell.the-darkness-within')!
+        .exhausted,
+    ).toBe(true);
+  });
+
+  it('does not surface Haunt when mana < 2', () => {
+    let s = setupHauntScenario();
+    s = setMana(s, 'p1', 1);
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p2',
+      spellCardId: 'base.spell.burn',
+      level: 1,
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'mage-chosen', mageId: 'alice-red-1' },
+    });
+    const reactionPrompt = topPending(s);
+    if (reactionPrompt.prompt.kind !== 'reaction-window') {
+      // No reaction window opened — Alice had no eligible reactions, which is
+      // also acceptable (Burn skipped the window).
+      return;
+    }
+    const haunt = reactionPrompt.prompt.reactionOptions.find(
+      (o) => o.effectId === 'base.spell.the-darkness-within.l2.react',
+    );
+    expect(haunt).toBeUndefined();
+  });
+
+  it('does not surface Haunt when the spell is not researched to L2', () => {
+    let s = setupHauntScenario();
+    // Strip L2 research.
+    s = mapPlayer(s, 'p1', (p) => ({
+      ...p,
+      ownedSpells: p.ownedSpells.map((o) =>
+        o.cardId !== 'base.spell.the-darkness-within'
+          ? o
+          : { ...o, wisPlacedLevel2: false },
+      ),
+    }));
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p2',
+      spellCardId: 'base.spell.burn',
+      level: 1,
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'mage-chosen', mageId: 'alice-red-1' },
+    });
+    const reactionPrompt = topPending(s);
+    if (reactionPrompt.prompt.kind !== 'reaction-window') return;
+    const haunt = reactionPrompt.prompt.reactionOptions.find(
+      (o) => o.effectId === 'base.spell.the-darkness-within.l2.react',
+    );
+    expect(haunt).toBeUndefined();
+  });
+});
+
+// ============================================================================
+// Possession (The Darkness Within L3) — permanent ownership swap.
+// ============================================================================
+
+describe('Possession (The Darkness Within L3)', () => {
+  function setupPossession(): GameState {
+    let s = initGame(TWO_PLAYER_CONFIG);
+    s = forceLibrarySideA(s);
+    s = zeroPlayerResources(s, 'p1');
+    s = zeroPlayerResources(s, 'p2');
+    s = addOwnedSpell(s, 'p1', 'base.spell.the-darkness-within', {
+      intPlaced: true,
+      wisPlacedLevel2: true,
+      wisPlacedLevel3: true,
+    });
+    s = setMana(s, 'p1', 4);
+    // Alice has a red mage on slot 1; Bob has a grey mage on slot 2.
+    s = addMage(s, 'p1', {
+      id: 'alice-red',
+      cardId: 'base.mage.sorcery',
+      color: 'red',
+    });
+    s = addMage(s, 'p2', {
+      id: 'bob-grey',
+      cardId: 'base.mage.mysticism',
+      color: 'grey',
+    });
+    s = placeMageOnSpace(s, 'p1', 'alice-red', 'base.room.library.a.slot-1');
+    s = placeMageOnSpace(s, 'p2', 'bob-grey', 'base.room.library.a.slot-2');
+    return {
+      ...s,
+      firstPlayerIndex: 0,
+      phase: {
+        kind: 'errands',
+        round: 1,
+        activePlayerIndex: 0,
+        actionUsed: false,
+        fastActionUsed: false,
+      },
+    };
+  }
+
+  it('prompts for the first mage with only placed mages eligible', () => {
+    let s = setupPossession();
+    // Bob also has an unplaced mage in office — should be excluded.
+    s = addMage(s, 'p2', {
+      id: 'bob-office',
+      cardId: 'base.mage.sorcery',
+      color: 'red',
+    });
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.the-darkness-within',
+      level: 3,
+    });
+    const top = topPending(s);
+    expect(top.prompt.kind).toBe('choose-target-mage');
+    if (top.prompt.kind !== 'choose-target-mage') throw new Error('unreachable');
+    expect(top.prompt.eligibleMageIds.sort()).toEqual(
+      ['alice-red', 'bob-grey'].sort(),
+    );
+  });
+
+  it('opposing blue mages are spell-immune and excluded from the target list', () => {
+    let s = setupPossession();
+    s = addMage(s, 'p2', {
+      id: 'bob-blue',
+      cardId: 'base.mage.divinity',
+      color: 'blue',
+    });
+    s = placeMageOnSpace(s, 'p2', 'bob-blue', 'base.room.library.a.slot-3');
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.the-darkness-within',
+      level: 3,
+    });
+    const top = topPending(s);
+    if (top.prompt.kind !== 'choose-target-mage') throw new Error('unreachable');
+    expect(top.prompt.eligibleMageIds).not.toContain('bob-blue');
+  });
+
+  it("swaps the two mages between players' mage arrays and the slot occupant ownerIds", () => {
+    let s = setupPossession();
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.the-darkness-within',
+      level: 3,
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'mage-chosen', mageId: 'alice-red' },
+    });
+    // Second pick excludes the first.
+    const second = topPending(s);
+    if (second.prompt.kind !== 'choose-target-mage') throw new Error('unreachable');
+    expect(second.prompt.eligibleMageIds).not.toContain('alice-red');
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: second.id,
+      answer: { kind: 'mage-chosen', mageId: 'bob-grey' },
+    });
+    const p1 = s.players.find((p) => p.id === 'p1')!;
+    const p2 = s.players.find((p) => p.id === 'p2')!;
+    // alice-red moved to Bob's mages; bob-grey moved to Alice's mages.
+    expect(p1.mages.some((m) => m.id === 'bob-grey')).toBe(true);
+    expect(p1.mages.some((m) => m.id === 'alice-red')).toBe(false);
+    expect(p2.mages.some((m) => m.id === 'alice-red')).toBe(true);
+    expect(p2.mages.some((m) => m.id === 'bob-grey')).toBe(false);
+    // The mages stay on their slots; only ownerId on each slot is swapped.
+    const lib = s.rooms.find((r) => r.id === 'base.room.library.a')!;
+    const slot1 = lib.actionSpaces.find(
+      (sp) => sp.id === 'base.room.library.a.slot-1',
+    )!;
+    const slot2 = lib.actionSpaces.find(
+      (sp) => sp.id === 'base.room.library.a.slot-2',
+    )!;
+    expect(slot1.occupant?.mageId).toBe('alice-red');
+    expect(slot1.occupant?.ownerId).toBe('p2');
+    expect(slot2.occupant?.mageId).toBe('bob-grey');
+    expect(slot2.occupant?.ownerId).toBe('p1');
+  });
+
+  it('also swaps when one of the mages is in a shadow position', () => {
+    let s = setupPossession();
+    // Move alice-red to a shadow position over bob-grey on slot 2.
+    s = {
+      ...s,
+      rooms: s.rooms.map((r) => {
+        if (r.id !== 'base.room.library.a') return r;
+        return {
+          ...r,
+          actionSpaces: r.actionSpaces.map((sp) => {
+            if (sp.id === 'base.room.library.a.slot-1') {
+              return { ...sp, occupant: null };
+            }
+            if (sp.id === 'base.room.library.a.slot-2') {
+              return {
+                ...sp,
+                shadowOccupant: {
+                  mageId: 'alice-red',
+                  ownerId: 'p1',
+                  isShadowing: true,
+                },
+              };
+            }
+            return sp;
+          }),
+        };
+      }),
+      players: s.players.map((p) =>
+        p.id !== 'p1'
+          ? p
+          : {
+              ...p,
+              mages: p.mages.map((m) =>
+                m.id !== 'alice-red'
+                  ? m
+                  : {
+                      ...m,
+                      isShadowing: true,
+                      location: {
+                        kind: 'action-space' as const,
+                        spaceId: 'base.room.library.a.slot-2',
+                      },
+                    },
+              ),
+            },
+      ),
+    };
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.the-darkness-within',
+      level: 3,
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'mage-chosen', mageId: 'alice-red' },
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'mage-chosen', mageId: 'bob-grey' },
+    });
+    const slot2 = s.rooms
+      .find((r) => r.id === 'base.room.library.a')!
+      .actionSpaces.find((sp) => sp.id === 'base.room.library.a.slot-2')!;
+    expect(slot2.occupant?.mageId).toBe('bob-grey');
+    expect(slot2.occupant?.ownerId).toBe('p1');
+    expect(slot2.shadowOccupant?.mageId).toBe('alice-red');
+    expect(slot2.shadowOccupant?.ownerId).toBe('p2');
+  });
+
+  it('fizzles when fewer than two eligible mages exist', () => {
+    let s = initGame(TWO_PLAYER_CONFIG);
+    s = forceLibrarySideA(s);
+    s = zeroPlayerResources(s, 'p1');
+    s = addOwnedSpell(s, 'p1', 'base.spell.the-darkness-within', {
+      intPlaced: true,
+      wisPlacedLevel2: true,
+      wisPlacedLevel3: true,
+    });
+    s = setMana(s, 'p1', 4);
+    s = addMage(s, 'p1', {
+      id: 'alice-red',
+      cardId: 'base.mage.sorcery',
+      color: 'red',
+    });
+    s = placeMageOnSpace(s, 'p1', 'alice-red', 'base.room.library.a.slot-1');
+    s = {
+      ...s,
+      firstPlayerIndex: 0,
+      phase: {
+        kind: 'errands',
+        round: 1,
+        activePlayerIndex: 0,
+        actionUsed: false,
+        fastActionUsed: false,
+      },
+    };
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.the-darkness-within',
+      level: 3,
+    });
+    expect(
+      s.pendingResolutionStack.some(
+        (e) => e.source.kind === 'spell' && e.source.id === 'base.spell.the-darkness-within',
+      ),
+    ).toBe(false);
+    // Mana was paid + spell exhausted regardless (the cast committed).
+    const p1 = s.players.find((p) => p.id === 'p1')!;
+    expect(p1.resources.mana).toBe(0);
   });
 });
 

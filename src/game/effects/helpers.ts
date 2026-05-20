@@ -1170,6 +1170,29 @@ export function buildReactionOptionsFor(
         });
       }
     }
+
+    // The Darkness Within L2 "Haunt": when your mage is wounded, moved, or
+    //   banished, it instead shadows the slot it previously occupied.
+    //   Researched at L2 (intPlaced + wisPlacedLevel2), unexhausted, cost 2 Mana.
+    const darknessWithin = responder.ownedSpells.find(
+      (s) => s.cardId === 'base.spell.the-darkness-within',
+    );
+    if (
+      darknessWithin &&
+      darknessWithin.intPlaced &&
+      darknessWithin.wisPlacedLevel2 &&
+      !darknessWithin.exhausted &&
+      responder.resources.mana >= 2 &&
+      isWoundBanishOrMove
+    ) {
+      options.push({
+        sourceKind: 'spell',
+        sourceId: 'base.spell.the-darkness-within',
+        effectId: 'base.spell.the-darkness-within.l2.react',
+        label: `Cast Haunt (shadow original slot)${labelSuffix(mageId)}`,
+        ...(multi ? { forMageId: mageId } : {}),
+      });
+    }
   }
 
   return options;

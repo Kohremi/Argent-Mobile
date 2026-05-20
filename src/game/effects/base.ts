@@ -11695,3 +11695,242 @@ registerEffect(
     };
   },
 );
+
+// ============================================================================
+// The Darkness Within L2 "Haunt" — reaction spell. When one of your Mages is
+// wounded, moved, or banished, it instead shadows the slot it previously
+// occupied. Mana cost: 2; exhausts on use. Mirrors Phase Steppers'
+// repositioning, sourced from a spell instead of a vault card.
+// ============================================================================
+
+registerEffect(
+  'base.spell.the-darkness-within.l2.react',
+  (ctx): EffectResult => {
+    const paid = payAndExhaustSpell(
+      ctx.state,
+      ctx.triggeringPlayerId,
+      'base.spell.the-darkness-within',
+      2,
+    );
+    if (!paid) return { kind: 'done', patch: {} };
+    const raw = ctx.resumeContext?.['triggerEvent'];
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+      throw new Error('Haunt: missing triggerEvent in resumeContext');
+    }
+    const event = raw as unknown as ReactionTriggerEvent;
+    if (
+      event.kind !== 'mage-wounded' &&
+      event.kind !== 'mage-banished' &&
+      event.kind !== 'mage-moved'
+    ) {
+      throw new Error(`Haunt cannot react to ${event.kind}`);
+    }
+    if (event.ownerId !== ctx.triggeringPlayerId) {
+      throw new Error("Haunt only reacts to the caster's own Mage");
+    }
+    const originalSpaceId =
+      event.kind === 'mage-moved' ? event.fromSpaceId : event.originalSpaceId;
+    if (!originalSpaceId) return { kind: 'done', patch: { players: paid.players } };
+    const mageId = event.mageId;
+    const ownerId = event.ownerId;
+    const occupancy: WorkerOccupancy = {
+      mageId,
+      ownerId,
+      isShadowing: true,
+    };
+    const players = paid.players.map((p): Player =>
+      p.id !== ownerId
+        ? p
+        : {
+            ...p,
+            mages: p.mages.map((m) =>
+              m.id !== mageId
+                ? m
+                : {
+                    ...m,
+                    isWounded: false,
+                    isShadowing: true,
+                    location: {
+                      kind: 'action-space' as const,
+                      spaceId: originalSpaceId,
+                    },
+                  },
+            ),
+          },
+    );
+    const rooms = paid.rooms.map((r) => ({
+      ...r,
+      actionSpaces: r.actionSpaces.map((s) =>
+        s.id !== originalSpaceId ? s : { ...s, shadowOccupant: occupancy },
+      ),
+    }));
+    return { kind: 'done', patch: { players, rooms } };
+  },
+);
+
+// ============================================================================
+// The Darkness Within L3 "Possession" — Swap ownership badges between two
+// Mages on the board. The swap is permanent. Targets:
+//   - any mage on a slot (base or shadow) — both positions count as "on the
+//     board";
+//   - opposing blue mages are spell-immune and excluded;
+//   - locked rooms do NOT protect — Possession isn't wound/banish/move/shadow.
+//
+// Mana cost: 4, Action timing. Effect:
+//   - mage A and mage B exchange which player.mages array they live in;
+//   - the slot occupant (or shadowOccupant) ownerId on each slot is updated
+//     to reflect the new owner;
+//   - mage.id, color, cardId, location, and shadow/wound flags are unchanged.
+// ============================================================================
+
+function buildPossessionTargets(
+  state: GameState,
+  casterId: string,
+  excludeMageId?: string,
+): string[] {
+  const out: string[] = [];
+  for (const p of state.players) {
+    for (const m of p.mages) {
+      if (m.location.kind !== 'action-space') continue;
+      if (m.color === 'blue' && p.id !== casterId) continue;
+      if (m.id === excludeMageId) continue;
+      out.push(m.id);
+    }
+  }
+  return out;
+}
+
+function applyOwnershipSwap(
+  state: GameState,
+  mageAId: string,
+  mageBId: string,
+): GameStatePatch {
+  let ownerA: string | null = null;
+  let ownerB: string | null = null;
+  let mageA: OwnedMage | null = null;
+  let mageB: OwnedMage | null = null;
+  for (const p of state.players) {
+    for (const m of p.mages) {
+      if (m.id === mageAId) {
+        ownerA = p.id;
+        mageA = m;
+      }
+      if (m.id === mageBId) {
+        ownerB = p.id;
+        mageB = m;
+      }
+    }
+  }
+  if (!ownerA || !ownerB || !mageA || !mageB) {
+    throw new Error(
+      `applyOwnershipSwap: could not locate both mages (${mageAId}, ${mageBId})`,
+    );
+  }
+  if (ownerA === ownerB) {
+    // Same owner — no actual swap to perform, slot ownerIds unchanged.
+    return {};
+  }
+  const players = state.players.map((p): Player => {
+    if (p.id === ownerA) {
+      return {
+        ...p,
+        mages: [...p.mages.filter((m) => m.id !== mageAId), mageB!],
+      };
+    }
+    if (p.id === ownerB) {
+      return {
+        ...p,
+        mages: [...p.mages.filter((m) => m.id !== mageBId), mageA!],
+      };
+    }
+    return p;
+  });
+  const rooms = state.rooms.map((r) => ({
+    ...r,
+    actionSpaces: r.actionSpaces.map((s) => {
+      let next = s;
+      if (next.occupant?.mageId === mageAId) {
+        next = { ...next, occupant: { ...next.occupant, ownerId: ownerB! } };
+      }
+      if (next.occupant?.mageId === mageBId) {
+        next = { ...next, occupant: { ...next.occupant, ownerId: ownerA! } };
+      }
+      if (next.shadowOccupant?.mageId === mageAId) {
+        next = {
+          ...next,
+          shadowOccupant: { ...next.shadowOccupant, ownerId: ownerB! },
+        };
+      }
+      if (next.shadowOccupant?.mageId === mageBId) {
+        next = {
+          ...next,
+          shadowOccupant: { ...next.shadowOccupant, ownerId: ownerA! },
+        };
+      }
+      return next;
+    }),
+  }));
+  return { players, rooms };
+}
+
+registerEffect(
+  'base.spell.the-darkness-within.l3',
+  (ctx): EffectResult => {
+    const self = 'base.spell.the-darkness-within.l3';
+    const step = ctx.resumeContext?.['step'];
+
+    if (!ctx.resumeAnswer) {
+      const targets = buildPossessionTargets(
+        ctx.state,
+        ctx.triggeringPlayerId,
+      );
+      if (targets.length < 2) return { kind: 'done', patch: {} };
+      return {
+        kind: 'pause',
+        pending: {
+          responderId: ctx.triggeringPlayerId,
+          prompt: { kind: 'choose-target-mage', eligibleMageIds: targets },
+          resume: { effectId: self, context: { step: 'pick-second' } },
+          source: ctx.source,
+        },
+      };
+    }
+
+    if (step === 'pick-second') {
+      if (ctx.resumeAnswer.kind !== 'mage-chosen') {
+        throw new Error(`${self} pick-second expected mage-chosen`);
+      }
+      const mageA = ctx.resumeAnswer.mageId;
+      const remaining = buildPossessionTargets(
+        ctx.state,
+        ctx.triggeringPlayerId,
+        mageA,
+      );
+      if (remaining.length === 0) return { kind: 'done', patch: {} };
+      return {
+        kind: 'pause',
+        pending: {
+          responderId: ctx.triggeringPlayerId,
+          prompt: { kind: 'choose-target-mage', eligibleMageIds: remaining },
+          resume: { effectId: self, context: { step: 'apply', mageA } },
+          source: ctx.source,
+        },
+      };
+    }
+
+    if (step === 'apply') {
+      if (ctx.resumeAnswer.kind !== 'mage-chosen') {
+        throw new Error(`${self} apply expected mage-chosen`);
+      }
+      const mageA = String(ctx.resumeContext?.['mageA'] ?? '');
+      const mageB = ctx.resumeAnswer.mageId;
+      if (!mageA || mageA === mageB) return { kind: 'done', patch: {} };
+      return {
+        kind: 'done',
+        patch: applyOwnershipSwap(ctx.state, mageA, mageB),
+      };
+    }
+
+    throw new Error(`${self} unexpected step ${String(step)}`);
+  },
+);
