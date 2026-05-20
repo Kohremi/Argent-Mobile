@@ -767,10 +767,27 @@ export interface ShadowOnPlaceBuff {
   expiresAt: BuffExpiry;
 }
 
+/**
+ * Global "no placements" buff (The Darkness Within L1 Malaise). While
+ * active, PLACE_WORKER is rejected for every player — including the
+ * caster. Expires at the caster's next turn (or round-end as the global
+ * fallback). The grey Mysticism "place after Action Spell" prompt is
+ * also suppressed while this buff is active, since selecting it could
+ * never produce a legal placement.
+ */
+export interface PlacementsBlockedBuff {
+  kind: 'placements-blocked';
+  casterPlayerId: PlayerId;
+  spellCardId: SpellCardId;
+  label: string;
+  expiresAt: BuffExpiry;
+}
+
 export type ActiveBuff =
   | MageImmunityBuff
   | MagesLosePowersBuff
-  | ShadowOnPlaceBuff;
+  | ShadowOnPlaceBuff
+  | PlacementsBlockedBuff;
 
 export type ReactionTriggerEvent =
   | {

@@ -18,6 +18,7 @@ import {
   magesLosePowers,
   lookupCandidate,
   MAGE_CARD_BY_COLOR,
+  placementsBlocked,
   woundMage,
 } from './effects/helpers';
 import type {
@@ -723,6 +724,10 @@ function handlePlaceWorker(state: GameState, action: PlaceWorkerAction): GameSta
   if (state.pendingResolutionStack.length > 0) {
     throw new Error('PLACE_WORKER: resolve pending prompt first');
   }
+  // Malaise (The Darkness Within L1) blocks all placements globally.
+  if (placementsBlocked(state)) {
+    throw new Error('PLACE_WORKER: Malaise — Mages cannot be placed');
+  }
   const activePlayerId = state.players[state.phase.activePlayerIndex]?.id;
   if (activePlayerId !== action.playerId) {
     throw new Error(
@@ -1315,49 +1320,33 @@ function handleCastSpell(state: GameState, action: CastSpellAction): GameState {
   // Grey (Mysticism) mage ability: when a player casts a spell as a full
   // Action AND has at least one unwounded grey mage in office, they MAY
   // place one onto an open base slot. The opportunity comes AFTER the
-  // spell fully resolves, so we push the Yes/No pending at the bottom of
-  // the stack now — the spell's own prompts / reactions go on top and pop
-  // first; this prompt fires last.
-  if (levelDef.timing === 'action' && !magesLosePowers(next)) {
-    const caster = next.players.find((p) => p.id === action.playerId);
-    const hasGreyInOffice =
-      caster?.mages.some(
-        (m) =>
-          m.color === 'grey' &&
-          m.location.kind === 'office' &&
-          !m.isWounded,
-      ) ?? false;
-    if (hasGreyInOffice) {
-      next = pushPending(next, {
-        responderId: action.playerId,
-        prompt: {
-          kind: 'choose-from-options',
-          options: [
-            {
-              id: 'place',
-              label: 'Place a Grey (Mysticism) Mage on an open slot',
-              payload: {},
-            },
-            { id: 'skip', label: 'Skip', payload: {} },
-          ],
-        },
-        resume: {
-          effectId: 'base.system.mysticism-place-after-cast',
-          context: { step: 'choose' },
-        },
-        source: {
-          kind: 'mage-power',
-          id: 'base.mage.mysticism.place-after-cast',
-          triggeringPlayerId: action.playerId,
-          description: 'Mysticism Mage — place after Action Spell',
-        },
-      });
-    }
-  }
+  // spell fully resolves. Gates are evaluated against the POST-effect
+  // state — a spell that adds a placements-blocking buff (Malaise) or a
+  // mages-lose-powers buff (Mesmerize) in its own resolution should
+  // suppress the prompt for the same cast.
+  const greyCheck =
+    levelDef.timing === 'action' &&
+    (() => {
+      const caster = next.players.find((p) => p.id === action.playerId);
+      return (
+        caster?.mages.some(
+          (m) =>
+            m.color === 'grey' &&
+            m.location.kind === 'office' &&
+            !m.isWounded,
+        ) ?? false
+      );
+    })();
+  const stackLenBeforeEffect = next.pendingResolutionStack.length;
 
   // Invoke the spell's effect.
   if (!hasEffect(levelDef.effectId)) {
-    return next; // Effect unregistered → just paid the cost, no further behavior.
+    return maybeInsertMysticismPending(
+      next,
+      action.playerId,
+      greyCheck,
+      stackLenBeforeEffect,
+    );
   }
   const effect = getEffect(levelDef.effectId);
   const ctx: EffectContext = {
@@ -1367,7 +1356,74 @@ function handleCastSpell(state: GameState, action: CastSpellAction): GameState {
     allowReactions: true,
   };
   const result = effect(ctx);
-  return applyEffectResult(next, result, ctx);
+  const afterEffect = applyEffectResult(next, result, ctx);
+  return maybeInsertMysticismPending(
+    afterEffect,
+    action.playerId,
+    greyCheck,
+    stackLenBeforeEffect,
+  );
+}
+
+/**
+ * Inserts the grey "place after Action Spell" prompt into the resolution
+ * stack at the position it would have occupied if pushed before the spell
+ * effect ran. Gates on the POST-effect state so a spell that adds Malaise
+ * or Mesmerize during its own resolution suppresses its own grey trigger.
+ */
+function maybeInsertMysticismPending(
+  state: GameState,
+  playerId: PlayerId,
+  greyCheck: boolean,
+  insertAt: number,
+): GameState {
+  if (!greyCheck) return state;
+  if (magesLosePowers(state)) return state;
+  if (placementsBlocked(state)) return state;
+  const caster = state.players.find((p) => p.id === playerId);
+  const stillHasGrey =
+    caster?.mages.some(
+      (m) =>
+        m.color === 'grey' &&
+        m.location.kind === 'office' &&
+        !m.isWounded,
+    ) ?? false;
+  if (!stillHasGrey) return state;
+  const minted = mintId(state, 'r');
+  const pending: PendingResolution = {
+    id: minted.id,
+    responderId: playerId,
+    prompt: {
+      kind: 'choose-from-options',
+      options: [
+        {
+          id: 'place',
+          label: 'Place a Grey (Mysticism) Mage on an open slot',
+          payload: {},
+        },
+        { id: 'skip', label: 'Skip', payload: {} },
+      ],
+    },
+    resume: {
+      effectId: 'base.system.mysticism-place-after-cast',
+      context: { step: 'choose' },
+    },
+    source: {
+      kind: 'mage-power',
+      id: 'base.mage.mysticism.place-after-cast',
+      triggeringPlayerId: playerId,
+      description: 'Mysticism Mage — place after Action Spell',
+    },
+  };
+  const stack = minted.state.pendingResolutionStack;
+  return {
+    ...minted.state,
+    pendingResolutionStack: [
+      ...stack.slice(0, insertAt),
+      pending,
+      ...stack.slice(insertAt),
+    ],
+  };
 }
 
 function handleChooseCandidate(

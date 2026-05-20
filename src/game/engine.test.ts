@@ -11651,6 +11651,172 @@ describe('Shadow-on-place buffs (Zero Hour L2 / Inversion L3)', () => {
 });
 
 // ============================================================================
+// Malaise (The Darkness Within L1) — global "no placements until your next
+// turn" buff
+// ============================================================================
+
+describe('Malaise (The Darkness Within L1)', () => {
+  function setupMalaise(): GameState {
+    let s = initGame(TWO_PLAYER_CONFIG);
+    s = forceLibrarySideA(s);
+    s = zeroPlayerResources(s, 'p1');
+    s = zeroPlayerResources(s, 'p2');
+    s = addOwnedSpell(s, 'p1', 'base.spell.the-darkness-within', {
+      intPlaced: true,
+    });
+    s = setMana(s, 'p1', 1);
+    // Alice has a grey office mage — its post-cast placement should be
+    // suppressed while Malaise is up.
+    s = addMage(s, 'p1', {
+      id: 'alice-grey',
+      cardId: 'base.mage.mysticism',
+      color: 'grey',
+    });
+    // Bob has an office mage so we can test his placement is blocked too.
+    s = addMage(s, 'p2', {
+      id: 'bob-red',
+      cardId: 'base.mage.sorcery',
+      color: 'red',
+    });
+    return {
+      ...s,
+      firstPlayerIndex: 0,
+      phase: {
+        kind: 'errands',
+        round: 1,
+        activePlayerIndex: 0,
+        actionUsed: false,
+        fastActionUsed: false,
+      },
+    };
+  }
+
+  it('cast adds a placements-blocked buff that expires at caster\'s turn-start', () => {
+    let s = setupMalaise();
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.the-darkness-within',
+      level: 1,
+    });
+    const buff = s.activeBuffs.find((b) => b.kind === 'placements-blocked');
+    expect(buff).toBeDefined();
+    if (!buff || buff.kind !== 'placements-blocked') throw new Error('unreachable');
+    expect(buff.casterPlayerId).toBe('p1');
+    expect(buff.expiresAt).toEqual({ kind: 'turn-start', playerId: 'p1' });
+  });
+
+  it('suppresses the grey Mysticism post-cast placement prompt for the caster', () => {
+    let s = setupMalaise();
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.the-darkness-within',
+      level: 1,
+    });
+    expect(
+      s.pendingResolutionStack.some(
+        (e) =>
+          e.source.kind === 'mage-power' &&
+          e.source.id === 'base.mage.mysticism.place-after-cast',
+      ),
+    ).toBe(false);
+  });
+
+  it('blocks the opponent from placing a mage', () => {
+    let s = setupMalaise();
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.the-darkness-within',
+      level: 1,
+    });
+    // CAST_SPELL consumed Alice's action — turn auto-advanced to Bob.
+    expect(s.players[s.phase.activePlayerIndex]!.id).toBe('p2');
+    expect(() =>
+      applyAction(s, {
+        type: 'PLACE_WORKER',
+        playerId: 'p2',
+        mageId: 'bob-red',
+        actionSpaceId: 'base.room.library.a.slot-1',
+      }),
+    ).toThrow(/Malaise/);
+  });
+
+  it('blocks the caster\'s own subsequent placement attempts', () => {
+    let s = setupMalaise();
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.the-darkness-within',
+      level: 1,
+    });
+    s = {
+      ...s,
+      phase: {
+        kind: 'errands' as const,
+        round: 1,
+        activePlayerIndex: 0,
+        actionUsed: false,
+        fastActionUsed: false,
+      },
+    };
+    expect(() =>
+      applyAction(s, {
+        type: 'PLACE_WORKER',
+        playerId: 'p1',
+        mageId: 'alice-grey',
+        actionSpaceId: 'base.room.library.a.slot-1',
+      }),
+    ).toThrow(/Malaise/);
+  });
+
+  it('expires when the caster\'s next turn begins', () => {
+    let s = setupMalaise();
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.the-darkness-within',
+      level: 1,
+    });
+    // After Alice's cast the turn auto-advances to Bob; Malaise is still up.
+    expect(s.players[s.phase.activePlayerIndex]!.id).toBe('p2');
+    expect(s.activeBuffs.some((b) => b.kind === 'placements-blocked')).toBe(
+      true,
+    );
+    // Bob passes → Alice's next turn begins → Malaise clears.
+    s = applyAction(s, { type: 'PASS_TURN', playerId: 'p2' });
+    expect(s.players[s.phase.activePlayerIndex]!.id).toBe('p1');
+    expect(s.activeBuffs.some((b) => b.kind === 'placements-blocked')).toBe(
+      false,
+    );
+  });
+
+  it('once the buff clears, placement works normally again', () => {
+    let s = setupMalaise();
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.the-darkness-within',
+      level: 1,
+    });
+    // Bob's turn now — but Malaise blocks him.
+    s = applyAction(s, { type: 'PASS_TURN', playerId: 'p2' });
+    // Alice's turn begins, Malaise clears.
+    s = applyAction(s, {
+      type: 'PLACE_WORKER',
+      playerId: 'p1',
+      mageId: 'alice-grey',
+      actionSpaceId: 'base.room.library.a.slot-1',
+    });
+    const slot1 = s.rooms
+      .find((r) => r.id === 'base.room.library.a')!
+      .actionSpaces.find((sp) => sp.id === 'base.room.library.a.slot-1')!;
+    expect(slot1.occupant?.mageId).toBe('alice-grey');
+  });
+});
+
+// ============================================================================
 // Room locking — Flamespout / Meteor / Cataclysm / Consecration
 // ============================================================================
 

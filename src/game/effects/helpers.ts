@@ -281,6 +281,16 @@ export function magesLosePowers(state: GameState): boolean {
   return state.activeBuffs.some((b) => b.kind === 'mages-lose-powers');
 }
 
+/**
+ * Returns true when a Malaise-style global buff is active. While true,
+ * NO player may execute a PLACE_WORKER action (base or shadow) — Malaise
+ * affects the caster too. The grey Mysticism post-cast placement prompt
+ * is also suppressed because it would have no legal slot to target.
+ */
+export function placementsBlocked(state: GameState): boolean {
+  return state.activeBuffs.some((b) => b.kind === 'placements-blocked');
+}
+
 /** Returns true when the given action-space sits inside a locked room. */
 export function isSpaceInLockedRoom(
   state: GameState,

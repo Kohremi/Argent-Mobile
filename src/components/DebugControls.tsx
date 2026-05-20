@@ -318,6 +318,8 @@ function placementBlockedReason(
   room: GameState['rooms'][number],
   space: GameState['rooms'][number]['actionSpaces'][number],
 ): string | null {
+  const malaise = state.activeBuffs.find((b) => b.kind === 'placements-blocked');
+  if (malaise) return `${malaise.label}: Mages cannot be placed`;
   if (room.cannotBePlacedInDirectly) return 'cannot place here';
   if (state.roomLocks.some((l) => l.roomId === room.id)) return 'room locked';
   if (space.occupant && !isArsMagnaPlacement(state, mage, space)) {
@@ -380,6 +382,8 @@ function shadowPlacementBlockedReason(
   room: GameState['rooms'][number],
   space: GameState['rooms'][number]['actionSpaces'][number],
 ): string | null {
+  const malaise = state.activeBuffs.find((b) => b.kind === 'placements-blocked');
+  if (malaise) return `${malaise.label}: Mages cannot be placed`;
   if (state.phase.kind !== 'errands') return 'not in errands phase';
   if (state.pendingResolutionStack.length > 0) return 'resolve pending prompt first';
   if (mage.location.kind !== 'office') return 'mage not in office';
@@ -1442,14 +1446,17 @@ function PlayerBuffBadges({
         } else if (b.kind === 'mages-lose-powers') {
           title = `${b.label} — all non-Divinity mages lose their powers (${dur})`;
           toneClass = 'text-violet-300 bg-violet-500/10 border-violet-500/30';
-        } else {
-          // shadow-on-place (Zero Hour / Inversion)
+        } else if (b.kind === 'shadow-on-place') {
           const modeText =
             b.mode === 'mandatory'
               ? 'all your placements must shadow'
               : 'your placements may shadow opposing mages';
           title = `${b.label} — ${modeText} (${dur})`;
           toneClass = 'text-sky-300 bg-sky-500/10 border-sky-500/30';
+        } else {
+          // placements-blocked (Malaise)
+          title = `${b.label} — Mages cannot be placed by anyone (${dur})`;
+          toneClass = 'text-rose-300 bg-rose-500/10 border-rose-500/30';
         }
         return (
           <span

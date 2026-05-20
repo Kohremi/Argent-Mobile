@@ -64,6 +64,7 @@ import type {
   MageColor,
   MageImmunityBuff,
   MagesLosePowersBuff,
+  PlacementsBlockedBuff,
   ShadowOnPlaceBuff,
   OwnedMage,
   OwnedMageId,
@@ -11664,6 +11665,32 @@ registerEffect(
         players: afterMove.players,
         rooms: afterMove.rooms,
         activeBuffs: [...afterMove.activeBuffs, buff],
+      },
+    };
+  },
+);
+
+// ============================================================================
+// The Darkness Within L1 "Malaise" — Until your next turn, Mages cannot be
+// placed. Affects every player (caster included). PLACE_WORKER and the grey
+// Mysticism post-cast prompt are gated on the global `placements-blocked`
+// buff (see helpers.ts + engine.ts).
+// ============================================================================
+
+registerEffect(
+  'base.spell.the-darkness-within.l1',
+  (ctx): EffectResult => {
+    const buff: PlacementsBlockedBuff = {
+      kind: 'placements-blocked',
+      casterPlayerId: ctx.triggeringPlayerId,
+      spellCardId: 'base.spell.the-darkness-within',
+      label: 'Malaise',
+      expiresAt: { kind: 'turn-start', playerId: ctx.triggeringPlayerId },
+    };
+    return {
+      kind: 'done',
+      patch: {
+        activeBuffs: [...ctx.state.activeBuffs, buff],
       },
     };
   },
