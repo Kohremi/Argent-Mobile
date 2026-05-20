@@ -1899,12 +1899,19 @@ export function applyGainMark(
  * vault drafts). Throws if the card isn't in the tableau.
  */
 /**
- * Performs a "Swap N Gold for a {color} Mage from the supply" trade. Returns
- * the patch on success, or `null` if any precondition fails (insufficient gold,
- * empty pool of that color, or the player is already at the 2-per-color cap).
+ * Performs a "Swap N Gold for a {color} Mage from the supply" trade.
  *
- * The cap matches the DRAFT_MAGE rule in `handleDraftMage` — no player may
- * own more than 2 of a single color, including leader color.
+ * Returns the patch on success, or `null` if the trade can't happen:
+ *   - player can't pay the gold cost, OR
+ *   - the requested color's pool is non-empty AND the player is already at
+ *     the 2-per-color cap for it, OR
+ *   - the requested color's pool is empty AND the off-white fallback can't
+ *     fire either (off-white pool empty OR player at 2-neutral cap).
+ *
+ * Fallback: when the supply for `color` is empty but the player could still
+ * accept a mage, they receive an off-white neutral mage instead (same gold
+ * cost). This mirrors the rulebook's "if the specific color supply is empty,
+ * substitute a neutral" guidance for paid-mage cards.
  */
 export function applyGoldForMageSwap(
   state: GameState,
@@ -1915,14 +1922,28 @@ export function applyGoldForMageSwap(
   const player = findPlayer(state, playerId);
   if (!player) return null;
   if (player.resources.gold < goldCost) return null;
-  const pool = state.mageDraftPool[color] ?? 0;
-  if (pool <= 0) return null;
-  const ownedOfColor = player.mages.filter((m) => m.color === color).length;
-  if (ownedOfColor >= 2) return null;
+
+  const requestedPool = state.mageDraftPool[color] ?? 0;
+  let givenColor: MageColor = color;
+  if (requestedPool <= 0) {
+    // Fall back to neutral when the specific color is empty.
+    const neutralPool = state.mageDraftPool['off-white'] ?? 0;
+    const ownedNeutral = player.mages.filter(
+      (m) => m.color === 'off-white',
+    ).length;
+    if (neutralPool <= 0) return null;
+    if (ownedNeutral >= 2) return null;
+    givenColor = 'off-white';
+  } else {
+    const ownedOfColor = player.mages.filter((m) => m.color === color).length;
+    if (ownedOfColor >= 2) return null;
+  }
+
+  const givenPool = state.mageDraftPool[givenColor] ?? 0;
   const seq = state.nextSequenceId;
   return {
     nextSequenceId: seq + 1,
-    mageDraftPool: { ...state.mageDraftPool, [color]: pool - 1 },
+    mageDraftPool: { ...state.mageDraftPool, [givenColor]: givenPool - 1 },
     players: state.players.map((p) =>
       p.id !== playerId
         ? p
@@ -1936,8 +1957,8 @@ export function applyGoldForMageSwap(
               ...p.mages,
               {
                 id: `m-${seq}`,
-                cardId: MAGE_CARD_BY_COLOR[color],
-                color,
+                cardId: MAGE_CARD_BY_COLOR[givenColor],
+                color: givenColor,
                 location: { kind: 'office' as const, playerId },
                 isShadowing: false,
                 isWounded: false,

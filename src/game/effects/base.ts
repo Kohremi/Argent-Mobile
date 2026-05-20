@@ -3001,8 +3001,10 @@ registerEffect('base.supporter.rennel-pedrigor', (ctx): EffectResult => {
 
 // ---------------------------------------------------------------------------
 // One-shot Gold→Mage swap supporters. Each fizzles silently if the player
-// can't pay 3 Gold, the supply for that color is empty, or the player is
-// already at the 2-per-color cap.
+// can't pay 3 Gold or both the requested-color and the off-white fallback
+// supplies can't satisfy the trade. When the requested color is empty but
+// off-white isn't (and the player isn't capped at 2 neutrals), the player
+// receives an off-white mage instead of the requested color.
 // ---------------------------------------------------------------------------
 
 function goldForMageSupporter(

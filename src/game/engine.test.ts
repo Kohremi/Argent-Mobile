@@ -14527,3 +14527,101 @@ describe('Alt-leader spells', () => {
     expect(targetPrompt.prompt.eligibleMageIds).toContain('bob-green-mage');
   });
 });
+
+// ============================================================================
+// Gold→Mage swap with off-white fallback (Arec, Kavri, Lesandra, Pendros,
+// Wilhelm). When the requested color is empty, the player gets a neutral
+// off-white mage instead — same gold cost.
+// ============================================================================
+
+describe('Gold→Mage swap supporters (off-white fallback)', () => {
+  async function callSwap(state: GameState, color: MageColor) {
+    const { applyGoldForMageSwap } = await import('./effects/helpers');
+    return applyGoldForMageSwap(state, 'p1', color, 3);
+  }
+
+  function baseSwapState(): GameState {
+    let s = initGame(TWO_PLAYER_CONFIG);
+    s = setGold(s, 'p1', 5);
+    return s;
+  }
+
+  it('normal: red pool > 0 → player receives a red mage', async () => {
+    const s = baseSwapState();
+    const patch = await callSwap(s, 'red');
+    expect(patch).not.toBeNull();
+    if (!patch) throw new Error('unreachable');
+    const after: GameState = { ...s, ...patch };
+    const p1 = after.players.find((p) => p.id === 'p1')!;
+    expect(p1.resources.gold).toBe(2); // 5 - 3
+    expect(p1.mages.some((m) => m.color === 'red')).toBe(true);
+    expect(after.mageDraftPool.red).toBe(s.mageDraftPool.red - 1);
+    expect(after.mageDraftPool['off-white']).toBe(s.mageDraftPool['off-white']);
+  });
+
+  it('fallback: red pool empty + off-white available → player receives an off-white mage', async () => {
+    let s = baseSwapState();
+    s = { ...s, mageDraftPool: { ...s.mageDraftPool, red: 0 } };
+    const neutralBefore = s.mageDraftPool['off-white'];
+    const patch = await callSwap(s, 'red');
+    expect(patch).not.toBeNull();
+    if (!patch) throw new Error('unreachable');
+    const after: GameState = { ...s, ...patch };
+    const p1 = after.players.find((p) => p.id === 'p1')!;
+    expect(p1.resources.gold).toBe(2);
+    expect(p1.mages.some((m) => m.color === 'off-white')).toBe(true);
+    expect(p1.mages.some((m) => m.color === 'red')).toBe(false);
+    expect(after.mageDraftPool.red).toBe(0);
+    expect(after.mageDraftPool['off-white']).toBe(neutralBefore - 1);
+  });
+
+  it('fizzles when both the requested color AND off-white pools are empty', async () => {
+    let s = baseSwapState();
+    s = {
+      ...s,
+      mageDraftPool: { ...s.mageDraftPool, blue: 0, 'off-white': 0 },
+    };
+    const patch = await callSwap(s, 'blue');
+    expect(patch).toBeNull();
+  });
+
+  it('fizzles when player has 2 of the requested color (even if off-white would be available)', async () => {
+    let s = baseSwapState();
+    s = addMage(s, 'p1', {
+      id: 'alice-grey-1',
+      cardId: 'base.mage.mysticism',
+      color: 'grey',
+    });
+    s = addMage(s, 'p1', {
+      id: 'alice-grey-2',
+      cardId: 'base.mage.mysticism',
+      color: 'grey',
+    });
+    const patch = await callSwap(s, 'grey');
+    expect(patch).toBeNull();
+  });
+
+  it('fallback fizzles when the requested color is empty AND the player is capped at 2 off-white', async () => {
+    let s = baseSwapState();
+    s = { ...s, mageDraftPool: { ...s.mageDraftPool, purple: 0 } };
+    s = addMage(s, 'p1', {
+      id: 'alice-neutral-1',
+      cardId: 'base.mage.neutral',
+      color: 'off-white',
+    });
+    s = addMage(s, 'p1', {
+      id: 'alice-neutral-2',
+      cardId: 'base.mage.neutral',
+      color: 'off-white',
+    });
+    const patch = await callSwap(s, 'purple');
+    expect(patch).toBeNull();
+  });
+
+  it('fizzles when the player cannot pay the gold cost', async () => {
+    let s = baseSwapState();
+    s = setGold(s, 'p1', 2);
+    const patch = await callSwap(s, 'red');
+    expect(patch).toBeNull();
+  });
+});
