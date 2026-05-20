@@ -2384,7 +2384,8 @@ describe('Candidate draft', () => {
     expect(alice?.mages).toHaveLength(2);
     expect(alice?.resources.meritBadges).toBe(1);
     expect(alice?.candidateStartingSpellId).toBe('base.spell.living-image');
-    expect(s.mageDraftPool['off-white']).toBe(2);
+    // Pool started at 10 off-white; Trias's two starting mages drop it to 8.
+    expect(s.mageDraftPool['off-white']).toBe(8);
   });
 
   it('rejects picking the same candidate twice', () => {
@@ -2542,7 +2543,7 @@ describe('Mage draft', () => {
     return s;
   }
 
-  it('seeds the initial mage draft pool with 4 of each color', () => {
+  it('seeds the initial mage draft pool with 4 of each colored mage + 10 off-white neutrals', () => {
     const s = initGame(DRAFT_CONFIG_2P);
     expect(s.mageDraftPool).toEqual({
       red: 4,
@@ -2550,7 +2551,7 @@ describe('Mage draft', () => {
       green: 4,
       blue: 4,
       purple: 4,
-      'off-white': 4,
+      'off-white': 10,
     });
   });
 
@@ -2631,7 +2632,7 @@ describe('Mage draft', () => {
       green: 2,
       blue: 2,
       purple: 2,
-      'off-white': 4,
+      'off-white': 10,
     });
   });
 
