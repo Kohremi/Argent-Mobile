@@ -59,6 +59,7 @@ import type {
   HarmfulEffectKind,
   MageColor,
   MageImmunityBuff,
+  MagesLosePowersBuff,
   OwnedMage,
   OwnedMageId,
   PendingResolutionInput,
@@ -10709,6 +10710,7 @@ function immunityBuffSpell(opts: {
 }) {
   return (ctx: EffectContext): EffectResult => {
     const newBuff: MageImmunityBuff = {
+      kind: 'mage-immunity',
       ownerId: ctx.triggeringPlayerId,
       spellCardId: opts.spellCardId,
       label: opts.label,
@@ -10809,4 +10811,40 @@ registerEffect(
     source: 'any',
     duration: 'turn-start',
   }),
+);
+
+// ============================================================================
+// Tenets of Dominance L1 "Mesmerize"
+// ============================================================================
+//
+// "Until your next turn, all Mages (except those immune to Spells) lose
+// their powers." Blue (Divinity) is the only colour with spell-immunity,
+// so blue mages keep their power; every other colour acts as neutral
+// while the buff is active:
+//   - Green: no longer wound-immune
+//   - Purple: no fast-action placement
+//   - Red: cannot trigger Ars Magna
+//   - Grey: no Mysticism place-after-cast
+//
+// Duration: caster's next turn OR round-end, whichever comes first. The
+// round-end branch is the global "clear all buffs at Resolution start"
+// hook in engine.ts — no extra logic needed here.
+
+registerEffect(
+  'base.spell.tenets-of-dominance.l1',
+  (ctx): EffectResult => {
+    const buff: MagesLosePowersBuff = {
+      kind: 'mages-lose-powers',
+      casterPlayerId: ctx.triggeringPlayerId,
+      spellCardId: 'base.spell.tenets-of-dominance',
+      label: 'Mesmerize',
+      expiresAt: { kind: 'turn-start', playerId: ctx.triggeringPlayerId },
+    };
+    return {
+      kind: 'done',
+      patch: {
+        activeBuffs: [...ctx.state.activeBuffs, buff],
+      },
+    };
+  },
 );

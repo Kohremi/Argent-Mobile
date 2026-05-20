@@ -691,22 +691,29 @@ export interface PendingResolution {
 /** Engine input (effects don't generate IDs; the engine does). */
 export type PendingResolutionInput = Omit<PendingResolution, 'id'>;
 
+export type HarmfulEffectKind = 'wound' | 'banish' | 'move' | 'shadow';
+
+/**
+ * Duration tag shared by every active buff:
+ *   - `turn-start` expires the moment the named player's next turn begins.
+ *   - `round-end` expires when the round transitions to Resolution.
+ *
+ * All active buffs additionally clear unconditionally at the start of
+ * Resolution so nothing carries across rounds.
+ */
+export type BuffExpiry =
+  | { kind: 'turn-start'; playerId: PlayerId }
+  | { kind: 'round-end' };
+
 /**
  * Sustained "immunity" buff (Moste Holie Litanies, Heart of the Mountain,
  * Tome of Protection, etc.). Protects every mage owned by `ownerId` from
  * the listed harmful effect kinds. `source: 'spell'` means only spell
  * sources are blocked (Tome of Protection L1); `'any'` blocks every
  * source (Tome of Protection L2, Heart of the Mountain L3).
- *
- * Duration:
- *   - `turn-start` expires the moment the named player's next turn begins
- *     (so the protection covers the caster's turn after cast + every
- *     intervening opponent turn).
- *   - `round-end` expires when the round transitions to Resolution.
  */
-export type HarmfulEffectKind = 'wound' | 'banish' | 'move' | 'shadow';
-
 export interface MageImmunityBuff {
+  kind: 'mage-immunity';
   ownerId: PlayerId;
   spellCardId: SpellCardId;
   /** Display name shown in tooltips ("Sanctification", "Stoneskin", ...). */
@@ -715,10 +722,29 @@ export interface MageImmunityBuff {
   immuneTo: HarmfulEffectKind[];
   /** `'spell'` blocks only spell-source effects; `'any'` blocks everything. */
   source: 'spell' | 'any';
-  expiresAt:
-    | { kind: 'turn-start'; playerId: PlayerId }
-    | { kind: 'round-end' };
+  expiresAt: BuffExpiry;
 }
+
+/**
+ * Global "all Mages lose their powers" buff (Tenets of Dominance L1
+ * Mesmerize). Mages of every colour except Divinity (blue) are treated
+ * as neutral while this is active:
+ *   - Green: no longer wound-immune
+ *   - Purple: no fast-action placement
+ *   - Red: cannot trigger Ars Magna
+ *   - Grey: no Mysticism place-after-cast
+ *   - Blue: KEEPS its opposing-spell immunity (the "except those immune
+ *     to Spells" clause from the rules).
+ */
+export interface MagesLosePowersBuff {
+  kind: 'mages-lose-powers';
+  casterPlayerId: PlayerId;
+  spellCardId: SpellCardId;
+  label: string;
+  expiresAt: BuffExpiry;
+}
+
+export type ActiveBuff = MageImmunityBuff | MagesLosePowersBuff;
 
 export type ReactionTriggerEvent =
   | {
@@ -915,10 +941,11 @@ export interface GameState {
    * / Tome of Protection). Each buff protects its owner's mages from one
    * or more harmful effect kinds for a bounded duration.
    *
-   * Read by `isMageImmuneToEffect`; expired by `processErrandsAdvance`
-   * (turn-start kind) and the resolution-start hook (round-end kind).
+   * Read by `isMageImmuneToEffect` / `magesLosePowers`; expired by
+   * `processErrandsAdvance` (turn-start kind matches incoming player)
+   * and unconditionally cleared at the resolution-start hook.
    */
-  activeBuffs: MageImmunityBuff[];
+  activeBuffs: ActiveBuff[];
 
   voters: ConsortiumVoter[];
   voterMarks: VoterMark[];

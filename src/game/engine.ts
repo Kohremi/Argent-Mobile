@@ -15,6 +15,7 @@ import {
   canArsMagnaTakeSpace,
   countPlayerMagesInRoom,
   describeSpaceSource,
+  magesLosePowers,
   lookupCandidate,
   MAGE_CARD_BY_COLOR,
   woundMage,
@@ -810,7 +811,10 @@ function handlePlaceWorker(state: GameState, action: PlaceWorkerAction): GameSta
   // mage late, e.g. after another fast action). Everyone else always
   // consumes the Action budget.
   let budgetKind: ActionBudgetKind = 'action';
-  if (mage.color === 'purple') {
+  if (mage.color === 'purple' && !magesLosePowers(state)) {
+    // Mesmerize disables purple's fast-action placement; otherwise prefer
+    // fast-action (falling back to the regular action if the fast was
+    // already spent this turn).
     budgetKind = state.phase.fastActionUsed ? 'action' : 'fast-action';
   }
   state = consumeActionBudget(state, budgetKind, 'PLACE_WORKER');
@@ -1192,7 +1196,7 @@ function handleCastSpell(state: GameState, action: CastSpellAction): GameState {
   // spell fully resolves, so we push the Yes/No pending at the bottom of
   // the stack now — the spell's own prompts / reactions go on top and pop
   // first; this prompt fires last.
-  if (levelDef.timing === 'action') {
+  if (levelDef.timing === 'action' && !magesLosePowers(next)) {
     const caster = next.players.find((p) => p.id === action.playerId);
     const hasGreyInOffice =
       caster?.mages.some(
@@ -2198,14 +2202,14 @@ function processErrandsAdvance(state: GameState): GameState {
     // Per rulebook: locks automatically clear at the start of the
     // Resolution phase. Mages that were inside still complete their
     // Errands (resolution walks slots; lock state isn't checked there).
-    // Sustained "rest of the round" immunity buffs also expire here.
+    // ALL active buffs expire here — "until your next turn" buffs whose
+    // caster never got another turn within the round also drop, so
+    // nothing bleeds across rounds.
     return {
       ...state,
       players,
       roomLocks: [],
-      activeBuffs: state.activeBuffs.filter(
-        (b) => b.expiresAt.kind !== 'round-end',
-      ),
+      activeBuffs: [],
       phase: {
         kind: 'resolution',
         round: errandsPhase.round,

@@ -211,10 +211,18 @@ export function buildHarmfulMageTargets(
         targets.push(m.id);
         continue;
       }
-      // Green: wound-immune only. Banish/move/shadow can still target a
-      // green mage.
-      if (opts.effect === 'wound' && m.color === 'green') continue;
-      // Blue: immune to rival spells across all effect kinds.
+      // Under Mesmerize ("all mages lose their powers"), colour-based
+      // protections drop EXCEPT for blue's spell-immunity. Otherwise:
+      //   Green is wound-immune only.
+      //   Blue is immune to opposing spells across all effect kinds.
+      const powersLost = magesLosePowers(state);
+      if (
+        !powersLost &&
+        opts.effect === 'wound' &&
+        m.color === 'green'
+      ) {
+        continue;
+      }
       if (
         m.color === 'blue' &&
         opts.source === 'spell' &&
@@ -249,12 +257,28 @@ export function isMageImmuneByBuff(
   source: 'spell' | 'non-spell',
 ): boolean {
   for (const buff of state.activeBuffs) {
+    if (buff.kind !== 'mage-immunity') continue;
     if (buff.ownerId !== ownerId) continue;
     if (!buff.immuneTo.includes(effect)) continue;
     if (buff.source === 'spell' && source !== 'spell') continue;
     return true;
   }
   return false;
+}
+
+/**
+ * Returns true when a Mesmerize-style global buff is active. While true,
+ * every mage colour except Divinity (blue) acts as a neutral mage:
+ *   - Green loses its wound-immunity
+ *   - Purple loses fast-action placement
+ *   - Red cannot trigger Ars Magna
+ *   - Grey loses post-cast Mysticism placement
+ *
+ * Blue mages keep their opposing-spell immunity per the spell's
+ * "except those immune to Spells" clause.
+ */
+export function magesLosePowers(state: GameState): boolean {
+  return state.activeBuffs.some((b) => b.kind === 'mages-lose-powers');
 }
 
 /** Returns true when the given action-space sits inside a locked room. */
@@ -2057,6 +2081,9 @@ export function buildArsMagnaTargets(
   state: GameState,
   casterId: PlayerId,
 ): OwnedMageId[] {
+  // Under Mesmerize the caster's red mage has lost its Ars Magna power
+  // — no eligible targets at all.
+  if (magesLosePowers(state)) return [];
   const targets: OwnedMageId[] = [];
   for (const p of state.players) {
     if (p.id === casterId) continue; // Can't target your own mages.
@@ -2095,6 +2122,8 @@ export function canArsMagnaTakeSpace(
   casterId: PlayerId,
   space: ActionSpace,
 ): boolean {
+  // Mesmerize disables red's Ars Magna power.
+  if (magesLosePowers(state)) return false;
   if (!space.occupant) return false;
   if (space.occupant.ownerId === casterId) return false;
   const caster = findPlayer(state, casterId);

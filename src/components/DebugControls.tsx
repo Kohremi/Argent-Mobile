@@ -1361,25 +1361,39 @@ function PlayerBuffBadges({
   state: GameState;
   playerId: string;
 }) {
-  const mine = state.activeBuffs.filter((b) => b.ownerId === playerId);
+  const mine = state.activeBuffs.filter((b) =>
+    b.kind === 'mage-immunity'
+      ? b.ownerId === playerId
+      : b.casterPlayerId === playerId,
+  );
   if (mine.length === 0) return null;
   return (
     <span className="inline-flex items-center gap-1 flex-wrap">
       {mine.map((b, i) => {
-        const kinds = b.immuneTo.join(' / ');
         const dur =
           b.expiresAt.kind === 'turn-start'
             ? 'until your next turn'
             : 'rest of round';
-        const sourceLabel =
-          b.source === 'spell' ? 'spell-source only' : 'any source';
-        const title = `${b.label} — your mages immune to ${kinds} (${sourceLabel}, ${dur})`;
+        let title: string;
+        if (b.kind === 'mage-immunity') {
+          const kinds = b.immuneTo.join(' / ');
+          const sourceLabel =
+            b.source === 'spell' ? 'spell-source only' : 'any source';
+          title = `${b.label} — your mages immune to ${kinds} (${sourceLabel}, ${dur})`;
+        } else {
+          title = `${b.label} — all non-Divinity mages lose their powers (${dur})`;
+        }
         return (
           <span
             key={`${b.spellCardId}-${i}`}
             title={title}
             aria-label={title}
-            className="inline-flex items-center gap-0.5 text-[10px] text-emerald-300 rounded px-1 bg-emerald-500/10 border border-emerald-500/30"
+            className={clsx(
+              'inline-flex items-center gap-0.5 text-[10px] rounded px-1 border',
+              b.kind === 'mage-immunity'
+                ? 'text-emerald-300 bg-emerald-500/10 border-emerald-500/30'
+                : 'text-violet-300 bg-violet-500/10 border-violet-500/30',
+            )}
           >
             <ShieldIcon size={11} />
             {b.label}
