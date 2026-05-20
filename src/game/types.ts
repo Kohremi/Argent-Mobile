@@ -452,6 +452,8 @@ export interface BellTowerCard {
   sourcePackId: PackId;
   effectId: EffectId;
   minPlayers: 2 | 3 | 4 | 5;
+  /** Short rules-text description; the UI shows it next to the name. */
+  description: string;
 }
 
 // ============================================================================

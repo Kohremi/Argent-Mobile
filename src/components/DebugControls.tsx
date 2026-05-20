@@ -3893,9 +3893,12 @@ function BellTowerPanel({
                 key={c.id}
                 className="flex items-center justify-between gap-2 rounded bg-slate-950/40 px-2 py-1 text-xs"
               >
-                <span className="text-slate-200 inline-flex items-center gap-1.5">
-                  <BellIcon size={12} />
-                  {c.name}
+                <span className="text-slate-200 inline-flex items-baseline gap-1.5 min-w-0 flex-1">
+                  <BellIcon size={12} className="self-center shrink-0" />
+                  <span className="font-medium shrink-0">{c.name}</span>
+                  <span className="text-[11px] text-slate-400 italic">
+                    — {c.description}
+                  </span>
                 </span>
                 {canClaim && activePlayer && (
                   <div className="flex items-center gap-1">

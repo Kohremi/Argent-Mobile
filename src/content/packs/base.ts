@@ -2210,6 +2210,7 @@ const bellTowerCards: BellTowerCard[] = [
     sourcePackId: PACK_ID,
     effectId: 'base.bell.first-player',
     minPlayers: 2,
+    description: 'You will be First Player during the next round.',
   },
   {
     id: 'base.bell.gain-ip',
@@ -2217,6 +2218,7 @@ const bellTowerCards: BellTowerCard[] = [
     sourcePackId: PACK_ID,
     effectId: 'base.bell.gain-ip',
     minPlayers: 2,
+    description: 'Gain 1 IP.',
   },
   {
     id: 'base.bell.gold-or-mana',
@@ -2224,6 +2226,7 @@ const bellTowerCards: BellTowerCard[] = [
     sourcePackId: PACK_ID,
     effectId: 'base.bell.gold-or-mana',
     minPlayers: 3,
+    description: 'Gain 2 Gold or gain 1 Mana.',
   },
   {
     id: 'base.bell.heal-from-infirmary',
@@ -2231,6 +2234,7 @@ const bellTowerCards: BellTowerCard[] = [
     sourcePackId: PACK_ID,
     effectId: 'base.bell.heal-from-infirmary',
     minPlayers: 4,
+    description: 'Heal a Mage in the Infirmary.',
   },
   {
     id: 'base.bell.cheap-spells',
@@ -2238,6 +2242,7 @@ const bellTowerCards: BellTowerCard[] = [
     sourcePackId: PACK_ID,
     effectId: 'base.bell.cheap-spells',
     minPlayers: 5,
+    description: 'Your Spells cost 1 less Mana for the rest of the round.',
   },
 ];
 
