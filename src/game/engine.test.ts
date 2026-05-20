@@ -14529,6 +14529,258 @@ describe('Alt-leader spells', () => {
 });
 
 // ============================================================================
+// Slow Time (Temporal Calculus L1) — choose a room, place up to two of your
+// Mages into it.
+// ============================================================================
+
+describe('Slow Time (Temporal Calculus L1)', () => {
+  function setupSlowTime(): GameState {
+    let s = initGame(TWO_PLAYER_CONFIG);
+    s = forceLibrarySideA(s);
+    s = zeroPlayerResources(s, 'p1');
+    s = zeroPlayerResources(s, 'p2');
+    s = addOwnedSpell(s, 'p1', 'base.spell.temporal-calculus-6th-ed', {
+      intPlaced: true,
+    });
+    s = setMana(s, 'p1', 2);
+    s = addMage(s, 'p1', {
+      id: 'alice-red-1',
+      cardId: 'base.mage.sorcery',
+      color: 'red',
+    });
+    s = addMage(s, 'p1', {
+      id: 'alice-red-2',
+      cardId: 'base.mage.sorcery',
+      color: 'red',
+    });
+    return {
+      ...s,
+      firstPlayerIndex: 0,
+      phase: {
+        kind: 'errands',
+        round: 1,
+        activePlayerIndex: 0,
+        actionUsed: false,
+        fastActionUsed: false,
+      },
+    };
+  }
+
+  it('prompts for a room first, then a mage + slot for the first placement', () => {
+    let s = setupSlowTime();
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.temporal-calculus-6th-ed',
+      level: 1,
+    });
+    const roomPrompt = topPending(s);
+    expect(roomPrompt.prompt.kind).toBe('choose-from-options');
+    if (roomPrompt.prompt.kind !== 'choose-from-options') throw new Error('unreachable');
+    expect(roomPrompt.prompt.options.some((o) => o.id === 'base.room.library.a')).toBe(true);
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: roomPrompt.id,
+      answer: {
+        kind: 'option-chosen',
+        optionId: 'base.room.library.a',
+        payload: {},
+      },
+    });
+    // Next prompt: pick a mage to place (or stop).
+    const magePrompt = topPending(s);
+    expect(magePrompt.prompt.kind).toBe('choose-from-options');
+    if (magePrompt.prompt.kind !== 'choose-from-options') throw new Error('unreachable');
+    const ids = magePrompt.prompt.options.map((o) => o.id);
+    expect(ids).toContain('alice-red-1');
+    expect(ids).toContain('alice-red-2');
+    expect(ids).toContain('stop');
+  });
+
+  it('both placements land in the chosen room only', () => {
+    let s = setupSlowTime();
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.temporal-calculus-6th-ed',
+      level: 1,
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: {
+        kind: 'option-chosen',
+        optionId: 'base.room.library.a',
+        payload: {},
+      },
+    });
+    // First placement: pick alice-red-1.
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: {
+        kind: 'option-chosen',
+        optionId: 'alice-red-1',
+        payload: {},
+      },
+    });
+    // Slot prompt must only offer Library A slots.
+    const slot1Prompt = topPending(s);
+    expect(slot1Prompt.prompt.kind).toBe('choose-target-action-space');
+    if (slot1Prompt.prompt.kind !== 'choose-target-action-space') throw new Error('unreachable');
+    expect(
+      slot1Prompt.prompt.eligibleSpaceIds.every((sid) =>
+        sid.startsWith('base.room.library.a.'),
+      ),
+    ).toBe(true);
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: slot1Prompt.id,
+      answer: {
+        kind: 'space-chosen',
+        spaceId: 'base.room.library.a.slot-3',
+      },
+    });
+    // The engine pump should surface the second mage prompt (after any
+    // instant-room handling). Slot 3 is a regular base slot — Library is a
+    // non-instant room so we go straight to the next mage prompt.
+    const magePrompt2 = topPending(s);
+    expect(magePrompt2.prompt.kind).toBe('choose-from-options');
+    if (magePrompt2.prompt.kind !== 'choose-from-options') throw new Error('unreachable');
+    // alice-red-1 is now placed; only alice-red-2 + stop remain.
+    expect(magePrompt2.prompt.options.map((o) => o.id).sort()).toEqual(
+      ['alice-red-2', 'stop'].sort(),
+    );
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: magePrompt2.id,
+      answer: {
+        kind: 'option-chosen',
+        optionId: 'alice-red-2',
+        payload: {},
+      },
+    });
+    const slot2Prompt = topPending(s);
+    if (slot2Prompt.prompt.kind !== 'choose-target-action-space') throw new Error('unreachable');
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: slot2Prompt.id,
+      answer: {
+        kind: 'space-chosen',
+        spaceId: 'base.room.library.a.slot-4',
+      },
+    });
+    // Both mages are now placed in Library A.
+    const lib = s.rooms.find((r) => r.id === 'base.room.library.a')!;
+    const occupants = lib.actionSpaces
+      .filter((sp) => sp.occupant)
+      .map((sp) => sp.occupant!.mageId)
+      .sort();
+    expect(occupants).toEqual(['alice-red-1', 'alice-red-2'].sort());
+    // Chain has been drained.
+    expect(s.pendingPlaceChain).toBeNull();
+  });
+
+  it('picking Stop after one placement ends the chain early ("up to two" semantics)', () => {
+    let s = setupSlowTime();
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.temporal-calculus-6th-ed',
+      level: 1,
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: {
+        kind: 'option-chosen',
+        optionId: 'base.room.library.a',
+        payload: {},
+      },
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: {
+        kind: 'option-chosen',
+        optionId: 'alice-red-1',
+        payload: {},
+      },
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: {
+        kind: 'space-chosen',
+        spaceId: 'base.room.library.a.slot-3',
+      },
+    });
+    // Second mage prompt — pick Stop.
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'option-chosen', optionId: 'stop', payload: {} },
+    });
+    // Chain cleared; only one mage placed.
+    expect(s.pendingPlaceChain).toBeNull();
+    const lib = s.rooms.find((r) => r.id === 'base.room.library.a')!;
+    const occupants = lib.actionSpaces
+      .filter((sp) => sp.occupant)
+      .map((sp) => sp.occupant!.mageId);
+    expect(occupants).toEqual(['alice-red-1']);
+  });
+
+  it('picking Stop immediately places zero mages and drops the chain', () => {
+    let s = setupSlowTime();
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.temporal-calculus-6th-ed',
+      level: 1,
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: {
+        kind: 'option-chosen',
+        optionId: 'base.room.library.a',
+        payload: {},
+      },
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'option-chosen', optionId: 'stop', payload: {} },
+    });
+    expect(s.pendingPlaceChain).toBeNull();
+    const lib = s.rooms.find((r) => r.id === 'base.room.library.a')!;
+    expect(lib.actionSpaces.every((sp) => !sp.occupant)).toBe(true);
+  });
+
+  it('only rooms with at least one open base slot for the caster are offered', () => {
+    let s = setupSlowTime();
+    // Fill Library A's base slots so the room can't accept placements.
+    s = addMage(s, 'p2', { id: 'bob-1', cardId: 'base.mage.mysticism', color: 'grey' });
+    s = addMage(s, 'p2', { id: 'bob-2', cardId: 'base.mage.mysticism', color: 'grey' });
+    s = addMage(s, 'p2', { id: 'bob-3', cardId: 'base.mage.mysticism', color: 'grey' });
+    s = addMage(s, 'p2', { id: 'bob-4', cardId: 'base.mage.mysticism', color: 'grey' });
+    s = placeMageOnSpace(s, 'p2', 'bob-1', 'base.room.library.a.slot-1');
+    s = placeMageOnSpace(s, 'p2', 'bob-2', 'base.room.library.a.slot-2');
+    s = placeMageOnSpace(s, 'p2', 'bob-3', 'base.room.library.a.slot-3');
+    s = placeMageOnSpace(s, 'p2', 'bob-4', 'base.room.library.a.slot-4');
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.temporal-calculus-6th-ed',
+      level: 1,
+    });
+    const top = topPending(s);
+    if (top.prompt.kind !== 'choose-from-options') throw new Error('unreachable');
+    expect(top.prompt.options.some((o) => o.id === 'base.room.library.a')).toBe(false);
+  });
+});
+
+// ============================================================================
 // Gold→Mage swap with off-white fallback (Arec, Kavri, Lesandra, Pendros,
 // Wilhelm). When the requested color is empty, the player gets a neutral
 // off-white mage instead — same gold cost.

@@ -9194,13 +9194,16 @@ registerEffect('base.spell.gust-of-wind.l1', (ctx): EffectResult => {
 
 /** Eligible empty regular/merit base slots for a "place without Mage powers"
  *  step — excludes Infirmary, locked rooms, room-cap-exhausted rooms, and
- *  shadow/wound slot types. */
+ *  shadow/wound slot types. Pass `restrictRoomId` to limit slots to a
+ *  specific room (Slow Time). */
 export function listPlaceWithoutPowersSlots(
   state: GameState,
   playerId: string,
+  restrictRoomId?: string,
 ): string[] {
   const slots: string[] = [];
   for (const r of state.rooms) {
+    if (restrictRoomId && r.id !== restrictRoomId) continue;
     if (r.cannotBePlacedInDirectly) continue;
     if (state.roomLocks.some((l) => l.roomId === r.id)) continue;
     if (isRoomAtPlayerCap(state, playerId, r.id)) continue;
@@ -9234,13 +9237,49 @@ registerEffect(
   'base.system.place-mage-without-powers',
   (ctx): EffectResult => {
     const step = ctx.resumeContext?.['step'] ?? 'pick-mage';
+    const chain = ctx.state.pendingPlaceChain;
+    const restrictRoomId =
+      chain?.playerId === ctx.triggeringPlayerId
+        ? chain.restrictRoomId
+        : undefined;
+    const allowStop =
+      chain?.playerId === ctx.triggeringPlayerId && chain.allowStop === true;
 
     if (step === 'pick-mage') {
       const mages = listPlaceWithoutPowersMages(
         ctx.state,
         ctx.triggeringPlayerId,
       );
-      if (mages.length === 0) return { kind: 'done', patch: {} };
+      const slots = listPlaceWithoutPowersSlots(
+        ctx.state,
+        ctx.triggeringPlayerId,
+        restrictRoomId,
+      );
+      if (mages.length === 0 || slots.length === 0) {
+        // No legal placement — clear the chain so the drain pump doesn't
+        // re-fire on the next idle moment.
+        return clearChainResult(ctx.state, ctx.triggeringPlayerId);
+      }
+      if (allowStop) {
+        const options: ChoiceOption[] = mages.map((mid) => ({
+          id: mid,
+          label: `Place ${mid}`,
+          payload: {},
+        }));
+        options.push({ id: 'stop', label: 'Stop here', payload: {} });
+        return {
+          kind: 'pause',
+          pending: {
+            responderId: ctx.triggeringPlayerId,
+            prompt: { kind: 'choose-from-options', options },
+            resume: {
+              effectId: 'base.system.place-mage-without-powers',
+              context: { step: 'after-mage-choice' },
+            },
+            source: ctx.source,
+          },
+        };
+      }
       return {
         kind: 'pause',
         pending: {
@@ -9255,6 +9294,41 @@ registerEffect(
       };
     }
 
+    if (step === 'after-mage-choice') {
+      if (ctx.resumeAnswer?.kind !== 'option-chosen') {
+        throw new Error(
+          'place-mage-without-powers after-mage-choice expected option-chosen',
+        );
+      }
+      if (ctx.resumeAnswer.optionId === 'stop') {
+        return clearChainResult(ctx.state, ctx.triggeringPlayerId);
+      }
+      const placerMageId = ctx.resumeAnswer.optionId;
+      const slots = listPlaceWithoutPowersSlots(
+        ctx.state,
+        ctx.triggeringPlayerId,
+        restrictRoomId,
+      );
+      if (slots.length === 0) {
+        return clearChainResult(ctx.state, ctx.triggeringPlayerId);
+      }
+      return {
+        kind: 'pause',
+        pending: {
+          responderId: ctx.triggeringPlayerId,
+          prompt: {
+            kind: 'choose-target-action-space',
+            eligibleSpaceIds: slots,
+          },
+          resume: {
+            effectId: 'base.system.place-mage-without-powers',
+            context: { step: 'apply', placerMageId },
+          },
+          source: ctx.source,
+        },
+      };
+    }
+
     if (step === 'pick-slot') {
       if (ctx.resumeAnswer?.kind !== 'mage-chosen') {
         throw new Error('place-mage-without-powers pick-slot expected mage-chosen');
@@ -9262,8 +9336,11 @@ registerEffect(
       const slots = listPlaceWithoutPowersSlots(
         ctx.state,
         ctx.triggeringPlayerId,
+        restrictRoomId,
       );
-      if (slots.length === 0) return { kind: 'done', patch: {} };
+      if (slots.length === 0) {
+        return clearChainResult(ctx.state, ctx.triggeringPlayerId);
+      }
       return {
         kind: 'pause',
         pending: {
@@ -9310,6 +9387,18 @@ registerEffect(
     );
   },
 );
+
+/** Clears the current pendingPlaceChain (used by Slow Time / Stop Time when
+ *  the player stops early or no legal placement remains). */
+function clearChainResult(
+  state: GameState,
+  playerId: string,
+): EffectResult {
+  if (state.pendingPlaceChain?.playerId !== playerId) {
+    return { kind: 'done', patch: {} };
+  }
+  return { kind: 'done', patch: { pendingPlaceChain: null } };
+}
 
 /** Pays the spell's cost + exhausts it. Returns null if the player can't
  *  afford or doesn't own the spell unexhausted. */
@@ -9381,6 +9470,89 @@ registerEffect('base.spell.tardy.l1.react', (ctx): EffectResult => {
   });
   return composeWithDelegate(delegate, { players: paid.players });
 });
+
+/**
+ * Temporal Calculus, 6th Ed. L1 "Slow Time" — Choose a room. Place up to two
+ * of your Mages into it. Cost: 2 Mana, Action. The chosen room must have at
+ * least one open base slot and not be locked / at the caster's per-room cap.
+ *
+ * After the room is chosen, the spell sets `pendingPlaceChain` with
+ * `restrictRoomId` so each placement (drained one at a time by the engine
+ * pump) targets only that room's open slots. `allowStop` lets the caster
+ * end the chain early — the spell text says "up to two", not "exactly two".
+ * The first placement fires inline so the chain reaches `remaining=1` after
+ * the first apply and drains naturally for the second.
+ */
+registerEffect(
+  'base.spell.temporal-calculus-6th-ed.l1',
+  (ctx): EffectResult => {
+    const self = 'base.spell.temporal-calculus-6th-ed.l1';
+    const step = ctx.resumeContext?.['step'];
+
+    if (!ctx.resumeAnswer) {
+      const eligibleRoomIds: string[] = [];
+      for (const r of ctx.state.rooms) {
+        const slots = listPlaceWithoutPowersSlots(
+          ctx.state,
+          ctx.triggeringPlayerId,
+          r.id,
+        );
+        if (slots.length > 0) eligibleRoomIds.push(r.id);
+      }
+      if (eligibleRoomIds.length === 0) return { kind: 'done', patch: {} };
+      const mages = listPlaceWithoutPowersMages(
+        ctx.state,
+        ctx.triggeringPlayerId,
+      );
+      if (mages.length === 0) return { kind: 'done', patch: {} };
+      return {
+        kind: 'pause',
+        pending: {
+          responderId: ctx.triggeringPlayerId,
+          prompt: {
+            kind: 'choose-from-options',
+            options: eligibleRoomIds.map((rid) => {
+              const r = ctx.state.rooms.find((rr) => rr.id === rid)!;
+              return { id: rid, label: r.name, payload: {} };
+            }),
+          },
+          resume: { effectId: self, context: { step: 'room-chosen' } },
+          source: ctx.source,
+        },
+      };
+    }
+
+    if (step === 'room-chosen') {
+      if (ctx.resumeAnswer.kind !== 'option-chosen') {
+        throw new Error(`${self} room-chosen expected option-chosen`);
+      }
+      const roomId = ctx.resumeAnswer.optionId;
+      // Set up the place chain (1 future placement queued) and immediately
+      // kick off the first placement via the shared helper.
+      const withChain: GameState = {
+        ...ctx.state,
+        pendingPlaceChain: {
+          playerId: ctx.triggeringPlayerId,
+          source: ctx.source,
+          remaining: 1,
+          restrictRoomId: roomId,
+          allowStop: true,
+        },
+      };
+      const delegate = getEffect('base.system.place-mage-without-powers')({
+        state: withChain,
+        source: ctx.source,
+        triggeringPlayerId: ctx.triggeringPlayerId,
+        allowReactions: false,
+      });
+      return composeWithDelegate(delegate, {
+        pendingPlaceChain: withChain.pendingPlaceChain,
+      });
+    }
+
+    throw new Error(`${self} unexpected step ${String(step)}`);
+  },
+);
 
 registerEffect(
   'base.spell.temporal-calculus-6th-ed.l2.react',

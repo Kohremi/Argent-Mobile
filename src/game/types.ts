@@ -983,6 +983,19 @@ export interface GameState {
     playerId: PlayerId;
     source: ResolutionSource;
     remaining: number;
+    /**
+     * Optional room constraint — when set, placements in this chain are
+     * limited to open base slots inside the named room. Slow Time
+     * (Temporal Calculus L1) sets this so the "up to two Mages" share the
+     * chosen room. Absent = any open slot, the original Stop Time behavior.
+     */
+    restrictRoomId?: RoomId;
+    /**
+     * When true, the placement prompt offers a "Stop" option so the player
+     * can end the chain early. Slow Time uses this for the "up to two"
+     * semantic. Absent / false = the placement is mandatory (Stop Time).
+     */
+    allowStop?: boolean;
   } | null;
   /**
    * The Contract chain (3 Research, all locked to a single department of
