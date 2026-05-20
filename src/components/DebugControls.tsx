@@ -1019,7 +1019,7 @@ function PromptControls({
               }
               disabled={opt.available === false}
               title={opt.unavailableReason}
-              className="px-3 py-1.5 rounded bg-amber-500 text-slate-950 hover:bg-amber-400 disabled:opacity-40 disabled:cursor-not-allowed"
+              className="px-3 py-1.5 rounded bg-amber-500 text-slate-950 hover:bg-amber-400 disabled:opacity-40 disabled:cursor-not-allowed text-left whitespace-pre-line"
             >
               {opt.label}
             </button>

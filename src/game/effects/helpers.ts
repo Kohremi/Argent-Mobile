@@ -1248,6 +1248,28 @@ export function isLegendarySpell(
   return false;
 }
 
+/** Returns the IDs of legendary spell books (the "set-aside" pool drafted via
+ *  Sealed Scroll) that are not yet owned by any player. Distinguished from
+ *  candidate starter spells by `unique` being falsy — leader spells set
+ *  `unique: true` and start in their candidate's office. */
+export function unclaimedLegendaryBooks(state: GameState): SpellCardId[] {
+  const owned = new Set<SpellCardId>();
+  for (const p of state.players) {
+    for (const s of p.ownedSpells) owned.add(s.cardId);
+  }
+  const out: SpellCardId[] = [];
+  for (const packId of state.activePackIds) {
+    const pack = getPack(packId);
+    if (!pack) continue;
+    for (const s of pack.legendarySpells) {
+      if (s.unique) continue;
+      if (owned.has(s.id)) continue;
+      out.push(s.id);
+    }
+  }
+  return out;
+}
+
 export function findActionSpace(
   state: GameState,
   spaceId: ActionSpaceId,
@@ -1536,6 +1558,56 @@ export function applyDraftSpell(
   return {
     spellDeck: nextDeck,
     spellTableau: nextTableau,
+    players: state.players.map((p) =>
+      p.id !== playerId
+        ? p
+        : {
+            ...p,
+            resources: {
+              ...p.resources,
+              intelligence: p.resources.intelligence - 1,
+            },
+            ownedSpells: [
+              ...p.ownedSpells,
+              {
+                cardId: spellCardId,
+                intPlaced: true,
+                wisPlacedLevel2: false,
+                wisPlacedLevel3: false,
+                exhausted: false,
+              },
+            ],
+          },
+    ),
+  };
+}
+
+/**
+ * Drafts a legendary spell book from the Sealed Scroll pool: deducts 1 INT
+ * and adds the book to the player's ownedSpells with `intPlaced=true`. The
+ * book lives in `pack.legendarySpells` (not `spellDeck`/`spellTableau`),
+ * so there is no tableau slot to clear or refill. Throws if the spell is
+ * already owned by anyone, isn't a legendary book, or the player has no
+ * INT.
+ */
+export function applyDraftLegendarySpell(
+  state: GameState,
+  playerId: PlayerId,
+  spellCardId: SpellCardId,
+): GameStatePatch {
+  const player = findPlayer(state, playerId);
+  if (!player) {
+    throw new Error(`applyDraftLegendarySpell: player ${playerId} not found`);
+  }
+  if (player.resources.intelligence < 1) {
+    throw new Error('applyDraftLegendarySpell: player has no INT available');
+  }
+  if (!unclaimedLegendaryBooks(state).includes(spellCardId)) {
+    throw new Error(
+      `applyDraftLegendarySpell: ${spellCardId} not in the unclaimed legendary pool`,
+    );
+  }
+  return {
     players: state.players.map((p) =>
       p.id !== playerId
         ? p

@@ -9,6 +9,7 @@ import {
   affordableVaultCards,
   applyAddWisToSpell,
   applyDiscardOwnedSpell,
+  applyDraftLegendarySpell,
   applyDraftSpell,
   applyGainMark,
   applyGoldForMageSwap,
@@ -46,6 +47,7 @@ import {
   returnMageToOfficePatch,
   playerHasAuricCatalyst,
   spellLabel,
+  unclaimedLegendaryBooks,
   woundMage,
 } from './helpers';
 import type {
@@ -10848,3 +10850,78 @@ registerEffect(
     };
   },
 );
+
+// ============================================================================
+// Sealed Scroll — research a Legendary Spell of your choice from the set-aside
+// pool. The 5 legendary spell books (`baseLegendarySpellBooks`) never enter the
+// regular spell deck; they live in `pack.legendarySpells` and are claimed only
+// here. Pays 1 INT (the "Research" cost). Fizzles if the pool is empty or the
+// player has no spare INT — the scroll itself is still consumed by
+// PLAY_VAULT_CARD upstream.
+// ============================================================================
+
+function legendaryBookOptionLabel(
+  state: GameState,
+  spellCardId: SpellCardId,
+): string {
+  const def = lookupSpellCardDef(state, spellCardId);
+  if (!def) return spellCardId;
+  const lines = def.levels.map((lv) => {
+    const cost = `${lv.manaCost} Mana`;
+    const timing =
+      lv.timing === 'fast-action'
+        ? 'Fast Action'
+        : lv.timing === 'reaction'
+          ? 'Reaction'
+          : 'Action';
+    return `  L${lv.level} ${lv.title} (${cost}, ${timing}): ${lv.description ?? ''}`;
+  });
+  return `${def.name}\n${lines.join('\n')}`;
+}
+
+registerEffect('base.vault.sealed-scroll', (ctx): EffectResult => {
+  const player = ctx.state.players.find(
+    (p) => p.id === ctx.triggeringPlayerId,
+  );
+  if (!player || player.resources.intelligence < 1) {
+    return { kind: 'done', patch: {} };
+  }
+  const pool = unclaimedLegendaryBooks(ctx.state);
+  if (pool.length === 0) return { kind: 'done', patch: {} };
+  const options: ChoiceOption[] = pool.map((cid) => ({
+    id: cid,
+    label: legendaryBookOptionLabel(ctx.state, cid),
+    payload: {},
+  }));
+  return {
+    kind: 'pause',
+    pending: {
+      responderId: ctx.triggeringPlayerId,
+      prompt: { kind: 'choose-from-options', options },
+      resume: { effectId: 'base.vault.sealed-scroll.draft', context: {} },
+      source: ctx.source,
+    },
+  };
+});
+
+registerEffect('base.vault.sealed-scroll.draft', (ctx): EffectResult => {
+  if (ctx.resumeAnswer?.kind !== 'option-chosen') {
+    throw new Error('sealed-scroll.draft expected option-chosen');
+  }
+  const spellCardId = ctx.resumeAnswer.optionId;
+  const player = ctx.state.players.find(
+    (p) => p.id === ctx.triggeringPlayerId,
+  );
+  if (!player || player.resources.intelligence < 1) {
+    return { kind: 'done', patch: {} };
+  }
+  if (!unclaimedLegendaryBooks(ctx.state).includes(spellCardId)) {
+    return { kind: 'done', patch: {} };
+  }
+  const patch = applyDraftLegendarySpell(
+    ctx.state,
+    ctx.triggeringPlayerId,
+    spellCardId,
+  );
+  return { kind: 'done', patch };
+});

@@ -10578,6 +10578,199 @@ describe('Mesmerize (Tenets of Dominance L1)', () => {
 });
 
 // ============================================================================
+// Sealed Scroll — research a Legendary Spell from the 5-book set-aside pool
+// ============================================================================
+
+describe('Sealed Scroll (legendary draft)', () => {
+  const LEGENDARY_BOOK_IDS = [
+    'base.spell.moste-holie-litanies',
+    'base.spell.on-the-weakness-of-flesh',
+    'base.spell.master-book-of-starcalling',
+    'base.spell.infinite-universes-realized',
+    'base.spell.calvals-deadliest-magicks',
+  ] as const;
+
+  function setupSealedScroll(opts: { p1Int: number }): GameState {
+    let s = initGame(TWO_PLAYER_CONFIG);
+    s = zeroPlayerResources(s, 'p1');
+    s = zeroPlayerResources(s, 'p2');
+    s = addVaultCard(s, 'p1', 'base.vault.sealed-scroll');
+    s = mapPlayer(s, 'p1', (p) => ({
+      ...p,
+      resources: { ...p.resources, intelligence: opts.p1Int },
+    }));
+    return {
+      ...s,
+      firstPlayerIndex: 0,
+      phase: {
+        kind: 'errands',
+        round: 1,
+        activePlayerIndex: 0,
+        actionUsed: false,
+        fastActionUsed: false,
+      },
+    };
+  }
+
+  it('the 5 legendary spell books form the initial unclaimed pool', async () => {
+    const s = initGame(TWO_PLAYER_CONFIG);
+    const { unclaimedLegendaryBooks } = await import('./effects/helpers');
+    expect(unclaimedLegendaryBooks(s).sort()).toEqual(
+      [...LEGENDARY_BOOK_IDS].sort(),
+    );
+    // None of the legendary books are mixed into the regular deck / tableau.
+    for (const id of LEGENDARY_BOOK_IDS) {
+      expect(s.spellDeck).not.toContain(id);
+      expect(s.spellTableau).not.toContain(id);
+    }
+  });
+
+  it('opens a 5-option draft prompt when used with spare INT', () => {
+    let s = setupSealedScroll({ p1Int: 1 });
+    s = applyAction(s, {
+      type: 'PLAY_VAULT_CARD',
+      playerId: 'p1',
+      vaultCardId: 'base.vault.sealed-scroll',
+    });
+    const top = topPending(s);
+    expect(top.prompt.kind).toBe('choose-from-options');
+    if (top.prompt.kind !== 'choose-from-options') throw new Error('unreachable');
+    expect(top.prompt.options).toHaveLength(5);
+    const ids = top.prompt.options.map((o) => o.id).sort();
+    expect(ids).toEqual([...LEGENDARY_BOOK_IDS].sort());
+    // The label includes the level effect text so the player can read the
+    // card before picking.
+    const moste = top.prompt.options.find(
+      (o) => o.id === 'base.spell.moste-holie-litanies',
+    )!;
+    expect(moste.label).toMatch(/Moste Holie Litanies/);
+    expect(moste.label).toMatch(/Sanctification/);
+    expect(moste.label).toMatch(/Consecration/);
+  });
+
+  it('drafting deducts 1 INT, adds the book to ownedSpells, and shrinks the pool', async () => {
+    let s = setupSealedScroll({ p1Int: 1 });
+    s = applyAction(s, {
+      type: 'PLAY_VAULT_CARD',
+      playerId: 'p1',
+      vaultCardId: 'base.vault.sealed-scroll',
+    });
+    const top = topPending(s);
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: top.id,
+      answer: {
+        kind: 'option-chosen',
+        optionId: 'base.spell.moste-holie-litanies',
+        payload: {},
+      },
+    });
+    const p1 = s.players.find((p) => p.id === 'p1')!;
+    expect(p1.resources.intelligence).toBe(0);
+    const owned = p1.ownedSpells.find(
+      (o) => o.cardId === 'base.spell.moste-holie-litanies',
+    );
+    expect(owned).toBeDefined();
+    expect(owned!.intPlaced).toBe(true);
+    // Scroll was a consumable — goes to personal discard.
+    expect(
+      p1.personalDiscard.find(
+        (d) => d.kind === 'consumable' && d.cardId === 'base.vault.sealed-scroll',
+      ),
+    ).toBeDefined();
+    expect(p1.vaultCards.find((v) => v.cardId === 'base.vault.sealed-scroll')).toBeUndefined();
+    const { unclaimedLegendaryBooks } = await import('./effects/helpers');
+    expect(unclaimedLegendaryBooks(s)).not.toContain(
+      'base.spell.moste-holie-litanies',
+    );
+    expect(unclaimedLegendaryBooks(s)).toHaveLength(4);
+  });
+
+  it('fizzles silently when the player has no INT — no prompt, scroll still consumed', () => {
+    let s = setupSealedScroll({ p1Int: 0 });
+    s = applyAction(s, {
+      type: 'PLAY_VAULT_CARD',
+      playerId: 'p1',
+      vaultCardId: 'base.vault.sealed-scroll',
+    });
+    expect(s.pendingResolutionStack).toHaveLength(0);
+    const p1 = s.players.find((p) => p.id === 'p1')!;
+    expect(p1.vaultCards.find((v) => v.cardId === 'base.vault.sealed-scroll')).toBeUndefined();
+    expect(
+      p1.personalDiscard.find(
+        (d) => d.kind === 'consumable' && d.cardId === 'base.vault.sealed-scroll',
+      ),
+    ).toBeDefined();
+  });
+
+  it('a second Sealed Scroll only lists the books still in the pool', async () => {
+    let s = setupSealedScroll({ p1Int: 2 });
+    s = addVaultCard(s, 'p1', 'base.vault.sealed-scroll');
+    // First use: draft Calval's.
+    s = applyAction(s, {
+      type: 'PLAY_VAULT_CARD',
+      playerId: 'p1',
+      vaultCardId: 'base.vault.sealed-scroll',
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: {
+        kind: 'option-chosen',
+        optionId: 'base.spell.calvals-deadliest-magicks',
+        payload: {},
+      },
+    });
+    // Bump the fastActionUsed/actionUsed back to false so we can play again
+    // in the same turn for the test. (Real game: this would be a second turn
+    // or a different player.)
+    s = {
+      ...s,
+      phase: {
+        kind: 'errands',
+        round: 1,
+        activePlayerIndex: 0,
+        actionUsed: false,
+        fastActionUsed: false,
+      },
+    };
+    s = applyAction(s, {
+      type: 'PLAY_VAULT_CARD',
+      playerId: 'p1',
+      vaultCardId: 'base.vault.sealed-scroll',
+    });
+    const top = topPending(s);
+    if (top.prompt.kind !== 'choose-from-options') throw new Error('unreachable');
+    expect(top.prompt.options).toHaveLength(4);
+    expect(top.prompt.options.map((o) => o.id)).not.toContain(
+      'base.spell.calvals-deadliest-magicks',
+    );
+  });
+
+  it('drafting a book does not touch the regular spell deck or tableau', () => {
+    let s = setupSealedScroll({ p1Int: 1 });
+    const deckBefore = [...s.spellDeck];
+    const tableauBefore = [...s.spellTableau];
+    s = applyAction(s, {
+      type: 'PLAY_VAULT_CARD',
+      playerId: 'p1',
+      vaultCardId: 'base.vault.sealed-scroll',
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: {
+        kind: 'option-chosen',
+        optionId: 'base.spell.master-book-of-starcalling',
+        payload: {},
+      },
+    });
+    expect(s.spellDeck).toEqual(deckBefore);
+    expect(s.spellTableau).toEqual(tableauBefore);
+  });
+});
+
+// ============================================================================
 // Room locking — Flamespout / Meteor / Cataclysm / Consecration
 // ============================================================================
 
