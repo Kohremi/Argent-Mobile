@@ -339,6 +339,15 @@ function placementBlockedReason(
     p.mages.some((m) => m.id === mage.id),
   );
   if (!owner) return 'mage owner not found';
+  // Mandatory shadow-on-place buff (Inversion) blocks base placement.
+  const shadowBuff = state.activeBuffs.find(
+    (b) =>
+      b.kind === 'shadow-on-place' &&
+      b.casterPlayerId === owner.id,
+  );
+  if (shadowBuff && shadowBuff.kind === 'shadow-on-place' && shadowBuff.mode === 'mandatory') {
+    return `${shadowBuff.label}: must shadow place`;
+  }
   const roomLimit = room.maxMagesPerPlayerPerRound ?? Infinity;
   if (Number.isFinite(roomLimit)) {
     const occupyingHere = countPlayerMagesInRoom(state, owner.id, room.id);
@@ -354,6 +363,54 @@ function placementBlockedReason(
     if (state.phase.fastActionUsed && state.phase.actionUsed) {
       return 'no Actions left this turn';
     }
+  } else {
+    if (state.phase.actionUsed) return 'Action already used';
+  }
+  return null;
+}
+
+/**
+ * Returns null when the caster could place `mage` into the shadow position of
+ * `space` (Zero Hour / Inversion); otherwise a short reason. Mirrors the
+ * engine's `PLACE_WORKER` shadow-placement validation.
+ */
+function shadowPlacementBlockedReason(
+  state: GameState,
+  mage: OwnedMage,
+  room: GameState['rooms'][number],
+  space: GameState['rooms'][number]['actionSpaces'][number],
+): string | null {
+  if (state.phase.kind !== 'errands') return 'not in errands phase';
+  if (state.pendingResolutionStack.length > 0) return 'resolve pending prompt first';
+  if (mage.location.kind !== 'office') return 'mage not in office';
+  if (mage.isWounded) return 'wounded mages must heal first';
+  if (room.cannotBePlacedInDirectly) return 'cannot place here';
+  if (state.roomLocks.some((l) => l.roomId === room.id)) return 'room locked';
+  if (space.shadowOccupant) return 'shadow position occupied';
+  const owner = state.players.find((p) =>
+    p.mages.some((m) => m.id === mage.id),
+  );
+  if (!owner) return 'mage owner not found';
+  const shadowBuff = state.activeBuffs.find(
+    (b) =>
+      b.kind === 'shadow-on-place' &&
+      b.casterPlayerId === owner.id,
+  );
+  if (!shadowBuff || shadowBuff.kind !== 'shadow-on-place') {
+    return 'no shadow-on-place buff active';
+  }
+  if (shadowBuff.mode === 'optional') {
+    if (!space.occupant || space.occupant.ownerId === owner.id) {
+      return `${shadowBuff.label}: needs an opposing Mage at base`;
+    }
+  }
+  const roomLimit = room.maxMagesPerPlayerPerRound ?? Infinity;
+  if (Number.isFinite(roomLimit)) {
+    const occupyingHere = countPlayerMagesInRoom(state, owner.id, room.id);
+    if (occupyingHere >= roomLimit) return `${room.name}: already at room limit this round`;
+  }
+  if (mage.color === 'purple') {
+    if (state.phase.actionUsed) return 'Action already used';
   } else {
     if (state.phase.actionUsed) return 'Action already used';
   }
@@ -1375,13 +1432,24 @@ function PlayerBuffBadges({
             ? 'until your next turn'
             : 'rest of round';
         let title: string;
+        let toneClass: string;
         if (b.kind === 'mage-immunity') {
           const kinds = b.immuneTo.join(' / ');
           const sourceLabel =
             b.source === 'spell' ? 'spell-source only' : 'any source';
           title = `${b.label} — your mages immune to ${kinds} (${sourceLabel}, ${dur})`;
-        } else {
+          toneClass = 'text-emerald-300 bg-emerald-500/10 border-emerald-500/30';
+        } else if (b.kind === 'mages-lose-powers') {
           title = `${b.label} — all non-Divinity mages lose their powers (${dur})`;
+          toneClass = 'text-violet-300 bg-violet-500/10 border-violet-500/30';
+        } else {
+          // shadow-on-place (Zero Hour / Inversion)
+          const modeText =
+            b.mode === 'mandatory'
+              ? 'all your placements must shadow'
+              : 'your placements may shadow opposing mages';
+          title = `${b.label} — ${modeText} (${dur})`;
+          toneClass = 'text-sky-300 bg-sky-500/10 border-sky-500/30';
         }
         return (
           <span
@@ -1390,9 +1458,7 @@ function PlayerBuffBadges({
             aria-label={title}
             className={clsx(
               'inline-flex items-center gap-0.5 text-[10px] rounded px-1 border',
-              b.kind === 'mage-immunity'
-                ? 'text-emerald-300 bg-emerald-500/10 border-emerald-500/30'
-                : 'text-violet-300 bg-violet-500/10 border-violet-500/30',
+              toneClass,
             )}
           >
             <ShieldIcon size={11} />
@@ -3517,6 +3583,11 @@ function RoomsPanel({
                     const isArsMagna =
                       selectedMage !== null &&
                       isArsMagnaPlacement(state, selectedMage, s);
+                    const shadowPlaceBlocked = selectedMage
+                      ? shadowPlacementBlockedReason(state, selectedMage, room, s)
+                      : 'no mage selected';
+                    const isShadowPlaceable =
+                      selectedMage !== null && shadowPlaceBlocked === null;
                     const spaceEligible = spaceMode?.eligibleIds.has(s.id) ?? false;
                     const occupantMageEligible =
                       s.occupant !== null &&
@@ -3652,19 +3723,41 @@ function RoomsPanel({
                         ? `place ${selectedMage?.color ?? ''} mage here`
                         : 'empty base slot';
 
-                    // Shadow tile click handler: only active for a mage-target
-                    // prompt when this slot has an eligible shadow occupant.
+                    // Shadow tile click handler:
+                    //   - mage-target prompt → select the shadow occupant
+                    //   - shadow placement (Zero Hour / Inversion) → PLACE_WORKER
+                    //     with isShadowing: true
                     const shadowClick: (() => void) | undefined =
                       shadowMageEligible && mageMode && shadowOccupant
                         ? () => mageMode.onSelect(shadowOccupant.mageId)
-                        : undefined;
+                        : isShadowPlaceable && selectedMage
+                          ? () => {
+                              dispatch({
+                                type: 'PLACE_WORKER',
+                                playerId:
+                                  state.players.find((p) =>
+                                    p.mages.some(
+                                      (m) => m.id === selectedMage.id,
+                                    ),
+                                  )?.id ?? '',
+                                mageId: selectedMage.id,
+                                actionSpaceId: s.id,
+                                isShadowing: true,
+                              });
+                              onPlaced();
+                            }
+                          : undefined;
                     const shadowRing =
                       shadowMageEligible && mageMode
                         ? 'ring-2 ring-amber-400'
-                        : '';
+                        : isShadowPlaceable
+                          ? 'ring-2 ring-sky-400'
+                          : '';
                     const shadowTitle = shadowOccupant
                       ? `${shadowOccupant.ownerId} (shadow)`
-                      : 'shadow slot (only via shadow-specific effects)';
+                      : isShadowPlaceable
+                        ? 'shadow-place here'
+                        : 'shadow slot (only via shadow-specific effects)';
 
                     const slotInfo = (
                       <div className="flex-1 min-w-0">

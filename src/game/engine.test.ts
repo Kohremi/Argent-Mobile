@@ -11344,6 +11344,313 @@ describe('Event Horizon (Infinite Universes Realized L1)', () => {
 });
 
 // ============================================================================
+// Zero Hour + Inversion (Infinite Universes Realized L2/L3) — shadow-on-place
+// buffs and the PLACE_WORKER `isShadowing: true` path.
+// ============================================================================
+
+describe('Shadow-on-place buffs (Zero Hour L2 / Inversion L3)', () => {
+  function setupInfinite(level: 1 | 2 | 3, casterMana: number): GameState {
+    let s = initGame(TWO_PLAYER_CONFIG);
+    s = forceLibrarySideA(s);
+    s = zeroPlayerResources(s, 'p1');
+    s = zeroPlayerResources(s, 'p2');
+    s = addOwnedSpell(s, 'p1', 'base.spell.infinite-universes-realized', {
+      intPlaced: level >= 1,
+      wisPlacedLevel2: level >= 2,
+      wisPlacedLevel3: level >= 3,
+    });
+    s = setMana(s, 'p1', casterMana);
+    // Alice has two red office mages (non-grey to avoid post-cast triggers).
+    s = addMage(s, 'p1', {
+      id: 'alice-red-1',
+      cardId: 'base.mage.sorcery',
+      color: 'red',
+    });
+    s = addMage(s, 'p1', {
+      id: 'alice-red-2',
+      cardId: 'base.mage.sorcery',
+      color: 'red',
+    });
+    // Bob has a placed mage on slot-1 (target for shadowing).
+    s = addMage(s, 'p2', {
+      id: 'bob-grey-1',
+      cardId: 'base.mage.mysticism',
+      color: 'grey',
+    });
+    s = placeMageOnSpace(s, 'p2', 'bob-grey-1', 'base.room.library.a.slot-1');
+    return {
+      ...s,
+      firstPlayerIndex: 0,
+      phase: {
+        kind: 'errands',
+        round: 1,
+        activePlayerIndex: 0,
+        actionUsed: false,
+        fastActionUsed: false,
+      },
+    };
+  }
+
+  describe('Zero Hour (L2, optional)', () => {
+    it('cast adds an optional shadow-on-place buff that expires at round-end', () => {
+      let s = setupInfinite(2, 3);
+      s = applyAction(s, {
+        type: 'CAST_SPELL',
+        playerId: 'p1',
+        spellCardId: 'base.spell.infinite-universes-realized',
+        level: 2,
+      });
+      expect(s.activeBuffs).toHaveLength(1);
+      const b = s.activeBuffs[0]!;
+      expect(b.kind).toBe('shadow-on-place');
+      if (b.kind !== 'shadow-on-place') throw new Error('unreachable');
+      expect(b.mode).toBe('optional');
+      expect(b.casterPlayerId).toBe('p1');
+      expect(b.expiresAt).toEqual({ kind: 'round-end' });
+    });
+
+    it('caster can shadow-place onto an opposing mage and opens one reaction window', () => {
+      let s = setupInfinite(2, 3);
+      s = applyAction(s, {
+        type: 'CAST_SPELL',
+        playerId: 'p1',
+        spellCardId: 'base.spell.infinite-universes-realized',
+        level: 2,
+      });
+      // Reset action budget for the follow-up placement test.
+      s = { ...s, phase: { kind: 'errands' as const, round: 1, activePlayerIndex: 0, actionUsed: false, fastActionUsed: false } };
+      s = applyAction(s, {
+        type: 'PLACE_WORKER',
+        playerId: 'p1',
+        mageId: 'alice-red-1',
+        actionSpaceId: 'base.room.library.a.slot-1',
+        isShadowing: true,
+      });
+      const slot1 = s.rooms
+        .find((r) => r.id === 'base.room.library.a')!
+        .actionSpaces.find((sp) => sp.id === 'base.room.library.a.slot-1')!;
+      expect(slot1.occupant?.mageId).toBe('bob-grey-1');
+      expect(slot1.shadowOccupant?.mageId).toBe('alice-red-1');
+      expect(s.activeReactionWindows).toHaveLength(1);
+      expect(s.activeReactionWindows[0]!.triggerEvents[0]!.kind).toBe(
+        'mage-shadowed',
+      );
+    });
+
+    it('caster can still place normally onto an empty base slot while Zero Hour is active', () => {
+      let s = setupInfinite(2, 3);
+      s = applyAction(s, {
+        type: 'CAST_SPELL',
+        playerId: 'p1',
+        spellCardId: 'base.spell.infinite-universes-realized',
+        level: 2,
+      });
+      s = { ...s, phase: { kind: 'errands' as const, round: 1, activePlayerIndex: 0, actionUsed: false, fastActionUsed: false } };
+      s = applyAction(s, {
+        type: 'PLACE_WORKER',
+        playerId: 'p1',
+        mageId: 'alice-red-1',
+        actionSpaceId: 'base.room.library.a.slot-2',
+      });
+      const slot2 = s.rooms
+        .find((r) => r.id === 'base.room.library.a')!
+        .actionSpaces.find((sp) => sp.id === 'base.room.library.a.slot-2')!;
+      expect(slot2.occupant?.mageId).toBe('alice-red-1');
+    });
+
+    it('rejects shadow placement over an empty base slot (Zero Hour requires opposing)', () => {
+      let s = setupInfinite(2, 3);
+      s = applyAction(s, {
+        type: 'CAST_SPELL',
+        playerId: 'p1',
+        spellCardId: 'base.spell.infinite-universes-realized',
+        level: 2,
+      });
+      s = { ...s, phase: { kind: 'errands' as const, round: 1, activePlayerIndex: 0, actionUsed: false, fastActionUsed: false } };
+      expect(() =>
+        applyAction(s, {
+          type: 'PLACE_WORKER',
+          playerId: 'p1',
+          mageId: 'alice-red-1',
+          actionSpaceId: 'base.room.library.a.slot-2',
+          isShadowing: true,
+        }),
+      ).toThrow(/requires an opposing Mage/);
+    });
+
+    it('shadow placement without an active shadow-on-place buff is rejected', () => {
+      // No Zero Hour cast — caster tries isShadowing: true.
+      let s = setupInfinite(2, 0);
+      expect(() =>
+        applyAction(s, {
+          type: 'PLACE_WORKER',
+          playerId: 'p1',
+          mageId: 'alice-red-1',
+          actionSpaceId: 'base.room.library.a.slot-1',
+          isShadowing: true,
+        }),
+      ).toThrow(/shadow placement requires a shadow-on-place buff/);
+    });
+  });
+
+  describe('Inversion (L3, mandatory)', () => {
+    it('cast mass-moves the caster\'s base-position mages to the shadow position of the same slot', () => {
+      let s = setupInfinite(3, 3);
+      // Place both Alice mages at slots 2 and 3 (base position).
+      s = placeMageOnSpace(s, 'p1', 'alice-red-1', 'base.room.library.a.slot-2');
+      s = placeMageOnSpace(s, 'p1', 'alice-red-2', 'base.room.library.a.slot-3');
+      s = applyAction(s, {
+        type: 'CAST_SPELL',
+        playerId: 'p1',
+        spellCardId: 'base.spell.infinite-universes-realized',
+        level: 3,
+      });
+      const lib = s.rooms.find((r) => r.id === 'base.room.library.a')!;
+      const slot2 = lib.actionSpaces.find(
+        (sp) => sp.id === 'base.room.library.a.slot-2',
+      )!;
+      const slot3 = lib.actionSpaces.find(
+        (sp) => sp.id === 'base.room.library.a.slot-3',
+      )!;
+      expect(slot2.occupant).toBeNull();
+      expect(slot2.shadowOccupant?.mageId).toBe('alice-red-1');
+      expect(slot3.occupant).toBeNull();
+      expect(slot3.shadowOccupant?.mageId).toBe('alice-red-2');
+      const p1 = s.players.find((p) => p.id === 'p1')!;
+      expect(p1.mages.find((m) => m.id === 'alice-red-1')!.isShadowing).toBe(
+        true,
+      );
+    });
+
+    it('cast adds a mandatory shadow-on-place buff that expires at round-end', () => {
+      let s = setupInfinite(3, 3);
+      s = applyAction(s, {
+        type: 'CAST_SPELL',
+        playerId: 'p1',
+        spellCardId: 'base.spell.infinite-universes-realized',
+        level: 3,
+      });
+      const buff = s.activeBuffs.find((b) => b.kind === 'shadow-on-place');
+      expect(buff).toBeDefined();
+      if (!buff || buff.kind !== 'shadow-on-place') throw new Error('unreachable');
+      expect(buff.mode).toBe('mandatory');
+      expect(buff.expiresAt).toEqual({ kind: 'round-end' });
+    });
+
+    it('base placement is rejected while Inversion is active', () => {
+      let s = setupInfinite(3, 3);
+      s = applyAction(s, {
+        type: 'CAST_SPELL',
+        playerId: 'p1',
+        spellCardId: 'base.spell.infinite-universes-realized',
+        level: 3,
+      });
+      s = { ...s, phase: { kind: 'errands' as const, round: 1, activePlayerIndex: 0, actionUsed: false, fastActionUsed: false } };
+      expect(() =>
+        applyAction(s, {
+          type: 'PLACE_WORKER',
+          playerId: 'p1',
+          mageId: 'alice-red-1',
+          actionSpaceId: 'base.room.library.a.slot-2',
+        }),
+      ).toThrow(/Inversion requires shadow placement/);
+    });
+
+    it('caster can shadow-place over an empty base while Inversion is active', () => {
+      let s = setupInfinite(3, 3);
+      s = applyAction(s, {
+        type: 'CAST_SPELL',
+        playerId: 'p1',
+        spellCardId: 'base.spell.infinite-universes-realized',
+        level: 3,
+      });
+      s = { ...s, phase: { kind: 'errands' as const, round: 1, activePlayerIndex: 0, actionUsed: false, fastActionUsed: false } };
+      s = applyAction(s, {
+        type: 'PLACE_WORKER',
+        playerId: 'p1',
+        mageId: 'alice-red-1',
+        actionSpaceId: 'base.room.library.a.slot-2',
+        isShadowing: true,
+      });
+      const slot2 = s.rooms
+        .find((r) => r.id === 'base.room.library.a')!
+        .actionSpaces.find((sp) => sp.id === 'base.room.library.a.slot-2')!;
+      expect(slot2.occupant).toBeNull();
+      expect(slot2.shadowOccupant?.mageId).toBe('alice-red-1');
+      // No reaction window — nobody was shadowed.
+      expect(s.activeReactionWindows).toHaveLength(0);
+    });
+
+    it('caster can also shadow-place over an opposing mage while Inversion is active', () => {
+      let s = setupInfinite(3, 3);
+      s = applyAction(s, {
+        type: 'CAST_SPELL',
+        playerId: 'p1',
+        spellCardId: 'base.spell.infinite-universes-realized',
+        level: 3,
+      });
+      s = { ...s, phase: { kind: 'errands' as const, round: 1, activePlayerIndex: 0, actionUsed: false, fastActionUsed: false } };
+      s = applyAction(s, {
+        type: 'PLACE_WORKER',
+        playerId: 'p1',
+        mageId: 'alice-red-1',
+        actionSpaceId: 'base.room.library.a.slot-1',
+        isShadowing: true,
+      });
+      const slot1 = s.rooms
+        .find((r) => r.id === 'base.room.library.a')!
+        .actionSpaces.find((sp) => sp.id === 'base.room.library.a.slot-1')!;
+      expect(slot1.occupant?.mageId).toBe('bob-grey-1');
+      expect(slot1.shadowOccupant?.mageId).toBe('alice-red-1');
+      expect(s.activeReactionWindows).toHaveLength(1);
+      expect(s.activeReactionWindows[0]!.triggerEvents[0]!.kind).toBe(
+        'mage-shadowed',
+      );
+    });
+
+    it('mass-move skips a mage whose shadow position is already occupied', () => {
+      let s = setupInfinite(3, 3);
+      // Place alice-red-1 at slot-2 base, and another mage at slot-2 shadow.
+      s = placeMageOnSpace(s, 'p1', 'alice-red-1', 'base.room.library.a.slot-2');
+      // Cheat: drop bob's mage into slot-2 shadow.
+      s = {
+        ...s,
+        rooms: s.rooms.map((r) => {
+          if (r.id !== 'base.room.library.a') return r;
+          return {
+            ...r,
+            actionSpaces: r.actionSpaces.map((sp) =>
+              sp.id !== 'base.room.library.a.slot-2'
+                ? sp
+                : {
+                    ...sp,
+                    shadowOccupant: {
+                      mageId: 'bob-grey-1',
+                      ownerId: 'p2',
+                      isShadowing: true,
+                    },
+                  },
+            ),
+          };
+        }),
+      };
+      s = applyAction(s, {
+        type: 'CAST_SPELL',
+        playerId: 'p1',
+        spellCardId: 'base.spell.infinite-universes-realized',
+        level: 3,
+      });
+      const slot2 = s.rooms
+        .find((r) => r.id === 'base.room.library.a')!
+        .actionSpaces.find((sp) => sp.id === 'base.room.library.a.slot-2')!;
+      // alice-red-1 stays at base (shadow was already occupied by bob).
+      expect(slot2.occupant?.mageId).toBe('alice-red-1');
+      expect(slot2.shadowOccupant?.mageId).toBe('bob-grey-1');
+    });
+  });
+});
+
+// ============================================================================
 // Room locking — Flamespout / Meteor / Cataclysm / Consecration
 // ============================================================================
 

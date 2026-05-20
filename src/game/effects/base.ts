@@ -64,6 +64,7 @@ import type {
   MageColor,
   MageImmunityBuff,
   MagesLosePowersBuff,
+  ShadowOnPlaceBuff,
   OwnedMage,
   OwnedMageId,
   PendingResolutionInput,
@@ -11555,3 +11556,115 @@ function eventHorizonFinalize(
     },
   };
 }
+
+// ============================================================================
+// Infinite Universes Realized L2 "Zero Hour" — For the rest of the round,
+// your Mages can shadow opponent's Mages when placed. (Optional shadow on
+// place; normal base placement remains available.)
+// ============================================================================
+
+registerEffect(
+  'base.spell.infinite-universes-realized.l2',
+  (ctx): EffectResult => {
+    const buff: ShadowOnPlaceBuff = {
+      kind: 'shadow-on-place',
+      casterPlayerId: ctx.triggeringPlayerId,
+      spellCardId: 'base.spell.infinite-universes-realized',
+      label: 'Zero Hour',
+      mode: 'optional',
+      expiresAt: { kind: 'round-end' },
+    };
+    return {
+      kind: 'done',
+      patch: {
+        activeBuffs: [...ctx.state.activeBuffs, buff],
+      },
+    };
+  },
+);
+
+// ============================================================================
+// Infinite Universes Realized L3 "Inversion" — All of your placed Mages move
+// to the Shadow position if able. For the rest of the round, you must
+// Shadow opponents or empty slots.
+//
+// Mass-move: each of the caster's mages currently at a slot's BASE position
+// shifts to the SHADOW position of the same slot, provided the shadow
+// position is empty. Mages already shadowing, or whose target shadow slot
+// is occupied, are skipped. No reaction events fire for the self-move.
+// Then the mandatory shadow-on-place buff is added; PLACE_WORKER's shadow-
+// placement branch (see engine.ts) enforces the "must shadow" rule for the
+// rest of the round.
+// ============================================================================
+
+function applyInversionMassMove(state: GameState, casterId: string): GameState {
+  const caster = state.players.find((p) => p.id === casterId);
+  if (!caster) return state;
+  let working = state;
+  for (const m of caster.mages) {
+    if (m.location.kind !== 'action-space') continue;
+    if (m.isShadowing) continue;
+    const spaceId = m.location.spaceId;
+    const space = working.rooms
+      .flatMap((r) => r.actionSpaces)
+      .find((s) => s.id === spaceId);
+    if (!space || space.shadowOccupant) continue;
+    if (space.occupant?.mageId !== m.id) continue;
+    working = {
+      ...working,
+      players: working.players.map((p) =>
+        p.id !== casterId
+          ? p
+          : {
+              ...p,
+              mages: p.mages.map((mm) =>
+                mm.id !== m.id ? mm : { ...mm, isShadowing: true },
+              ),
+            },
+      ),
+      rooms: working.rooms.map((r) => {
+        if (!r.actionSpaces.some((s) => s.id === spaceId)) return r;
+        return {
+          ...r,
+          actionSpaces: r.actionSpaces.map((s) =>
+            s.id !== spaceId
+              ? s
+              : {
+                  ...s,
+                  occupant: null,
+                  shadowOccupant: {
+                    mageId: m.id,
+                    ownerId: casterId,
+                    isShadowing: true,
+                  },
+                },
+          ),
+        };
+      }),
+    };
+  }
+  return working;
+}
+
+registerEffect(
+  'base.spell.infinite-universes-realized.l3',
+  (ctx): EffectResult => {
+    const afterMove = applyInversionMassMove(ctx.state, ctx.triggeringPlayerId);
+    const buff: ShadowOnPlaceBuff = {
+      kind: 'shadow-on-place',
+      casterPlayerId: ctx.triggeringPlayerId,
+      spellCardId: 'base.spell.infinite-universes-realized',
+      label: 'Inversion',
+      mode: 'mandatory',
+      expiresAt: { kind: 'round-end' },
+    };
+    return {
+      kind: 'done',
+      patch: {
+        players: afterMove.players,
+        rooms: afterMove.rooms,
+        activeBuffs: [...afterMove.activeBuffs, buff],
+      },
+    };
+  },
+);

@@ -33,6 +33,7 @@ import type {
   DraftMageAction,
   PlaySupporterAction,
   PlayVaultCardAction,
+  ShadowOnPlaceBuff,
   SupporterCard,
   VaultCard,
   EffectContext,
@@ -769,17 +770,41 @@ function handlePlaceWorker(state: GameState, action: PlaceWorkerAction): GameSta
   if (state.roomLocks.some((l) => l.roomId === room.id)) {
     throw new Error(`PLACE_WORKER: room ${room.id} is locked`);
   }
+
+  // Shadow-on-place buff (Zero Hour / Inversion) lets the caster target a
+  // slot's shadow position instead of its base. Inversion makes shadowing
+  // mandatory — base placement is rejected while it's active.
+  const shadowBuff = state.activeBuffs.find(
+    (b): b is ShadowOnPlaceBuff =>
+      b.kind === 'shadow-on-place' && b.casterPlayerId === action.playerId,
+  );
+  const requestedShadow = action.isShadowing === true;
+  if (shadowBuff?.mode === 'mandatory' && !requestedShadow) {
+    throw new Error(
+      `PLACE_WORKER: ${shadowBuff.label} requires shadow placement`,
+    );
+  }
+  if (requestedShadow && !shadowBuff) {
+    throw new Error(
+      'PLACE_WORKER: shadow placement requires a shadow-on-place buff (Zero Hour / Inversion)',
+    );
+  }
+
   // Red (Sorcery) mages may place on an OCCUPIED slot if they can pay
   // 1 mana and the occupant is a valid Ars Magna target (opposing, not
   // wounded, not green, not blue). All other placements require an empty
   // slot.
   const isArsMagnaPlacement =
+    !requestedShadow &&
     mage.color === 'red' &&
     canArsMagnaTakeSpace(state, action.playerId, space);
-  if (space.occupant && !isArsMagnaPlacement) {
+  if (!requestedShadow && space.occupant && !isArsMagnaPlacement) {
     throw new Error(`PLACE_WORKER: space ${space.id} already occupied`);
   }
-  if (space.slotType === 'shadow' || space.slotType === 'shadow-merit') {
+  if (
+    !requestedShadow &&
+    (space.slotType === 'shadow' || space.slotType === 'shadow-merit')
+  ) {
     // TODO: shadow placement requires choosing which occupied slot to copy.
     throw new Error(
       `PLACE_WORKER: slot type "${space.slotType}" not yet supported`,
@@ -787,6 +812,22 @@ function handlePlaceWorker(state: GameState, action: PlaceWorkerAction): GameSta
   }
   if (space.slotType === 'wound') {
     throw new Error(`PLACE_WORKER: slot type "wound" not yet supported`);
+  }
+  if (requestedShadow) {
+    if (space.shadowOccupant) {
+      throw new Error(
+        `PLACE_WORKER: shadow position of ${space.id} already occupied`,
+      );
+    }
+    // Zero Hour (optional mode) requires an opposing mage at the base
+    // position. Inversion (mandatory) allows any shadow placement.
+    if (shadowBuff!.mode === 'optional') {
+      if (!space.occupant || space.occupant.ownerId === action.playerId) {
+        throw new Error(
+          `PLACE_WORKER: ${shadowBuff!.label} requires an opposing Mage at the base position`,
+        );
+      }
+    }
   }
 
   // Merit-cost spaces are placeable even without enough Merit Badges. The
@@ -818,6 +859,87 @@ function handlePlaceWorker(state: GameState, action: PlaceWorkerAction): GameSta
     budgetKind = state.phase.fastActionUsed ? 'action' : 'fast-action';
   }
   state = consumeActionBudget(state, budgetKind, 'PLACE_WORKER');
+
+  // Shadow-on-place placement: drop the mage into the slot's shadow
+  // position. If the base position is occupied, the base occupant is
+  // shadowed (mage-shadowed event opens a reaction window for the affected
+  // owner). Shadowing over an empty base (Inversion-only) is just a
+  // placement — no event.
+  if (requestedShadow) {
+    const baseOccupant = space.occupant;
+    const updatedRooms = state.rooms.map((r, ri) =>
+      ri !== foundRoomIdx
+        ? r
+        : {
+            ...r,
+            actionSpaces: r.actionSpaces.map((sp, si) =>
+              si !== foundSpaceIdx
+                ? sp
+                : {
+                    ...sp,
+                    shadowOccupant: {
+                      mageId: action.mageId,
+                      ownerId: action.playerId,
+                      isShadowing: true,
+                    },
+                  },
+            ),
+          },
+    );
+    const updatedPlayers = state.players.map((p): Player => {
+      if (p.id !== action.playerId) return p;
+      return {
+        ...p,
+        mages: p.mages.map((m) =>
+          m.id !== action.mageId
+            ? m
+            : {
+                ...m,
+                location: { kind: 'action-space' as const, spaceId: space.id },
+                isShadowing: true,
+              },
+        ),
+      };
+    });
+    const placed: GameState = {
+      ...state,
+      rooms: updatedRooms,
+      players: updatedPlayers,
+    };
+    if (!baseOccupant) {
+      return placed;
+    }
+    const event: ReactionTriggerEvent = {
+      kind: 'mage-shadowed',
+      mageId: baseOccupant.mageId,
+      ownerId: baseOccupant.ownerId,
+      byPlayerId: action.playerId,
+      spaceId: space.id,
+    };
+    const source: ResolutionSource = {
+      kind: 'spell',
+      id: shadowBuff!.spellCardId,
+      triggeringPlayerId: action.playerId,
+      description: shadowBuff!.label,
+    };
+    const ctx: EffectContext = {
+      state: placed,
+      source,
+      triggeringPlayerId: action.playerId,
+      allowReactions: true,
+    };
+    const result: EffectResult = {
+      kind: 'open-reaction',
+      window: {
+        triggerEvents: [event],
+        pendingResponderIds: buildReactionQueue(placed, action.playerId),
+        reactedPlayerIds: [],
+        afterResume: { effectId: 'base.system.noop', context: {} },
+        source,
+      },
+    };
+    return applyEffectResult(placed, result, ctx);
+  }
 
   // Red Mage Ars Magna: spending 1 mana when placing wounds the slot's
   // occupant and lets the red mage take that slot. The standard placement

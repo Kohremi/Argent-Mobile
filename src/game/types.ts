@@ -744,7 +744,33 @@ export interface MagesLosePowersBuff {
   expiresAt: BuffExpiry;
 }
 
-export type ActiveBuff = MageImmunityBuff | MagesLosePowersBuff;
+/**
+ * "Shadow on place" buff (Infinite Universes Realized L2 Zero Hour,
+ * L3 Inversion). Lets the caster's PLACE_WORKER target a slot's shadow
+ * position instead of its base position.
+ *
+ * - `mode: 'optional'` (Zero Hour) — the caster MAY place into a shadow
+ *   slot, but only over an OPPOSING base occupant. Normal base placement
+ *   is still allowed.
+ * - `mode: 'mandatory'` (Inversion) — every placement MUST go to a shadow
+ *   slot. Shadow slots over an empty base are also valid destinations.
+ *
+ * Both modes still respect: shadow slot must be empty, room not locked,
+ * caster under per-room cap.
+ */
+export interface ShadowOnPlaceBuff {
+  kind: 'shadow-on-place';
+  casterPlayerId: PlayerId;
+  spellCardId: SpellCardId;
+  label: string;
+  mode: 'optional' | 'mandatory';
+  expiresAt: BuffExpiry;
+}
+
+export type ActiveBuff =
+  | MageImmunityBuff
+  | MagesLosePowersBuff
+  | ShadowOnPlaceBuff;
 
 export type ReactionTriggerEvent =
   | {
