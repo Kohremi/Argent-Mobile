@@ -10771,6 +10771,579 @@ describe('Sealed Scroll (legendary draft)', () => {
 });
 
 // ============================================================================
+// Ice Comet (Master Book of Starcalling L1) — one room, wound + banish + move
+// ============================================================================
+
+describe('Ice Comet (Master Book of Starcalling L1)', () => {
+  function setupIceComet(): GameState {
+    let s = initGame(TWO_PLAYER_CONFIG);
+    s = forceLibrarySideA(s);
+    s = zeroPlayerResources(s, 'p1');
+    s = zeroPlayerResources(s, 'p2');
+    s = addOwnedSpell(s, 'p1', 'base.spell.master-book-of-starcalling', {
+      intPlaced: true,
+    });
+    s = setMana(s, 'p1', 3);
+    // Three of Bob's mages in Library A: one targetable by all three effects.
+    s = addMage(s, 'p2', {
+      id: 'bob-grey-1',
+      cardId: 'base.mage.mysticism',
+      color: 'grey',
+    });
+    s = addMage(s, 'p2', {
+      id: 'bob-grey-2',
+      cardId: 'base.mage.mysticism',
+      color: 'grey',
+    });
+    s = addMage(s, 'p2', {
+      id: 'bob-grey-3',
+      cardId: 'base.mage.mysticism',
+      color: 'grey',
+    });
+    s = placeMageOnSpace(s, 'p2', 'bob-grey-1', 'base.room.library.a.slot-1');
+    s = placeMageOnSpace(s, 'p2', 'bob-grey-2', 'base.room.library.a.slot-2');
+    s = placeMageOnSpace(s, 'p2', 'bob-grey-3', 'base.room.library.a.slot-3');
+    return {
+      ...s,
+      firstPlayerIndex: 0,
+      phase: {
+        kind: 'errands',
+        round: 1,
+        activePlayerIndex: 0,
+        actionUsed: false,
+        fastActionUsed: false,
+      },
+    };
+  }
+
+  it('cast prompts for a room first', () => {
+    let s = setupIceComet();
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.master-book-of-starcalling',
+      level: 1,
+    });
+    const top = topPending(s);
+    expect(top.prompt.kind).toBe('choose-from-options');
+    if (top.prompt.kind !== 'choose-from-options') throw new Error('unreachable');
+    expect(top.prompt.options.some((o) => o.id === 'base.room.library.a')).toBe(
+      true,
+    );
+  });
+
+  it('after room is chosen, prompts for the wound target', () => {
+    let s = setupIceComet();
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.master-book-of-starcalling',
+      level: 1,
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: {
+        kind: 'option-chosen',
+        optionId: 'base.room.library.a',
+        payload: {},
+      },
+    });
+    const top = topPending(s);
+    expect(top.prompt.kind).toBe('choose-target-mage');
+    if (top.prompt.kind !== 'choose-target-mage') throw new Error('unreachable');
+    expect(top.prompt.eligibleMageIds.sort()).toEqual(
+      ['bob-grey-1', 'bob-grey-2', 'bob-grey-3'].sort(),
+    );
+  });
+
+  it('the banish target options exclude the already-picked wound target', () => {
+    let s = setupIceComet();
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.master-book-of-starcalling',
+      level: 1,
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: {
+        kind: 'option-chosen',
+        optionId: 'base.room.library.a',
+        payload: {},
+      },
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'mage-chosen', mageId: 'bob-grey-1' },
+    });
+    const top = topPending(s);
+    expect(top.prompt.kind).toBe('choose-target-mage');
+    if (top.prompt.kind !== 'choose-target-mage') throw new Error('unreachable');
+    expect(top.prompt.eligibleMageIds).not.toContain('bob-grey-1');
+    expect(top.prompt.eligibleMageIds.sort()).toEqual(
+      ['bob-grey-2', 'bob-grey-3'].sort(),
+    );
+  });
+
+  it('the move source options exclude wound + banish picks', () => {
+    let s = setupIceComet();
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.master-book-of-starcalling',
+      level: 1,
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: {
+        kind: 'option-chosen',
+        optionId: 'base.room.library.a',
+        payload: {},
+      },
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'mage-chosen', mageId: 'bob-grey-1' },
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'mage-chosen', mageId: 'bob-grey-2' },
+    });
+    const top = topPending(s);
+    expect(top.prompt.kind).toBe('choose-target-mage');
+    if (top.prompt.kind !== 'choose-target-mage') throw new Error('unreachable');
+    expect(top.prompt.eligibleMageIds).toEqual(['bob-grey-3']);
+  });
+
+  it('after the move dest is chosen, applies all three and opens a single reaction window', () => {
+    let s = setupIceComet();
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.master-book-of-starcalling',
+      level: 1,
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: {
+        kind: 'option-chosen',
+        optionId: 'base.room.library.a',
+        payload: {},
+      },
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'mage-chosen', mageId: 'bob-grey-1' },
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'mage-chosen', mageId: 'bob-grey-2' },
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'mage-chosen', mageId: 'bob-grey-3' },
+    });
+    // The move dest prompt should offer slot 4 (the only open base slot).
+    const destPrompt = topPending(s);
+    expect(destPrompt.prompt.kind).toBe('choose-target-action-space');
+    if (destPrompt.prompt.kind !== 'choose-target-action-space') {
+      throw new Error('unreachable');
+    }
+    expect(destPrompt.prompt.eligibleSpaceIds).toContain(
+      'base.room.library.a.slot-4',
+    );
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: destPrompt.id,
+      answer: {
+        kind: 'space-chosen',
+        spaceId: 'base.room.library.a.slot-4',
+      },
+    });
+    // Now a reaction window should be open for p2 with all three events.
+    expect(s.activeReactionWindows).toHaveLength(1);
+    const win = s.activeReactionWindows[0]!;
+    const kinds = win.triggerEvents.map((e) => e.kind).sort();
+    expect(kinds).toEqual(['mage-banished', 'mage-moved', 'mage-wounded']);
+    expect(win.pendingResponderIds).toEqual(['p2']);
+    // Verify state side effects.
+    const p2 = s.players.find((p) => p.id === 'p2')!;
+    const grey1 = p2.mages.find((m) => m.id === 'bob-grey-1')!;
+    const grey2 = p2.mages.find((m) => m.id === 'bob-grey-2')!;
+    const grey3 = p2.mages.find((m) => m.id === 'bob-grey-3')!;
+    expect(grey1.isWounded).toBe(true);
+    expect(grey1.location.kind).toBe('infirmary');
+    expect(grey2.location.kind).toBe('office'); // banished back to office
+    expect(grey3.location).toEqual({
+      kind: 'action-space',
+      spaceId: 'base.room.library.a.slot-4',
+    });
+  });
+
+  it('auto-skips the wound step when only banish/move targets remain', () => {
+    let s = setupIceComet();
+    // Replace Bob's grey-1 with a green mage — green is wound-immune (but
+    // banish/move-able). Drop slot 3 occupant so move has an open dest.
+    s = mapPlayer(s, 'p2', (p) => ({
+      ...p,
+      mages: p.mages
+        .filter((m) => m.id !== 'bob-grey-1')
+        .filter((m) => m.id !== 'bob-grey-3')
+        .concat({
+          id: 'bob-green',
+          cardId: 'base.mage.natural-magick',
+          color: 'green',
+          location: { kind: 'action-space', spaceId: 'base.room.library.a.slot-1' },
+          isShadowing: false,
+          isWounded: false,
+        }),
+    }));
+    // Re-seat slot occupants by hand.
+    s = {
+      ...s,
+      rooms: s.rooms.map((r) => {
+        if (r.id !== 'base.room.library.a') return r;
+        return {
+          ...r,
+          actionSpaces: r.actionSpaces.map((sp) => {
+            if (sp.id === 'base.room.library.a.slot-1') {
+              return {
+                ...sp,
+                occupant: {
+                  mageId: 'bob-green',
+                  ownerId: 'p2',
+                  isShadowing: false,
+                },
+              };
+            }
+            if (sp.id === 'base.room.library.a.slot-3') {
+              return { ...sp, occupant: null };
+            }
+            return sp;
+          }),
+        };
+      }),
+    };
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.master-book-of-starcalling',
+      level: 1,
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: {
+        kind: 'option-chosen',
+        optionId: 'base.room.library.a',
+        payload: {},
+      },
+    });
+    // Wound prompt: only bob-grey-2 (green is wound-immune; bob-grey-3 gone).
+    const woundPrompt = topPending(s);
+    expect(woundPrompt.prompt.kind).toBe('choose-target-mage');
+    if (woundPrompt.prompt.kind !== 'choose-target-mage') throw new Error('unreachable');
+    expect(woundPrompt.prompt.eligibleMageIds).toEqual(['bob-grey-2']);
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: woundPrompt.id,
+      answer: { kind: 'mage-chosen', mageId: 'bob-grey-2' },
+    });
+    // Banish prompt: only bob-green (grey-2 picked for wound).
+    const banishPrompt = topPending(s);
+    expect(banishPrompt.prompt.kind).toBe('choose-target-mage');
+    if (banishPrompt.prompt.kind !== 'choose-target-mage') throw new Error('unreachable');
+    expect(banishPrompt.prompt.eligibleMageIds).toEqual(['bob-green']);
+  });
+
+  it('fizzles entirely when no room has any of the three targets', () => {
+    let s = initGame(TWO_PLAYER_CONFIG);
+    s = forceLibrarySideA(s);
+    s = zeroPlayerResources(s, 'p1');
+    s = addOwnedSpell(s, 'p1', 'base.spell.master-book-of-starcalling', {
+      intPlaced: true,
+    });
+    s = setMana(s, 'p1', 3);
+    s = {
+      ...s,
+      firstPlayerIndex: 0,
+      phase: {
+        kind: 'errands',
+        round: 1,
+        activePlayerIndex: 0,
+        actionUsed: false,
+        fastActionUsed: false,
+      },
+    };
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.master-book-of-starcalling',
+      level: 1,
+    });
+    // No opponents have mages on the board → no eligible room.
+    expect(s.pendingResolutionStack).toHaveLength(0);
+    // Mana was still spent + spell exhausted.
+    expect(s.players.find((p) => p.id === 'p1')!.resources.mana).toBe(0);
+  });
+});
+
+// ============================================================================
+// Event Horizon (Infinite Universes Realized L1) — shadow two mages with two
+// of your mages
+// ============================================================================
+
+describe('Event Horizon (Infinite Universes Realized L1)', () => {
+  function setupEventHorizon(): GameState {
+    let s = initGame(TWO_PLAYER_CONFIG);
+    s = forceLibrarySideA(s);
+    s = zeroPlayerResources(s, 'p1');
+    s = zeroPlayerResources(s, 'p2');
+    s = addOwnedSpell(s, 'p1', 'base.spell.infinite-universes-realized', {
+      intPlaced: true,
+    });
+    s = setMana(s, 'p1', 2);
+    // Alice has two office mages to use as shadowers. Use red (Sorcery) to
+    // avoid triggering the grey "place after Action Spell" post-cast prompt.
+    s = addMage(s, 'p1', {
+      id: 'alice-red-1',
+      cardId: 'base.mage.sorcery',
+      color: 'red',
+    });
+    s = addMage(s, 'p1', {
+      id: 'alice-red-2',
+      cardId: 'base.mage.sorcery',
+      color: 'red',
+    });
+    // Bob has two placed mages — both shadowable.
+    s = addMage(s, 'p2', {
+      id: 'bob-grey-1',
+      cardId: 'base.mage.mysticism',
+      color: 'grey',
+    });
+    s = addMage(s, 'p2', {
+      id: 'bob-grey-2',
+      cardId: 'base.mage.mysticism',
+      color: 'grey',
+    });
+    s = placeMageOnSpace(s, 'p2', 'bob-grey-1', 'base.room.library.a.slot-1');
+    s = placeMageOnSpace(s, 'p2', 'bob-grey-2', 'base.room.library.a.slot-2');
+    return {
+      ...s,
+      firstPlayerIndex: 0,
+      phase: {
+        kind: 'errands',
+        round: 1,
+        activePlayerIndex: 0,
+        actionUsed: false,
+        fastActionUsed: false,
+      },
+    };
+  }
+
+  it('cast prompts for the first shadow target', () => {
+    let s = setupEventHorizon();
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.infinite-universes-realized',
+      level: 1,
+    });
+    const top = topPending(s);
+    expect(top.prompt.kind).toBe('choose-target-mage');
+    if (top.prompt.kind !== 'choose-target-mage') throw new Error('unreachable');
+    expect(top.prompt.eligibleMageIds.sort()).toEqual(
+      ['bob-grey-1', 'bob-grey-2'].sort(),
+    );
+  });
+
+  it('after first target picked, prompts for the first shadower (caster office mage)', () => {
+    let s = setupEventHorizon();
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.infinite-universes-realized',
+      level: 1,
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'mage-chosen', mageId: 'bob-grey-1' },
+    });
+    const top = topPending(s);
+    expect(top.prompt.kind).toBe('choose-target-mage');
+    if (top.prompt.kind !== 'choose-target-mage') throw new Error('unreachable');
+    expect(top.prompt.eligibleMageIds.sort()).toEqual(
+      ['alice-red-1', 'alice-red-2'].sort(),
+    );
+  });
+
+  it('second target options exclude the first target; second shadower options exclude the first shadower', () => {
+    let s = setupEventHorizon();
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.infinite-universes-realized',
+      level: 1,
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'mage-chosen', mageId: 'bob-grey-1' },
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'mage-chosen', mageId: 'alice-red-1' },
+    });
+    const t2 = topPending(s);
+    expect(t2.prompt.kind).toBe('choose-target-mage');
+    if (t2.prompt.kind !== 'choose-target-mage') throw new Error('unreachable');
+    expect(t2.prompt.eligibleMageIds).toEqual(['bob-grey-2']);
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: t2.id,
+      answer: { kind: 'mage-chosen', mageId: 'bob-grey-2' },
+    });
+    const s2 = topPending(s);
+    expect(s2.prompt.kind).toBe('choose-target-mage');
+    if (s2.prompt.kind !== 'choose-target-mage') throw new Error('unreachable');
+    expect(s2.prompt.eligibleMageIds).toEqual(['alice-red-2']);
+  });
+
+  it('after both picks, both shadowers are placed at the targets\' shadow slots and one window opens', () => {
+    let s = setupEventHorizon();
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.infinite-universes-realized',
+      level: 1,
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'mage-chosen', mageId: 'bob-grey-1' },
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'mage-chosen', mageId: 'alice-red-1' },
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'mage-chosen', mageId: 'bob-grey-2' },
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'mage-chosen', mageId: 'alice-red-2' },
+    });
+    expect(s.activeReactionWindows).toHaveLength(1);
+    const win = s.activeReactionWindows[0]!;
+    expect(win.triggerEvents).toHaveLength(2);
+    expect(win.triggerEvents.every((e) => e.kind === 'mage-shadowed')).toBe(
+      true,
+    );
+    const lib = s.rooms.find((r) => r.id === 'base.room.library.a')!;
+    const slot1 = lib.actionSpaces.find(
+      (sp) => sp.id === 'base.room.library.a.slot-1',
+    )!;
+    const slot2 = lib.actionSpaces.find(
+      (sp) => sp.id === 'base.room.library.a.slot-2',
+    )!;
+    expect(slot1.shadowOccupant?.mageId).toBe('alice-red-1');
+    expect(slot1.occupant?.mageId).toBe('bob-grey-1');
+    expect(slot2.shadowOccupant?.mageId).toBe('alice-red-2');
+    expect(slot2.occupant?.mageId).toBe('bob-grey-2');
+    const p1 = s.players.find((p) => p.id === 'p1')!;
+    expect(p1.mages.find((m) => m.id === 'alice-red-1')!.isShadowing).toBe(
+      true,
+    );
+    expect(p1.mages.find((m) => m.id === 'alice-red-2')!.isShadowing).toBe(
+      true,
+    );
+  });
+
+  it('if only one shadow target exists, applies just one shadow and skips the second chain', () => {
+    let s = setupEventHorizon();
+    // Take Bob down to a single placed mage.
+    s = {
+      ...s,
+      players: s.players.map((p) =>
+        p.id !== 'p2' ? p : { ...p, mages: p.mages.filter((m) => m.id !== 'bob-grey-2') },
+      ),
+      rooms: s.rooms.map((r) => {
+        if (r.id !== 'base.room.library.a') return r;
+        return {
+          ...r,
+          actionSpaces: r.actionSpaces.map((sp) =>
+            sp.id === 'base.room.library.a.slot-2'
+              ? { ...sp, occupant: null }
+              : sp,
+          ),
+        };
+      }),
+    };
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.infinite-universes-realized',
+      level: 1,
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'mage-chosen', mageId: 'bob-grey-1' },
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'mage-chosen', mageId: 'alice-red-1' },
+    });
+    // The spell finalized with one shadow (no second pick chain prompted);
+    // the only pending entry is the reaction window for the affected owner.
+    expect(s.activeReactionWindows).toHaveLength(1);
+    expect(s.activeReactionWindows[0]!.triggerEvents).toHaveLength(1);
+    expect(
+      s.pendingResolutionStack.filter(
+        (e) => e.prompt.kind !== 'reaction-window',
+      ),
+    ).toHaveLength(0);
+    const slot1 = s.rooms
+      .find((r) => r.id === 'base.room.library.a')!
+      .actionSpaces.find((sp) => sp.id === 'base.room.library.a.slot-1')!;
+    expect(slot1.shadowOccupant?.mageId).toBe('alice-red-1');
+  });
+
+  it('fizzles when the caster has no office mages', () => {
+    let s = setupEventHorizon();
+    // Move both of Alice's office mages onto slots, leaving her with nothing
+    // in office.
+    s = placeMageOnSpace(s, 'p1', 'alice-red-1', 'base.room.library.a.slot-3');
+    s = placeMageOnSpace(s, 'p1', 'alice-red-2', 'base.room.library.a.slot-4');
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.infinite-universes-realized',
+      level: 1,
+    });
+    expect(s.pendingResolutionStack).toHaveLength(0);
+    expect(s.activeReactionWindows).toHaveLength(0);
+  });
+});
+
+// ============================================================================
 // Room locking — Flamespout / Meteor / Cataclysm / Consecration
 // ============================================================================
 

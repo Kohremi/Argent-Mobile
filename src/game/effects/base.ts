@@ -38,8 +38,10 @@ import {
   applyRoomLockPatch,
   buildSpellMoveTargets,
   buildSpellShadowTargets,
+  findMageSlotPosition,
   isLegendarySpell,
   isRoomAtPlayerCap,
+  isRoomLocked,
   lookupSpellCardDef,
   moveMageToSpace,
   placeOfficeMageAsShadow,
@@ -10925,3 +10927,631 @@ registerEffect('base.vault.sealed-scroll.draft', (ctx): EffectResult => {
   );
   return { kind: 'done', patch };
 });
+
+// ============================================================================
+// Master Book of Starcalling L1 "Ice Comet" — In a single room, wound a Mage,
+// banish a Mage, and move a Mage to an open slot in the same room.
+//
+// Picks are collected in order (wound → banish → move-source → move-dest);
+// later picks exclude mages chosen for earlier picks (a single target can't
+// be wound AND banish'd by one cast). Each step auto-skips if no eligible
+// targets exist. After all picks, the three effects apply in a single batch
+// and ONE combined reaction window opens with all triggered events — affected
+// opponents react after the spell has fully resolved, not after each step.
+// ============================================================================
+
+const ICE_COMET_SKIP = '__SKIP__';
+
+function buildMovableMagesInRoom(
+  state: GameState,
+  casterId: string,
+  roomId: string,
+): string[] {
+  const eligible = new Set(buildSpellMoveTargets(state, casterId));
+  const room = state.rooms.find((r) => r.id === roomId);
+  if (!room) return [];
+  const mages: string[] = [];
+  for (const s of room.actionSpaces) {
+    if (s.occupant && eligible.has(s.occupant.mageId)) {
+      mages.push(s.occupant.mageId);
+    }
+    if (s.shadowOccupant && eligible.has(s.shadowOccupant.mageId)) {
+      mages.push(s.shadowOccupant.mageId);
+    }
+  }
+  return mages;
+}
+
+function openBaseSlotsInRoom(state: GameState, roomId: string): string[] {
+  const room = state.rooms.find((r) => r.id === roomId);
+  if (!room) return [];
+  return room.actionSpaces
+    .filter(
+      (s) =>
+        !s.occupant && (s.slotType === 'regular' || s.slotType === 'merit'),
+    )
+    .map((s) => s.id);
+}
+
+type IceCometPicks = {
+  roomId: string;
+  woundMageId?: string;
+  banishMageId?: string;
+  moveMageId?: string;
+  moveDestSpaceId?: string;
+};
+
+function iceCometWalk(
+  ctx: EffectContext,
+  self: string,
+  picks: IceCometPicks,
+): EffectResult {
+  // Wound pick.
+  if (picks.woundMageId === undefined) {
+    const targets = buildWoundableMagesInRoom(
+      ctx.state,
+      ctx.triggeringPlayerId,
+      picks.roomId,
+    );
+    if (targets.length === 0) {
+      return iceCometWalk(ctx, self, { ...picks, woundMageId: ICE_COMET_SKIP });
+    }
+    return {
+      kind: 'pause',
+      pending: {
+        responderId: ctx.triggeringPlayerId,
+        prompt: { kind: 'choose-target-mage', eligibleMageIds: targets },
+        resume: {
+          effectId: self,
+          context: { step: 'wound-chosen', picks: picksToContext(picks) },
+        },
+        source: ctx.source,
+      },
+    };
+  }
+  // Banish pick (exclude wound target).
+  if (picks.banishMageId === undefined) {
+    const targets = buildBanishableMagesInRoom(
+      ctx.state,
+      ctx.triggeringPlayerId,
+      picks.roomId,
+    ).filter((id) => id !== picks.woundMageId);
+    if (targets.length === 0) {
+      return iceCometWalk(ctx, self, {
+        ...picks,
+        banishMageId: ICE_COMET_SKIP,
+      });
+    }
+    return {
+      kind: 'pause',
+      pending: {
+        responderId: ctx.triggeringPlayerId,
+        prompt: { kind: 'choose-target-mage', eligibleMageIds: targets },
+        resume: {
+          effectId: self,
+          context: { step: 'banish-chosen', picks: picksToContext(picks) },
+        },
+        source: ctx.source,
+      },
+    };
+  }
+  // Move source (exclude wound + banish targets); need ≥1 open dest in room.
+  if (picks.moveMageId === undefined) {
+    const candidates = buildMovableMagesInRoom(
+      ctx.state,
+      ctx.triggeringPlayerId,
+      picks.roomId,
+    ).filter(
+      (id) => id !== picks.woundMageId && id !== picks.banishMageId,
+    );
+    const opens = openBaseSlotsInRoom(ctx.state, picks.roomId);
+    // Each source needs an open dest that ISN'T its own current slot.
+    const sources = candidates.filter((mid) => {
+      const pos = findMageSlotPosition(ctx.state, mid);
+      const otherOpens = opens.filter((sid) => pos?.spaceId !== sid);
+      return otherOpens.length > 0;
+    });
+    if (sources.length === 0) {
+      return iceCometWalk(ctx, self, {
+        ...picks,
+        moveMageId: ICE_COMET_SKIP,
+        moveDestSpaceId: ICE_COMET_SKIP,
+      });
+    }
+    return {
+      kind: 'pause',
+      pending: {
+        responderId: ctx.triggeringPlayerId,
+        prompt: { kind: 'choose-target-mage', eligibleMageIds: sources },
+        resume: {
+          effectId: self,
+          context: {
+            step: 'move-source-chosen',
+            picks: picksToContext(picks),
+          },
+        },
+        source: ctx.source,
+      },
+    };
+  }
+  // Move dest.
+  if (picks.moveDestSpaceId === undefined) {
+    if (picks.moveMageId === ICE_COMET_SKIP) {
+      return iceCometWalk(ctx, self, {
+        ...picks,
+        moveDestSpaceId: ICE_COMET_SKIP,
+      });
+    }
+    const pos = findMageSlotPosition(
+      ctx.state,
+      picks.moveMageId as OwnedMageId,
+    );
+    const dests = openBaseSlotsInRoom(ctx.state, picks.roomId).filter(
+      (sid) => pos?.spaceId !== sid,
+    );
+    if (dests.length === 0) {
+      return iceCometWalk(ctx, self, {
+        ...picks,
+        moveMageId: ICE_COMET_SKIP,
+        moveDestSpaceId: ICE_COMET_SKIP,
+      });
+    }
+    return {
+      kind: 'pause',
+      pending: {
+        responderId: ctx.triggeringPlayerId,
+        prompt: {
+          kind: 'choose-target-action-space',
+          eligibleSpaceIds: dests,
+        },
+        resume: {
+          effectId: self,
+          context: { step: 'move-dest-chosen', picks: picksToContext(picks) },
+        },
+        source: ctx.source,
+      },
+    };
+  }
+  return iceCometFinalize(ctx, picks);
+}
+
+function picksToContext(picks: IceCometPicks): SerializableContext {
+  const out: SerializableContext = { roomId: picks.roomId };
+  if (picks.woundMageId !== undefined) out['woundMageId'] = picks.woundMageId;
+  if (picks.banishMageId !== undefined) out['banishMageId'] = picks.banishMageId;
+  if (picks.moveMageId !== undefined) out['moveMageId'] = picks.moveMageId;
+  if (picks.moveDestSpaceId !== undefined)
+    out['moveDestSpaceId'] = picks.moveDestSpaceId;
+  return out;
+}
+
+function picksFromContext(ctx: EffectContext): IceCometPicks {
+  const raw = (ctx.resumeContext?.['picks'] ?? {}) as SerializableContext;
+  const out: IceCometPicks = { roomId: String(raw['roomId'] ?? '') };
+  if (typeof raw['woundMageId'] === 'string') out.woundMageId = raw['woundMageId'];
+  if (typeof raw['banishMageId'] === 'string') out.banishMageId = raw['banishMageId'];
+  if (typeof raw['moveMageId'] === 'string') out.moveMageId = raw['moveMageId'];
+  if (typeof raw['moveDestSpaceId'] === 'string') out.moveDestSpaceId = raw['moveDestSpaceId'];
+  return out;
+}
+
+function iceCometFinalize(
+  ctx: EffectContext,
+  picks: IceCometPicks,
+): EffectResult {
+  let working = ctx.state;
+  const events: ReactionTriggerEvent[] = [];
+  const byPlayerId = ctx.triggeringPlayerId;
+
+  if (picks.woundMageId && picks.woundMageId !== ICE_COMET_SKIP) {
+    const w = woundMage(working, picks.woundMageId, byPlayerId);
+    working = { ...working, ...w.patch };
+    events.push(w.triggerEvent);
+  }
+  if (picks.banishMageId && picks.banishMageId !== ICE_COMET_SKIP) {
+    const b = banishMage(working, picks.banishMageId, byPlayerId);
+    working = { ...working, ...b.patch };
+    events.push(b.triggerEvent);
+  }
+  if (
+    picks.moveMageId &&
+    picks.moveMageId !== ICE_COMET_SKIP &&
+    picks.moveDestSpaceId &&
+    picks.moveDestSpaceId !== ICE_COMET_SKIP
+  ) {
+    const m = moveMageToSpace(
+      working,
+      picks.moveMageId,
+      picks.moveDestSpaceId,
+      byPlayerId,
+    );
+    working = { ...working, ...m.patch };
+    events.push(m.triggerEvent);
+  }
+
+  if (events.length === 0) return { kind: 'done', patch: {} };
+
+  const patch: GameStatePatch = {
+    players: working.players,
+    rooms: working.rooms,
+  };
+  const reactorQueue = buildBatchReactorQueue(ctx.state, byPlayerId, events);
+  const orderedEvents = orderEventsByTurn(ctx.state, byPlayerId, events);
+
+  return {
+    kind: 'open-reaction',
+    patch,
+    window: {
+      triggerEvents: events,
+      pendingResponderIds: reactorQueue,
+      reactedPlayerIds: [],
+      afterResume: {
+        effectId: 'base.system.batch-post-wound-bonus',
+        context: { events: eventsArrayToContext(orderedEvents) },
+      },
+      source: ctx.source,
+    },
+  };
+}
+
+registerEffect(
+  'base.spell.master-book-of-starcalling.l1',
+  (ctx): EffectResult => {
+    const self = 'base.spell.master-book-of-starcalling.l1';
+
+    // Initial entry: pick room.
+    if (!ctx.resumeAnswer) {
+      const eligibleRoomIds = ctx.state.rooms
+        .filter((r) => {
+          const hasWound =
+            buildWoundableMagesInRoom(ctx.state, ctx.triggeringPlayerId, r.id)
+              .length > 0;
+          const hasBanish =
+            buildBanishableMagesInRoom(ctx.state, ctx.triggeringPlayerId, r.id)
+              .length > 0;
+          const opens = openBaseSlotsInRoom(ctx.state, r.id);
+          const hasMove =
+            buildMovableMagesInRoom(ctx.state, ctx.triggeringPlayerId, r.id)
+              .some((mid) => {
+                const pos = findMageSlotPosition(
+                  ctx.state,
+                  mid as OwnedMageId,
+                );
+                return opens.some((sid) => pos?.spaceId !== sid);
+              });
+          return hasWound || hasBanish || hasMove;
+        })
+        .map((r) => r.id);
+      if (eligibleRoomIds.length === 0) return { kind: 'done', patch: {} };
+      return {
+        kind: 'pause',
+        pending: {
+          responderId: ctx.triggeringPlayerId,
+          prompt: {
+            kind: 'choose-from-options',
+            options: eligibleRoomIds.map((rid) => ({
+              id: rid,
+              label: ctx.state.rooms.find((r) => r.id === rid)!.name,
+              payload: {},
+            })),
+          },
+          resume: { effectId: self, context: { step: 'room-chosen' } },
+          source: ctx.source,
+        },
+      };
+    }
+
+    const step = ctx.resumeContext?.['step'];
+
+    if (step === 'room-chosen') {
+      if (ctx.resumeAnswer.kind !== 'option-chosen') {
+        throw new Error(`${self} room-chosen expected option-chosen`);
+      }
+      return iceCometWalk(ctx, self, { roomId: ctx.resumeAnswer.optionId });
+    }
+
+    const picks = picksFromContext(ctx);
+
+    if (step === 'wound-chosen') {
+      if (ctx.resumeAnswer.kind !== 'mage-chosen') {
+        throw new Error(`${self} wound-chosen expected mage-chosen`);
+      }
+      return iceCometWalk(ctx, self, {
+        ...picks,
+        woundMageId: ctx.resumeAnswer.mageId,
+      });
+    }
+    if (step === 'banish-chosen') {
+      if (ctx.resumeAnswer.kind !== 'mage-chosen') {
+        throw new Error(`${self} banish-chosen expected mage-chosen`);
+      }
+      return iceCometWalk(ctx, self, {
+        ...picks,
+        banishMageId: ctx.resumeAnswer.mageId,
+      });
+    }
+    if (step === 'move-source-chosen') {
+      if (ctx.resumeAnswer.kind !== 'mage-chosen') {
+        throw new Error(`${self} move-source-chosen expected mage-chosen`);
+      }
+      return iceCometWalk(ctx, self, {
+        ...picks,
+        moveMageId: ctx.resumeAnswer.mageId,
+      });
+    }
+    if (step === 'move-dest-chosen') {
+      if (ctx.resumeAnswer.kind !== 'space-chosen') {
+        throw new Error(`${self} move-dest-chosen expected space-chosen`);
+      }
+      return iceCometWalk(ctx, self, {
+        ...picks,
+        moveDestSpaceId: ctx.resumeAnswer.spaceId,
+      });
+    }
+    throw new Error(`${self}: unexpected step ${String(step)}`);
+  },
+);
+
+// ============================================================================
+// Infinite Universes Realized L1 "Event Horizon" — Shadow two Mages with two
+// of your Mages.
+//
+// The caster picks two pairs (target, shadower):
+//   - target = any spell-shadow-eligible mage on a slot whose shadow position
+//     is empty AND whose room isn't at the caster's per-room cap;
+//   - shadower = one of the caster's unwounded office mages.
+// Targets and shadowers can't repeat across the two picks. If only one of
+// each is available, the spell does just one shadow. After all picks, both
+// placements apply in order; the second is silently skipped if it would
+// violate the per-room cap or the shadow slot has become occupied. A single
+// reaction window opens at the end with both `mage-shadowed` events.
+// ============================================================================
+
+function eventHorizonTargets(
+  state: GameState,
+  casterId: string,
+  excludeMageId?: string,
+): string[] {
+  const shadowable = new Set(buildSpellShadowTargets(state, casterId));
+  const out: string[] = [];
+  for (const r of state.rooms) {
+    if (isRoomLocked(state, r.id)) continue;
+    if (isRoomAtPlayerCap(state, casterId, r.id)) continue;
+    for (const s of r.actionSpaces) {
+      if (s.shadowOccupant) continue;
+      const occ = s.occupant;
+      if (!occ) continue;
+      if (!shadowable.has(occ.mageId)) continue;
+      if (occ.mageId === excludeMageId) continue;
+      out.push(occ.mageId);
+    }
+  }
+  return out;
+}
+
+function eventHorizonShadowers(
+  state: GameState,
+  casterId: string,
+  excludeMageId?: string,
+): string[] {
+  const caster = state.players.find((p) => p.id === casterId);
+  if (!caster) return [];
+  return caster.mages
+    .filter(
+      (m) =>
+        m.location.kind === 'office' &&
+        !m.isWounded &&
+        m.id !== excludeMageId,
+    )
+    .map((m) => m.id);
+}
+
+registerEffect(
+  'base.spell.infinite-universes-realized.l1',
+  (ctx): EffectResult => {
+    const self = 'base.spell.infinite-universes-realized.l1';
+    const step = ctx.resumeContext?.['step'];
+
+    // Initial entry: prompt for target 1.
+    if (!ctx.resumeAnswer) {
+      const targets = eventHorizonTargets(ctx.state, ctx.triggeringPlayerId);
+      const shadowers = eventHorizonShadowers(
+        ctx.state,
+        ctx.triggeringPlayerId,
+      );
+      if (targets.length === 0 || shadowers.length === 0) {
+        return { kind: 'done', patch: {} };
+      }
+      return {
+        kind: 'pause',
+        pending: {
+          responderId: ctx.triggeringPlayerId,
+          prompt: { kind: 'choose-target-mage', eligibleMageIds: targets },
+          resume: { effectId: self, context: { step: 'pick-shadower-1' } },
+          source: ctx.source,
+        },
+      };
+    }
+
+    if (step === 'pick-shadower-1') {
+      if (ctx.resumeAnswer.kind !== 'mage-chosen') {
+        throw new Error(`${self} pick-shadower-1 expected mage-chosen`);
+      }
+      const target1 = ctx.resumeAnswer.mageId;
+      const shadowers = eventHorizonShadowers(
+        ctx.state,
+        ctx.triggeringPlayerId,
+      );
+      if (shadowers.length === 0) {
+        return eventHorizonFinalize(ctx, [{ target: target1, shadower: '' }]);
+      }
+      return {
+        kind: 'pause',
+        pending: {
+          responderId: ctx.triggeringPlayerId,
+          prompt: { kind: 'choose-target-mage', eligibleMageIds: shadowers },
+          resume: {
+            effectId: self,
+            context: { step: 'pick-target-2', target1 },
+          },
+          source: ctx.source,
+        },
+      };
+    }
+
+    if (step === 'pick-target-2') {
+      if (ctx.resumeAnswer.kind !== 'mage-chosen') {
+        throw new Error(`${self} pick-target-2 expected mage-chosen`);
+      }
+      const target1 = String(ctx.resumeContext?.['target1'] ?? '');
+      const shadower1 = ctx.resumeAnswer.mageId;
+      const target2Options = eventHorizonTargets(
+        ctx.state,
+        ctx.triggeringPlayerId,
+        target1,
+      );
+      if (target2Options.length === 0) {
+        return eventHorizonFinalize(ctx, [
+          { target: target1, shadower: shadower1 },
+        ]);
+      }
+      const shadower2Options = eventHorizonShadowers(
+        ctx.state,
+        ctx.triggeringPlayerId,
+        shadower1,
+      );
+      if (shadower2Options.length === 0) {
+        return eventHorizonFinalize(ctx, [
+          { target: target1, shadower: shadower1 },
+        ]);
+      }
+      return {
+        kind: 'pause',
+        pending: {
+          responderId: ctx.triggeringPlayerId,
+          prompt: {
+            kind: 'choose-target-mage',
+            eligibleMageIds: target2Options,
+          },
+          resume: {
+            effectId: self,
+            context: { step: 'pick-shadower-2', target1, shadower1 },
+          },
+          source: ctx.source,
+        },
+      };
+    }
+
+    if (step === 'pick-shadower-2') {
+      if (ctx.resumeAnswer.kind !== 'mage-chosen') {
+        throw new Error(`${self} pick-shadower-2 expected mage-chosen`);
+      }
+      const target1 = String(ctx.resumeContext?.['target1'] ?? '');
+      const shadower1 = String(ctx.resumeContext?.['shadower1'] ?? '');
+      const target2 = ctx.resumeAnswer.mageId;
+      const shadower2Options = eventHorizonShadowers(
+        ctx.state,
+        ctx.triggeringPlayerId,
+        shadower1,
+      );
+      if (shadower2Options.length === 0) {
+        return eventHorizonFinalize(ctx, [
+          { target: target1, shadower: shadower1 },
+        ]);
+      }
+      return {
+        kind: 'pause',
+        pending: {
+          responderId: ctx.triggeringPlayerId,
+          prompt: {
+            kind: 'choose-target-mage',
+            eligibleMageIds: shadower2Options,
+          },
+          resume: {
+            effectId: self,
+            context: {
+              step: 'finalize',
+              target1,
+              shadower1,
+              target2,
+            },
+          },
+          source: ctx.source,
+        },
+      };
+    }
+
+    if (step === 'finalize') {
+      if (ctx.resumeAnswer.kind !== 'mage-chosen') {
+        throw new Error(`${self} finalize expected mage-chosen`);
+      }
+      const target1 = String(ctx.resumeContext?.['target1'] ?? '');
+      const shadower1 = String(ctx.resumeContext?.['shadower1'] ?? '');
+      const target2 = String(ctx.resumeContext?.['target2'] ?? '');
+      const shadower2 = ctx.resumeAnswer.mageId;
+      return eventHorizonFinalize(ctx, [
+        { target: target1, shadower: shadower1 },
+        { target: target2, shadower: shadower2 },
+      ]);
+    }
+
+    throw new Error(`${self} unexpected step ${String(step)}`);
+  },
+);
+
+function eventHorizonFinalize(
+  ctx: EffectContext,
+  pairs: { target: string; shadower: string }[],
+): EffectResult {
+  let working = ctx.state;
+  const events: ReactionTriggerEvent[] = [];
+  for (const { target, shadower } of pairs) {
+    if (!target || !shadower) continue;
+    const targetMage = working.players
+      .flatMap((p) => p.mages)
+      .find((m) => m.id === target);
+    if (!targetMage || targetMage.location.kind !== 'action-space') continue;
+    const spaceId = targetMage.location.spaceId;
+    const space = working.rooms
+      .flatMap((r) => r.actionSpaces)
+      .find((s) => s.id === spaceId);
+    if (!space || space.shadowOccupant) continue;
+    const targetRoom = working.rooms.find((r) =>
+      r.actionSpaces.some((s) => s.id === spaceId),
+    );
+    if (!targetRoom) continue;
+    if (isRoomAtPlayerCap(working, ctx.triggeringPlayerId, targetRoom.id)) {
+      continue;
+    }
+    const shadowerMage = working.players
+      .flatMap((p) => p.mages)
+      .find((m) => m.id === shadower);
+    if (!shadowerMage || shadowerMage.location.kind !== 'office') continue;
+    const patch = placeOfficeMageAsShadow(
+      working,
+      ctx.triggeringPlayerId,
+      shadower,
+      spaceId,
+    );
+    working = { ...working, ...patch };
+    events.push(
+      buildMageShadowedEvent(working, target, ctx.triggeringPlayerId),
+    );
+  }
+  if (events.length === 0) return { kind: 'done', patch: {} };
+  return {
+    kind: 'open-reaction',
+    patch: { players: working.players, rooms: working.rooms },
+    window: {
+      triggerEvents: events,
+      pendingResponderIds: buildBatchReactorQueue(
+        ctx.state,
+        ctx.triggeringPlayerId,
+        events,
+      ),
+      reactedPlayerIds: [],
+      afterResume: { effectId: 'base.system.noop', context: {} },
+      source: ctx.source,
+    },
+  };
+}
