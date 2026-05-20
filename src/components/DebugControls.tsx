@@ -1437,15 +1437,18 @@ function PlayerBuffBadges({
             : 'rest of round';
         let title: string;
         let toneClass: string;
+        let keyBase: string;
         if (b.kind === 'mage-immunity') {
           const kinds = b.immuneTo.join(' / ');
           const sourceLabel =
             b.source === 'spell' ? 'spell-source only' : 'any source';
           title = `${b.label} — your mages immune to ${kinds} (${sourceLabel}, ${dur})`;
           toneClass = 'text-emerald-300 bg-emerald-500/10 border-emerald-500/30';
+          keyBase = b.spellCardId;
         } else if (b.kind === 'mages-lose-powers') {
           title = `${b.label} — all non-Divinity mages lose their powers (${dur})`;
           toneClass = 'text-violet-300 bg-violet-500/10 border-violet-500/30';
+          keyBase = b.spellCardId;
         } else if (b.kind === 'shadow-on-place') {
           const modeText =
             b.mode === 'mandatory'
@@ -1453,14 +1456,20 @@ function PlayerBuffBadges({
               : 'your placements may shadow opposing mages';
           title = `${b.label} — ${modeText} (${dur})`;
           toneClass = 'text-sky-300 bg-sky-500/10 border-sky-500/30';
-        } else {
-          // placements-blocked (Malaise)
+          keyBase = b.spellCardId;
+        } else if (b.kind === 'placements-blocked') {
           title = `${b.label} — Mages cannot be placed by anyone (${dur})`;
           toneClass = 'text-rose-300 bg-rose-500/10 border-rose-500/30';
+          keyBase = b.spellCardId;
+        } else {
+          // spells-cheaper (Power)
+          title = `${b.label} — your Spells cost ${b.discount} less Mana (${dur})`;
+          toneClass = 'text-amber-300 bg-amber-500/10 border-amber-500/30';
+          keyBase = b.sourceId;
         }
         return (
           <span
-            key={`${b.spellCardId}-${i}`}
+            key={`${keyBase}-${i}`}
             title={title}
             aria-label={title}
             className={clsx(

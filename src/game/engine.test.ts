@@ -27,6 +27,12 @@ const FOUR_PLAYER_CONFIG: GameConfig = {
   rngSeed: 12345,
 };
 
+const FIVE_PLAYER_CONFIG: GameConfig = {
+  activePackIds: ['base'],
+  playerNames: ['Alice', 'Bob', 'Cara', 'Dan', 'Eve'],
+  rngSeed: 12345,
+};
+
 function advance(state: GameState): GameState {
   return applyAction(state, { type: 'ADVANCE_PHASE' });
 }
@@ -68,16 +74,24 @@ describe('initGame', () => {
     expect(ucNames).toEqual(['Council Chamber', 'Infirmary', 'Library']);
   });
 
-  it('seats the 3-card bell tower offering set', () => {
+  it('seats bell tower offerings scaled to player count (4 players → 4 cards)', () => {
     const s = initGame(FOUR_PLAYER_CONFIG);
-    expect(s.bellTower.available).toHaveLength(3);
+    expect(s.bellTower.available).toHaveLength(4);
     expect(s.bellTower.available.every((c) => c.minPlayers <= 4)).toBe(true);
     const ids = s.bellTower.available.map((c) => c.id).sort();
     expect(ids).toEqual([
       'base.bell.first-player',
       'base.bell.gain-ip',
       'base.bell.gold-or-mana',
+      'base.bell.heal-from-infirmary',
     ]);
+  });
+
+  it('2-player game seats only the 2+ bell tower offerings (Initiative + Popularity)', () => {
+    const s = initGame(TWO_PLAYER_CONFIG);
+    expect(s.bellTower.available).toHaveLength(2);
+    const ids = s.bellTower.available.map((c) => c.id).sort();
+    expect(ids).toEqual(['base.bell.first-player', 'base.bell.gain-ip']);
   });
 });
 
@@ -1235,10 +1249,27 @@ describe('Endgame scoring', () => {
 });
 
 describe('Bell Tower offerings', () => {
+  // The remaining tests in this block were written when the base game had a
+  // flat 3-card bell tower. With 4-player games now also seating Strength
+  // (heal from infirmary), trim the seat back to the original three so the
+  // existing "claim three → tower drains" scenarios still apply.
+  const ORIGINAL_BELL_IDS = new Set([
+    'base.bell.first-player',
+    'base.bell.gain-ip',
+    'base.bell.gold-or-mana',
+  ]);
   function startErrands(): GameState {
     let s = initGame(FOUR_PLAYER_CONFIG);
     s = applyAction(s, { type: 'ADVANCE_PHASE' }); // round-setup → errands
-    return s;
+    return {
+      ...s,
+      bellTower: {
+        ...s.bellTower,
+        available: s.bellTower.available.filter((c) =>
+          ORIGINAL_BELL_IDS.has(c.id),
+        ),
+      },
+    };
   }
 
   it('CLAIM_BELL_TOWER moves card to taken and records on player', () => {
@@ -1843,6 +1874,9 @@ describe('Bell Tower offerings', () => {
     s = applyAction(s, { type: 'ADVANCE_PHASE' }); // → mid-game-scoring
     s = applyAction(s, { type: 'ADVANCE_PHASE' }); // → round-setup round 2
     s = applyAction(s, { type: 'ADVANCE_PHASE' }); // → errands round 2
+    // Round-setup restores from (available + taken) of the previous round;
+    // since startErrands trimmed the tower to the original 3 cards, only
+    // those 3 return.
     expect(s.bellTower.available).toHaveLength(3);
     expect(s.bellTower.taken).toHaveLength(0);
     // Per-round bell tower record reset on every player.
@@ -1860,6 +1894,231 @@ describe('Bell Tower offerings', () => {
     if (s.phase.kind === 'errands') {
       expect(s.phase.activePlayerIndex).toBe(claimer2Idx);
     }
+  });
+});
+
+// ============================================================================
+// Strength (Bell Tower 4+) — heal a Mage from the Infirmary
+// ============================================================================
+
+describe('Strength (bell tower, 4+)', () => {
+  function setupStrength(): GameState {
+    let s = initGame(FOUR_PLAYER_CONFIG);
+    s = forceLibrarySideA(s);
+    s = applyAction(s, { type: 'ADVANCE_PHASE' });
+    // p1 starts with a wounded mage in the infirmary.
+    s = addMage(s, 'p1', {
+      id: 'alice-grey',
+      cardId: 'base.mage.mysticism',
+      color: 'grey',
+    });
+    s = mapPlayer(s, 'p1', (p) => ({
+      ...p,
+      mages: p.mages.map((m) =>
+        m.id !== 'alice-grey'
+          ? m
+          : {
+              ...m,
+              isWounded: true,
+              location: { kind: 'infirmary' as const },
+            },
+      ),
+    }));
+    return s;
+  }
+
+  it('prompts for the wounded mage then for an open slot', () => {
+    let s = setupStrength();
+    if (s.phase.kind !== 'errands') throw new Error('expected errands');
+    // Round-setup randomized who's first; rotate until p1 is active by
+    // claiming any non-Strength bell tower card each opponent turn.
+    while (s.players[s.phase.activePlayerIndex]!.id !== 'p1') {
+      const other = s.bellTower.available.find(
+        (c) => c.id !== 'base.bell.heal-from-infirmary',
+      );
+      if (!other) throw new Error('no other bell tower card to rotate with');
+      s = applyAction(s, {
+        type: 'CLAIM_BELL_TOWER',
+        playerId: s.players[s.phase.activePlayerIndex]!.id,
+        bellTowerCardId: other.id,
+      });
+      while (s.pendingResolutionStack.length > 0) {
+        const top = topPending(s);
+        if (top.prompt.kind === 'choose-from-options') {
+          s = applyAction(s, {
+            type: 'RESOLVE_PENDING',
+            resolutionId: top.id,
+            answer: {
+              kind: 'option-chosen',
+              optionId: top.prompt.options[0]!.id,
+              payload: {},
+            },
+          });
+        } else {
+          break;
+        }
+      }
+      if (s.phase.kind !== 'errands') throw new Error('tower drained early');
+    }
+    s = applyAction(s, {
+      type: 'CLAIM_BELL_TOWER',
+      playerId: 'p1',
+      bellTowerCardId: 'base.bell.heal-from-infirmary',
+    });
+    const top = topPending(s);
+    expect(top.prompt.kind).toBe('choose-target-mage');
+    if (top.prompt.kind !== 'choose-target-mage') throw new Error('unreachable');
+    expect(top.prompt.eligibleMageIds).toEqual(['alice-grey']);
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: top.id,
+      answer: { kind: 'mage-chosen', mageId: 'alice-grey' },
+    });
+    const slotPrompt = topPending(s);
+    expect(slotPrompt.prompt.kind).toBe('choose-target-action-space');
+    if (slotPrompt.prompt.kind !== 'choose-target-action-space') throw new Error('unreachable');
+    expect(slotPrompt.prompt.eligibleSpaceIds.length).toBeGreaterThan(0);
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: slotPrompt.id,
+      answer: {
+        kind: 'space-chosen',
+        spaceId: 'base.room.library.a.slot-1',
+      },
+    });
+    const p1 = s.players.find((p) => p.id === 'p1')!;
+    const healed = p1.mages.find((m) => m.id === 'alice-grey')!;
+    expect(healed.isWounded).toBe(false);
+    expect(healed.location).toEqual({
+      kind: 'action-space',
+      spaceId: 'base.room.library.a.slot-1',
+    });
+  });
+
+  it('fizzles silently when the claimer has no wounded mages', () => {
+    let s = initGame(FOUR_PLAYER_CONFIG);
+    s = applyAction(s, { type: 'ADVANCE_PHASE' });
+    if (s.phase.kind !== 'errands') throw new Error('expected errands');
+    const activeId = s.players[s.phase.activePlayerIndex]!.id;
+    s = applyAction(s, {
+      type: 'CLAIM_BELL_TOWER',
+      playerId: activeId,
+      bellTowerCardId: 'base.bell.heal-from-infirmary',
+    });
+    // No pending heal prompt — effect fizzled.
+    expect(
+      s.pendingResolutionStack.some(
+        (e) => e.source.id === 'base.bell.heal-from-infirmary',
+      ),
+    ).toBe(false);
+    // Bell tower card still moved to taken.
+    const claimer = s.players.find((p) => p.id === activeId)!;
+    expect(claimer.bellTowerCards).toContain('base.bell.heal-from-infirmary');
+  });
+});
+
+// ============================================================================
+// Power (Bell Tower 5+) — Your Spells cost 1 less Mana for the rest of the round
+// ============================================================================
+
+describe('Power (bell tower, 5+)', () => {
+  it('cast subtracts 1 Mana from each spell the claimer casts that round', () => {
+    let s = initGame(FIVE_PLAYER_CONFIG);
+    s = forceLibrarySideA(s);
+    s = applyAction(s, { type: 'ADVANCE_PHASE' });
+    if (s.phase.kind !== 'errands') throw new Error('expected errands');
+    // Force p1 active so we don't rotate down to a single bell tower card
+    // (which would end the round and immediately clear the buff at
+    // resolution-start).
+    s = {
+      ...s,
+      firstPlayerIndex: 0,
+      phase: {
+        kind: 'errands' as const,
+        round: 1,
+        activePlayerIndex: 0,
+        actionUsed: false,
+        fastActionUsed: false,
+      },
+    };
+    s = applyAction(s, {
+      type: 'CLAIM_BELL_TOWER',
+      playerId: 'p1',
+      bellTowerCardId: 'base.bell.cheap-spells',
+    });
+    // Power is now active for p1.
+    const buff = s.activeBuffs.find((b) => b.kind === 'spells-cheaper');
+    expect(buff).toBeDefined();
+    if (!buff || buff.kind !== 'spells-cheaper') throw new Error('unreachable');
+    expect(buff.casterPlayerId).toBe('p1');
+    expect(buff.discount).toBe(1);
+    expect(buff.expiresAt).toEqual({ kind: 'round-end' });
+    // Give p1 a Burn spell (1-Mana L1) so casting it for free demonstrates
+    // the discount kicked in. Reset turn so they can act.
+    s = addOwnedSpell(s, 'p1', 'base.spell.burn', { intPlaced: true });
+    s = setMana(s, 'p1', 0);
+    s = {
+      ...s,
+      phase: {
+        kind: 'errands' as const,
+        round: 1,
+        activePlayerIndex: s.players.findIndex((p) => p.id === 'p1'),
+        actionUsed: false,
+        fastActionUsed: false,
+      },
+    };
+    // Pre-discount, Burn L1 costs 1 Mana. With Power, it's free.
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.burn',
+      level: 1,
+    });
+    const p1 = s.players.find((p) => p.id === 'p1')!;
+    expect(p1.resources.mana).toBe(0);
+    expect(
+      p1.ownedSpells.find((o) => o.cardId === 'base.spell.burn')!.exhausted,
+    ).toBe(true);
+  });
+
+  it('discount is floored at 0 (does not refund mana)', () => {
+    let s = initGame(FIVE_PLAYER_CONFIG);
+    s = applyAction(s, { type: 'ADVANCE_PHASE' });
+    if (s.phase.kind !== 'errands') throw new Error('expected errands');
+    // Manually inject a Power buff for p1 instead of rotating the tower.
+    s = {
+      ...s,
+      activeBuffs: [
+        {
+          kind: 'spells-cheaper',
+          casterPlayerId: 'p1',
+          sourceId: 'base.bell.cheap-spells',
+          label: 'Power',
+          discount: 5,
+          expiresAt: { kind: 'round-end' },
+        },
+      ],
+    };
+    s = addOwnedSpell(s, 'p1', 'base.spell.burn', { intPlaced: true });
+    s = setMana(s, 'p1', 0);
+    s = {
+      ...s,
+      phase: {
+        kind: 'errands' as const,
+        round: 1,
+        activePlayerIndex: s.players.findIndex((p) => p.id === 'p1'),
+        actionUsed: false,
+        fastActionUsed: false,
+      },
+    };
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.burn',
+      level: 1,
+    });
+    // Burn was 1 Mana; discount 5 → effective 0, not -4. Mana stays at 0.
+    expect(s.players.find((p) => p.id === 'p1')!.resources.mana).toBe(0);
   });
 });
 

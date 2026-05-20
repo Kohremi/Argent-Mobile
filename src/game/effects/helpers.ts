@@ -291,6 +291,23 @@ export function placementsBlocked(state: GameState): boolean {
   return state.activeBuffs.some((b) => b.kind === 'placements-blocked');
 }
 
+/**
+ * Returns the total mana-cost discount on spells cast by `playerId`,
+ * summing every active `spells-cheaper` buff scoped to that player.
+ */
+export function spellManaDiscountFor(
+  state: GameState,
+  playerId: PlayerId,
+): number {
+  let total = 0;
+  for (const b of state.activeBuffs) {
+    if (b.kind !== 'spells-cheaper') continue;
+    if (b.casterPlayerId !== playerId) continue;
+    total += b.discount;
+  }
+  return total;
+}
+
 /** Returns true when the given action-space sits inside a locked room. */
 export function isSpaceInLockedRoom(
   state: GameState,

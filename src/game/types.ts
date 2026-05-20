@@ -783,11 +783,27 @@ export interface PlacementsBlockedBuff {
   expiresAt: BuffExpiry;
 }
 
+/**
+ * Cheaper-spells buff (Power bell tower offering). Reduces the caster's spell
+ * mana cost by `discount` (floored at 0) for every cast while the buff is
+ * active. Expires at round-end.
+ */
+export interface SpellsCheaperBuff {
+  kind: 'spells-cheaper';
+  casterPlayerId: PlayerId;
+  /** Source identifier for tooling — bell tower card id, supporter id, etc. */
+  sourceId: string;
+  label: string;
+  discount: number;
+  expiresAt: BuffExpiry;
+}
+
 export type ActiveBuff =
   | MageImmunityBuff
   | MagesLosePowersBuff
   | ShadowOnPlaceBuff
-  | PlacementsBlockedBuff;
+  | PlacementsBlockedBuff
+  | SpellsCheaperBuff;
 
 export type ReactionTriggerEvent =
   | {

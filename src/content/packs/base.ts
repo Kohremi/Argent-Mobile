@@ -2191,37 +2191,53 @@ const voters: ConsortiumVoter[] = [
 ];
 
 // ============================================================================
-// Bell Tower — 3 offerings (2-player-game set per the room file)
+// Bell Tower — 5 offerings, gated by player count
 // ============================================================================
 //
-// Each round refreshes the offering pool to 3. Claiming the last card drains
-// the tower and ends the round (handled by `processErrandsAdvance`).
+// Each round seats every offering whose minPlayers is met. Claiming the last
+// available card drains the tower and ends the round.
 //
-//   1. First-player Token: claimer becomes first player next round.
-//   2. Gold or Mana:        claimer chooses 2 Gold OR 1 Mana.
-//   3. IP:                  claimer gains 1 IP.
+//   2+ Initiative      — Become First Player next round.
+//   2+ Popularity      — Gain 1 IP.
+//   3+ Resourcefulness — Gain 2 Gold or 1 Mana.
+//   4+ Strength        — Heal a Mage from the Infirmary.
+//   5+ Power           — Your Spells cost 1 less Mana for the rest of the round.
 
 const bellTowerCards: BellTowerCard[] = [
   {
     id: 'base.bell.first-player',
-    name: 'First Player Token',
+    name: 'Initiative',
     sourcePackId: PACK_ID,
     effectId: 'base.bell.first-player',
     minPlayers: 2,
   },
   {
-    id: 'base.bell.gold-or-mana',
-    name: 'Gold or Mana',
-    sourcePackId: PACK_ID,
-    effectId: 'base.bell.gold-or-mana',
-    minPlayers: 2,
-  },
-  {
     id: 'base.bell.gain-ip',
-    name: 'Influence Point',
+    name: 'Popularity',
     sourcePackId: PACK_ID,
     effectId: 'base.bell.gain-ip',
     minPlayers: 2,
+  },
+  {
+    id: 'base.bell.gold-or-mana',
+    name: 'Resourcefulness',
+    sourcePackId: PACK_ID,
+    effectId: 'base.bell.gold-or-mana',
+    minPlayers: 3,
+  },
+  {
+    id: 'base.bell.heal-from-infirmary',
+    name: 'Strength',
+    sourcePackId: PACK_ID,
+    effectId: 'base.bell.heal-from-infirmary',
+    minPlayers: 4,
+  },
+  {
+    id: 'base.bell.cheap-spells',
+    name: 'Power',
+    sourcePackId: PACK_ID,
+    effectId: 'base.bell.cheap-spells',
+    minPlayers: 5,
   },
 ];
 

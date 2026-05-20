@@ -66,6 +66,7 @@ import type {
   MagesLosePowersBuff,
   PlacementsBlockedBuff,
   ShadowOnPlaceBuff,
+  SpellsCheaperBuff,
   OwnedMage,
   OwnedMageId,
   PendingResolutionInput,
@@ -2410,6 +2411,97 @@ registerEffect('base.bell.gain-ip', (ctx: EffectContext): EffectResult => ({
   kind: 'done',
   patch: bumpInfluencePatch(ctx.state, ctx.triggeringPlayerId, 1),
 }));
+
+/**
+ * Strength (4+) — heal a Mage in the Infirmary. Two-step: pick a wounded
+ * mage of the claimer, then pick an open base slot to place them on.
+ * Fizzles if the claimer has no wounded mages or no open slots exist.
+ */
+registerEffect('base.bell.heal-from-infirmary', (ctx: EffectContext): EffectResult => {
+  const self = 'base.bell.heal-from-infirmary';
+  const step = ctx.resumeContext?.['step'];
+
+  if (!ctx.resumeAnswer) {
+    const claimer = ctx.state.players.find(
+      (p) => p.id === ctx.triggeringPlayerId,
+    );
+    const wounded =
+      claimer?.mages
+        .filter((m) => m.location.kind === 'infirmary' && m.isWounded)
+        .map((m) => m.id) ?? [];
+    if (wounded.length === 0) return { kind: 'done', patch: {} };
+    const opens = listEligiblePlacementSlots(ctx.state, ctx.triggeringPlayerId);
+    if (opens.length === 0) return { kind: 'done', patch: {} };
+    return {
+      kind: 'pause',
+      pending: {
+        responderId: ctx.triggeringPlayerId,
+        prompt: { kind: 'choose-target-mage', eligibleMageIds: wounded },
+        resume: { effectId: self, context: { step: 'pick-slot' } },
+        source: ctx.source,
+      },
+    };
+  }
+
+  if (step === 'pick-slot') {
+    if (ctx.resumeAnswer.kind !== 'mage-chosen') {
+      throw new Error(`${self} pick-slot expected mage-chosen`);
+    }
+    const mageId = ctx.resumeAnswer.mageId;
+    const opens = listEligiblePlacementSlots(ctx.state, ctx.triggeringPlayerId);
+    if (opens.length === 0) return { kind: 'done', patch: {} };
+    return {
+      kind: 'pause',
+      pending: {
+        responderId: ctx.triggeringPlayerId,
+        prompt: {
+          kind: 'choose-target-action-space',
+          eligibleSpaceIds: opens,
+        },
+        resume: { effectId: self, context: { step: 'apply', mageId } },
+        source: ctx.source,
+      },
+    };
+  }
+
+  if (step === 'apply') {
+    if (ctx.resumeAnswer.kind !== 'space-chosen') {
+      throw new Error(`${self} apply expected space-chosen`);
+    }
+    const mageId = String(ctx.resumeContext?.['mageId'] ?? '');
+    if (!mageId) return { kind: 'done', patch: {} };
+    const spaceId = ctx.resumeAnswer.spaceId;
+    return {
+      kind: 'done',
+      patch: healMageToSpace(ctx.state, mageId, spaceId),
+    };
+  }
+
+  throw new Error(`${self} unexpected step ${String(step)}`);
+});
+
+/**
+ * Power (5+) — Your Spells cost 1 less Mana for the rest of the round. Adds
+ * a `spells-cheaper` buff scoped to the claimer; the cast-spell handler
+ * subtracts the buff's `discount` (floored at 0) when computing the mana
+ * cost. Clears at round-end like every other active buff.
+ */
+registerEffect('base.bell.cheap-spells', (ctx: EffectContext): EffectResult => {
+  const buff: SpellsCheaperBuff = {
+    kind: 'spells-cheaper',
+    casterPlayerId: ctx.triggeringPlayerId,
+    sourceId: 'base.bell.cheap-spells',
+    label: 'Power',
+    discount: 1,
+    expiresAt: { kind: 'round-end' },
+  };
+  return {
+    kind: 'done',
+    patch: {
+      activeBuffs: [...ctx.state.activeBuffs, buff],
+    },
+  };
+});
 
 // ============================================================================
 // Supporters — simple resource-gain effects.

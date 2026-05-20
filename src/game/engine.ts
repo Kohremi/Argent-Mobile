@@ -19,6 +19,7 @@ import {
   lookupCandidate,
   MAGE_CARD_BY_COLOR,
   placementsBlocked,
+  spellManaDiscountFor,
   woundMage,
 } from './effects/helpers';
 import type {
@@ -1273,7 +1274,11 @@ function handleCastSpell(state: GameState, action: CastSpellAction): GameState {
 
   // Mana Elixir (and similar) waive the cost of the very next spell this
   // turn. If the flag is set, the mana check is skipped and the cost zeros.
-  const effectiveManaCost = player.nextSpellFreeMana ? 0 : levelDef.manaCost;
+  // Sustained "spells cheaper" buffs (Power bell tower offering) shave more
+  // off the printed cost, floored at 0.
+  const discount = spellManaDiscountFor(state, action.playerId);
+  const discountedCost = Math.max(0, levelDef.manaCost - discount);
+  const effectiveManaCost = player.nextSpellFreeMana ? 0 : discountedCost;
   if (player.resources.mana < effectiveManaCost) {
     throw new Error(
       `CAST_SPELL: insufficient mana (need ${effectiveManaCost}, have ${player.resources.mana})`,
