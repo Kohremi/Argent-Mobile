@@ -12536,3 +12536,117 @@ registerEffect(
     patch: applySecretSupporterDraw(ctx.state, ctx.triggeringPlayerId),
   }),
 );
+
+// ============================================================================
+// Memoirs of the Future-Past L2 "Past Power" — Cast one of your regular
+// Action Spells at a level less than the highest level you've researched.
+// Do not pay any additional mana or exhaust it.
+//
+// Candidates: levels 1 .. (highestResearched-1) of any owned spell where:
+//   - L1 is researched (intPlaced); the spell's highest researched level
+//     comes from wisPlacedLevel3 > wisPlacedLevel2 > intPlaced;
+//   - the candidate level has action timing (the card says "regular Action
+//     Spells" — fast-action and reaction levels are excluded);
+//   - the level's effect is actually registered.
+// Past Power itself is excluded from candidates.
+//
+// On apply: NO mana deduction (Past Power's 3 Mana is paid via CAST_SPELL),
+// NO exhaust on the borrowed spell. Past Power exhausts via the normal cast
+// path. This is a "single spell" cast: the borrowed effect runs in-line.
+// ============================================================================
+
+type PastPowerCandidate = {
+  spellCardId: string;
+  level: 1 | 2;
+  effectId: string;
+  label: string;
+};
+
+function listPastPowerCandidates(
+  state: GameState,
+  casterId: string,
+): PastPowerCandidate[] {
+  const player = state.players.find((p) => p.id === casterId);
+  if (!player) return [];
+  const out: PastPowerCandidate[] = [];
+  for (const owned of player.ownedSpells) {
+    if (owned.cardId === 'base.spell.memoirs-of-the-future-past') continue;
+    if (!owned.intPlaced) continue;
+    const highest: 1 | 2 | 3 = owned.wisPlacedLevel3
+      ? 3
+      : owned.wisPlacedLevel2
+        ? 2
+        : 1;
+    if (highest === 1) continue;
+    const def = lookupSpellCardDef(state, owned.cardId);
+    if (!def) continue;
+    const eligible: (1 | 2)[] = highest === 3 ? [1, 2] : [1];
+    for (const lvl of eligible) {
+      const lvlDef = def.levels.find((l) => l.level === lvl);
+      if (!lvlDef) continue;
+      if (lvlDef.timing !== 'action') continue;
+      if (!hasEffect(lvlDef.effectId)) continue;
+      out.push({
+        spellCardId: owned.cardId,
+        level: lvl,
+        effectId: lvlDef.effectId,
+        label: `${def.name} L${lvl} "${lvlDef.title}": ${lvlDef.description ?? ''}`,
+      });
+    }
+  }
+  return out;
+}
+
+registerEffect(
+  'base.spell.memoirs-of-the-future-past.l2',
+  (ctx): EffectResult => {
+    const self = 'base.spell.memoirs-of-the-future-past.l2';
+    const step = ctx.resumeContext?.['step'];
+
+    if (!ctx.resumeAnswer) {
+      const candidates = listPastPowerCandidates(
+        ctx.state,
+        ctx.triggeringPlayerId,
+      );
+      if (candidates.length === 0) return { kind: 'done', patch: {} };
+      const options: ChoiceOption[] = candidates.map((c) => ({
+        id: `${c.spellCardId}::${c.level}`,
+        label: c.label,
+        payload: {},
+      }));
+      return {
+        kind: 'pause',
+        pending: {
+          responderId: ctx.triggeringPlayerId,
+          prompt: { kind: 'choose-from-options', options },
+          resume: { effectId: self, context: { step: 'apply' } },
+          source: ctx.source,
+        },
+      };
+    }
+
+    if (step === 'apply') {
+      if (ctx.resumeAnswer.kind !== 'option-chosen') {
+        throw new Error(`${self} apply expected option-chosen`);
+      }
+      const [chosenSpellId, levelStr] = ctx.resumeAnswer.optionId.split('::');
+      const level = Number(levelStr) as 1 | 2;
+      // Re-validate against the current state.
+      const candidate = listPastPowerCandidates(
+        ctx.state,
+        ctx.triggeringPlayerId,
+      ).find((c) => c.spellCardId === chosenSpellId && c.level === level);
+      if (!candidate) return { kind: 'done', patch: {} };
+      // No mana deduction, no extra exhaust — just invoke the chosen level.
+      const delegate = getEffect(candidate.effectId)({
+        state: ctx.state,
+        source: ctx.source,
+        triggeringPlayerId: ctx.triggeringPlayerId,
+        allowReactions: ctx.allowReactions,
+      });
+      return delegate;
+    }
+
+    throw new Error(`${self} unexpected step ${String(step)}`);
+  },
+);

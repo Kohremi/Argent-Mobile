@@ -14529,6 +14529,181 @@ describe('Alt-leader spells', () => {
 });
 
 // ============================================================================
+// Past Power (Memoirs of the Future-Past L2) — cast a lower-level action
+// spell free; no exhaust on the borrowed spell.
+// ============================================================================
+
+describe('Past Power (Memoirs of the Future-Past L2)', () => {
+  function setupPastPower(opts: {
+    burnLevel?: 1 | 2 | 3;
+    casterMana: number;
+  }): GameState {
+    let s = initGame(TWO_PLAYER_CONFIG);
+    s = forceLibrarySideA(s);
+    s = zeroPlayerResources(s, 'p1');
+    s = zeroPlayerResources(s, 'p2');
+    s = addOwnedSpell(s, 'p1', 'base.spell.memoirs-of-the-future-past', {
+      intPlaced: true,
+      wisPlacedLevel2: true,
+    });
+    // Burn researched to the requested level (L1 default).
+    const burnLevel = opts.burnLevel ?? 1;
+    s = addOwnedSpell(s, 'p1', 'base.spell.burn', {
+      intPlaced: true,
+      wisPlacedLevel2: burnLevel >= 2,
+      wisPlacedLevel3: burnLevel >= 3,
+    });
+    s = setMana(s, 'p1', opts.casterMana);
+    // Bob has a placed mage so Burn has a target.
+    s = addMage(s, 'p2', {
+      id: 'bob-grey',
+      cardId: 'base.mage.mysticism',
+      color: 'grey',
+    });
+    s = placeMageOnSpace(s, 'p2', 'bob-grey', 'base.room.library.a.slot-1');
+    return {
+      ...s,
+      firstPlayerIndex: 0,
+      phase: {
+        kind: 'errands',
+        round: 1,
+        activePlayerIndex: 0,
+        actionUsed: false,
+        fastActionUsed: false,
+      },
+    };
+  }
+
+  it('prompts with levels strictly below each owned spell\'s highest researched level', () => {
+    let s = setupPastPower({ burnLevel: 3, casterMana: 3 });
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.memoirs-of-the-future-past',
+      level: 2,
+    });
+    const top = topPending(s);
+    expect(top.prompt.kind).toBe('choose-from-options');
+    if (top.prompt.kind !== 'choose-from-options') throw new Error('unreachable');
+    const ids = top.prompt.options.map((o) => o.id);
+    // Burn researched to L3 → eligible L1 + L2.
+    expect(ids).toContain('base.spell.burn::1');
+    expect(ids).toContain('base.spell.burn::2');
+    // Never the highest level (L3).
+    expect(ids).not.toContain('base.spell.burn::3');
+    // Past Power itself excluded.
+    expect(
+      ids.some((id) => id.startsWith('base.spell.memoirs-of-the-future-past::')),
+    ).toBe(false);
+  });
+
+  it('fizzles when the caster has no spell researched past L1', () => {
+    let s = setupPastPower({ burnLevel: 1, casterMana: 3 });
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.memoirs-of-the-future-past',
+      level: 2,
+    });
+    // Past Power had no candidates — no follow-up prompt for it.
+    expect(
+      s.pendingResolutionStack.some(
+        (e) =>
+          e.source.kind === 'spell' &&
+          e.source.id === 'base.spell.memoirs-of-the-future-past',
+      ),
+    ).toBe(false);
+    // Past Power still paid its mana + exhausted.
+    const p1 = s.players.find((p) => p.id === 'p1')!;
+    expect(p1.resources.mana).toBe(0); // 3 - 3
+    expect(
+      p1.ownedSpells.find(
+        (o) => o.cardId === 'base.spell.memoirs-of-the-future-past',
+      )!.exhausted,
+    ).toBe(true);
+  });
+
+  it('picking a level invokes the borrowed effect; borrowed spell stays unexhausted, no extra mana', () => {
+    let s = setupPastPower({ burnLevel: 2, casterMana: 3 });
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.memoirs-of-the-future-past',
+      level: 2,
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'option-chosen', optionId: 'base.spell.burn::1', payload: {} },
+    });
+    // Burn L1's target prompt should be open.
+    const burnTarget = topPending(s);
+    expect(burnTarget.prompt.kind).toBe('choose-target-mage');
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: burnTarget.id,
+      answer: { kind: 'mage-chosen', mageId: 'bob-grey' },
+    });
+    const p1 = s.players.find((p) => p.id === 'p1')!;
+    // Past Power's 3 mana was paid; no extra mana for Burn.
+    expect(p1.resources.mana).toBe(0);
+    // Past Power exhausted; Burn is NOT exhausted (Past Power's grace).
+    expect(
+      p1.ownedSpells.find(
+        (o) => o.cardId === 'base.spell.memoirs-of-the-future-past',
+      )!.exhausted,
+    ).toBe(true);
+    expect(p1.ownedSpells.find((o) => o.cardId === 'base.spell.burn')!.exhausted).toBe(
+      false,
+    );
+    // Bob's mage was wounded (Burn ran).
+    const bob = s.players.find((p) => p.id === 'p2')!;
+    expect(bob.mages.find((m) => m.id === 'bob-grey')!.isWounded).toBe(true);
+  });
+
+  it('does not offer fast-action or reaction levels (only "regular Action Spells")', () => {
+    let s = setupPastPower({ casterMana: 3 });
+    // Grant Alice Burn researched to L3 (its L2/L3 are action-timing already)
+    // AND The Light That Leads researched to L3 (its levels are fast-action).
+    s = mapPlayer(s, 'p1', (p) => ({
+      ...p,
+      ownedSpells: [
+        ...p.ownedSpells.filter((o) => o.cardId !== 'base.spell.burn'),
+        {
+          cardId: 'base.spell.burn',
+          intPlaced: true,
+          wisPlacedLevel2: true,
+          wisPlacedLevel3: true,
+          exhausted: false,
+        },
+        {
+          cardId: 'base.spell.the-light-that-leads',
+          intPlaced: true,
+          wisPlacedLevel2: true,
+          wisPlacedLevel3: true,
+          exhausted: false,
+        },
+      ],
+    }));
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.memoirs-of-the-future-past',
+      level: 2,
+    });
+    const top = topPending(s);
+    if (top.prompt.kind !== 'choose-from-options') throw new Error('unreachable');
+    const ids = top.prompt.options.map((o) => o.id);
+    // Burn L1 + L2 (action timing): allowed.
+    expect(ids).toContain('base.spell.burn::1');
+    expect(ids).toContain('base.spell.burn::2');
+    // The Light That Leads L1 + L2 are fast-action: NOT allowed.
+    expect(ids).not.toContain('base.spell.the-light-that-leads::1');
+    expect(ids).not.toContain('base.spell.the-light-that-leads::2');
+  });
+});
+
+// ============================================================================
 // Shadow Puppet (Tenets of Dominance L3) — gain a Secret Supporter.
 // ============================================================================
 
