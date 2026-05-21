@@ -1461,8 +1461,12 @@ function PlayerBuffBadges({
           title = `${b.label} — Mages cannot be placed by anyone (${dur})`;
           toneClass = 'text-rose-300 bg-rose-500/10 border-rose-500/30';
           keyBase = b.spellCardId;
+        } else if (b.kind === 'spells-blocked') {
+          title = `${b.label} — Spells cannot be cast by anyone (${dur})`;
+          toneClass = 'text-rose-300 bg-rose-500/10 border-rose-500/30';
+          keyBase = b.spellCardId;
         } else {
-          // spells-cheaper (Power)
+          // spells-cheaper (Power / Inner Fire)
           title = `${b.label} — your Spells cost ${b.discount} less Mana (${dur})`;
           toneClass = 'text-amber-300 bg-amber-500/10 border-amber-500/30';
           keyBase = b.sourceId;

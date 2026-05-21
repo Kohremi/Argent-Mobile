@@ -66,6 +66,7 @@ import type {
   MagesLosePowersBuff,
   PlacementsBlockedBuff,
   ShadowOnPlaceBuff,
+  SpellsBlockedBuff,
   SpellsCheaperBuff,
   OwnedMage,
   OwnedMageId,
@@ -12369,6 +12370,33 @@ registerEffect(
       label: 'Inner Fire',
       discount: 1,
       expiresAt: { kind: 'round-end' },
+    };
+    return {
+      kind: 'done',
+      patch: {
+        activeBuffs: [...ctx.state.activeBuffs, buff],
+      },
+    };
+  },
+);
+
+// ============================================================================
+// Will of the Divines L2 "Silence" — Until the start of your next turn,
+// players may not cast Spells. Action, 1 Mana. Adds a global SpellsBlockedBuff
+// scoped to the caster's turn-start (or round-end as the global fallback).
+// Reaction-timing spells fired from reaction windows remain allowed; only
+// CAST_SPELL action-time casting is blocked.
+// ============================================================================
+
+registerEffect(
+  'base.spell.will-of-the-divines.l2',
+  (ctx): EffectResult => {
+    const buff: SpellsBlockedBuff = {
+      kind: 'spells-blocked',
+      casterPlayerId: ctx.triggeringPlayerId,
+      spellCardId: 'base.spell.will-of-the-divines',
+      label: 'Silence',
+      expiresAt: { kind: 'turn-start', playerId: ctx.triggeringPlayerId },
     };
     return {
       kind: 'done',

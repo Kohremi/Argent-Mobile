@@ -292,6 +292,15 @@ export function placementsBlocked(state: GameState): boolean {
 }
 
 /**
+ * Returns true when a Silence-style global buff is active. While true, NO
+ * player may execute a CAST_SPELL action — Silence affects the caster too.
+ * Reaction-timing spells fired from a reaction window remain allowed.
+ */
+export function spellsBlocked(state: GameState): boolean {
+  return state.activeBuffs.some((b) => b.kind === 'spells-blocked');
+}
+
+/**
  * Returns the total mana-cost discount on spells cast by `playerId`,
  * summing every active `spells-cheaper` buff scoped to that player.
  */

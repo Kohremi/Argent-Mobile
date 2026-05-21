@@ -807,12 +807,29 @@ export interface SpellsCheaperBuff {
   expiresAt: BuffExpiry;
 }
 
+/**
+ * Global "no spell casts" buff (Will of the Divines L2 Silence). While
+ * active, NO player may execute CAST_SPELL as a direct action — Silence
+ * affects the caster too. Reaction-timing spells fired from a reaction
+ * window are still allowed (per rulebook intent — reactions aren't "cast
+ * spells" actions). Expires at the caster's next turn-start, or at
+ * round-end as the global fallback.
+ */
+export interface SpellsBlockedBuff {
+  kind: 'spells-blocked';
+  casterPlayerId: PlayerId;
+  spellCardId: SpellCardId;
+  label: string;
+  expiresAt: BuffExpiry;
+}
+
 export type ActiveBuff =
   | MageImmunityBuff
   | MagesLosePowersBuff
   | ShadowOnPlaceBuff
   | PlacementsBlockedBuff
-  | SpellsCheaperBuff;
+  | SpellsCheaperBuff
+  | SpellsBlockedBuff;
 
 export type ReactionTriggerEvent =
   | {

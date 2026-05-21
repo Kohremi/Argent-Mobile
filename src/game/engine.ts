@@ -20,6 +20,7 @@ import {
   MAGE_CARD_BY_COLOR,
   placementsBlocked,
   spellManaDiscountFor,
+  spellsBlocked,
   woundMage,
 } from './effects/helpers';
 import type {
@@ -1238,6 +1239,12 @@ function handleCastSpell(state: GameState, action: CastSpellAction): GameState {
   }
   if (state.pendingResolutionStack.length > 0) {
     throw new Error('CAST_SPELL: resolve pending prompt first');
+  }
+  // Silence (Will of the Divines L2) blocks all Spell casts globally —
+  // reaction-timing spells fired from a reaction window are unaffected
+  // (they don't go through this handler).
+  if (spellsBlocked(state)) {
+    throw new Error('CAST_SPELL: Silence — Spells cannot be cast');
   }
   const activePlayerId = state.players[state.phase.activePlayerIndex]?.id;
   if (activePlayerId !== action.playerId) {
