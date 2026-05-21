@@ -12650,3 +12650,100 @@ registerEffect(
     throw new Error(`${self} unexpected step ${String(step)}`);
   },
 );
+
+// ============================================================================
+// Memoirs of the Future-Past L3 "Eternal Power" — Cast one of your regular
+// Action Spells of any level (it need not even be researched). Do not pay
+// any additional mana or exhaust it.
+//
+// Like Past Power but the candidate filter widens to every level (1/2/3) of
+// every owned spell — no "highest researched" constraint. You still need to
+// own the spell at L1 (intPlaced) for it to appear on your player board;
+// the L2 / L3 levels need not be researched. Memoirs itself is excluded so
+// the spell doesn't recurse into Future / Past / Eternal Power.
+// ============================================================================
+
+type EternalPowerCandidate = {
+  spellCardId: string;
+  level: 1 | 2 | 3;
+  effectId: string;
+  label: string;
+};
+
+function listEternalPowerCandidates(
+  state: GameState,
+  casterId: string,
+): EternalPowerCandidate[] {
+  const player = state.players.find((p) => p.id === casterId);
+  if (!player) return [];
+  const out: EternalPowerCandidate[] = [];
+  for (const owned of player.ownedSpells) {
+    if (owned.cardId === 'base.spell.memoirs-of-the-future-past') continue;
+    if (!owned.intPlaced) continue;
+    const def = lookupSpellCardDef(state, owned.cardId);
+    if (!def) continue;
+    for (const lvlDef of def.levels) {
+      if (lvlDef.timing !== 'action') continue;
+      if (!hasEffect(lvlDef.effectId)) continue;
+      out.push({
+        spellCardId: owned.cardId,
+        level: lvlDef.level,
+        effectId: lvlDef.effectId,
+        label: `${def.name} L${lvlDef.level} "${lvlDef.title}": ${lvlDef.description ?? ''}`,
+      });
+    }
+  }
+  return out;
+}
+
+registerEffect(
+  'base.spell.memoirs-of-the-future-past.l3',
+  (ctx): EffectResult => {
+    const self = 'base.spell.memoirs-of-the-future-past.l3';
+    const step = ctx.resumeContext?.['step'];
+
+    if (!ctx.resumeAnswer) {
+      const candidates = listEternalPowerCandidates(
+        ctx.state,
+        ctx.triggeringPlayerId,
+      );
+      if (candidates.length === 0) return { kind: 'done', patch: {} };
+      const options: ChoiceOption[] = candidates.map((c) => ({
+        id: `${c.spellCardId}::${c.level}`,
+        label: c.label,
+        payload: {},
+      }));
+      return {
+        kind: 'pause',
+        pending: {
+          responderId: ctx.triggeringPlayerId,
+          prompt: { kind: 'choose-from-options', options },
+          resume: { effectId: self, context: { step: 'apply' } },
+          source: ctx.source,
+        },
+      };
+    }
+
+    if (step === 'apply') {
+      if (ctx.resumeAnswer.kind !== 'option-chosen') {
+        throw new Error(`${self} apply expected option-chosen`);
+      }
+      const [chosenSpellId, levelStr] = ctx.resumeAnswer.optionId.split('::');
+      const level = Number(levelStr) as 1 | 2 | 3;
+      const candidate = listEternalPowerCandidates(
+        ctx.state,
+        ctx.triggeringPlayerId,
+      ).find((c) => c.spellCardId === chosenSpellId && c.level === level);
+      if (!candidate) return { kind: 'done', patch: {} };
+      const delegate = getEffect(candidate.effectId)({
+        state: ctx.state,
+        source: ctx.source,
+        triggeringPlayerId: ctx.triggeringPlayerId,
+        allowReactions: ctx.allowReactions,
+      });
+      return delegate;
+    }
+
+    throw new Error(`${self} unexpected step ${String(step)}`);
+  },
+);

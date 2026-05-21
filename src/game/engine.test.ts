@@ -14529,6 +14529,103 @@ describe('Alt-leader spells', () => {
 });
 
 // ============================================================================
+// Eternal Power (Memoirs of the Future-Past L3) — cast ANY action level of
+// an owned spell for free; no exhaust on the borrowed spell.
+// ============================================================================
+
+describe('Eternal Power (Memoirs of the Future-Past L3)', () => {
+  function setupEternalPower(): GameState {
+    let s = initGame(TWO_PLAYER_CONFIG);
+    s = forceLibrarySideA(s);
+    s = zeroPlayerResources(s, 'p1');
+    s = zeroPlayerResources(s, 'p2');
+    s = addOwnedSpell(s, 'p1', 'base.spell.memoirs-of-the-future-past', {
+      intPlaced: true,
+      wisPlacedLevel2: true,
+      wisPlacedLevel3: true,
+    });
+    // Burn researched only at L1 — Eternal Power should still offer L2 + L3
+    // since "it need not even be researched".
+    s = addOwnedSpell(s, 'p1', 'base.spell.burn', { intPlaced: true });
+    s = setMana(s, 'p1', 7);
+    s = addMage(s, 'p2', {
+      id: 'bob-grey',
+      cardId: 'base.mage.mysticism',
+      color: 'grey',
+    });
+    s = placeMageOnSpace(s, 'p2', 'bob-grey', 'base.room.library.a.slot-1');
+    return {
+      ...s,
+      firstPlayerIndex: 0,
+      phase: {
+        kind: 'errands',
+        round: 1,
+        activePlayerIndex: 0,
+        actionUsed: false,
+        fastActionUsed: false,
+      },
+    };
+  }
+
+  it('offers every action level of every owned spell, regardless of WIS placement', () => {
+    let s = setupEternalPower();
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.memoirs-of-the-future-past',
+      level: 3,
+    });
+    const top = topPending(s);
+    if (top.prompt.kind !== 'choose-from-options') throw new Error('unreachable');
+    const ids = top.prompt.options.map((o) => o.id);
+    expect(ids).toContain('base.spell.burn::1');
+    expect(ids).toContain('base.spell.burn::2');
+    expect(ids).toContain('base.spell.burn::3');
+    // Memoirs of the Future-Past itself excluded — no recursion.
+    expect(
+      ids.some((id) => id.startsWith('base.spell.memoirs-of-the-future-past::')),
+    ).toBe(false);
+  });
+
+  it('picking a level invokes the borrowed effect free + leaves the borrowed spell unexhausted', () => {
+    let s = setupEternalPower();
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.memoirs-of-the-future-past',
+      level: 3,
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'option-chosen', optionId: 'base.spell.burn::1', payload: {} },
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'mage-chosen', mageId: 'bob-grey' },
+    });
+    const p1 = s.players.find((p) => p.id === 'p1')!;
+    // Eternal Power's 7 mana was paid; no extra for Burn.
+    expect(p1.resources.mana).toBe(0);
+    expect(
+      p1.ownedSpells.find(
+        (o) => o.cardId === 'base.spell.memoirs-of-the-future-past',
+      )!.exhausted,
+    ).toBe(true);
+    // Burn unexhausted (Eternal Power's grace).
+    expect(p1.ownedSpells.find((o) => o.cardId === 'base.spell.burn')!.exhausted).toBe(
+      false,
+    );
+    // Bob's mage wounded.
+    expect(
+      s.players.find((p) => p.id === 'p2')!.mages.find((m) => m.id === 'bob-grey')!
+        .isWounded,
+    ).toBe(true);
+  });
+});
+
+// ============================================================================
 // Past Power (Memoirs of the Future-Past L2) — cast a lower-level action
 // spell free; no exhaust on the borrowed spell.
 // ============================================================================
