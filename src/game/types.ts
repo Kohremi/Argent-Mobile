@@ -200,6 +200,13 @@ export interface Player {
    */
   nextSpellFreeMana?: boolean;
   /**
+   * Buff flag: the next Spell this player casts during this turn does NOT
+   * exhaust. Set by Will of the Divines L1 "Concentration". Consumed by
+   * CAST_SPELL on the very next spell, and cleared unconditionally at turn
+   * end (same lifecycle as `nextSpellFreeMana`).
+   */
+  nextSpellSkipsExhaust?: boolean;
+  /**
    * Buff flag: the next Gold cost this player would pay is reduced to
    * zero. Set by Auric Catalyst's reaction. Consumed by the post-window
    * apply-buy step (or the equivalent paid acquisition). Does NOT

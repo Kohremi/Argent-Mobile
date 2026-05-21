@@ -14529,6 +14529,105 @@ describe('Alt-leader spells', () => {
 });
 
 // ============================================================================
+// Concentration (Will of the Divines L1) — the next Spell you cast this turn
+// does NOT exhaust.
+// ============================================================================
+
+describe('Concentration (Will of the Divines L1)', () => {
+  function setupConcentration(): GameState {
+    let s = initGame(TWO_PLAYER_CONFIG);
+    s = forceLibrarySideA(s);
+    s = zeroPlayerResources(s, 'p1');
+    s = zeroPlayerResources(s, 'p2');
+    s = addOwnedSpell(s, 'p1', 'base.spell.will-of-the-divines', {
+      intPlaced: true,
+    });
+    // Burn is the test "next spell" — costs 1 Mana.
+    s = addOwnedSpell(s, 'p1', 'base.spell.burn', { intPlaced: true });
+    s = setMana(s, 'p1', 1);
+    // Bob has a placed mage so Burn has a target.
+    s = addMage(s, 'p2', {
+      id: 'bob-grey',
+      cardId: 'base.mage.mysticism',
+      color: 'grey',
+    });
+    s = placeMageOnSpace(s, 'p2', 'bob-grey', 'base.room.library.a.slot-1');
+    return {
+      ...s,
+      firstPlayerIndex: 0,
+      phase: {
+        kind: 'errands',
+        round: 1,
+        activePlayerIndex: 0,
+        actionUsed: false,
+        fastActionUsed: false,
+      },
+    };
+  }
+
+  it('cast sets the nextSpellSkipsExhaust flag on the caster', () => {
+    let s = setupConcentration();
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.will-of-the-divines',
+      level: 1,
+    });
+    const p1 = s.players.find((p) => p.id === 'p1')!;
+    expect(p1.nextSpellSkipsExhaust).toBe(true);
+  });
+
+  it('the very next spell does not exhaust + flag is cleared after', () => {
+    let s = setupConcentration();
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.will-of-the-divines',
+      level: 1,
+    });
+    // Concentration is fast-action; caster still has Action available.
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.burn',
+      level: 1,
+    });
+    // Resolve Burn's target prompt so the cast settles.
+    const burnPrompt = topPending(s);
+    expect(burnPrompt.prompt.kind).toBe('choose-target-mage');
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: burnPrompt.id,
+      answer: { kind: 'mage-chosen', mageId: 'bob-grey' },
+    });
+    const p1 = s.players.find((p) => p.id === 'p1')!;
+    // Burn was NOT exhausted by Concentration's grace.
+    expect(p1.ownedSpells.find((o) => o.cardId === 'base.spell.burn')!.exhausted).toBe(false);
+    // Will of the Divines DID exhaust (it's the spell that fired).
+    expect(
+      p1.ownedSpells.find((o) => o.cardId === 'base.spell.will-of-the-divines')!
+        .exhausted,
+    ).toBe(true);
+    // Flag is consumed.
+    expect(p1.nextSpellSkipsExhaust).toBe(false);
+  });
+
+  it('flag clears at turn-end if the caster never cast a second spell', () => {
+    let s = setupConcentration();
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.will-of-the-divines',
+      level: 1,
+    });
+    // Pass the turn without casting a follow-up spell.
+    s = applyAction(s, { type: 'PASS_TURN', playerId: 'p1' });
+    const p1 = s.players.find((p) => p.id === 'p1')!;
+    expect(p1.nextSpellSkipsExhaust).toBe(false);
+  });
+});
+
+// ============================================================================
 // Future Power (Memoirs of the Future-Past L1) — cast an unresearched L2/L3
 // of one of your learned Spells; you pay that level's mana cost. Future
 // Power itself exhausts; the borrowed spell does NOT.

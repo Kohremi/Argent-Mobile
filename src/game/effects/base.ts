@@ -12328,3 +12328,24 @@ registerEffect(
     throw new Error(`${self} unexpected step ${String(step)}`);
   },
 );
+
+// ============================================================================
+// Will of the Divines L1 "Concentration" — The next time you cast a Spell
+// this turn, do not exhaust it. Fast Action, 0 Mana. Sets the caster's
+// `nextSpellSkipsExhaust` flag; CAST_SPELL consumes and clears it on the
+// very next cast. Cleared unconditionally at turn-end if unused.
+// ============================================================================
+
+registerEffect(
+  'base.spell.will-of-the-divines.l1',
+  (ctx): EffectResult => ({
+    kind: 'done',
+    patch: {
+      players: ctx.state.players.map((p) =>
+        p.id !== ctx.triggeringPlayerId
+          ? p
+          : { ...p, nextSpellSkipsExhaust: true },
+      ),
+    },
+  }),
+);

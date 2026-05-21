@@ -1298,7 +1298,10 @@ function handleCastSpell(state: GameState, action: CastSpellAction): GameState {
     'CAST_SPELL',
   );
 
-  // Spend mana, exhaust spell, consume the free-mana buff if it was set.
+  // Spend mana, exhaust spell, consume the free-mana / no-exhaust buffs if
+  // either was set. Concentration (`nextSpellSkipsExhaust`) leaves the cast
+  // spell unexhausted; one-shot, cleared regardless of which spell was cast.
+  const skipExhaust = player.nextSpellSkipsExhaust === true;
   let next: GameState = {
     ...state,
     players: state.players.map((p) =>
@@ -1308,9 +1311,12 @@ function handleCastSpell(state: GameState, action: CastSpellAction): GameState {
             ...p,
             resources: { ...p.resources, mana: p.resources.mana - effectiveManaCost },
             ownedSpells: p.ownedSpells.map((s) =>
-              s.cardId !== action.spellCardId ? s : { ...s, exhausted: true },
+              s.cardId !== action.spellCardId
+                ? s
+                : { ...s, exhausted: skipExhaust ? s.exhausted : true },
             ),
             nextSpellFreeMana: false,
+            nextSpellSkipsExhaust: false,
           },
     ),
   };
@@ -2372,13 +2378,16 @@ function processErrandsAdvance(state: GameState): GameState {
   if (state.phase.kind !== 'errands') {
     throw new Error('processErrandsAdvance: not in errands phase');
   }
-  // The active player's "next spell free" buff (Mana Elixir etc.) expires
-  // unconditionally when their turn ends, used or not.
+  // The active player's "next spell free" / "next spell no-exhaust" buffs
+  // (Mana Elixir / Concentration) expire unconditionally when their turn
+  // ends, used or not.
   const errandsPhase = state.phase;
   const outgoingId = state.players[errandsPhase.activePlayerIndex]?.id;
   const players = outgoingId
     ? state.players.map((p) =>
-        p.id !== outgoingId ? p : { ...p, nextSpellFreeMana: false },
+        p.id !== outgoingId
+          ? p
+          : { ...p, nextSpellFreeMana: false, nextSpellSkipsExhaust: false },
       )
     : state.players;
   if (state.bellTower.available.length === 0) {
