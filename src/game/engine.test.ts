@@ -14529,6 +14529,99 @@ describe('Alt-leader spells', () => {
 });
 
 // ============================================================================
+// Inner Fire (A Brighter Flame L1) — rest-of-round 1-Mana discount on the
+// caster's spells.
+// ============================================================================
+
+describe('Inner Fire (A Brighter Flame L1)', () => {
+  function setupInnerFire(): GameState {
+    let s = initGame(TWO_PLAYER_CONFIG);
+    s = forceLibrarySideA(s);
+    s = zeroPlayerResources(s, 'p1');
+    s = zeroPlayerResources(s, 'p2');
+    s = addOwnedSpell(s, 'p1', 'base.spell.a-brighter-flame', {
+      intPlaced: true,
+    });
+    s = addOwnedSpell(s, 'p1', 'base.spell.burn', { intPlaced: true });
+    s = setMana(s, 'p1', 1);
+    s = addMage(s, 'p2', {
+      id: 'bob-grey',
+      cardId: 'base.mage.mysticism',
+      color: 'grey',
+    });
+    s = placeMageOnSpace(s, 'p2', 'bob-grey', 'base.room.library.a.slot-1');
+    return {
+      ...s,
+      firstPlayerIndex: 0,
+      phase: {
+        kind: 'errands',
+        round: 1,
+        activePlayerIndex: 0,
+        actionUsed: false,
+        fastActionUsed: false,
+      },
+    };
+  }
+
+  it('cast adds a caster-scoped spells-cheaper buff (discount 1, round-end)', () => {
+    let s = setupInnerFire();
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.a-brighter-flame',
+      level: 1,
+    });
+    const buff = s.activeBuffs.find((b) => b.kind === 'spells-cheaper');
+    expect(buff).toBeDefined();
+    if (!buff || buff.kind !== 'spells-cheaper') throw new Error('unreachable');
+    expect(buff.casterPlayerId).toBe('p1');
+    expect(buff.discount).toBe(1);
+    expect(buff.expiresAt).toEqual({ kind: 'round-end' });
+  });
+
+  it('a follow-up spell costs 1 less mana while Inner Fire is up', () => {
+    let s = setupInnerFire();
+    // Inner Fire costs 1 Mana — start with 1 so we'll be at 0 after.
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.a-brighter-flame',
+      level: 1,
+    });
+    expect(s.players.find((p) => p.id === 'p1')!.resources.mana).toBe(0);
+    // Now reset budget + give p1 enough mana to cast Burn normally (1).
+    // With Inner Fire, Burn costs 0.
+    s = {
+      ...s,
+      phase: {
+        kind: 'errands' as const,
+        round: 1,
+        activePlayerIndex: 0,
+        actionUsed: false,
+        fastActionUsed: false,
+      },
+    };
+    // Burn L1 is 1 mana; discounted to 0 — cast at 0 mana.
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.burn',
+      level: 1,
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'mage-chosen', mageId: 'bob-grey' },
+    });
+    const p1 = s.players.find((p) => p.id === 'p1')!;
+    expect(p1.resources.mana).toBe(0);
+    expect(p1.ownedSpells.find((o) => o.cardId === 'base.spell.burn')!.exhausted).toBe(
+      true,
+    );
+  });
+});
+
+// ============================================================================
 // Concentration (Will of the Divines L1) — the next Spell you cast this turn
 // does NOT exhaust.
 // ============================================================================

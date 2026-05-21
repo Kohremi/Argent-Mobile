@@ -12349,3 +12349,32 @@ registerEffect(
     },
   }),
 );
+
+// ============================================================================
+// A Brighter Flame L1 "Inner Fire" — For the rest of the round, your Spells
+// cost 1 less Mana. Adds a caster-scoped SpellsCheaperBuff (discount = 1,
+// expiresAt = round-end). The same buff shape as the Power bell tower
+// offering — both stack via spellManaDiscountFor if a player somehow had
+// both active, which is fine since each discount is fixed at 1 Mana per
+// spell and clamped to 0.
+// ============================================================================
+
+registerEffect(
+  'base.spell.a-brighter-flame.l1',
+  (ctx): EffectResult => {
+    const buff: SpellsCheaperBuff = {
+      kind: 'spells-cheaper',
+      casterPlayerId: ctx.triggeringPlayerId,
+      sourceId: 'base.spell.a-brighter-flame',
+      label: 'Inner Fire',
+      discount: 1,
+      expiresAt: { kind: 'round-end' },
+    };
+    return {
+      kind: 'done',
+      patch: {
+        activeBuffs: [...ctx.state.activeBuffs, buff],
+      },
+    };
+  },
+);
