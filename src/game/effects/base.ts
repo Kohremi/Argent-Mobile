@@ -12200,3 +12200,131 @@ registerEffect(
     throw new Error(`${self} unexpected step ${String(step)}`);
   },
 );
+
+// ============================================================================
+// Memoirs of the Future-Past L1 "Future Power" — Cast a Spell that you have
+// not yet researched from among your learned Spells (paying all mana costs).
+//
+// Candidates are L2 or L3 of any owned spell where:
+//   - L1 is researched (intPlaced = true),
+//   - that level's WIS is NOT placed,
+//   - the level's timing is action or fast-action (reaction-timing levels
+//     can't be invoked outside a reaction window),
+//   - the caster can afford the level's printed mana cost,
+//   - the level's effect is actually registered.
+// Future Power itself is excluded as a candidate.
+//
+// Cast flow: CAST_SPELL pays Future Power's (0) mana and exhausts it. This
+// effect prompts for a (spell, level) option, deducts the borrowed level's
+// mana, and delegates to the chosen level's effect. The borrowed spell does
+// NOT exhaust — this counts as a single spell (Future Power's cast).
+// ============================================================================
+
+type FuturePowerCandidate = {
+  spellCardId: string;
+  level: 2 | 3;
+  manaCost: number;
+  effectId: string;
+  label: string;
+};
+
+function listFuturePowerCandidates(
+  state: GameState,
+  casterId: string,
+): FuturePowerCandidate[] {
+  const player = state.players.find((p) => p.id === casterId);
+  if (!player) return [];
+  const out: FuturePowerCandidate[] = [];
+  for (const owned of player.ownedSpells) {
+    if (!owned.intPlaced) continue;
+    if (owned.cardId === 'base.spell.memoirs-of-the-future-past') continue;
+    const def = lookupSpellCardDef(state, owned.cardId);
+    if (!def) continue;
+    const levels: (2 | 3)[] = [];
+    if (!owned.wisPlacedLevel2) levels.push(2);
+    if (!owned.wisPlacedLevel3) levels.push(3);
+    for (const lvl of levels) {
+      const lvlDef = def.levels.find((l) => l.level === lvl);
+      if (!lvlDef) continue;
+      if (lvlDef.timing === 'reaction') continue;
+      if (!hasEffect(lvlDef.effectId)) continue;
+      if (player.resources.mana < lvlDef.manaCost) continue;
+      out.push({
+        spellCardId: owned.cardId,
+        level: lvl,
+        manaCost: lvlDef.manaCost,
+        effectId: lvlDef.effectId,
+        label: `${def.name} L${lvl} "${lvlDef.title}" (${lvlDef.manaCost} Mana): ${lvlDef.description ?? ''}`,
+      });
+    }
+  }
+  return out;
+}
+
+registerEffect(
+  'base.spell.memoirs-of-the-future-past.l1',
+  (ctx): EffectResult => {
+    const self = 'base.spell.memoirs-of-the-future-past.l1';
+    const step = ctx.resumeContext?.['step'];
+
+    if (!ctx.resumeAnswer) {
+      const candidates = listFuturePowerCandidates(
+        ctx.state,
+        ctx.triggeringPlayerId,
+      );
+      if (candidates.length === 0) return { kind: 'done', patch: {} };
+      const options: ChoiceOption[] = candidates.map((c) => ({
+        id: `${c.spellCardId}::${c.level}`,
+        label: c.label,
+        payload: {},
+      }));
+      return {
+        kind: 'pause',
+        pending: {
+          responderId: ctx.triggeringPlayerId,
+          prompt: { kind: 'choose-from-options', options },
+          resume: { effectId: self, context: { step: 'apply' } },
+          source: ctx.source,
+        },
+      };
+    }
+
+    if (step === 'apply') {
+      if (ctx.resumeAnswer.kind !== 'option-chosen') {
+        throw new Error(`${self} apply expected option-chosen`);
+      }
+      const [chosenSpellId, levelStr] = ctx.resumeAnswer.optionId.split('::');
+      const level = Number(levelStr) as 2 | 3;
+      // Re-check eligibility against current state (mana could have changed
+      // via a reaction earlier in the spell stack, etc.).
+      const candidate = listFuturePowerCandidates(
+        ctx.state,
+        ctx.triggeringPlayerId,
+      ).find((c) => c.spellCardId === chosenSpellId && c.level === level);
+      if (!candidate) return { kind: 'done', patch: {} };
+      const paidState: GameState = {
+        ...ctx.state,
+        players: ctx.state.players.map((p) =>
+          p.id !== ctx.triggeringPlayerId
+            ? p
+            : {
+                ...p,
+                resources: {
+                  ...p.resources,
+                  mana: p.resources.mana - candidate.manaCost,
+                },
+              },
+        ),
+      };
+      const delegate = getEffect(candidate.effectId)({
+        state: paidState,
+        source: ctx.source,
+        triggeringPlayerId: ctx.triggeringPlayerId,
+        allowReactions: ctx.allowReactions,
+      });
+      return composeWithDelegate(delegate, { players: paidState.players });
+    }
+
+    throw new Error(`${self} unexpected step ${String(step)}`);
+  },
+);

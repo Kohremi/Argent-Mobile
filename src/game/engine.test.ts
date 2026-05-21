@@ -14529,6 +14529,183 @@ describe('Alt-leader spells', () => {
 });
 
 // ============================================================================
+// Future Power (Memoirs of the Future-Past L1) — cast an unresearched L2/L3
+// of one of your learned Spells; you pay that level's mana cost. Future
+// Power itself exhausts; the borrowed spell does NOT.
+// ============================================================================
+
+describe('Future Power (Memoirs of the Future-Past L1)', () => {
+  function setupFuturePower(opts: { mana: number }): GameState {
+    let s = initGame(TWO_PLAYER_CONFIG);
+    s = forceLibrarySideA(s);
+    s = zeroPlayerResources(s, 'p1');
+    s = zeroPlayerResources(s, 'p2');
+    s = addOwnedSpell(s, 'p1', 'base.spell.memoirs-of-the-future-past', {
+      intPlaced: true,
+    });
+    // Burn is learned at L1 only — L2 (Conflagration) is unresearched.
+    s = addOwnedSpell(s, 'p1', 'base.spell.burn', { intPlaced: true });
+    s = setMana(s, 'p1', opts.mana);
+    // Bob has a placed mage so Burn has a target.
+    s = addMage(s, 'p2', {
+      id: 'bob-grey',
+      cardId: 'base.mage.mysticism',
+      color: 'grey',
+    });
+    s = placeMageOnSpace(s, 'p2', 'bob-grey', 'base.room.library.a.slot-1');
+    return {
+      ...s,
+      firstPlayerIndex: 0,
+      phase: {
+        kind: 'errands',
+        round: 1,
+        activePlayerIndex: 0,
+        actionUsed: false,
+        fastActionUsed: false,
+      },
+    };
+  }
+
+  it('prompts only with L2/L3 levels of owned spells whose WIS slot is empty', () => {
+    let s = setupFuturePower({ mana: 5 });
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.memoirs-of-the-future-past',
+      level: 1,
+    });
+    const top = topPending(s);
+    expect(top.prompt.kind).toBe('choose-from-options');
+    if (top.prompt.kind !== 'choose-from-options') throw new Error('unreachable');
+    const ids = top.prompt.options.map((o) => o.id);
+    expect(ids).toContain('base.spell.burn::2');
+    expect(ids).toContain('base.spell.burn::3');
+    // L1 of Burn is researched — never offered.
+    expect(ids).not.toContain('base.spell.burn::1');
+    // Future Power itself is never offered.
+    expect(ids.some((id) => id.startsWith('base.spell.memoirs-of-the-future-past::'))).toBe(false);
+  });
+
+  it('excludes a level whose WIS slot is already placed', () => {
+    let s = setupFuturePower({ mana: 5 });
+    // Pretend the caster already researched Burn L2.
+    s = mapPlayer(s, 'p1', (p) => ({
+      ...p,
+      ownedSpells: p.ownedSpells.map((o) =>
+        o.cardId !== 'base.spell.burn'
+          ? o
+          : { ...o, wisPlacedLevel2: true },
+      ),
+    }));
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.memoirs-of-the-future-past',
+      level: 1,
+    });
+    const top = topPending(s);
+    if (top.prompt.kind !== 'choose-from-options') throw new Error('unreachable');
+    const ids = top.prompt.options.map((o) => o.id);
+    expect(ids).not.toContain('base.spell.burn::2');
+    expect(ids).toContain('base.spell.burn::3');
+  });
+
+  it('excludes options the caster cannot afford', () => {
+    let s = setupFuturePower({ mana: 2 });
+    // Burn L2 is 2 Mana (Conflagration); Burn L3 is 4 Mana (Inferno).
+    // Caster has 2 → L2 is affordable but L3 isn't.
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.memoirs-of-the-future-past',
+      level: 1,
+    });
+    const top = topPending(s);
+    if (top.prompt.kind !== 'choose-from-options') throw new Error('unreachable');
+    const ids = top.prompt.options.map((o) => o.id);
+    expect(ids).toContain('base.spell.burn::2');
+    expect(ids).not.toContain('base.spell.burn::3');
+  });
+
+  it('picking a level pays its mana cost, runs the effect, and leaves the borrowed spell unexhausted', () => {
+    let s = setupFuturePower({ mana: 3 });
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.memoirs-of-the-future-past',
+      level: 1,
+    });
+    // Pick Burn L2 (Conflagration, 2 Mana). The borrowed effect may then
+    // open a follow-up prompt of its own — we don't need to resolve it to
+    // verify the mana/exhaust accounting at this point.
+    expect(topPending(s).prompt.kind).toBe('choose-from-options');
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'option-chosen', optionId: 'base.spell.burn::2', payload: {} },
+    });
+    const p1 = s.players.find((p) => p.id === 'p1')!;
+    // Mana spent (3 → 1, paid 2 for Burn L2).
+    expect(p1.resources.mana).toBe(1);
+    // Future Power exhausted (CAST_SPELL handler did this).
+    expect(
+      p1.ownedSpells.find(
+        (o) => o.cardId === 'base.spell.memoirs-of-the-future-past',
+      )!.exhausted,
+    ).toBe(true);
+    // Burn (borrowed spell) NOT exhausted — single-cast semantics.
+    expect(
+      p1.ownedSpells.find((o) => o.cardId === 'base.spell.burn')!.exhausted,
+    ).toBe(false);
+    // The borrowed L2 wasn't researched.
+    expect(
+      p1.ownedSpells.find((o) => o.cardId === 'base.spell.burn')!.wisPlacedLevel2,
+    ).toBe(false);
+  });
+
+  it('fizzles silently when the caster has no eligible candidates', () => {
+    let s = initGame(TWO_PLAYER_CONFIG);
+    s = zeroPlayerResources(s, 'p1');
+    s = addOwnedSpell(s, 'p1', 'base.spell.memoirs-of-the-future-past', {
+      intPlaced: true,
+    });
+    s = setMana(s, 'p1', 5);
+    s = {
+      ...s,
+      firstPlayerIndex: 0,
+      phase: {
+        kind: 'errands',
+        round: 1,
+        activePlayerIndex: 0,
+        actionUsed: false,
+        fastActionUsed: false,
+      },
+    };
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.memoirs-of-the-future-past',
+      level: 1,
+    });
+    // No follow-up Future Power prompt.
+    expect(
+      s.pendingResolutionStack.some(
+        (e) =>
+          e.source.kind === 'spell' &&
+          e.source.id === 'base.spell.memoirs-of-the-future-past',
+      ),
+    ).toBe(false);
+    // Future Power still exhausted (cost paid).
+    const p1 = s.players.find((p) => p.id === 'p1')!;
+    expect(
+      p1.ownedSpells.find(
+        (o) => o.cardId === 'base.spell.memoirs-of-the-future-past',
+      )!.exhausted,
+    ).toBe(true);
+  });
+});
+
+// ============================================================================
 // Slow Time (Temporal Calculus L1) — choose a room, place up to two of your
 // Mages into it.
 // ============================================================================
