@@ -65,6 +65,7 @@ import type {
   MageImmunityBuff,
   MagesLosePowersBuff,
   PlacementsBlockedBuff,
+  RevivalBuff,
   ShadowOnPlaceBuff,
   SpellsBlockedBuff,
   SpellsCheaperBuff,
@@ -7569,10 +7570,15 @@ function woundManyMages(
     working = { ...working, ...result.patch };
     events.push(result.triggerEvent);
   }
-  return {
-    patch: { players: working.players, rooms: working.rooms },
-    events,
+  const patch: GameStatePatch = {
+    players: working.players,
+    rooms: working.rooms,
   };
+  // Carry forward any Revival enqueue side-effects from the per-wound patches.
+  if (working.pendingRevivalChecks !== state.pendingRevivalChecks) {
+    patch.pendingRevivalChecks = working.pendingRevivalChecks;
+  }
+  return { patch, events };
 }
 
 /**
@@ -12406,3 +12412,111 @@ registerEffect(
     };
   },
 );
+
+// ============================================================================
+// Will of the Divines L3 "Revival" — For the rest of this round, you may
+// move your wounded Mages after the action that wounded them. Still gain
+// Infirmary Bonuses.
+//
+// Adds a caster-scoped RevivalBuff (round-end). woundMage enqueues a
+// pendingRevivalChecks entry whenever an opposing action wounds one of the
+// caster's mages while the buff is active; the engine's
+// drainRevivalCheckIfIdle pump surfaces a Yes/No "heal-and-place to any
+// open slot" prompt for the mage's owner once the wound's reaction window
+// and infirmary-bonus chain are idle. The Infirmary bonus is granted by
+// the wound's normal post-wound chain — Revival doesn't suppress it.
+// ============================================================================
+
+registerEffect(
+  'base.spell.will-of-the-divines.l3',
+  (ctx): EffectResult => {
+    const buff: RevivalBuff = {
+      kind: 'revival',
+      casterPlayerId: ctx.triggeringPlayerId,
+      spellCardId: 'base.spell.will-of-the-divines',
+      label: 'Revival',
+      expiresAt: { kind: 'round-end' },
+    };
+    return {
+      kind: 'done',
+      patch: {
+        activeBuffs: [...ctx.state.activeBuffs, buff],
+      },
+    };
+  },
+);
+
+/**
+ * Revival prompt — multi-step:
+ *   1. (no resumeAnswer): Yes/No on whether to use Revival for this mage.
+ *   2. step='pick-slot' (option-chosen=yes): pick an open base slot to
+ *      place the wounded mage on (or fizzle if no slots remain).
+ *   3. step='apply' (space-chosen): clear isWounded + place at the slot.
+ * The wounded mage id rides in `ctx.resumeContext.mageId` from the drain pump
+ * onward.
+ */
+registerEffect('base.system.revival-prompt', (ctx: EffectContext): EffectResult => {
+  const self = 'base.system.revival-prompt';
+  const step = ctx.resumeContext?.['step'];
+  const mageId = String(ctx.resumeContext?.['mageId'] ?? '');
+  if (!mageId) return { kind: 'done', patch: {} };
+
+  if (!ctx.resumeAnswer) {
+    return {
+      kind: 'pause',
+      pending: {
+        responderId: ctx.triggeringPlayerId,
+        prompt: {
+          kind: 'choose-from-options',
+          options: [
+            { id: 'yes', label: `Revival: move ${mageId} to an open slot`, payload: {} },
+            { id: 'no', label: 'Skip Revival', payload: {} },
+          ],
+        },
+        resume: {
+          effectId: self,
+          context: { step: 'after-choice', mageId },
+        },
+        source: ctx.source,
+      },
+    };
+  }
+
+  if (step === 'after-choice') {
+    if (ctx.resumeAnswer.kind !== 'option-chosen') {
+      throw new Error(`${self} after-choice expected option-chosen`);
+    }
+    if (ctx.resumeAnswer.optionId === 'no') {
+      return { kind: 'done', patch: {} };
+    }
+    const slots = listPlaceWithoutPowersSlots(
+      ctx.state,
+      ctx.triggeringPlayerId,
+    );
+    if (slots.length === 0) return { kind: 'done', patch: {} };
+    return {
+      kind: 'pause',
+      pending: {
+        responderId: ctx.triggeringPlayerId,
+        prompt: {
+          kind: 'choose-target-action-space',
+          eligibleSpaceIds: slots,
+        },
+        resume: { effectId: self, context: { step: 'apply', mageId } },
+        source: ctx.source,
+      },
+    };
+  }
+
+  if (step === 'apply') {
+    if (ctx.resumeAnswer.kind !== 'space-chosen') {
+      throw new Error(`${self} apply expected space-chosen`);
+    }
+    return {
+      kind: 'done',
+      patch: healMageToSpace(ctx.state, mageId, ctx.resumeAnswer.spaceId),
+    };
+  }
+
+  throw new Error(`${self} unexpected step ${String(step)}`);
+});

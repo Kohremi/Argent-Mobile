@@ -823,13 +823,33 @@ export interface SpellsBlockedBuff {
   expiresAt: BuffExpiry;
 }
 
+/**
+ * Revival buff (Will of the Divines L3). After one of the caster's mages is
+ * wounded by an opponent's action (and the Infirmary bonus has been settled),
+ * the caster may move that wounded mage out of the Infirmary onto any open
+ * base slot, healing it in the process. Bonus still fires (per the card
+ * text: "Still gain Infirmary Bonuses"). Expires at round-end.
+ *
+ * Wired via `state.pendingRevivalChecks` — each qualifying wound enqueues an
+ * entry; the engine's `drainRevivalCheckIfIdle` pump surfaces the prompt
+ * once the wound's reaction window and any infirmary-bonus chain are idle.
+ */
+export interface RevivalBuff {
+  kind: 'revival';
+  casterPlayerId: PlayerId;
+  spellCardId: SpellCardId;
+  label: string;
+  expiresAt: BuffExpiry;
+}
+
 export type ActiveBuff =
   | MageImmunityBuff
   | MagesLosePowersBuff
   | ShadowOnPlaceBuff
   | PlacementsBlockedBuff
   | SpellsCheaperBuff
-  | SpellsBlockedBuff;
+  | SpellsBlockedBuff
+  | RevivalBuff;
 
 export type ReactionTriggerEvent =
   | {
@@ -1033,6 +1053,14 @@ export interface GameState {
     remaining: number;
     lockedDepartment?: Department;
   } | null;
+  /**
+   * Revival prompt queue (Will of the Divines L3). Each entry is a wounded
+   * mage whose owner has the Revival buff active at wound time. The
+   * `drainRevivalCheckIfIdle` engine pump pops one entry per idle moment and
+   * surfaces a Yes/No move-and-heal prompt for that mage's owner. Cleared at
+   * round-end alongside the buff itself.
+   */
+  pendingRevivalChecks: { ownerId: PlayerId; mageId: OwnedMageId }[];
 
   /**
    * Active "immunity" buffs (Moste Holie Litanies / Heart of the Mountain

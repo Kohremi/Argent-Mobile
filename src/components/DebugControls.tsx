@@ -1465,6 +1465,10 @@ function PlayerBuffBadges({
           title = `${b.label} — Spells cannot be cast by anyone (${dur})`;
           toneClass = 'text-rose-300 bg-rose-500/10 border-rose-500/30';
           keyBase = b.spellCardId;
+        } else if (b.kind === 'revival') {
+          title = `${b.label} — your wounded Mages can move out of the Infirmary right after they're wounded (${dur})`;
+          toneClass = 'text-emerald-300 bg-emerald-500/10 border-emerald-500/30';
+          keyBase = b.spellCardId;
         } else {
           // spells-cheaper (Power / Inner Fire)
           title = `${b.label} — your Spells cost ${b.discount} less Mana (${dur})`;

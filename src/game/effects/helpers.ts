@@ -474,8 +474,28 @@ export function woundMage(
     ? clearSpaceOccupant(state.rooms, slotLookup.spaceId, slotLookup.position)
     : state.rooms;
 
+  // Revival (Will of the Divines L3) enqueues a post-wound prompt for this
+  // mage's owner when the buff is active and the wounder is an opponent. The
+  // engine's drain pump surfaces the prompt once the wound's reaction window
+  // and infirmary-bonus chain are idle.
+  const ownerHasRevival =
+    byPlayerId !== owner.id &&
+    state.activeBuffs.some(
+      (b) => b.kind === 'revival' && b.casterPlayerId === owner.id,
+    );
+  const patch: GameStatePatch = ownerHasRevival
+    ? {
+        players,
+        rooms,
+        pendingRevivalChecks: [
+          ...state.pendingRevivalChecks,
+          { ownerId: owner.id, mageId: targetMageId },
+        ],
+      }
+    : { players, rooms };
+
   return {
-    patch: { players, rooms },
+    patch,
     triggerEvent: {
       kind: 'mage-wounded',
       mageId: targetMageId,

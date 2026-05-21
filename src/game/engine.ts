@@ -335,6 +335,48 @@ function drainContractResearchIfIdle(state: GameState): GameState {
 }
 
 /**
+ * Drains a single entry from the Revival queue when the stack/reactions
+ * are idle. Surfaces a Yes/No "move and heal this wounded mage to an open
+ * slot" prompt for its owner. Quietly drops entries whose mage is no
+ * longer wounded (a reaction may have restored it) or whose owner has
+ * since lost the Revival buff.
+ */
+function drainRevivalCheckIfIdle(state: GameState): GameState {
+  const queue = state.pendingRevivalChecks;
+  if (queue.length === 0) return state;
+  if (state.pendingResolutionStack.length > 0) return state;
+  if (state.activeReactionWindows.length > 0) return state;
+  const [next, ...rest] = queue;
+  if (!next) return state;
+  const withoutEntry: GameState = { ...state, pendingRevivalChecks: rest };
+  const owner = withoutEntry.players.find((p) => p.id === next.ownerId);
+  const mage = owner?.mages.find((m) => m.id === next.mageId);
+  const stillRevivable =
+    owner !== undefined &&
+    mage !== undefined &&
+    mage.isWounded &&
+    mage.location.kind === 'infirmary' &&
+    withoutEntry.activeBuffs.some(
+      (b) => b.kind === 'revival' && b.casterPlayerId === owner.id,
+    );
+  if (!stillRevivable) return withoutEntry;
+  const ctx: EffectContext = {
+    state: withoutEntry,
+    source: {
+      kind: 'spell',
+      id: 'base.spell.will-of-the-divines',
+      triggeringPlayerId: owner.id,
+      description: 'Revival',
+    },
+    triggeringPlayerId: owner.id,
+    allowReactions: false,
+    resumeContext: { mageId: next.mageId },
+  };
+  const result = getEffect('base.system.revival-prompt')(ctx);
+  return applyEffectResult(withoutEntry, result, ctx);
+}
+
+/**
  * If the active player has spent their Regular Action and no prompts or
  * reaction windows are still open, the turn ends automatically (per
  * rulebook). Called at the end of every dispatch so that turns advance
@@ -352,6 +394,10 @@ function autoAdvanceIfTurnDone(state: GameState): GameState {
   // first placement may have left a pending entry once its instant-reward
   // chain resolved.
   state = drainPendingPlaceChainIfIdle(state);
+  // Revival checks fire after the wound's reaction window and bonus chain
+  // have settled — surface them before any further chain advancement so the
+  // owner can re-place their wounded mage immediately.
+  state = drainRevivalCheckIfIdle(state);
   // Drain a queued research opportunity first — this may add to the stack,
   // in which case we stop and let the player resolve it before any further
   // turn advancement.
@@ -2409,6 +2455,7 @@ function processErrandsAdvance(state: GameState): GameState {
       players,
       roomLocks: [],
       activeBuffs: [],
+      pendingRevivalChecks: [],
       phase: {
         kind: 'resolution',
         round: errandsPhase.round,
