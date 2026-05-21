@@ -12520,3 +12520,19 @@ registerEffect('base.system.revival-prompt', (ctx: EffectContext): EffectResult 
 
   throw new Error(`${self} unexpected step ${String(step)}`);
 });
+
+// ============================================================================
+// Tenets of Dominance L3 "Shadow Puppet" — Gain a Secret Supporter. Action,
+// 4 Mana. Delegates to `applySecretSupporterDraw` — the same helper backing
+// the Telepathy vault card's draw-as-secret path. The drawn card lands
+// face-down in the caster's personal discard and counts for "Most Supporters"
+// voter scoring. Fizzles silently when the supporter deck is empty.
+// ============================================================================
+
+registerEffect(
+  'base.spell.tenets-of-dominance.l3',
+  (ctx): EffectResult => ({
+    kind: 'done',
+    patch: applySecretSupporterDraw(ctx.state, ctx.triggeringPlayerId),
+  }),
+);

@@ -14529,6 +14529,79 @@ describe('Alt-leader spells', () => {
 });
 
 // ============================================================================
+// Shadow Puppet (Tenets of Dominance L3) — gain a Secret Supporter.
+// ============================================================================
+
+describe('Shadow Puppet (Tenets of Dominance L3)', () => {
+  function setupShadowPuppet(): GameState {
+    let s = initGame(TWO_PLAYER_CONFIG);
+    s = zeroPlayerResources(s, 'p1');
+    s = addOwnedSpell(s, 'p1', 'base.spell.tenets-of-dominance', {
+      intPlaced: true,
+      wisPlacedLevel2: true,
+      wisPlacedLevel3: true,
+    });
+    s = setMana(s, 'p1', 4);
+    return {
+      ...s,
+      firstPlayerIndex: 0,
+      phase: {
+        kind: 'errands',
+        round: 1,
+        activePlayerIndex: 0,
+        actionUsed: false,
+        fastActionUsed: false,
+      },
+    };
+  }
+
+  it('cast pulls the top supporter into the caster\'s personal discard as a secret supporter', () => {
+    let s = setupShadowPuppet();
+    // Lock the top of the supporter deck so we know what gets drawn.
+    s = { ...s, supporterDeck: ['base.supporter.adelaide-chivers', ...s.supporterDeck] };
+    const deckLenBefore = s.supporterDeck.length;
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.tenets-of-dominance',
+      level: 3,
+    });
+    expect(s.supporterDeck.length).toBe(deckLenBefore - 1);
+    const p1 = s.players.find((p) => p.id === 'p1')!;
+    expect(p1.personalDiscard).toContainEqual({
+      kind: 'secret-supporter',
+      cardId: 'base.supporter.adelaide-chivers',
+    });
+    // Mana paid + spell exhausted via the normal cast path.
+    expect(p1.resources.mana).toBe(0);
+    expect(
+      p1.ownedSpells.find((o) => o.cardId === 'base.spell.tenets-of-dominance')!
+        .exhausted,
+    ).toBe(true);
+  });
+
+  it('fizzles silently when the supporter deck is empty (spell still exhausts + mana spent)', () => {
+    let s = setupShadowPuppet();
+    s = { ...s, supporterDeck: [] };
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.tenets-of-dominance',
+      level: 3,
+    });
+    const p1 = s.players.find((p) => p.id === 'p1')!;
+    expect(p1.personalDiscard.some((e) => e.kind === 'secret-supporter')).toBe(
+      false,
+    );
+    expect(p1.resources.mana).toBe(0);
+    expect(
+      p1.ownedSpells.find((o) => o.cardId === 'base.spell.tenets-of-dominance')!
+        .exhausted,
+    ).toBe(true);
+  });
+});
+
+// ============================================================================
 // Revival (Will of the Divines L3) — wounded mages can be moved to any open
 // slot right after they're wounded; bonus still fires.
 // ============================================================================
