@@ -162,6 +162,15 @@ function consumeActionBudget(
   }
   if (kind === 'action') {
     if (state.phase.actionUsed) {
+      // Bonus actions (Flare / Dazzle) cover the spend after the base
+      // Action is gone — decrement the counter and let the action through.
+      const bonus = state.phase.extraActions ?? 0;
+      if (bonus > 0) {
+        return {
+          ...state,
+          phase: { ...state.phase, extraActions: bonus - 1 },
+        };
+      }
       throw new Error(`${label}: you already used your Action this turn`);
     }
     return { ...state, phase: { ...state.phase, actionUsed: true } };
@@ -413,6 +422,9 @@ function autoAdvanceIfTurnDone(state: GameState): GameState {
   state = drainContractResearchIfIdle(state);
   if (state.phase.kind !== 'errands') return state;
   if (!state.phase.actionUsed) return state;
+  // Bonus actions (Flare / Dazzle) hold the turn open after the base
+  // Action is spent — the auto-advance waits until they're all gone too.
+  if ((state.phase.extraActions ?? 0) > 0) return state;
   if (state.pendingResolutionStack.length > 0) return state;
   if (state.activeReactionWindows.length > 0) return state;
   return processErrandsAdvance(state);
@@ -2489,6 +2501,7 @@ function processErrandsAdvance(state: GameState): GameState {
       activePlayerIndex: next,
       actionUsed: false,
       fastActionUsed: false,
+      extraActions: 0,
     },
   };
 }

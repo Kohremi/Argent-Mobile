@@ -14529,6 +14529,171 @@ describe('Alt-leader spells', () => {
 });
 
 // ============================================================================
+// Flare + Dazzle (The Light That Leads L2 / L3) — fast actions that grant
+// extra normal Action(s) this turn.
+// ============================================================================
+
+describe('Flare / Dazzle (The Light That Leads L2 / L3)', () => {
+  function setupLight(level: 2 | 3): GameState {
+    let s = initGame(TWO_PLAYER_CONFIG);
+    s = forceLibrarySideA(s);
+    s = zeroPlayerResources(s, 'p1');
+    s = zeroPlayerResources(s, 'p2');
+    s = addOwnedSpell(s, 'p1', 'base.spell.the-light-that-leads', {
+      intPlaced: true,
+      wisPlacedLevel2: true,
+      wisPlacedLevel3: level === 3,
+    });
+    s = addOwnedSpell(s, 'p1', 'base.spell.burn', { intPlaced: true });
+    s = setMana(s, 'p1', 10);
+    s = addMage(s, 'p2', {
+      id: 'bob-grey',
+      cardId: 'base.mage.mysticism',
+      color: 'grey',
+    });
+    s = placeMageOnSpace(s, 'p2', 'bob-grey', 'base.room.library.a.slot-1');
+    s = addMage(s, 'p2', {
+      id: 'bob-grey-2',
+      cardId: 'base.mage.mysticism',
+      color: 'grey',
+    });
+    s = placeMageOnSpace(s, 'p2', 'bob-grey-2', 'base.room.library.a.slot-2');
+    return {
+      ...s,
+      firstPlayerIndex: 0,
+      phase: {
+        kind: 'errands',
+        round: 1,
+        activePlayerIndex: 0,
+        actionUsed: false,
+        fastActionUsed: false,
+      },
+    };
+  }
+
+  it('Flare grants +1 extraActions', () => {
+    let s = setupLight(2);
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.the-light-that-leads',
+      level: 2,
+    });
+    if (s.phase.kind !== 'errands') throw new Error('expected errands');
+    expect(s.phase.extraActions).toBe(1);
+    // Fast action was used by Flare; base Action is still untouched.
+    expect(s.phase.fastActionUsed).toBe(true);
+    expect(s.phase.actionUsed).toBe(false);
+  });
+
+  it('Dazzle grants +2 extraActions', () => {
+    let s = setupLight(3);
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.the-light-that-leads',
+      level: 3,
+    });
+    if (s.phase.kind !== 'errands') throw new Error('expected errands');
+    expect(s.phase.extraActions).toBe(2);
+  });
+
+  it('caster can take a base action AND a Flare bonus action in the same turn', () => {
+    let s = setupLight(2);
+    // Cast Flare (fast-action, uses fast budget + grants +1 extra action).
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.the-light-that-leads',
+      level: 2,
+    });
+    // Now cast Burn (action) — spends the base Action.
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.burn',
+      level: 1,
+    });
+    // Walk the pending stack to fully resolve the Burn cast (target,
+    // reaction window pass, infirmary bonus).
+    const resolveAllPrompts = (state: GameState): GameState => {
+      let curr = state;
+      let i = 0;
+      while (curr.pendingResolutionStack.length > 0 && i++ < 10) {
+        const top = topPending(curr);
+        if (top.prompt.kind === 'choose-target-mage') {
+          curr = applyAction(curr, {
+            type: 'RESOLVE_PENDING',
+            resolutionId: top.id,
+            answer: {
+              kind: 'mage-chosen',
+              mageId: top.prompt.eligibleMageIds[0]!,
+            },
+          });
+        } else if (top.prompt.kind === 'reaction-window') {
+          curr = applyAction(curr, {
+            type: 'RESOLVE_PENDING',
+            resolutionId: top.id,
+            answer: { kind: 'reaction-passed' },
+          });
+        } else if (top.prompt.kind === 'choose-from-options') {
+          curr = applyAction(curr, {
+            type: 'RESOLVE_PENDING',
+            resolutionId: top.id,
+            answer: {
+              kind: 'option-chosen',
+              optionId: top.prompt.options[0]!.id,
+              payload: {},
+            },
+          });
+        } else {
+          break;
+        }
+      }
+      return curr;
+    };
+    s = resolveAllPrompts(s);
+    // Mark Burn unexhausted so we can cast a second time.
+    s = mapPlayer(s, 'p1', (p) => ({
+      ...p,
+      ownedSpells: p.ownedSpells.map((o) =>
+        o.cardId !== 'base.spell.burn' ? o : { ...o, exhausted: false },
+      ),
+    }));
+    // Turn is still ours because extraActions=1; cast Burn again.
+    if (s.phase.kind !== 'errands') throw new Error('expected errands');
+    expect(s.players[s.phase.activePlayerIndex]!.id).toBe('p1');
+    expect(s.phase.extraActions).toBe(1);
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.burn',
+      level: 1,
+    });
+    s = resolveAllPrompts(s);
+    // Both wounds applied.
+    const bob = s.players.find((p) => p.id === 'p2')!;
+    expect(bob.mages.find((m) => m.id === 'bob-grey')!.isWounded).toBe(true);
+    expect(bob.mages.find((m) => m.id === 'bob-grey-2')!.isWounded).toBe(true);
+  });
+
+  it('extraActions resets to 0 on turn advance', () => {
+    let s = setupLight(2);
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.the-light-that-leads',
+      level: 2,
+    });
+    // Pass turn (we still have base action + 1 extra; PASS_TURN should work).
+    s = applyAction(s, { type: 'PASS_TURN', playerId: 'p1' });
+    if (s.phase.kind !== 'errands') throw new Error('expected errands');
+    // Bob's turn — his extraActions should be 0 by default (undefined OK).
+    expect(s.phase.extraActions ?? 0).toBe(0);
+  });
+});
+
+// ============================================================================
 // Retribution (Wrath of Heaven L3) — reaction: wound two of the attacker's
 // mages after one of yours is wounded.
 // ============================================================================

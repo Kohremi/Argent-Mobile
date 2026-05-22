@@ -515,6 +515,14 @@ export type GamePhase =
        * Same reset cadence as `actionUsed`.
        */
       fastActionUsed: boolean;
+      /**
+       * Bonus Action grants in addition to the base Action. Granted by
+       * spells like Flare (+1) and Dazzle (+2). When consuming an Action
+       * with `actionUsed: true`, decrements this counter instead of
+       * throwing — so the player can spend their bonus actions after the
+       * base one is used. Reset to 0 on every turn change.
+       */
+      extraActions?: number;
     }
   | {
       kind: 'resolution';

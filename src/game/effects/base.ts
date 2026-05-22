@@ -13266,3 +13266,40 @@ registerEffect('base.spell.wrath-of-heaven.l3.react', (ctx): EffectResult => {
 
   throw new Error(`${selfRetribution} unexpected step ${String(step)}`);
 });
+
+// ============================================================================
+// The Light That Leads L2 "Flare" / L3 "Dazzle" — Take 1 / 2 normal actions.
+// Both are Fast Action timing, so the caster can layer the bonus actions
+// onto the same turn AFTER they cast. The engine's `extraActions` counter
+// on the errands phase carries the grant; `consumeActionBudget` decrements
+// it on each "Action" spend once the base Action is gone. The counter
+// resets to 0 on every turn change.
+//
+// Flare grants 1 extra action; Dazzle grants 2.
+// ============================================================================
+
+function grantExtraActions(state: GameState, count: number): GameStatePatch {
+  if (state.phase.kind !== 'errands') return {};
+  return {
+    phase: {
+      ...state.phase,
+      extraActions: (state.phase.extraActions ?? 0) + count,
+    },
+  };
+}
+
+registerEffect(
+  'base.spell.the-light-that-leads.l2',
+  (ctx): EffectResult => ({
+    kind: 'done',
+    patch: grantExtraActions(ctx.state, 1),
+  }),
+);
+
+registerEffect(
+  'base.spell.the-light-that-leads.l3',
+  (ctx): EffectResult => ({
+    kind: 'done',
+    patch: grantExtraActions(ctx.state, 2),
+  }),
+);
