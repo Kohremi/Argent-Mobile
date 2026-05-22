@@ -14529,6 +14529,245 @@ describe('Alt-leader spells', () => {
 });
 
 // ============================================================================
+// Renewal (Songs of Springtime L3) — reaction: place wounded/moved mage to
+// an empty slot AND refresh an exhausted Spell or Treasure.
+// ============================================================================
+
+describe('Renewal (Songs of Springtime L3)', () => {
+  function setupRenewal(): GameState {
+    let s = initGame(TWO_PLAYER_CONFIG);
+    s = forceLibrarySideA(s);
+    s = zeroPlayerResources(s, 'p1');
+    s = zeroPlayerResources(s, 'p2');
+    s = addOwnedSpell(s, 'p1', 'base.spell.songs-of-springtime', {
+      intPlaced: true,
+      wisPlacedLevel2: true,
+      wisPlacedLevel3: true,
+    });
+    // Alice also owns an exhausted Burn so Renewal has something to refresh.
+    s = addOwnedSpell(s, 'p1', 'base.spell.burn', {
+      intPlaced: true,
+      exhausted: true,
+    });
+    s = setMana(s, 'p1', 2);
+    s = addMage(s, 'p1', {
+      id: 'alice-red',
+      cardId: 'base.mage.sorcery',
+      color: 'red',
+    });
+    s = placeMageOnSpace(s, 'p1', 'alice-red', 'base.room.library.a.slot-1');
+    s = addOwnedSpell(s, 'p2', 'base.spell.burn', { intPlaced: true });
+    s = setMana(s, 'p2', 2);
+    return {
+      ...s,
+      firstPlayerIndex: 1,
+      phase: {
+        kind: 'errands',
+        round: 1,
+        activePlayerIndex: 1,
+        actionUsed: false,
+        fastActionUsed: false,
+      },
+    };
+  }
+
+  it('surfaces a Renewal option when the caster\'s mage is wounded and they have ≥2 mana + L3 research', () => {
+    let s = setupRenewal();
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p2',
+      spellCardId: 'base.spell.burn',
+      level: 1,
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'mage-chosen', mageId: 'alice-red' },
+    });
+    const reactionPrompt = topPending(s);
+    expect(reactionPrompt.prompt.kind).toBe('reaction-window');
+    if (reactionPrompt.prompt.kind !== 'reaction-window') throw new Error('unreachable');
+    const renewal = reactionPrompt.prompt.reactionOptions.find(
+      (o) => o.effectId === 'base.spell.songs-of-springtime.l3.react',
+    );
+    expect(renewal).toBeDefined();
+  });
+
+  it('Renewal places the mage on the chosen slot, clears wound, then refreshes a chosen exhausted spell', () => {
+    let s = setupRenewal();
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p2',
+      spellCardId: 'base.spell.burn',
+      level: 1,
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'mage-chosen', mageId: 'alice-red' },
+    });
+    const reactionPrompt = topPending(s);
+    if (reactionPrompt.prompt.kind !== 'reaction-window') throw new Error('unreachable');
+    const renewal = reactionPrompt.prompt.reactionOptions.find(
+      (o) => o.effectId === 'base.spell.songs-of-springtime.l3.react',
+    )!;
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: reactionPrompt.id,
+      answer: {
+        kind: 'reaction-played',
+        effectId: renewal.effectId,
+        reactionContext: {},
+      },
+    });
+    // Bonus prompt fires first (mage still wounded when window closes).
+    const bonusPrompt = topPending(s);
+    if (bonusPrompt.prompt.kind === 'choose-from-options') {
+      s = applyAction(s, {
+        type: 'RESOLVE_PENDING',
+        resolutionId: bonusPrompt.id,
+        answer: {
+          kind: 'option-chosen',
+          optionId: bonusPrompt.prompt.options[0]!.id,
+          payload: {},
+        },
+      });
+    }
+    // Now Renewal's slot prompt.
+    const slotPrompt = topPending(s);
+    expect(slotPrompt.prompt.kind).toBe('choose-target-action-space');
+    if (slotPrompt.prompt.kind !== 'choose-target-action-space') throw new Error('unreachable');
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: slotPrompt.id,
+      answer: {
+        kind: 'space-chosen',
+        spaceId: 'base.room.library.a.slot-3',
+      },
+    });
+    // Refresh prompt fires next.
+    const refreshPrompt = topPending(s);
+    expect(refreshPrompt.prompt.kind).toBe('choose-from-options');
+    if (refreshPrompt.prompt.kind !== 'choose-from-options') throw new Error('unreachable');
+    const burnOption = refreshPrompt.prompt.options.find(
+      (o) => o.id === 'spell:base.spell.burn',
+    );
+    expect(burnOption).toBeDefined();
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: refreshPrompt.id,
+      answer: {
+        kind: 'option-chosen',
+        optionId: 'spell:base.spell.burn',
+        payload: {},
+      },
+    });
+    const alice = s.players.find((p) => p.id === 'p1')!;
+    const placed = alice.mages.find((m) => m.id === 'alice-red')!;
+    expect(placed.isWounded).toBe(false);
+    expect(placed.location).toEqual({
+      kind: 'action-space',
+      spaceId: 'base.room.library.a.slot-3',
+    });
+    expect(alice.ownedSpells.find((o) => o.cardId === 'base.spell.burn')!.exhausted).toBe(
+      false,
+    );
+    // Renewal itself exhausts; Songs of Springtime is the casting spell.
+    expect(
+      alice.ownedSpells.find((o) => o.cardId === 'base.spell.songs-of-springtime')!
+        .exhausted,
+    ).toBe(true);
+    expect(alice.resources.mana).toBe(0); // spent 2
+  });
+
+  it('the refresh prompt offers Songs of Springtime itself when no other exhausted card exists (matches Regeneration\'s self-refresh pattern)', () => {
+    let s = setupRenewal();
+    // Make Burn unexhausted so the only exhausted card after Renewal casts
+    // is Songs of Springtime itself (it just paid + exhausted).
+    s = mapPlayer(s, 'p1', (p) => ({
+      ...p,
+      ownedSpells: p.ownedSpells.map((o) =>
+        o.cardId !== 'base.spell.burn' ? o : { ...o, exhausted: false },
+      ),
+    }));
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p2',
+      spellCardId: 'base.spell.burn',
+      level: 1,
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'mage-chosen', mageId: 'alice-red' },
+    });
+    const reactionPrompt = topPending(s);
+    if (reactionPrompt.prompt.kind !== 'reaction-window') throw new Error('unreachable');
+    const renewal = reactionPrompt.prompt.reactionOptions.find(
+      (o) => o.effectId === 'base.spell.songs-of-springtime.l3.react',
+    )!;
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: reactionPrompt.id,
+      answer: {
+        kind: 'reaction-played',
+        effectId: renewal.effectId,
+        reactionContext: {},
+      },
+    });
+    const bonusPrompt = topPending(s);
+    if (bonusPrompt.prompt.kind === 'choose-from-options') {
+      s = applyAction(s, {
+        type: 'RESOLVE_PENDING',
+        resolutionId: bonusPrompt.id,
+        answer: {
+          kind: 'option-chosen',
+          optionId: bonusPrompt.prompt.options[0]!.id,
+          payload: {},
+        },
+      });
+    }
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: {
+        kind: 'space-chosen',
+        spaceId: 'base.room.library.a.slot-3',
+      },
+    });
+    // Refresh prompt fires; only Songs of Springtime is exhausted.
+    const refreshPrompt = topPending(s);
+    expect(refreshPrompt.prompt.kind).toBe('choose-from-options');
+    if (refreshPrompt.prompt.kind !== 'choose-from-options') throw new Error('unreachable');
+    expect(refreshPrompt.prompt.options.map((o) => o.id)).toEqual([
+      'spell:base.spell.songs-of-springtime',
+    ]);
+  });
+
+  it('does not surface Renewal when mana < 2', () => {
+    let s = setupRenewal();
+    s = setMana(s, 'p1', 1);
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p2',
+      spellCardId: 'base.spell.burn',
+      level: 1,
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'mage-chosen', mageId: 'alice-red' },
+    });
+    const reactionPrompt = topPending(s);
+    if (reactionPrompt.prompt.kind !== 'reaction-window') return;
+    const renewal = reactionPrompt.prompt.reactionOptions.find(
+      (o) => o.effectId === 'base.spell.songs-of-springtime.l3.react',
+    );
+    expect(renewal).toBeUndefined();
+  });
+});
+
+// ============================================================================
 // Regrowth (Songs of Springtime L2) — reaction: place a wounded or moved
 // mage into any empty slot.
 // ============================================================================

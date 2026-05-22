@@ -12862,3 +12862,187 @@ registerEffect(
     throw new Error(`${selfRegrowth} unexpected step ${String(step)}`);
   },
 );
+
+// ============================================================================
+// Songs of Springtime L3 "Renewal" — Reaction, 2 Mana. When one of your Mages
+// is wounded or moved, place it into an empty slot (clear isWounded), THEN
+// refresh an exhausted Spell or Treasure. Combines Regrowth's reposition
+// with Regeneration's refresh. The refresh step is skipped silently if the
+// responder has nothing exhausted by the time it fires.
+// ============================================================================
+
+registerEffect(
+  'base.spell.songs-of-springtime.l3.react',
+  (ctx: EffectContext): EffectResult => {
+    const selfRenewal = 'base.spell.songs-of-springtime.l3.react';
+    const step = ctx.resumeContext?.['step'];
+
+    if (!step) {
+      const paid = payAndExhaustSpell(
+        ctx.state,
+        ctx.triggeringPlayerId,
+        'base.spell.songs-of-springtime',
+        2,
+      );
+      if (!paid) return { kind: 'done', patch: {} };
+      const raw = ctx.resumeContext?.['triggerEvent'];
+      if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+        throw new Error('Renewal: missing triggerEvent in resumeContext');
+      }
+      const event = raw as unknown as ReactionTriggerEvent;
+      if (event.kind !== 'mage-wounded' && event.kind !== 'mage-moved') {
+        throw new Error(`Renewal cannot react to ${event.kind}`);
+      }
+      if (event.ownerId !== ctx.triggeringPlayerId) {
+        throw new Error("Renewal only reacts to the caster's own Mage");
+      }
+      const slots = listPlaceWithoutPowersSlots(paid, ctx.triggeringPlayerId);
+      if (slots.length === 0) {
+        return { kind: 'done', patch: { players: paid.players } };
+      }
+      return {
+        kind: 'pause',
+        patch: { players: paid.players },
+        pending: {
+          responderId: ctx.triggeringPlayerId,
+          prompt: {
+            kind: 'choose-target-action-space',
+            eligibleSpaceIds: slots,
+          },
+          resume: {
+            effectId: selfRenewal,
+            context: { step: 'apply-place', mageId: event.mageId },
+          },
+          source: ctx.source,
+        },
+      };
+    }
+
+    if (step === 'apply-place') {
+      if (ctx.resumeAnswer?.kind !== 'space-chosen') {
+        throw new Error(`${selfRenewal} apply-place expected space-chosen`);
+      }
+      const mageId = String(ctx.resumeContext?.['mageId'] ?? '');
+      if (!mageId) return { kind: 'done', patch: {} };
+      const destSpaceId = ctx.resumeAnswer.spaceId;
+      const ownerId = ctx.triggeringPlayerId;
+      const mage = ctx.state.players
+        .flatMap((p) => p.mages)
+        .find((m) => m.id === mageId);
+      if (!mage) return { kind: 'done', patch: {} };
+      const fromSpaceId =
+        mage.location.kind === 'action-space' ? mage.location.spaceId : null;
+      const occupancy: WorkerOccupancy = {
+        mageId,
+        ownerId,
+        isShadowing: false,
+      };
+      const players = ctx.state.players.map((p): Player => {
+        if (p.id !== ownerId) return p;
+        return {
+          ...p,
+          mages: p.mages.map((m) =>
+            m.id !== mageId
+              ? m
+              : {
+                  ...m,
+                  isWounded: false,
+                  isShadowing: false,
+                  location: {
+                    kind: 'action-space' as const,
+                    spaceId: destSpaceId,
+                  },
+                },
+          ),
+        };
+      });
+      const rooms = ctx.state.rooms.map((r) => ({
+        ...r,
+        actionSpaces: r.actionSpaces.map((s) => {
+          if (fromSpaceId && s.id === fromSpaceId && s.occupant?.mageId === mageId) {
+            return { ...s, occupant: null };
+          }
+          if (s.id === destSpaceId) {
+            return { ...s, occupant: occupancy };
+          }
+          return s;
+        }),
+      }));
+      const placed: GameState = { ...ctx.state, players, rooms };
+      // Surface the refresh prompt. Skip silently if there's nothing
+      // exhausted to refresh.
+      const reactor = placed.players.find((p) => p.id === ownerId);
+      const exhaustedSpells =
+        reactor?.ownedSpells.filter((s) => s.exhausted) ?? [];
+      const exhaustedTreasures =
+        reactor?.vaultCards.filter((v) => v.exhausted) ?? [];
+      if (exhaustedSpells.length + exhaustedTreasures.length === 0) {
+        return { kind: 'done', patch: { players, rooms } };
+      }
+      const options: ChoiceOption[] = [
+        ...exhaustedSpells.map((s) => ({
+          id: `spell:${s.cardId}`,
+          label: `Refresh Spell — ${spellLabel(placed, s.cardId)}`,
+          payload: {},
+        })),
+        ...exhaustedTreasures.map((v) => ({
+          id: `treasure:${v.cardId}`,
+          label: `Refresh Treasure — ${v.cardId}`,
+          payload: {},
+        })),
+      ];
+      return {
+        kind: 'pause',
+        patch: { players, rooms },
+        pending: {
+          responderId: ownerId,
+          prompt: { kind: 'choose-from-options', options },
+          resume: {
+            effectId: selfRenewal,
+            context: { step: 'apply-refresh' },
+          },
+          source: ctx.source,
+        },
+      };
+    }
+
+    if (step === 'apply-refresh') {
+      if (ctx.resumeAnswer?.kind !== 'option-chosen') {
+        throw new Error(`${selfRenewal} apply-refresh expected option-chosen`);
+      }
+      const choice = ctx.resumeAnswer.optionId;
+      if (choice.startsWith('spell:')) {
+        const cardId = choice.slice('spell:'.length);
+        return {
+          kind: 'done',
+          patch: refreshOwnedSpellPatch(
+            ctx.state,
+            ctx.triggeringPlayerId,
+            cardId,
+          ),
+        };
+      }
+      if (choice.startsWith('treasure:')) {
+        const cardId = choice.slice('treasure:'.length);
+        return {
+          kind: 'done',
+          patch: {
+            players: ctx.state.players.map((p) =>
+              p.id !== ctx.triggeringPlayerId
+                ? p
+                : {
+                    ...p,
+                    vaultCards: p.vaultCards.map((v) =>
+                      v.cardId !== cardId ? v : { ...v, exhausted: false },
+                    ),
+                  },
+            ),
+          },
+        };
+      }
+      return { kind: 'done', patch: {} };
+    }
+
+    throw new Error(`${selfRenewal} unexpected step ${String(step)}`);
+  },
+);

@@ -1232,6 +1232,23 @@ export function buildReactionOptionsFor(
         ...(multi ? { forMageId: mageId } : {}),
       });
     }
+    // Songs of Springtime L3 "Renewal": when your mage is wounded or moved,
+    //   place it into an empty slot + refresh an exhausted Spell or Treasure.
+    //   Cost: 2 Mana. Researched at L3.
+    if (
+      songsReady &&
+      songs?.wisPlacedLevel3 &&
+      responder.resources.mana >= 2 &&
+      (event.kind === 'mage-wounded' || event.kind === 'mage-moved')
+    ) {
+      options.push({
+        sourceKind: 'spell',
+        sourceId: 'base.spell.songs-of-springtime',
+        effectId: 'base.spell.songs-of-springtime.l3.react',
+        label: `Cast Renewal (place + refresh a Spell or Treasure)${labelSuffix(mageId)}`,
+        ...(multi ? { forMageId: mageId } : {}),
+      });
+    }
 
     // The Darkness Within L2 "Haunt": when your mage is wounded, moved, or
     //   banished, it instead shadows the slot it previously occupied.
