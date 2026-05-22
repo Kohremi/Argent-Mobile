@@ -984,6 +984,7 @@ export function buildReactionOptionsFor(
   state: GameState,
   responderId: PlayerId,
   events: ReactionTriggerEvent[],
+  triggerSource?: ResolutionSource,
 ): ReactionOptionShape[] {
   const responder = findPlayer(state, responderId);
   if (!responder) return [];
@@ -1246,6 +1247,31 @@ export function buildReactionOptionsFor(
         sourceId: 'base.spell.songs-of-springtime',
         effectId: 'base.spell.songs-of-springtime.l3.react',
         label: `Cast Renewal (place + refresh a Spell or Treasure)${labelSuffix(mageId)}`,
+        ...(multi ? { forMageId: mageId } : {}),
+      });
+    }
+    // Tome of Protection L3 "Absorb Mana": when one of your mages is moved /
+    //   wounded / banished BY A SPELL, gain Mana equal to that spell's cost.
+    //   Cost: 0 Mana. Researched at L3. Only surfaced when the trigger's
+    //   source is a spell — physical effects (mage powers / vault cards)
+    //   don't satisfy the "by a spell" clause.
+    const tomeOfProtection = responder.ownedSpells.find(
+      (s) => s.cardId === 'base.spell.tome-of-protection',
+    );
+    if (
+      tomeOfProtection &&
+      tomeOfProtection.intPlaced &&
+      tomeOfProtection.wisPlacedLevel2 &&
+      tomeOfProtection.wisPlacedLevel3 &&
+      !tomeOfProtection.exhausted &&
+      triggerSource?.kind === 'spell' &&
+      isWoundBanishOrMove
+    ) {
+      options.push({
+        sourceKind: 'spell',
+        sourceId: 'base.spell.tome-of-protection',
+        effectId: 'base.spell.tome-of-protection.l3.react',
+        label: `Cast Absorb Mana (gain Mana = spell's cost)${labelSuffix(mageId)}`,
         ...(multi ? { forMageId: mageId } : {}),
       });
     }

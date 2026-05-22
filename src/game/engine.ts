@@ -242,7 +242,12 @@ function drainBellTowerLastEventIfIdle(state: GameState): GameState {
       const p =
         withoutPending.players[(claimerIndex + i) % withoutPending.players.length];
       if (!p || p.id === pending.byPlayerId) continue;
-      const opts = buildReactionOptionsFor(withoutPending, p.id, [triggerEvent]);
+      const opts = buildReactionOptionsFor(
+        withoutPending,
+        p.id,
+        [triggerEvent],
+        pending.source,
+      );
       if (opts.length > 0) responderIds.push(p.id);
     }
   }
@@ -521,6 +526,7 @@ function advanceReactionWindow(state: GameState, window: ReactionWindow): GameSt
     state,
     responderId,
     window.triggerEvents,
+    window.source,
   );
   const promptInput: PendingResolutionInput = {
     responderId,
@@ -2113,6 +2119,7 @@ function resolveReactionPrompt(
       resumeContext: {
         ...answer.reactionContext,
         triggerEvent: triggerEventValue,
+        triggerSource: window.source as unknown as SerializableContext,
       },
       allowReactions: false,
     };

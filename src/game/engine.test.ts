@@ -14529,6 +14529,131 @@ describe('Alt-leader spells', () => {
 });
 
 // ============================================================================
+// Absorb Mana (Tome of Protection L3) — reaction: gain mana equal to the
+// triggering spell's cost.
+// ============================================================================
+
+describe('Absorb Mana (Tome of Protection L3)', () => {
+  function setupAbsorb(): GameState {
+    let s = initGame(TWO_PLAYER_CONFIG);
+    s = forceLibrarySideA(s);
+    s = zeroPlayerResources(s, 'p1');
+    s = zeroPlayerResources(s, 'p2');
+    // Alice owns Tome of Protection researched to L3 + 0 mana (it's free).
+    s = addOwnedSpell(s, 'p1', 'base.spell.tome-of-protection', {
+      intPlaced: true,
+      wisPlacedLevel2: true,
+      wisPlacedLevel3: true,
+    });
+    // One placed mage so Bob can target it.
+    s = addMage(s, 'p1', {
+      id: 'alice-red',
+      cardId: 'base.mage.sorcery',
+      color: 'red',
+    });
+    s = placeMageOnSpace(s, 'p1', 'alice-red', 'base.room.library.a.slot-1');
+    // Bob owns Burn (L1 costs 1 Mana) for the wound trigger.
+    s = addOwnedSpell(s, 'p2', 'base.spell.burn', { intPlaced: true });
+    s = setMana(s, 'p2', 2);
+    return {
+      ...s,
+      firstPlayerIndex: 1,
+      phase: {
+        kind: 'errands',
+        round: 1,
+        activePlayerIndex: 1,
+        actionUsed: false,
+        fastActionUsed: false,
+      },
+    };
+  }
+
+  it('surfaces Absorb Mana when a spell wounds the responder\'s mage', () => {
+    let s = setupAbsorb();
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p2',
+      spellCardId: 'base.spell.burn',
+      level: 1,
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'mage-chosen', mageId: 'alice-red' },
+    });
+    const reactionPrompt = topPending(s);
+    expect(reactionPrompt.prompt.kind).toBe('reaction-window');
+    if (reactionPrompt.prompt.kind !== 'reaction-window') throw new Error('unreachable');
+    const absorb = reactionPrompt.prompt.reactionOptions.find(
+      (o) => o.effectId === 'base.spell.tome-of-protection.l3.react',
+    );
+    expect(absorb).toBeDefined();
+  });
+
+  it('playing Absorb Mana grants mana equal to the spell\'s printed cost', () => {
+    let s = setupAbsorb();
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p2',
+      spellCardId: 'base.spell.burn',
+      level: 1,
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'mage-chosen', mageId: 'alice-red' },
+    });
+    const reactionPrompt = topPending(s);
+    if (reactionPrompt.prompt.kind !== 'reaction-window') throw new Error('unreachable');
+    const absorb = reactionPrompt.prompt.reactionOptions.find(
+      (o) => o.effectId === 'base.spell.tome-of-protection.l3.react',
+    )!;
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: reactionPrompt.id,
+      answer: {
+        kind: 'reaction-played',
+        effectId: absorb.effectId,
+        reactionContext: {},
+      },
+    });
+    const alice = s.players.find((p) => p.id === 'p1')!;
+    // Burn L1 printed cost is 1 Mana → Alice gains 1.
+    expect(alice.resources.mana).toBe(1);
+    expect(
+      alice.ownedSpells.find((o) => o.cardId === 'base.spell.tome-of-protection')!
+        .exhausted,
+    ).toBe(true);
+  });
+
+  it('is NOT surfaced for non-spell sources (e.g. Ars Magna)', () => {
+    let s = setupAbsorb();
+    // Replace Bob's Burn with an Ars Magna setup: red mage with mana on
+    // Alice's occupied slot. Ars Magna is a mage-power source, not a spell.
+    s = addMage(s, 'p2', {
+      id: 'bob-red',
+      cardId: 'base.mage.sorcery',
+      color: 'red',
+    });
+    s = setMana(s, 'p2', 1);
+    s = applyAction(s, {
+      type: 'PLACE_WORKER',
+      playerId: 'p2',
+      mageId: 'bob-red',
+      actionSpaceId: 'base.room.library.a.slot-1', // Alice's slot
+    });
+    // Ars Magna opened a reaction window for Alice. Should NOT include Absorb Mana.
+    const reactionPrompt = topPending(s);
+    expect(reactionPrompt.prompt.kind).toBe('reaction-window');
+    if (reactionPrompt.prompt.kind !== 'reaction-window') throw new Error('unreachable');
+    const absorb = reactionPrompt.prompt.reactionOptions.find(
+      (o) => o.effectId === 'base.spell.tome-of-protection.l3.react',
+    );
+    expect(absorb).toBeUndefined();
+  });
+});
+
+// ============================================================================
 // Renewal (Songs of Springtime L3) — reaction: place wounded/moved mage to
 // an empty slot AND refresh an exhausted Spell or Treasure.
 // ============================================================================

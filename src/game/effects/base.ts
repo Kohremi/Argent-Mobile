@@ -13046,3 +13046,77 @@ registerEffect(
     throw new Error(`${selfRenewal} unexpected step ${String(step)}`);
   },
 );
+
+// ============================================================================
+// Tome of Protection L3 "Absorb Mana" — Reaction, 0 Mana. After one of your
+// Mages would be moved, wounded, or banished by a spell, gain Mana equal to
+// the cost of that spell. The reaction option is only surfaced when the
+// trigger's source is a spell (not a mage power, vault card, etc.).
+//
+// The mana amount is the SPELL'S PRINTED COST at the level cast. We resolve
+// that via the trigger source's spellCardId + level (level is encoded in
+// the source's description as "Name LN"). When level isn't recoverable we
+// fall back to L1's cost so the reaction still pays out reasonably.
+// ============================================================================
+
+function castLevelFromSourceDescription(description?: string): 1 | 2 | 3 {
+  if (!description) return 1;
+  const match = description.match(/L(\d+)$/);
+  if (!match || !match[1]) return 1;
+  const n = Number.parseInt(match[1], 10);
+  if (n === 1 || n === 2 || n === 3) return n;
+  return 1;
+}
+
+function spellCastedManaCost(
+  state: GameState,
+  source: ResolutionSource,
+): number {
+  if (source.kind !== 'spell') return 0;
+  const def = lookupSpellCardDef(state, source.id);
+  if (!def) return 0;
+  const level = castLevelFromSourceDescription(source.description);
+  const lvlDef = def.levels.find((l) => l.level === level);
+  return lvlDef?.manaCost ?? 0;
+}
+
+registerEffect(
+  'base.spell.tome-of-protection.l3.react',
+  (ctx: EffectContext): EffectResult => {
+    const paid = payAndExhaustSpell(
+      ctx.state,
+      ctx.triggeringPlayerId,
+      'base.spell.tome-of-protection',
+      0,
+    );
+    if (!paid) return { kind: 'done', patch: {} };
+    const raw = ctx.resumeContext?.['triggerEvent'];
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+      throw new Error('Absorb Mana: missing triggerEvent in resumeContext');
+    }
+    const event = raw as unknown as ReactionTriggerEvent;
+    if (
+      event.kind !== 'mage-wounded' &&
+      event.kind !== 'mage-banished' &&
+      event.kind !== 'mage-moved'
+    ) {
+      throw new Error(`Absorb Mana cannot react to ${event.kind}`);
+    }
+    if (event.ownerId !== ctx.triggeringPlayerId) {
+      throw new Error("Absorb Mana only reacts to the caster's own Mage");
+    }
+    const sourceRaw = ctx.resumeContext?.['triggerSource'];
+    if (!sourceRaw || typeof sourceRaw !== 'object' || Array.isArray(sourceRaw)) {
+      return { kind: 'done', patch: { players: paid.players } };
+    }
+    const triggerSource = sourceRaw as unknown as ResolutionSource;
+    const amount = spellCastedManaCost(paid, triggerSource);
+    if (amount <= 0) {
+      return { kind: 'done', patch: { players: paid.players } };
+    }
+    return {
+      kind: 'done',
+      patch: gainResourcePatch(paid, ctx.triggeringPlayerId, 'mana', amount),
+    };
+  },
+);
