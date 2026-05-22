@@ -12747,3 +12747,118 @@ registerEffect(
     throw new Error(`${self} unexpected step ${String(step)}`);
   },
 );
+
+// ============================================================================
+// Songs of Springtime L2 "Regrowth" — Reaction. When one of your Mages is
+// wounded or moved, place it into an empty slot (clear `isWounded`). Cost:
+// 1 Mana; the spell exhausts.
+//
+// The reaction option is surfaced from buildReactionOptionsFor when the
+// caster owns Songs of Springtime researched to L2 (intPlaced +
+// wisPlacedLevel2), unexhausted, with ≥1 Mana, and the trigger is a
+// `mage-wounded` or `mage-moved` event targeting one of their own mages.
+// ============================================================================
+
+registerEffect(
+  'base.spell.songs-of-springtime.l2.react',
+  (ctx: EffectContext): EffectResult => {
+    const selfRegrowth = 'base.spell.songs-of-springtime.l2.react';
+    const step = ctx.resumeContext?.['step'];
+
+    if (!step) {
+      const paid = payAndExhaustSpell(
+        ctx.state,
+        ctx.triggeringPlayerId,
+        'base.spell.songs-of-springtime',
+        1,
+      );
+      if (!paid) return { kind: 'done', patch: {} };
+      const raw = ctx.resumeContext?.['triggerEvent'];
+      if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+        throw new Error('Regrowth: missing triggerEvent in resumeContext');
+      }
+      const event = raw as unknown as ReactionTriggerEvent;
+      if (event.kind !== 'mage-wounded' && event.kind !== 'mage-moved') {
+        throw new Error(`Regrowth cannot react to ${event.kind}`);
+      }
+      if (event.ownerId !== ctx.triggeringPlayerId) {
+        throw new Error("Regrowth only reacts to the caster's own Mage");
+      }
+      const slots = listPlaceWithoutPowersSlots(paid, ctx.triggeringPlayerId);
+      if (slots.length === 0) {
+        return { kind: 'done', patch: { players: paid.players } };
+      }
+      return {
+        kind: 'pause',
+        patch: { players: paid.players },
+        pending: {
+          responderId: ctx.triggeringPlayerId,
+          prompt: {
+            kind: 'choose-target-action-space',
+            eligibleSpaceIds: slots,
+          },
+          resume: {
+            effectId: selfRegrowth,
+            context: { step: 'apply', mageId: event.mageId },
+          },
+          source: ctx.source,
+        },
+      };
+    }
+
+    if (step === 'apply') {
+      if (ctx.resumeAnswer?.kind !== 'space-chosen') {
+        throw new Error(`${selfRegrowth} apply expected space-chosen`);
+      }
+      const mageId = String(ctx.resumeContext?.['mageId'] ?? '');
+      if (!mageId) return { kind: 'done', patch: {} };
+      const destSpaceId = ctx.resumeAnswer.spaceId;
+      const ownerId = ctx.triggeringPlayerId;
+      const mage = ctx.state.players
+        .flatMap((p) => p.mages)
+        .find((m) => m.id === mageId);
+      if (!mage) return { kind: 'done', patch: {} };
+      const fromSpaceId =
+        mage.location.kind === 'action-space' ? mage.location.spaceId : null;
+      const occupancy: WorkerOccupancy = {
+        mageId,
+        ownerId,
+        isShadowing: false,
+      };
+      const players = ctx.state.players.map((p): Player => {
+        if (p.id !== ownerId) return p;
+        return {
+          ...p,
+          mages: p.mages.map((m) =>
+            m.id !== mageId
+              ? m
+              : {
+                  ...m,
+                  isWounded: false,
+                  isShadowing: false,
+                  location: {
+                    kind: 'action-space' as const,
+                    spaceId: destSpaceId,
+                  },
+                },
+          ),
+        };
+      });
+      const rooms = ctx.state.rooms.map((r) => ({
+        ...r,
+        actionSpaces: r.actionSpaces.map((s) => {
+          if (fromSpaceId && s.id === fromSpaceId && s.occupant?.mageId === mageId) {
+            return { ...s, occupant: null };
+          }
+          if (s.id === destSpaceId) {
+            return { ...s, occupant: occupancy };
+          }
+          return s;
+        }),
+      }));
+      return { kind: 'done', patch: { players, rooms } };
+    }
+
+    throw new Error(`${selfRegrowth} unexpected step ${String(step)}`);
+  },
+);

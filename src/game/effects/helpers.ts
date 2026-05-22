@@ -1216,6 +1216,22 @@ export function buildReactionOptionsFor(
         });
       }
     }
+    // Songs of Springtime L2 "Regrowth": when your mage is wounded or moved,
+    //   place it into an empty slot. Cost: 1 Mana. Researched at L2.
+    if (
+      songsReady &&
+      songs?.wisPlacedLevel2 &&
+      responder.resources.mana >= 1 &&
+      (event.kind === 'mage-wounded' || event.kind === 'mage-moved')
+    ) {
+      options.push({
+        sourceKind: 'spell',
+        sourceId: 'base.spell.songs-of-springtime',
+        effectId: 'base.spell.songs-of-springtime.l2.react',
+        label: `Cast Regrowth (place into an empty slot)${labelSuffix(mageId)}`,
+        ...(multi ? { forMageId: mageId } : {}),
+      });
+    }
 
     // The Darkness Within L2 "Haunt": when your mage is wounded, moved, or
     //   banished, it instead shadows the slot it previously occupied.

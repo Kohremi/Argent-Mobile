@@ -14529,6 +14529,186 @@ describe('Alt-leader spells', () => {
 });
 
 // ============================================================================
+// Regrowth (Songs of Springtime L2) — reaction: place a wounded or moved
+// mage into any empty slot.
+// ============================================================================
+
+describe('Regrowth (Songs of Springtime L2)', () => {
+  function setupRegrowth(): GameState {
+    let s = initGame(TWO_PLAYER_CONFIG);
+    s = forceLibrarySideA(s);
+    s = zeroPlayerResources(s, 'p1');
+    s = zeroPlayerResources(s, 'p2');
+    s = addOwnedSpell(s, 'p1', 'base.spell.songs-of-springtime', {
+      intPlaced: true,
+      wisPlacedLevel2: true,
+    });
+    s = setMana(s, 'p1', 1);
+    s = addMage(s, 'p1', {
+      id: 'alice-red',
+      cardId: 'base.mage.sorcery',
+      color: 'red',
+    });
+    s = placeMageOnSpace(s, 'p1', 'alice-red', 'base.room.library.a.slot-1');
+    s = addOwnedSpell(s, 'p2', 'base.spell.burn', { intPlaced: true });
+    s = setMana(s, 'p2', 2);
+    return {
+      ...s,
+      firstPlayerIndex: 1, // Bob first so he can cast Burn at Alice.
+      phase: {
+        kind: 'errands',
+        round: 1,
+        activePlayerIndex: 1,
+        actionUsed: false,
+        fastActionUsed: false,
+      },
+    };
+  }
+
+  it('surfaces a Regrowth option when the caster\'s mage is wounded', () => {
+    let s = setupRegrowth();
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p2',
+      spellCardId: 'base.spell.burn',
+      level: 1,
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'mage-chosen', mageId: 'alice-red' },
+    });
+    const reactionPrompt = topPending(s);
+    expect(reactionPrompt.prompt.kind).toBe('reaction-window');
+    if (reactionPrompt.prompt.kind !== 'reaction-window') throw new Error('unreachable');
+    const regrowth = reactionPrompt.prompt.reactionOptions.find(
+      (o) => o.effectId === 'base.spell.songs-of-springtime.l2.react',
+    );
+    expect(regrowth).toBeDefined();
+  });
+
+  it('playing Regrowth places the wounded mage on the chosen empty slot and clears the wound', () => {
+    let s = setupRegrowth();
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p2',
+      spellCardId: 'base.spell.burn',
+      level: 1,
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'mage-chosen', mageId: 'alice-red' },
+    });
+    const reactionPrompt = topPending(s);
+    if (reactionPrompt.prompt.kind !== 'reaction-window') throw new Error('unreachable');
+    const regrowth = reactionPrompt.prompt.reactionOptions.find(
+      (o) => o.effectId === 'base.spell.songs-of-springtime.l2.react',
+    )!;
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: reactionPrompt.id,
+      answer: {
+        kind: 'reaction-played',
+        effectId: regrowth.effectId,
+        reactionContext: {},
+      },
+    });
+    // The post-wound infirmary bonus fires after the reaction window closes
+    // but before Regrowth's slot pause resumes — its prompt is on top.
+    // ("Still gain Infirmary Bonuses" semantically applies here: the mage
+    // was wounded, Regrowth then moves it out.)
+    const bonusPrompt = topPending(s);
+    if (bonusPrompt.prompt.kind === 'choose-from-options') {
+      s = applyAction(s, {
+        type: 'RESOLVE_PENDING',
+        resolutionId: bonusPrompt.id,
+        answer: {
+          kind: 'option-chosen',
+          optionId: bonusPrompt.prompt.options[0]!.id,
+          payload: {},
+        },
+      });
+    }
+    // Now the Regrowth slot prompt.
+    const slotPrompt = topPending(s);
+    expect(slotPrompt.prompt.kind).toBe('choose-target-action-space');
+    if (slotPrompt.prompt.kind !== 'choose-target-action-space') throw new Error('unreachable');
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: slotPrompt.id,
+      answer: {
+        kind: 'space-chosen',
+        spaceId: 'base.room.library.a.slot-3',
+      },
+    });
+    const alice = s.players.find((p) => p.id === 'p1')!;
+    const placed = alice.mages.find((m) => m.id === 'alice-red')!;
+    expect(placed.isWounded).toBe(false);
+    expect(placed.location).toEqual({
+      kind: 'action-space',
+      spaceId: 'base.room.library.a.slot-3',
+    });
+    expect(alice.resources.mana).toBe(0); // spent 1
+    expect(
+      alice.ownedSpells.find((o) => o.cardId === 'base.spell.songs-of-springtime')!
+        .exhausted,
+    ).toBe(true);
+  });
+
+  it('does not surface Regrowth when mana < 1', () => {
+    let s = setupRegrowth();
+    s = setMana(s, 'p1', 0);
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p2',
+      spellCardId: 'base.spell.burn',
+      level: 1,
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'mage-chosen', mageId: 'alice-red' },
+    });
+    const reactionPrompt = topPending(s);
+    if (reactionPrompt.prompt.kind !== 'reaction-window') return;
+    const regrowth = reactionPrompt.prompt.reactionOptions.find(
+      (o) => o.effectId === 'base.spell.songs-of-springtime.l2.react',
+    );
+    expect(regrowth).toBeUndefined();
+  });
+
+  it('not surfaced when the spell is researched only to L1', () => {
+    let s = setupRegrowth();
+    s = mapPlayer(s, 'p1', (p) => ({
+      ...p,
+      ownedSpells: p.ownedSpells.map((o) =>
+        o.cardId !== 'base.spell.songs-of-springtime'
+          ? o
+          : { ...o, wisPlacedLevel2: false },
+      ),
+    }));
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p2',
+      spellCardId: 'base.spell.burn',
+      level: 1,
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'mage-chosen', mageId: 'alice-red' },
+    });
+    const reactionPrompt = topPending(s);
+    if (reactionPrompt.prompt.kind !== 'reaction-window') return;
+    const regrowth = reactionPrompt.prompt.reactionOptions.find(
+      (o) => o.effectId === 'base.spell.songs-of-springtime.l2.react',
+    );
+    expect(regrowth).toBeUndefined();
+  });
+});
+
+// ============================================================================
 // Eternal Power (Memoirs of the Future-Past L3) — cast ANY action level of
 // an owned spell for free; no exhaust on the borrowed spell.
 // ============================================================================
