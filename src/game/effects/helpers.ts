@@ -1191,6 +1191,24 @@ export function buildReactionOptionsFor(
         ...(multi ? { forMageId: mageId } : {}),
       });
     }
+    // Wrath of Heaven L3 "Retribution": when your mage is wounded by an
+    //   opponent, choose and wound TWO Mages owned by the attacker. Cost:
+    //   3 Mana. Researched at L3.
+    if (
+      wrathReady &&
+      wrath?.wisPlacedLevel3 &&
+      triggeredByOpponent &&
+      event.kind === 'mage-wounded' &&
+      responder.resources.mana >= 3
+    ) {
+      options.push({
+        sourceKind: 'spell',
+        sourceId: 'base.spell.wrath-of-heaven',
+        effectId: 'base.spell.wrath-of-heaven.l3.react',
+        label: `Cast Retribution (wound two of the attacker's mages)${labelSuffix(mageId)}`,
+        ...(multi ? { forMageId: mageId } : {}),
+      });
+    }
 
     // Songs of Springtime L1 "Regeneration": when your mage is wounded or
     //   moved, refresh an exhausted Spell or Treasure. Cost: 0 Mana.

@@ -14529,6 +14529,211 @@ describe('Alt-leader spells', () => {
 });
 
 // ============================================================================
+// Retribution (Wrath of Heaven L3) — reaction: wound two of the attacker's
+// mages after one of yours is wounded.
+// ============================================================================
+
+describe('Retribution (Wrath of Heaven L3)', () => {
+  function setupRetribution(): GameState {
+    let s = initGame(TWO_PLAYER_CONFIG);
+    s = forceLibrarySideA(s);
+    s = zeroPlayerResources(s, 'p1');
+    s = zeroPlayerResources(s, 'p2');
+    s = addOwnedSpell(s, 'p1', 'base.spell.wrath-of-heaven', {
+      intPlaced: true,
+      wisPlacedLevel2: true,
+      wisPlacedLevel3: true,
+    });
+    s = setMana(s, 'p1', 3);
+    s = addMage(s, 'p1', {
+      id: 'alice-red',
+      cardId: 'base.mage.sorcery',
+      color: 'red',
+    });
+    s = placeMageOnSpace(s, 'p1', 'alice-red', 'base.room.library.a.slot-1');
+    s = addOwnedSpell(s, 'p2', 'base.spell.burn', { intPlaced: true });
+    s = setMana(s, 'p2', 2);
+    // Two of Bob's placed mages to retaliate against.
+    s = addMage(s, 'p2', {
+      id: 'bob-grey-1',
+      cardId: 'base.mage.mysticism',
+      color: 'grey',
+    });
+    s = addMage(s, 'p2', {
+      id: 'bob-grey-2',
+      cardId: 'base.mage.mysticism',
+      color: 'grey',
+    });
+    s = placeMageOnSpace(s, 'p2', 'bob-grey-1', 'base.room.library.a.slot-2');
+    s = placeMageOnSpace(s, 'p2', 'bob-grey-2', 'base.room.library.a.slot-3');
+    return {
+      ...s,
+      firstPlayerIndex: 1,
+      phase: {
+        kind: 'errands',
+        round: 1,
+        activePlayerIndex: 1,
+        actionUsed: false,
+        fastActionUsed: false,
+      },
+    };
+  }
+
+  it('surfaces Retribution when a spell wounds the responder\'s mage', () => {
+    let s = setupRetribution();
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p2',
+      spellCardId: 'base.spell.burn',
+      level: 1,
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'mage-chosen', mageId: 'alice-red' },
+    });
+    const reactionPrompt = topPending(s);
+    if (reactionPrompt.prompt.kind !== 'reaction-window') throw new Error('unreachable');
+    const retrib = reactionPrompt.prompt.reactionOptions.find(
+      (o) => o.effectId === 'base.spell.wrath-of-heaven.l3.react',
+    );
+    expect(retrib).toBeDefined();
+  });
+
+  it('wounds two of the attacker\'s mages on consecutive picks', () => {
+    let s = setupRetribution();
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p2',
+      spellCardId: 'base.spell.burn',
+      level: 1,
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'mage-chosen', mageId: 'alice-red' },
+    });
+    const reactionPrompt = topPending(s);
+    if (reactionPrompt.prompt.kind !== 'reaction-window') throw new Error('unreachable');
+    const retrib = reactionPrompt.prompt.reactionOptions.find(
+      (o) => o.effectId === 'base.spell.wrath-of-heaven.l3.react',
+    )!;
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: reactionPrompt.id,
+      answer: {
+        kind: 'reaction-played',
+        effectId: retrib.effectId,
+        reactionContext: {},
+      },
+    });
+    // Alice's own Infirmary bonus from the original Burn lands first.
+    const bonusPrompt = topPending(s);
+    if (bonusPrompt.prompt.kind === 'choose-from-options') {
+      s = applyAction(s, {
+        type: 'RESOLVE_PENDING',
+        resolutionId: bonusPrompt.id,
+        answer: {
+          kind: 'option-chosen',
+          optionId: bonusPrompt.prompt.options[0]!.id,
+          payload: {},
+        },
+      });
+    }
+    // First target prompt — both Bob mages eligible.
+    const t1Prompt = topPending(s);
+    expect(t1Prompt.prompt.kind).toBe('choose-target-mage');
+    if (t1Prompt.prompt.kind !== 'choose-target-mage') throw new Error('unreachable');
+    expect(t1Prompt.prompt.eligibleMageIds.sort()).toEqual(
+      ['bob-grey-1', 'bob-grey-2'].sort(),
+    );
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: t1Prompt.id,
+      answer: { kind: 'mage-chosen', mageId: 'bob-grey-1' },
+    });
+    // Second target prompt excludes the first.
+    const t2Prompt = topPending(s);
+    if (t2Prompt.prompt.kind !== 'choose-target-mage') throw new Error('unreachable');
+    expect(t2Prompt.prompt.eligibleMageIds).toEqual(['bob-grey-2']);
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: t2Prompt.id,
+      answer: { kind: 'mage-chosen', mageId: 'bob-grey-2' },
+    });
+    // Two bonus prompts may surface for Bob (one per wound). Resolve any
+    // remaining choose-from-options prompts until idle.
+    while (s.pendingResolutionStack.length > 0) {
+      const top = topPending(s);
+      if (top.prompt.kind !== 'choose-from-options') break;
+      s = applyAction(s, {
+        type: 'RESOLVE_PENDING',
+        resolutionId: top.id,
+        answer: {
+          kind: 'option-chosen',
+          optionId: top.prompt.options[0]!.id,
+          payload: {},
+        },
+      });
+    }
+    const bob = s.players.find((p) => p.id === 'p2')!;
+    expect(bob.mages.find((m) => m.id === 'bob-grey-1')!.isWounded).toBe(true);
+    expect(bob.mages.find((m) => m.id === 'bob-grey-2')!.isWounded).toBe(true);
+    const alice = s.players.find((p) => p.id === 'p1')!;
+    expect(alice.resources.mana).toBe(0); // spent 3
+    expect(
+      alice.ownedSpells.find((o) => o.cardId === 'base.spell.wrath-of-heaven')!
+        .exhausted,
+    ).toBe(true);
+  });
+
+  it('does not surface Retribution for non-wound triggers (e.g. move)', () => {
+    let s = setupRetribution();
+    // Replace setup: a move-only event setup. Use Strength of Earth which moves.
+    s = mapPlayer(s, 'p2', (p) => ({
+      ...p,
+      ownedSpells: [
+        { cardId: 'base.spell.strength-of-earth', intPlaced: true, wisPlacedLevel2: false, wisPlacedLevel3: false, exhausted: false },
+      ],
+    }));
+    s = setMana(s, 'p2', 1);
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p2',
+      spellCardId: 'base.spell.strength-of-earth',
+      level: 1,
+    });
+    // Resolve the move spell's prompts (mage + slot) to get to the reaction.
+    let i = 0;
+    while (s.pendingResolutionStack.length > 0 && i++ < 5) {
+      const top = topPending(s);
+      if (top.prompt.kind === 'reaction-window') break;
+      if (top.prompt.kind === 'choose-target-mage') {
+        s = applyAction(s, {
+          type: 'RESOLVE_PENDING',
+          resolutionId: top.id,
+          answer: { kind: 'mage-chosen', mageId: top.prompt.eligibleMageIds[0]! },
+        });
+      } else if (top.prompt.kind === 'choose-target-action-space') {
+        s = applyAction(s, {
+          type: 'RESOLVE_PENDING',
+          resolutionId: top.id,
+          answer: { kind: 'space-chosen', spaceId: top.prompt.eligibleSpaceIds[0]! },
+        });
+      } else {
+        break;
+      }
+    }
+    const reactionPrompt = topPending(s);
+    if (reactionPrompt.prompt.kind !== 'reaction-window') return;
+    const retrib = reactionPrompt.prompt.reactionOptions.find(
+      (o) => o.effectId === 'base.spell.wrath-of-heaven.l3.react',
+    );
+    expect(retrib).toBeUndefined();
+  });
+});
+
+// ============================================================================
 // Absorb Mana (Tome of Protection L3) — reaction: gain mana equal to the
 // triggering spell's cost.
 // ============================================================================

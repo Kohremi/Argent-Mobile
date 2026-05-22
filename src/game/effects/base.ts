@@ -13120,3 +13120,149 @@ registerEffect(
     };
   },
 );
+
+// ============================================================================
+// Wrath of Heaven L3 "Retribution" — Reaction, 3 Mana. After one of your
+// Mages is wounded by an opponent, wound TWO mages owned by that opponent.
+//
+// Two-pick chain: pick targets one at a time (the second excludes the first),
+// then apply both wounds in a batch and surface the attacker's Infirmary
+// bonus prompts via batch-post-wound-bonus. No reaction window opens for
+// the retaliation wounds (reactions cannot be reacted to per rulebook).
+//
+// Falls back to a single wound if the attacker only has one eligible mage.
+// Fizzles entirely if the attacker has no eligible mages (responder still
+// pays the 3 Mana + exhausts via payAndExhaustSpell, matching how the
+// other Wrath levels handle "no targets").
+// ============================================================================
+
+registerEffect('base.spell.wrath-of-heaven.l3.react', (ctx): EffectResult => {
+  const selfRetribution = 'base.spell.wrath-of-heaven.l3.react';
+  const step = ctx.resumeContext?.['step'];
+
+  function placedMagesOf(state: GameState, playerId: string): string[] {
+    const p = state.players.find((pp) => pp.id === playerId);
+    return (
+      p?.mages
+        .filter((m) => m.location.kind === 'action-space' && !m.isWounded)
+        .map((m) => m.id) ?? []
+    );
+  }
+
+  function applyRetributionWounds(
+    workingState: GameState,
+    woundPatch: GameStatePatch,
+    targets: string[],
+  ): EffectResult {
+    if (targets.length === 0) return { kind: 'done', patch: woundPatch };
+    const wounded = woundManyMages(
+      workingState,
+      targets,
+      ctx.triggeringPlayerId,
+    );
+    const composedPatch: GameStatePatch = { ...woundPatch, ...wounded.patch };
+    const afterWounds: GameState = { ...workingState, ...wounded.patch };
+    const ordered = orderEventsByTurn(
+      workingState,
+      ctx.triggeringPlayerId,
+      wounded.events,
+    );
+    // Invoke the existing batch-post-wound-bonus pump directly — reactions
+    // can't open another reaction window for these wounds, so we skip
+    // straight to the bonus chain.
+    const bonusResult = getEffect('base.system.batch-post-wound-bonus')({
+      state: afterWounds,
+      source: ctx.source,
+      triggeringPlayerId: ctx.triggeringPlayerId,
+      resumeContext: { events: eventsArrayToContext(ordered) },
+      allowReactions: false,
+    });
+    return composeWithDelegate(bonusResult, composedPatch);
+  }
+
+  if (!step) {
+    const paid = payAndExhaustSpell(
+      ctx.state,
+      ctx.triggeringPlayerId,
+      'base.spell.wrath-of-heaven',
+      3,
+    );
+    if (!paid) return { kind: 'done', patch: {} };
+    const rawEvent = ctx.resumeContext?.['triggerEvent'];
+    if (!rawEvent || typeof rawEvent !== 'object') {
+      return { kind: 'done', patch: { players: paid.players } };
+    }
+    const event = rawEvent as unknown as ReactionTriggerEvent;
+    if (event.kind !== 'mage-wounded') {
+      return { kind: 'done', patch: { players: paid.players } };
+    }
+    if (!('byPlayerId' in event) || event.byPlayerId === event.ownerId) {
+      return { kind: 'done', patch: { players: paid.players } };
+    }
+    const attackerId = event.byPlayerId;
+    const targets = placedMagesOf(paid, attackerId);
+    if (targets.length === 0) {
+      return { kind: 'done', patch: { players: paid.players } };
+    }
+    return {
+      kind: 'pause',
+      patch: { players: paid.players },
+      pending: {
+        responderId: ctx.triggeringPlayerId,
+        prompt: { kind: 'choose-target-mage', eligibleMageIds: targets },
+        resume: {
+          effectId: selfRetribution,
+          context: { step: 'pick-second', attackerId },
+        },
+        source: ctx.source,
+      },
+    };
+  }
+
+  if (step === 'pick-second') {
+    if (ctx.resumeAnswer?.kind !== 'mage-chosen') {
+      throw new Error(`${selfRetribution} pick-second expected mage-chosen`);
+    }
+    const target1 = ctx.resumeAnswer.mageId;
+    const attackerId = String(ctx.resumeContext?.['attackerId'] ?? '');
+    if (!attackerId) {
+      return applyRetributionWounds(ctx.state, {}, [target1]);
+    }
+    const remaining = placedMagesOf(ctx.state, attackerId).filter(
+      (m) => m !== target1,
+    );
+    if (remaining.length === 0) {
+      // Only one target available — apply the single wound.
+      return applyRetributionWounds(ctx.state, {}, [target1]);
+    }
+    return {
+      kind: 'pause',
+      pending: {
+        responderId: ctx.triggeringPlayerId,
+        prompt: {
+          kind: 'choose-target-mage',
+          eligibleMageIds: remaining,
+        },
+        resume: {
+          effectId: selfRetribution,
+          context: { step: 'apply', target1 },
+        },
+        source: ctx.source,
+      },
+    };
+  }
+
+  if (step === 'apply') {
+    if (ctx.resumeAnswer?.kind !== 'mage-chosen') {
+      throw new Error(`${selfRetribution} apply expected mage-chosen`);
+    }
+    const target1 = String(ctx.resumeContext?.['target1'] ?? '');
+    const target2 = ctx.resumeAnswer.mageId;
+    if (!target1 || target1 === target2) {
+      return applyRetributionWounds(ctx.state, {}, [target2]);
+    }
+    return applyRetributionWounds(ctx.state, {}, [target1, target2]);
+  }
+
+  throw new Error(`${selfRetribution} unexpected step ${String(step)}`);
+});
