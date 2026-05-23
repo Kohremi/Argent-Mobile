@@ -194,6 +194,52 @@ function injectPhaseSteppers(state: GameState, playerId: PlayerId): GameState {
   };
 }
 
+/** Adds the chosen spell to a player's office at L1 (intPlaced=true) and
+ *  unexhausted. If the player already owns the spell, leaves the existing
+ *  OwnedSpell alone — debug should be additive, not destructive. */
+function injectSpell(
+  state: GameState,
+  playerId: PlayerId,
+  cardId: string,
+): GameState {
+  return {
+    ...state,
+    players: state.players.map((p) => {
+      if (p.id !== playerId) return p;
+      if (p.ownedSpells.some((s) => s.cardId === cardId)) return p;
+      return {
+        ...p,
+        ownedSpells: [
+          ...p.ownedSpells,
+          {
+            cardId,
+            intPlaced: true,
+            wisPlacedLevel2: false,
+            wisPlacedLevel3: false,
+            exhausted: false,
+          },
+        ],
+      };
+    }),
+  };
+}
+
+/** Returns every spell across the active packs (regular + legendary),
+ *  sorted by department then name for stable rendering. */
+function listAllAvailableSpells(state: GameState): SpellCard[] {
+  const out: SpellCard[] = [];
+  for (const packId of state.activePackIds) {
+    const pack = listPacks().find((p) => p.id === packId);
+    if (!pack) continue;
+    out.push(...pack.spells, ...pack.legendarySpells);
+  }
+  out.sort((a, b) => {
+    if (a.department !== b.department) return a.department.localeCompare(b.department);
+    return a.name.localeCompare(b.name);
+  });
+  return out;
+}
+
 function bumpResource(
   state: GameState,
   playerId: PlayerId,
@@ -2167,8 +2213,76 @@ function PlayerCard({
             +1 <ResourceIcon kind="merit-badge" size={11} />
           </button>
         </div>
+        <SpellAcquirePicker state={state} player={player} patchState={patchState} />
       </div>
     </div>
+  );
+}
+
+/**
+ * Debug-only disclosure for granting any pack spell to a player. Shows each
+ * spell's name, department, and per-level text so the user can read the
+ * card before acquiring. "Add" seats the spell at L1 (intPlaced=true) so
+ * it's castable; existing ownership disables the row.
+ */
+function SpellAcquirePicker({
+  state,
+  player,
+  patchState,
+}: {
+  state: GameState;
+  player: Player;
+  patchState: (fn: (s: GameState) => GameState) => void;
+}) {
+  const all = listAllAvailableSpells(state);
+  if (all.length === 0) return null;
+  return (
+    <details className="text-[10px]">
+      <summary className="text-slate-400 cursor-pointer hover:text-slate-200 select-none">
+        Acquire spell ({all.length} available)
+      </summary>
+      <div className="mt-1 max-h-72 overflow-y-auto space-y-1 pr-1">
+        {all.map((sp) => {
+          const owned = player.ownedSpells.some((o) => o.cardId === sp.id);
+          return (
+            <div
+              key={sp.id}
+              className="rounded bg-slate-950/40 p-1.5 space-y-0.5 border border-slate-800"
+            >
+              <div className="flex items-center justify-between gap-2">
+                <span className="font-medium text-slate-200">{sp.name}</span>
+                <span className="text-[9px] uppercase tracking-wide text-slate-500 ml-auto">
+                  {sp.department}
+                </span>
+                <button
+                  type="button"
+                  onClick={() =>
+                    patchState((s) => injectSpell(s, player.id, sp.id))
+                  }
+                  disabled={owned}
+                  className="px-1.5 py-0.5 rounded bg-amber-500 text-slate-950 hover:bg-amber-400 disabled:bg-slate-700 disabled:text-slate-500 disabled:cursor-not-allowed text-[9px] shrink-0"
+                  title={owned ? 'Already owned' : 'Acquire at L1 (intPlaced)'}
+                >
+                  {owned ? '✓ owned' : 'Add'}
+                </button>
+              </div>
+              {sp.levels.map((lv) => (
+                <p
+                  key={lv.level}
+                  className="text-[9px] text-slate-400 leading-snug"
+                >
+                  <span className="text-slate-300">
+                    L{lv.level} {lv.title}
+                  </span>{' '}
+                  ({lv.manaCost} Mana, {lv.timing}):{' '}
+                  <span className="italic">{lv.description ?? ''}</span>
+                </p>
+              ))}
+            </div>
+          );
+        })}
+      </div>
+    </details>
   );
 }
 
