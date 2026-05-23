@@ -14183,3 +14183,111 @@ function surfaceFadeMagePrompt(
     },
   };
 }
+
+// ============================================================================
+// Thirteen Greater Mysteries L2 "Tap the Well" — Action, 0 Mana. Cast a Level
+// 1 Spell from the Spell Tableau, paying all costs.
+//
+// Candidates come from `state.spellTableau` (the 3 face-up spell books), not
+// from the caster's owned spells. The L1 effect must be registered and the
+// caster must be able to afford the L1 mana cost; reaction-timing L1s are
+// excluded. The borrowed cast does NOT remove the card from the tableau and
+// does NOT mark anything exhausted (the tableau card isn't owned).
+// ============================================================================
+
+type TapTheWellCandidate = {
+  spellCardId: string;
+  manaCost: number;
+  effectId: string;
+  label: string;
+};
+
+function listTapTheWellCandidates(
+  state: GameState,
+  casterId: string,
+): TapTheWellCandidate[] {
+  const player = state.players.find((p) => p.id === casterId);
+  if (!player) return [];
+  const out: TapTheWellCandidate[] = [];
+  for (const cardId of state.spellTableau) {
+    const def = lookupSpellCardDef(state, cardId);
+    if (!def) continue;
+    const lvl1 = def.levels.find((l) => l.level === 1);
+    if (!lvl1) continue;
+    if (lvl1.timing === 'reaction') continue;
+    if (!hasEffect(lvl1.effectId)) continue;
+    if (player.resources.mana < lvl1.manaCost) continue;
+    out.push({
+      spellCardId: cardId,
+      manaCost: lvl1.manaCost,
+      effectId: lvl1.effectId,
+      label: `${def.name} L1 "${lvl1.title}" (${lvl1.manaCost} Mana): ${lvl1.description ?? ''}`,
+    });
+  }
+  return out;
+}
+
+registerEffect(
+  'base.spell.thirteen-greater-mysteries.l2',
+  (ctx: EffectContext): EffectResult => {
+    const self = 'base.spell.thirteen-greater-mysteries.l2';
+    const step = ctx.resumeContext?.['step'];
+
+    if (!ctx.resumeAnswer) {
+      const candidates = listTapTheWellCandidates(
+        ctx.state,
+        ctx.triggeringPlayerId,
+      );
+      if (candidates.length === 0) return { kind: 'done', patch: {} };
+      const options: ChoiceOption[] = candidates.map((c) => ({
+        id: c.spellCardId,
+        label: c.label,
+        payload: {},
+      }));
+      return {
+        kind: 'pause',
+        pending: {
+          responderId: ctx.triggeringPlayerId,
+          prompt: { kind: 'choose-from-options', options },
+          resume: { effectId: self, context: { step: 'apply' } },
+          source: ctx.source,
+        },
+      };
+    }
+
+    if (step === 'apply') {
+      if (ctx.resumeAnswer.kind !== 'option-chosen') {
+        throw new Error(`${self} apply expected option-chosen`);
+      }
+      const chosenSpellId = ctx.resumeAnswer.optionId;
+      const candidate = listTapTheWellCandidates(
+        ctx.state,
+        ctx.triggeringPlayerId,
+      ).find((c) => c.spellCardId === chosenSpellId);
+      if (!candidate) return { kind: 'done', patch: {} };
+      const paidState: GameState = {
+        ...ctx.state,
+        players: ctx.state.players.map((p) =>
+          p.id !== ctx.triggeringPlayerId
+            ? p
+            : {
+                ...p,
+                resources: {
+                  ...p.resources,
+                  mana: p.resources.mana - candidate.manaCost,
+                },
+              },
+        ),
+      };
+      const delegate = getEffect(candidate.effectId)({
+        state: paidState,
+        source: ctx.source,
+        triggeringPlayerId: ctx.triggeringPlayerId,
+        allowReactions: ctx.allowReactions,
+      });
+      return composeWithDelegate(delegate, { players: paidState.players });
+    }
+
+    throw new Error(`${self} unexpected step ${String(step)}`);
+  },
+);

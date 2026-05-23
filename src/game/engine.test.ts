@@ -14529,6 +14529,111 @@ describe('Alt-leader spells', () => {
 });
 
 // ============================================================================
+// Tap the Well (Thirteen Greater Mysteries L2) — cast a L1 tableau spell,
+// paying all costs.
+// ============================================================================
+
+describe('Tap the Well (Thirteen Greater Mysteries L2)', () => {
+  function setupTapTheWell(): GameState {
+    let s = initGame(TWO_PLAYER_CONFIG);
+    s = forceLibrarySideA(s);
+    s = zeroPlayerResources(s, 'p1');
+    s = zeroPlayerResources(s, 'p2');
+    s = addOwnedSpell(s, 'p1', 'base.spell.thirteen-greater-mysteries', {
+      intPlaced: true,
+      wisPlacedLevel2: true,
+    });
+    // Tap the Well L2 costs 0; the tableau cast needs its own mana.
+    s = setMana(s, 'p1', 1);
+    // Pin Burn into the tableau so we know what's there.
+    s = { ...s, spellTableau: ['base.spell.burn'] };
+    s = addMage(s, 'p2', {
+      id: 'bob-grey',
+      cardId: 'base.mage.mysticism',
+      color: 'grey',
+    });
+    s = placeMageOnSpace(s, 'p2', 'bob-grey', 'base.room.library.a.slot-1');
+    return {
+      ...s,
+      firstPlayerIndex: 0,
+      phase: {
+        kind: 'errands',
+        round: 1,
+        activePlayerIndex: 0,
+        actionUsed: false,
+        fastActionUsed: false,
+      },
+    };
+  }
+
+  it('offers L1 spells from the tableau the caster can afford', () => {
+    let s = setupTapTheWell();
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.thirteen-greater-mysteries',
+      level: 2,
+    });
+    const top = topPending(s);
+    if (top.prompt.kind !== 'choose-from-options') throw new Error('unreachable');
+    const ids = top.prompt.options.map((o) => o.id);
+    expect(ids).toContain('base.spell.burn');
+  });
+
+  it('runs the chosen L1 effect, pays its mana, and does NOT exhaust anything in the tableau', () => {
+    let s = setupTapTheWell();
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.thirteen-greater-mysteries',
+      level: 2,
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'option-chosen', optionId: 'base.spell.burn', payload: {} },
+    });
+    // Burn's target prompt.
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'mage-chosen', mageId: 'bob-grey' },
+    });
+    const p1 = s.players.find((p) => p.id === 'p1')!;
+    // Burn cost 1 → mana 0.
+    expect(p1.resources.mana).toBe(0);
+    // Caster doesn't own Burn (it's still in the tableau).
+    expect(
+      p1.ownedSpells.find((o) => o.cardId === 'base.spell.burn'),
+    ).toBeUndefined();
+    // Tableau still contains Burn.
+    expect(s.spellTableau).toContain('base.spell.burn');
+    // Bob's mage wounded.
+    const bob = s.players.find((p) => p.id === 'p2')!;
+    expect(bob.mages.find((m) => m.id === 'bob-grey')!.isWounded).toBe(true);
+  });
+
+  it('fizzles when the caster cannot afford any L1 in the tableau', () => {
+    let s = setupTapTheWell();
+    s = setMana(s, 'p1', 0); // Burn costs 1.
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.thirteen-greater-mysteries',
+      level: 2,
+    });
+    // No follow-up prompt for Tap the Well.
+    expect(
+      s.pendingResolutionStack.some(
+        (e) =>
+          e.source.kind === 'spell' &&
+          e.source.id === 'base.spell.thirteen-greater-mysteries',
+      ),
+    ).toBe(false);
+  });
+});
+
+// ============================================================================
 // Fade (Parallel Synchronicity L2) — pick a room, then toggle which placed
 // mages shift to their slots' shadow positions.
 // ============================================================================
