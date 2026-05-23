@@ -14529,6 +14529,347 @@ describe('Alt-leader spells', () => {
 });
 
 // ============================================================================
+// Accelerate Time (Paralocation L2) — fast action: cast another Spell.
+// ============================================================================
+
+describe('Accelerate Time (Paralocation L2)', () => {
+  function setupAccelerate(): GameState {
+    let s = initGame(TWO_PLAYER_CONFIG);
+    s = forceLibrarySideA(s);
+    s = zeroPlayerResources(s, 'p1');
+    s = zeroPlayerResources(s, 'p2');
+    s = addOwnedSpell(s, 'p1', 'base.spell.everyday-paralocation', {
+      intPlaced: true,
+      wisPlacedLevel2: true,
+    });
+    s = addOwnedSpell(s, 'p1', 'base.spell.burn', { intPlaced: true });
+    s = setMana(s, 'p1', 3);
+    s = addMage(s, 'p2', {
+      id: 'bob-grey',
+      cardId: 'base.mage.mysticism',
+      color: 'grey',
+    });
+    s = placeMageOnSpace(s, 'p2', 'bob-grey', 'base.room.library.a.slot-1');
+    return {
+      ...s,
+      firstPlayerIndex: 0,
+      phase: {
+        kind: 'errands',
+        round: 1,
+        activePlayerIndex: 0,
+        actionUsed: false,
+        fastActionUsed: false,
+      },
+    };
+  }
+
+  it('prompts for a castable owned spell (and excludes Paralocation itself)', () => {
+    let s = setupAccelerate();
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.everyday-paralocation',
+      level: 2,
+    });
+    const top = topPending(s);
+    expect(top.prompt.kind).toBe('choose-from-options');
+    if (top.prompt.kind !== 'choose-from-options') throw new Error('unreachable');
+    const ids = top.prompt.options.map((o) => o.id);
+    expect(ids).toContain('base.spell.burn::1');
+    expect(
+      ids.some((id) => id.startsWith('base.spell.everyday-paralocation::')),
+    ).toBe(false);
+  });
+
+  it('borrowed spell pays its own mana + exhausts and runs its effect', () => {
+    let s = setupAccelerate();
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.everyday-paralocation',
+      level: 2,
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'option-chosen', optionId: 'base.spell.burn::1', payload: {} },
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'mage-chosen', mageId: 'bob-grey' },
+    });
+    const p1 = s.players.find((p) => p.id === 'p1')!;
+    // Paralocation L2: 2 Mana, Burn L1: 1 Mana → total 3 spent.
+    expect(p1.resources.mana).toBe(0);
+    expect(
+      p1.ownedSpells.find((o) => o.cardId === 'base.spell.everyday-paralocation')!
+        .exhausted,
+    ).toBe(true);
+    expect(p1.ownedSpells.find((o) => o.cardId === 'base.spell.burn')!.exhausted).toBe(
+      true,
+    );
+    const bob = s.players.find((p) => p.id === 'p2')!;
+    expect(bob.mages.find((m) => m.id === 'bob-grey')!.isWounded).toBe(true);
+  });
+});
+
+// ============================================================================
+// Mystic Link (Tenets of Dominance L2) — cast another spell + place a mage.
+// ============================================================================
+
+describe('Mystic Link (Tenets of Dominance L2)', () => {
+  function setupMysticLink(): GameState {
+    let s = initGame(TWO_PLAYER_CONFIG);
+    s = forceLibrarySideA(s);
+    s = zeroPlayerResources(s, 'p1');
+    s = zeroPlayerResources(s, 'p2');
+    s = addOwnedSpell(s, 'p1', 'base.spell.tenets-of-dominance', {
+      intPlaced: true,
+      wisPlacedLevel2: true,
+    });
+    s = addOwnedSpell(s, 'p1', 'base.spell.burn', { intPlaced: true });
+    s = setMana(s, 'p1', 3);
+    s = addMage(s, 'p1', {
+      id: 'alice-red',
+      cardId: 'base.mage.sorcery',
+      color: 'red',
+    });
+    s = addMage(s, 'p2', {
+      id: 'bob-grey',
+      cardId: 'base.mage.mysticism',
+      color: 'grey',
+    });
+    s = placeMageOnSpace(s, 'p2', 'bob-grey', 'base.room.library.a.slot-1');
+    return {
+      ...s,
+      firstPlayerIndex: 0,
+      phase: {
+        kind: 'errands',
+        round: 1,
+        activePlayerIndex: 0,
+        actionUsed: false,
+        fastActionUsed: false,
+      },
+    };
+  }
+
+  it('cast → pick borrowed spell → resolve borrowed effect → place a mage', () => {
+    let s = setupMysticLink();
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.tenets-of-dominance',
+      level: 2,
+    });
+    // First prompt: pick a borrowed spell (or skip).
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'option-chosen', optionId: 'base.spell.burn::1', payload: {} },
+    });
+    // Burn's target prompt.
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'mage-chosen', mageId: 'bob-grey' },
+    });
+    // Walk remaining prompts (reaction window pass, etc.) until the
+    // pendingPlaceChain pump surfaces the mage-pick.
+    const resolveAllPrompts = (state: GameState): GameState => {
+      let curr = state;
+      let i = 0;
+      while (curr.pendingResolutionStack.length > 0 && i++ < 10) {
+        const top = topPending(curr);
+        if (top.prompt.kind === 'reaction-window') {
+          curr = applyAction(curr, {
+            type: 'RESOLVE_PENDING',
+            resolutionId: top.id,
+            answer: { kind: 'reaction-passed' },
+          });
+        } else if (
+          top.prompt.kind === 'choose-from-options' &&
+          top.prompt.options.some((o) => o.id === 'place')
+        ) {
+          // Mysticism post-cast — skip it (we want the Mystic Link place).
+          const skip = top.prompt.options.find((o) => o.id === 'skip');
+          if (skip) {
+            curr = applyAction(curr, {
+              type: 'RESOLVE_PENDING',
+              resolutionId: top.id,
+              answer: { kind: 'option-chosen', optionId: 'skip', payload: {} },
+            });
+          } else {
+            break;
+          }
+        } else if (top.prompt.kind === 'choose-target-mage') {
+          // Mystic Link's place-mage step: pick alice-red.
+          curr = applyAction(curr, {
+            type: 'RESOLVE_PENDING',
+            resolutionId: top.id,
+            answer: { kind: 'mage-chosen', mageId: 'alice-red' },
+          });
+        } else if (top.prompt.kind === 'choose-target-action-space') {
+          curr = applyAction(curr, {
+            type: 'RESOLVE_PENDING',
+            resolutionId: top.id,
+            answer: {
+              kind: 'space-chosen',
+              spaceId: 'base.room.library.a.slot-2',
+            },
+          });
+        } else if (top.prompt.kind === 'choose-from-options') {
+          curr = applyAction(curr, {
+            type: 'RESOLVE_PENDING',
+            resolutionId: top.id,
+            answer: {
+              kind: 'option-chosen',
+              optionId: top.prompt.options[0]!.id,
+              payload: {},
+            },
+          });
+        } else {
+          break;
+        }
+      }
+      return curr;
+    };
+    s = resolveAllPrompts(s);
+    // Bob's mage wounded by Burn.
+    const bob = s.players.find((p) => p.id === 'p2')!;
+    expect(bob.mages.find((m) => m.id === 'bob-grey')!.isWounded).toBe(true);
+    // Alice's mage placed somewhere by Mystic Link.
+    const alice = s.players.find((p) => p.id === 'p1')!;
+    const placed = alice.mages.find((m) => m.id === 'alice-red')!;
+    expect(placed.location.kind).toBe('action-space');
+  });
+});
+
+// ============================================================================
+// Chain Lightning (Lightning and You L3) — wound + place + optional cast
+// another.
+// ============================================================================
+
+describe('Chain Lightning (Lightning and You L3)', () => {
+  function setupChainLightning(): GameState {
+    let s = initGame(TWO_PLAYER_CONFIG);
+    s = forceLibrarySideA(s);
+    s = zeroPlayerResources(s, 'p1');
+    s = zeroPlayerResources(s, 'p2');
+    s = addOwnedSpell(s, 'p1', 'base.spell.lightning-and-you', {
+      intPlaced: true,
+      wisPlacedLevel2: true,
+      wisPlacedLevel3: true,
+    });
+    s = addOwnedSpell(s, 'p1', 'base.spell.burn', { intPlaced: true });
+    s = setMana(s, 'p1', 6);
+    s = addMage(s, 'p1', {
+      id: 'alice-red',
+      cardId: 'base.mage.sorcery',
+      color: 'red',
+    });
+    s = addMage(s, 'p2', {
+      id: 'bob-grey-1',
+      cardId: 'base.mage.mysticism',
+      color: 'grey',
+    });
+    s = addMage(s, 'p2', {
+      id: 'bob-grey-2',
+      cardId: 'base.mage.mysticism',
+      color: 'grey',
+    });
+    s = placeMageOnSpace(s, 'p2', 'bob-grey-1', 'base.room.library.a.slot-1');
+    s = placeMageOnSpace(s, 'p2', 'bob-grey-2', 'base.room.library.a.slot-2');
+    return {
+      ...s,
+      firstPlayerIndex: 0,
+      phase: {
+        kind: 'errands',
+        round: 1,
+        activePlayerIndex: 0,
+        actionUsed: false,
+        fastActionUsed: false,
+      },
+    };
+  }
+
+  it('wound → place → may-cast prompt offers a borrowed spell or skip', () => {
+    let s = setupChainLightning();
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.lightning-and-you',
+      level: 3,
+    });
+    // Pick a wound target.
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'mage-chosen', mageId: 'bob-grey-1' },
+    });
+    // Walk: reaction-window pass, bonus, place-mage, place-slot, until
+    // the may-cast prompt appears.
+    let mayCastPrompt: ReturnType<typeof topPending> | null = null;
+    let i = 0;
+    while (s.pendingResolutionStack.length > 0 && i++ < 12) {
+      const top = topPending(s);
+      if (
+        top.prompt.kind === 'choose-from-options' &&
+        top.prompt.options.some((o) => o.id === 'skip') &&
+        top.prompt.options.some((o) => o.id.startsWith('base.spell.burn::'))
+      ) {
+        mayCastPrompt = top;
+        break;
+      }
+      if (top.prompt.kind === 'reaction-window') {
+        s = applyAction(s, {
+          type: 'RESOLVE_PENDING',
+          resolutionId: top.id,
+          answer: { kind: 'reaction-passed' },
+        });
+      } else if (top.prompt.kind === 'choose-target-mage') {
+        s = applyAction(s, {
+          type: 'RESOLVE_PENDING',
+          resolutionId: top.id,
+          answer: {
+            kind: 'mage-chosen',
+            mageId: top.prompt.eligibleMageIds[0]!,
+          },
+        });
+      } else if (top.prompt.kind === 'choose-target-action-space') {
+        s = applyAction(s, {
+          type: 'RESOLVE_PENDING',
+          resolutionId: top.id,
+          answer: {
+            kind: 'space-chosen',
+            spaceId: top.prompt.eligibleSpaceIds[0]!,
+          },
+        });
+      } else if (top.prompt.kind === 'choose-from-options') {
+        s = applyAction(s, {
+          type: 'RESOLVE_PENDING',
+          resolutionId: top.id,
+          answer: {
+            kind: 'option-chosen',
+            optionId: top.prompt.options[0]!.id,
+            payload: {},
+          },
+        });
+      } else {
+        break;
+      }
+    }
+    expect(mayCastPrompt).not.toBeNull();
+    if (!mayCastPrompt) throw new Error('unreachable');
+    if (mayCastPrompt.prompt.kind !== 'choose-from-options') throw new Error('unreachable');
+    expect(mayCastPrompt.prompt.options.map((o) => o.id)).toContain('skip');
+    expect(
+      mayCastPrompt.prompt.options.some((o) => o.id.startsWith('base.spell.burn::')),
+    ).toBe(true);
+  });
+});
+
+// ============================================================================
 // Flare + Dazzle (The Light That Leads L2 / L3) — fast actions that grant
 // extra normal Action(s) this turn.
 // ============================================================================

@@ -13303,3 +13303,540 @@ registerEffect(
     patch: grantExtraActions(ctx.state, 2),
   }),
 );
+
+// ============================================================================
+// `base.system.cast-another-spell` — shared "cast a Spell you own" sub-effect.
+// Used by Accelerate Time (Paralocation L2), Mystic Link (Tenets L2), Chain
+// Lightning (Lightning L3), and any future effect that says "Cast another
+// Spell." Candidates are owned, intPlaced, unexhausted spells whose chosen
+// level isn't reaction-timing, has a registered effect, and the caster can
+// afford. Higher levels show up as separate options when researched.
+//
+// On apply: deducts the level's mana, exhausts the spell, then delegates to
+// the level's effect with the caster's allowReactions setting preserved.
+// Borrowed effect's reactions (wound windows, etc.) fire normally — this is
+// a "full" cast, not a Future Power-style preview.
+//
+// Pass `excludeSpellId` in resumeContext to keep the calling spell out of
+// the candidate list (so it can't recurse into itself).
+// ============================================================================
+
+type CastAnotherCandidate = {
+  spellCardId: string;
+  level: 1 | 2 | 3;
+  manaCost: number;
+  effectId: string;
+  label: string;
+};
+
+function listCastAnotherCandidates(
+  state: GameState,
+  casterId: string,
+  excludeSpellId?: string,
+): CastAnotherCandidate[] {
+  const player = state.players.find((p) => p.id === casterId);
+  if (!player) return [];
+  const out: CastAnotherCandidate[] = [];
+  for (const owned of player.ownedSpells) {
+    if (excludeSpellId && owned.cardId === excludeSpellId) continue;
+    if (!owned.intPlaced) continue;
+    if (owned.exhausted) continue;
+    const def = lookupSpellCardDef(state, owned.cardId);
+    if (!def) continue;
+    const researched: (1 | 2 | 3)[] = [1];
+    if (owned.wisPlacedLevel2) researched.push(2);
+    if (owned.wisPlacedLevel3) researched.push(3);
+    for (const lvl of researched) {
+      const lvlDef = def.levels.find((l) => l.level === lvl);
+      if (!lvlDef) continue;
+      if (lvlDef.timing === 'reaction') continue;
+      if (!hasEffect(lvlDef.effectId)) continue;
+      if (player.resources.mana < lvlDef.manaCost) continue;
+      out.push({
+        spellCardId: owned.cardId,
+        level: lvl,
+        manaCost: lvlDef.manaCost,
+        effectId: lvlDef.effectId,
+        label: `${def.name} L${lvl} "${lvlDef.title}" (${lvlDef.manaCost} Mana)`,
+      });
+    }
+  }
+  return out;
+}
+
+registerEffect(
+  'base.system.cast-another-spell',
+  (ctx: EffectContext): EffectResult => {
+    const self = 'base.system.cast-another-spell';
+    const step = ctx.resumeContext?.['step'];
+    const excludeRaw = ctx.resumeContext?.['excludeSpellId'];
+    const excludeSpellId =
+      typeof excludeRaw === 'string' ? excludeRaw : undefined;
+
+    if (!ctx.resumeAnswer || step === undefined) {
+      const candidates = listCastAnotherCandidates(
+        ctx.state,
+        ctx.triggeringPlayerId,
+        excludeSpellId,
+      );
+      if (candidates.length === 0) return { kind: 'done', patch: {} };
+      const options: ChoiceOption[] = candidates.map((c) => ({
+        id: `${c.spellCardId}::${c.level}`,
+        label: c.label,
+        payload: {},
+      }));
+      return {
+        kind: 'pause',
+        pending: {
+          responderId: ctx.triggeringPlayerId,
+          prompt: { kind: 'choose-from-options', options },
+          resume: {
+            effectId: self,
+            context: {
+              step: 'apply',
+              ...(excludeSpellId ? { excludeSpellId } : {}),
+            },
+          },
+          source: ctx.source,
+        },
+      };
+    }
+
+    if (step === 'apply') {
+      if (ctx.resumeAnswer.kind !== 'option-chosen') {
+        throw new Error(`${self} apply expected option-chosen`);
+      }
+      const [chosenSpellId, levelStr] = ctx.resumeAnswer.optionId.split('::');
+      const level = Number(levelStr) as 1 | 2 | 3;
+      const candidate = listCastAnotherCandidates(
+        ctx.state,
+        ctx.triggeringPlayerId,
+        excludeSpellId,
+      ).find((c) => c.spellCardId === chosenSpellId && c.level === level);
+      if (!candidate) return { kind: 'done', patch: {} };
+      const paidState: GameState = {
+        ...ctx.state,
+        players: ctx.state.players.map((p) =>
+          p.id !== ctx.triggeringPlayerId
+            ? p
+            : {
+                ...p,
+                resources: {
+                  ...p.resources,
+                  mana: p.resources.mana - candidate.manaCost,
+                },
+                ownedSpells: p.ownedSpells.map((o) =>
+                  o.cardId !== candidate.spellCardId
+                    ? o
+                    : { ...o, exhausted: true },
+                ),
+              },
+        ),
+      };
+      const delegate = getEffect(candidate.effectId)({
+        state: paidState,
+        source: ctx.source,
+        triggeringPlayerId: ctx.triggeringPlayerId,
+        allowReactions: ctx.allowReactions,
+      });
+      return composeWithDelegate(delegate, { players: paidState.players });
+    }
+
+    throw new Error(`${self} unexpected step ${String(step)}`);
+  },
+);
+
+// ============================================================================
+// Everyday Paralocation L2 "Accelerate Time" — Fast Action, 2 Mana. Cast
+// another Spell. Delegates straight to base.system.cast-another-spell with
+// Paralocation itself excluded.
+// ============================================================================
+
+registerEffect(
+  'base.spell.everyday-paralocation.l2',
+  (ctx: EffectContext): EffectResult => {
+    return getEffect('base.system.cast-another-spell')({
+      state: ctx.state,
+      source: ctx.source,
+      triggeringPlayerId: ctx.triggeringPlayerId,
+      allowReactions: ctx.allowReactions,
+      resumeContext: { excludeSpellId: 'base.spell.everyday-paralocation' },
+    });
+  },
+);
+
+// ============================================================================
+// Tenets of Dominance L2 "Mystic Link" — Action, 2 Mana. Cast another Spell.
+// Then, place any Mage you control. The post-cast placement uses the
+// existing pendingPlaceChain machinery (the engine's drain pump fires it
+// once the borrowed spell's chain is fully idle).
+// ============================================================================
+
+registerEffect(
+  'base.spell.tenets-of-dominance.l2',
+  (ctx: EffectContext): EffectResult => {
+    const self = 'base.spell.tenets-of-dominance.l2';
+    const step = ctx.resumeContext?.['step'];
+
+    if (!ctx.resumeAnswer || step === undefined) {
+      const candidates = listCastAnotherCandidates(
+        ctx.state,
+        ctx.triggeringPlayerId,
+        'base.spell.tenets-of-dominance',
+      );
+      if (candidates.length === 0) {
+        // No castable other spell — still queue the placement.
+        const placeOnlyChain: GameState = {
+          ...ctx.state,
+          pendingPlaceChain: {
+            playerId: ctx.triggeringPlayerId,
+            source: ctx.source,
+            remaining: 1,
+          },
+        };
+        return {
+          kind: 'done',
+          patch: { pendingPlaceChain: placeOnlyChain.pendingPlaceChain },
+        };
+      }
+      const options: ChoiceOption[] = candidates.map((c) => ({
+        id: `${c.spellCardId}::${c.level}`,
+        label: c.label,
+        payload: {},
+      }));
+      // Add a "Skip the cast, just place" option (rare case where the
+      // player has nothing useful to cast but still gets the placement).
+      options.push({
+        id: 'skip',
+        label: 'Skip the borrowed cast (place a Mage only)',
+        payload: {},
+      });
+      return {
+        kind: 'pause',
+        pending: {
+          responderId: ctx.triggeringPlayerId,
+          prompt: { kind: 'choose-from-options', options },
+          resume: { effectId: self, context: { step: 'apply-cast' } },
+          source: ctx.source,
+        },
+      };
+    }
+
+    if (step === 'apply-cast') {
+      if (ctx.resumeAnswer.kind !== 'option-chosen') {
+        throw new Error(`${self} apply-cast expected option-chosen`);
+      }
+      // Queue the post-cast placement no matter what — Mystic Link's place
+      // happens "then" after the cast (or as a standalone if skipped).
+      const baseChainState: GameState = {
+        ...ctx.state,
+        pendingPlaceChain: {
+          playerId: ctx.triggeringPlayerId,
+          source: ctx.source,
+          remaining: 1,
+        },
+      };
+      if (ctx.resumeAnswer.optionId === 'skip') {
+        return {
+          kind: 'done',
+          patch: { pendingPlaceChain: baseChainState.pendingPlaceChain },
+        };
+      }
+      const [chosenSpellId, levelStr] = ctx.resumeAnswer.optionId.split('::');
+      const level = Number(levelStr) as 1 | 2 | 3;
+      const candidate = listCastAnotherCandidates(
+        ctx.state,
+        ctx.triggeringPlayerId,
+        'base.spell.tenets-of-dominance',
+      ).find((c) => c.spellCardId === chosenSpellId && c.level === level);
+      if (!candidate) {
+        return {
+          kind: 'done',
+          patch: { pendingPlaceChain: baseChainState.pendingPlaceChain },
+        };
+      }
+      const paidState: GameState = {
+        ...baseChainState,
+        players: baseChainState.players.map((p) =>
+          p.id !== ctx.triggeringPlayerId
+            ? p
+            : {
+                ...p,
+                resources: {
+                  ...p.resources,
+                  mana: p.resources.mana - candidate.manaCost,
+                },
+                ownedSpells: p.ownedSpells.map((o) =>
+                  o.cardId !== candidate.spellCardId
+                    ? o
+                    : { ...o, exhausted: true },
+                ),
+              },
+        ),
+      };
+      const delegate = getEffect(candidate.effectId)({
+        state: paidState,
+        source: ctx.source,
+        triggeringPlayerId: ctx.triggeringPlayerId,
+        allowReactions: ctx.allowReactions,
+      });
+      return composeWithDelegate(delegate, {
+        players: paidState.players,
+        pendingPlaceChain: paidState.pendingPlaceChain,
+      });
+    }
+
+    throw new Error(`${self} unexpected step ${String(step)}`);
+  },
+);
+
+// ============================================================================
+// Lightning and You L3 "Chain Lightning" — Action, 5 Mana. Wound an
+// opponent's Mage, then place a Mage of your own. You may then cast another
+// Spell.
+//
+// Mirrors L2 "Lightning"'s wound→bonus→place chain, then adds an optional
+// "may cast another Spell" tail. Inline implementation (the L2 effect uses
+// self-references to its own id in resume contexts, so it can't be cleanly
+// delegated to and chained beyond).
+// ============================================================================
+
+registerEffect('base.spell.lightning-and-you.l3', (ctx): EffectResult => {
+  const self = 'base.spell.lightning-and-you.l3';
+  const step = ctx.resumeContext?.['step'];
+
+  // Steps that resume without a resumeAnswer (afterResume from open-reaction
+  // windows) must be checked BEFORE the initial-entry guard.
+  if (step === 'after-wound') {
+    const event = readTriggerEvent(ctx);
+    if (event && checkInfirmaryBonusApplies(ctx.state, event)) {
+      return {
+        kind: 'pause',
+        pending: bonusPromptFor(event, ctx.triggeringPlayerId, {
+          effectId: self,
+          context: { step: 'after-bonus', recipientPlayerId: event.ownerId },
+        }),
+      };
+    }
+    const placerPrompt = placeAnyOfficeMagePrompt(
+      ctx.state,
+      ctx.triggeringPlayerId,
+      self,
+      ctx.source,
+      { step: 'pick-slot' },
+    );
+    if (!placerPrompt) {
+      return chainLightningCastAnotherPrompt(ctx, self);
+    }
+    return { kind: 'pause', pending: placerPrompt };
+  }
+
+  if (!ctx.resumeAnswer) {
+    const targets = buildWoundTargetsFor(
+      ctx.state,
+      ctx.triggeringPlayerId,
+      'opponent-only',
+    );
+    if (targets.length === 0) return { kind: 'done', patch: {} };
+    return {
+      kind: 'pause',
+      pending: {
+        responderId: ctx.triggeringPlayerId,
+        prompt: { kind: 'choose-target-mage', eligibleMageIds: targets },
+        resume: { effectId: self, context: { step: 'wound' } },
+        source: ctx.source,
+      },
+    };
+  }
+
+  if (step === 'wound') {
+    if (ctx.resumeAnswer.kind !== 'mage-chosen') {
+      throw new Error(`${self} wound expected mage-chosen`);
+    }
+    const wound = woundMage(
+      ctx.state,
+      ctx.resumeAnswer.mageId,
+      ctx.triggeringPlayerId,
+    );
+    return {
+      kind: 'open-reaction',
+      patch: wound.patch,
+      window: {
+        triggerEvents: [wound.triggerEvent],
+        pendingResponderIds: buildReactionQueue(
+          ctx.state,
+          ctx.triggeringPlayerId,
+        ),
+        reactedPlayerIds: [],
+        afterResume: {
+          effectId: self,
+          context: {
+            step: 'after-wound',
+            triggerEvent: triggerEventToContext(wound.triggerEvent),
+          },
+        },
+        source: ctx.source,
+      },
+    };
+  }
+
+  if (step === 'after-bonus') {
+    if (ctx.resumeAnswer.kind !== 'option-chosen') {
+      throw new Error(`${self} after-bonus expected option-chosen`);
+    }
+    const recipientId = ctx.resumeContext?.['recipientPlayerId'];
+    if (typeof recipientId !== 'string') {
+      throw new Error(`${self} after-bonus: missing recipientPlayerId`);
+    }
+    const bonusPatch = applyInfirmaryBonusPatch(
+      ctx.state,
+      recipientId,
+      ctx.resumeAnswer.optionId,
+    );
+    const afterBonus: GameState = { ...ctx.state, ...bonusPatch };
+    const placerPrompt = placeAnyOfficeMagePrompt(
+      afterBonus,
+      ctx.triggeringPlayerId,
+      self,
+      ctx.source,
+      { step: 'pick-slot' },
+    );
+    if (!placerPrompt) {
+      return chainLightningCastAnotherPrompt(
+        { ...ctx, state: afterBonus },
+        self,
+        bonusPatch,
+      );
+    }
+    return { kind: 'pause', patch: bonusPatch, pending: placerPrompt };
+  }
+
+  if (step === 'pick-slot') {
+    if (ctx.resumeAnswer.kind !== 'mage-chosen') {
+      throw new Error(`${self} pick-slot expected mage-chosen`);
+    }
+    const placerMageId = ctx.resumeAnswer.mageId;
+    const openSlots = listEligiblePlacementSlots(
+      ctx.state,
+      ctx.triggeringPlayerId,
+    );
+    if (openSlots.length === 0) {
+      return chainLightningCastAnotherPrompt(ctx, self);
+    }
+    return {
+      kind: 'pause',
+      pending: {
+        responderId: ctx.triggeringPlayerId,
+        prompt: {
+          kind: 'choose-target-action-space',
+          eligibleSpaceIds: openSlots,
+        },
+        resume: {
+          effectId: self,
+          context: { step: 'apply-place', placerMageId },
+        },
+        source: ctx.source,
+      },
+    };
+  }
+
+  if (step === 'apply-place') {
+    if (ctx.resumeAnswer.kind !== 'space-chosen') {
+      throw new Error(`${self} apply-place expected space-chosen`);
+    }
+    const placerMageId = ctx.resumeContext?.['placerMageId'];
+    if (typeof placerMageId !== 'string') {
+      throw new Error(`${self} apply-place: missing placerMageId`);
+    }
+    const placePatch = placeOfficeMageOnSpaceCrediting(
+      ctx.state,
+      ctx.triggeringPlayerId,
+      placerMageId,
+      ctx.resumeAnswer.spaceId,
+    );
+    const afterPlace: GameState = { ...ctx.state, ...placePatch };
+    return chainLightningCastAnotherPrompt(
+      { ...ctx, state: afterPlace },
+      self,
+      placePatch,
+    );
+  }
+
+  if (step === 'after-may-cast') {
+    if (ctx.resumeAnswer.kind !== 'option-chosen') {
+      throw new Error(`${self} after-may-cast expected option-chosen`);
+    }
+    if (ctx.resumeAnswer.optionId === 'skip') {
+      return { kind: 'done', patch: {} };
+    }
+    // Delegate to cast-another-spell with the chosen spell preselected by
+    // re-invoking its apply step.
+    const [chosenSpellId, levelStr] = ctx.resumeAnswer.optionId.split('::');
+    const level = Number(levelStr) as 1 | 2 | 3;
+    const candidate = listCastAnotherCandidates(
+      ctx.state,
+      ctx.triggeringPlayerId,
+      'base.spell.lightning-and-you',
+    ).find((c) => c.spellCardId === chosenSpellId && c.level === level);
+    if (!candidate) return { kind: 'done', patch: {} };
+    const paidState: GameState = {
+      ...ctx.state,
+      players: ctx.state.players.map((p) =>
+        p.id !== ctx.triggeringPlayerId
+          ? p
+          : {
+              ...p,
+              resources: {
+                ...p.resources,
+                mana: p.resources.mana - candidate.manaCost,
+              },
+              ownedSpells: p.ownedSpells.map((o) =>
+                o.cardId !== candidate.spellCardId
+                  ? o
+                  : { ...o, exhausted: true },
+              ),
+            },
+      ),
+    };
+    const delegate = getEffect(candidate.effectId)({
+      state: paidState,
+      source: ctx.source,
+      triggeringPlayerId: ctx.triggeringPlayerId,
+      allowReactions: ctx.allowReactions,
+    });
+    return composeWithDelegate(delegate, { players: paidState.players });
+  }
+
+  throw new Error(`${self} unexpected step ${String(step)}`);
+});
+
+/** Surfaces the "may cast another Spell" prompt for Chain Lightning. */
+function chainLightningCastAnotherPrompt(
+  ctx: EffectContext,
+  self: string,
+  carryPatch?: GameStatePatch,
+): EffectResult {
+  const candidates = listCastAnotherCandidates(
+    ctx.state,
+    ctx.triggeringPlayerId,
+    'base.spell.lightning-and-you',
+  );
+  if (candidates.length === 0) {
+    return { kind: 'done', patch: carryPatch ?? {} };
+  }
+  const options: ChoiceOption[] = candidates.map((c) => ({
+    id: `${c.spellCardId}::${c.level}`,
+    label: c.label,
+    payload: {},
+  }));
+  options.push({ id: 'skip', label: 'Skip the bonus cast', payload: {} });
+  const pending: PendingResolutionInput = {
+    responderId: ctx.triggeringPlayerId,
+    prompt: { kind: 'choose-from-options', options },
+    resume: { effectId: self, context: { step: 'after-may-cast' } },
+    source: ctx.source,
+  };
+  return carryPatch
+    ? { kind: 'pause', patch: carryPatch, pending }
+    : { kind: 'pause', pending };
+}
