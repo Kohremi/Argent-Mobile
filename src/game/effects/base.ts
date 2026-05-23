@@ -14343,3 +14343,477 @@ registerEffect(
     patch: grantExtraActions(ctx.state, 3),
   }),
 );
+
+// ============================================================================
+// Taming of the Storm L2 "Tornado" — Action, 2 Mana. Rearrange all Mages in
+// a room. The caster picks a room (must contain ≥1 base-position mage), then
+// assigns each base-position mage to a base slot in that room one-by-one.
+// Each pick excludes slots already claimed by earlier picks. Mages stay
+// with the same owner; per-room caps don't shift because no mages enter or
+// leave the room. Shadow occupants stay in place. Opposing blue mages are
+// NOT excluded — rearranging isn't wound/banish/move/shadow in the
+// reaction-event sense, and the card text doesn't restrict by color.
+// ============================================================================
+
+function listTornadoRooms(state: GameState): string[] {
+  const out: string[] = [];
+  for (const r of state.rooms) {
+    if (isRoomLocked(state, r.id)) continue;
+    if (r.actionSpaces.some((s) => s.occupant !== null)) out.push(r.id);
+  }
+  return out;
+}
+
+function baseMagesInRoom(
+  state: GameState,
+  roomId: string,
+): { mageId: string; ownerId: string; spaceId: string }[] {
+  const room = state.rooms.find((r) => r.id === roomId);
+  if (!room) return [];
+  const out: { mageId: string; ownerId: string; spaceId: string }[] = [];
+  for (const s of room.actionSpaces) {
+    if (!s.occupant) continue;
+    out.push({
+      mageId: s.occupant.mageId,
+      ownerId: s.occupant.ownerId,
+      spaceId: s.id,
+    });
+  }
+  return out;
+}
+
+function baseSlotsInRoom(state: GameState, roomId: string): string[] {
+  const room = state.rooms.find((r) => r.id === roomId);
+  if (!room) return [];
+  return room.actionSpaces
+    .filter(
+      (s) =>
+        s.slotType === 'regular' ||
+        s.slotType === 'merit' ||
+        s.slotType === 'wound',
+    )
+    .map((s) => s.id);
+}
+
+function applyRearrangement(
+  state: GameState,
+  roomId: string,
+  assignments: { mageId: string; ownerId: string; spaceId: string }[],
+): GameStatePatch {
+  const players = state.players.map((p): Player => ({
+    ...p,
+    mages: p.mages.map((m) => {
+      const assign = assignments.find((a) => a.mageId === m.id);
+      if (!assign) return m;
+      return {
+        ...m,
+        location: { kind: 'action-space' as const, spaceId: assign.spaceId },
+      };
+    }),
+  }));
+  const rooms = state.rooms.map((r) => {
+    if (r.id !== roomId) return r;
+    return {
+      ...r,
+      actionSpaces: r.actionSpaces.map((s) => {
+        const assign = assignments.find((a) => a.spaceId === s.id);
+        if (assign) {
+          return {
+            ...s,
+            occupant: {
+              mageId: assign.mageId,
+              ownerId: assign.ownerId,
+              isShadowing: false,
+            },
+          };
+        }
+        // Slot got no assignment — clear its base occupant (the previous
+        // occupant has moved elsewhere).
+        return { ...s, occupant: null };
+      }),
+    };
+  });
+  return { players, rooms };
+}
+
+registerEffect(
+  'base.spell.taming-of-the-storm.l2',
+  (ctx: EffectContext): EffectResult => tornadoStart(ctx),
+);
+
+function tornadoStart(ctx: EffectContext): EffectResult {
+  const self = 'base.spell.taming-of-the-storm.l2';
+  const step = ctx.resumeContext?.['step'];
+
+  if (!ctx.resumeAnswer) {
+    const rooms = listTornadoRooms(ctx.state);
+    if (rooms.length === 0) return { kind: 'done', patch: {} };
+    return {
+      kind: 'pause',
+      pending: {
+        responderId: ctx.triggeringPlayerId,
+        prompt: {
+          kind: 'choose-from-options',
+          options: rooms.map((rid) => {
+            const r = ctx.state.rooms.find((rr) => rr.id === rid)!;
+            return { id: rid, label: r.name, payload: {} };
+          }),
+        },
+        resume: { effectId: self, context: { step: 'pick-room' } },
+        source: ctx.source,
+      },
+    };
+  }
+
+  if (step === 'pick-room') {
+    if (ctx.resumeAnswer.kind !== 'option-chosen') {
+      throw new Error(`${self} pick-room expected option-chosen`);
+    }
+    const roomId = ctx.resumeAnswer.optionId;
+    return tornadoSurfaceNextPick(ctx, self, roomId, [], []);
+  }
+
+  if (step === 'assign-slot') {
+    if (ctx.resumeAnswer.kind !== 'space-chosen') {
+      throw new Error(`${self} assign-slot expected space-chosen`);
+    }
+    const roomId = String(ctx.resumeContext?.['roomId'] ?? '');
+    const queueRaw = ctx.resumeContext?.['queue'];
+    const assignedRaw = ctx.resumeContext?.['assigned'];
+    const queue = Array.isArray(queueRaw)
+      ? (queueRaw as unknown as string[])
+      : [];
+    const assigned = Array.isArray(assignedRaw)
+      ? (assignedRaw as unknown as { mageId: string; ownerId: string; spaceId: string }[])
+      : [];
+    const mageId = String(ctx.resumeContext?.['currentMageId'] ?? '');
+    const ownerId = String(ctx.resumeContext?.['currentOwnerId'] ?? '');
+    if (!mageId) return { kind: 'done', patch: {} };
+    const nextAssigned = [
+      ...assigned,
+      { mageId, ownerId, spaceId: ctx.resumeAnswer.spaceId },
+    ];
+    return tornadoSurfaceNextPick(ctx, self, roomId, queue, nextAssigned);
+  }
+
+  throw new Error(`${self} unexpected step ${String(step)}`);
+}
+
+function tornadoSurfaceNextPick(
+  ctx: EffectContext,
+  self: string,
+  roomId: string,
+  queue: string[],
+  assigned: { mageId: string; ownerId: string; spaceId: string }[],
+): EffectResult {
+  // First call: seed queue from baseMagesInRoom.
+  if (queue.length === 0 && assigned.length === 0) {
+    const mages = baseMagesInRoom(ctx.state, roomId);
+    if (mages.length === 0) return { kind: 'done', patch: {} };
+    return tornadoSurfaceMagePrompt(
+      ctx,
+      self,
+      roomId,
+      mages[0]!,
+      mages.slice(1).map((m) => m.mageId),
+      [],
+    );
+  }
+  if (queue.length === 0) {
+    // All mages assigned — apply.
+    return { kind: 'done', patch: applyRearrangement(ctx.state, roomId, assigned) };
+  }
+  // Next mage in queue. Look up its current owner.
+  const nextMageId = queue[0]!;
+  const remaining = queue.slice(1);
+  const owner = ctx.state.players.find((p) =>
+    p.mages.some((m) => m.id === nextMageId),
+  );
+  if (!owner) {
+    // Mage vanished — skip.
+    return tornadoSurfaceNextPick(ctx, self, roomId, remaining, assigned);
+  }
+  return tornadoSurfaceMagePrompt(
+    ctx,
+    self,
+    roomId,
+    { mageId: nextMageId, ownerId: owner.id, spaceId: '' },
+    remaining,
+    assigned,
+  );
+}
+
+function tornadoSurfaceMagePrompt(
+  ctx: EffectContext,
+  self: string,
+  roomId: string,
+  current: { mageId: string; ownerId: string; spaceId: string },
+  queue: string[],
+  assigned: { mageId: string; ownerId: string; spaceId: string }[],
+): EffectResult {
+  const allBaseSlots = baseSlotsInRoom(ctx.state, roomId);
+  const claimedSlots = assigned.map((a) => a.spaceId);
+  const available = allBaseSlots.filter((s) => !claimedSlots.includes(s));
+  if (available.length === 0) {
+    // Nowhere to put this mage — apply what we have and bail.
+    return {
+      kind: 'done',
+      patch: applyRearrangement(ctx.state, roomId, assigned),
+    };
+  }
+  return {
+    kind: 'pause',
+    pending: {
+      responderId: ctx.triggeringPlayerId,
+      prompt: {
+        kind: 'choose-target-action-space',
+        eligibleSpaceIds: available,
+      },
+      resume: {
+        effectId: self,
+        context: {
+          step: 'assign-slot',
+          roomId,
+          currentMageId: current.mageId,
+          currentOwnerId: current.ownerId,
+          queue: queue as unknown as SerializableContext['queue'],
+          assigned: assigned as unknown as SerializableContext['assigned'],
+        },
+      },
+      source: ctx.source,
+    },
+  };
+}
+
+// ============================================================================
+// Taming of the Storm L3 "Hurricane" — Action, 3 Mana. Wound a Mage, then
+// rearrange the rest of the Mages in that room. Two-stage chain: pick the
+// wound target (must be in some room with rearrangeable peers + still satisfy
+// the spell-source wound filter), wound them (opens a reaction window),
+// then after the window settles, run the room's rearrangement against the
+// REMAINING base-position mages.
+// ============================================================================
+
+registerEffect('base.spell.taming-of-the-storm.l3', (ctx): EffectResult => {
+  const self = 'base.spell.taming-of-the-storm.l3';
+  const step = ctx.resumeContext?.['step'];
+
+  // afterResume from the wound's reaction window — bonus chain then enter
+  // the rearrangement phase against the same room.
+  if (step === 'after-wound') {
+    const event = readTriggerEvent(ctx);
+    if (event && checkInfirmaryBonusApplies(ctx.state, event)) {
+      return {
+        kind: 'pause',
+        pending: bonusPromptFor(event, ctx.triggeringPlayerId, {
+          effectId: self,
+          context: {
+            step: 'after-bonus',
+            recipientPlayerId: event.ownerId,
+            roomId: String(ctx.resumeContext?.['roomId'] ?? ''),
+          },
+        }),
+      };
+    }
+    return hurricaneEnterRearrange(
+      ctx.state,
+      ctx,
+      String(ctx.resumeContext?.['roomId'] ?? ''),
+      {},
+    );
+  }
+
+  if (step === 'after-bonus') {
+    if (ctx.resumeAnswer?.kind !== 'option-chosen') {
+      throw new Error(`${self} after-bonus expected option-chosen`);
+    }
+    const recipientId = ctx.resumeContext?.['recipientPlayerId'];
+    if (typeof recipientId !== 'string') {
+      throw new Error(`${self} after-bonus: missing recipientPlayerId`);
+    }
+    const bonusPatch = applyInfirmaryBonusPatch(
+      ctx.state,
+      recipientId,
+      ctx.resumeAnswer.optionId,
+    );
+    const afterBonus: GameState = { ...ctx.state, ...bonusPatch };
+    return hurricaneEnterRearrange(
+      afterBonus,
+      ctx,
+      String(ctx.resumeContext?.['roomId'] ?? ''),
+      bonusPatch,
+    );
+  }
+
+  if (step === 'assign-slot') {
+    if (ctx.resumeAnswer?.kind !== 'space-chosen') {
+      throw new Error(`${self} assign-slot expected space-chosen`);
+    }
+    const roomId = String(ctx.resumeContext?.['roomId'] ?? '');
+    const queueRaw = ctx.resumeContext?.['queue'];
+    const assignedRaw = ctx.resumeContext?.['assigned'];
+    const queue = Array.isArray(queueRaw) ? (queueRaw as unknown as string[]) : [];
+    const assigned = Array.isArray(assignedRaw)
+      ? (assignedRaw as unknown as { mageId: string; ownerId: string; spaceId: string }[])
+      : [];
+    const mageId = String(ctx.resumeContext?.['currentMageId'] ?? '');
+    const ownerId = String(ctx.resumeContext?.['currentOwnerId'] ?? '');
+    if (!mageId) return { kind: 'done', patch: {} };
+    const nextAssigned = [
+      ...assigned,
+      { mageId, ownerId, spaceId: ctx.resumeAnswer.spaceId },
+    ];
+    return hurricaneNextPick(ctx, self, roomId, queue, nextAssigned);
+  }
+
+  if (!ctx.resumeAnswer) {
+    // Step 0: pick wound target. Eligible: any spell-woundable mage in a
+    // room that has the target as its current occupant (we filter the
+    // target list to placed mages; the chosen target's room becomes the
+    // rearrangement room).
+    const targets = buildBurnTargets(ctx.state, ctx.triggeringPlayerId);
+    if (targets.length === 0) return { kind: 'done', patch: {} };
+    return {
+      kind: 'pause',
+      pending: {
+        responderId: ctx.triggeringPlayerId,
+        prompt: { kind: 'choose-target-mage', eligibleMageIds: targets },
+        resume: { effectId: self, context: { step: 'wound' } },
+        source: ctx.source,
+      },
+    };
+  }
+
+  if (step === 'wound') {
+    if (ctx.resumeAnswer.kind !== 'mage-chosen') {
+      throw new Error(`${self} wound expected mage-chosen`);
+    }
+    const targetMageId = ctx.resumeAnswer.mageId;
+    const targetMage = ctx.state.players
+      .flatMap((p) => p.mages)
+      .find((m) => m.id === targetMageId);
+    const roomId =
+      targetMage?.location.kind === 'action-space'
+        ? findRoomBySpaceId(ctx.state, targetMage.location.spaceId)?.id
+        : null;
+    const wound = woundMage(ctx.state, targetMageId, ctx.triggeringPlayerId);
+    return {
+      kind: 'open-reaction',
+      patch: wound.patch,
+      window: {
+        triggerEvents: [wound.triggerEvent],
+        pendingResponderIds: buildReactionQueue(
+          ctx.state,
+          ctx.triggeringPlayerId,
+        ),
+        reactedPlayerIds: [],
+        afterResume: {
+          effectId: self,
+          context: {
+            step: 'after-wound',
+            triggerEvent: triggerEventToContext(wound.triggerEvent),
+            roomId: roomId ?? '',
+          },
+        },
+        source: ctx.source,
+      },
+    };
+  }
+
+  throw new Error(`${self} unexpected step ${String(step)}`);
+});
+
+function hurricaneEnterRearrange(
+  state: GameState,
+  ctx: EffectContext,
+  roomId: string,
+  carryPatch: GameStatePatch,
+): EffectResult {
+  if (!roomId) return { kind: 'done', patch: carryPatch };
+  const mages = baseMagesInRoom(state, roomId);
+  if (mages.length === 0) return { kind: 'done', patch: carryPatch };
+  const first = mages[0]!;
+  return hurricaneSurfaceMagePrompt(
+    { ...ctx, state },
+    'base.spell.taming-of-the-storm.l3',
+    roomId,
+    first,
+    mages.slice(1).map((m) => m.mageId),
+    [],
+    carryPatch,
+  );
+}
+
+function hurricaneNextPick(
+  ctx: EffectContext,
+  self: string,
+  roomId: string,
+  queue: string[],
+  assigned: { mageId: string; ownerId: string; spaceId: string }[],
+): EffectResult {
+  if (queue.length === 0) {
+    return {
+      kind: 'done',
+      patch: applyRearrangement(ctx.state, roomId, assigned),
+    };
+  }
+  const nextMageId = queue[0]!;
+  const remaining = queue.slice(1);
+  const owner = ctx.state.players.find((p) =>
+    p.mages.some((m) => m.id === nextMageId),
+  );
+  if (!owner) {
+    return hurricaneNextPick(ctx, self, roomId, remaining, assigned);
+  }
+  return hurricaneSurfaceMagePrompt(
+    ctx,
+    self,
+    roomId,
+    { mageId: nextMageId, ownerId: owner.id, spaceId: '' },
+    remaining,
+    assigned,
+  );
+}
+
+function hurricaneSurfaceMagePrompt(
+  ctx: EffectContext,
+  self: string,
+  roomId: string,
+  current: { mageId: string; ownerId: string; spaceId: string },
+  queue: string[],
+  assigned: { mageId: string; ownerId: string; spaceId: string }[],
+  carryPatch?: GameStatePatch,
+): EffectResult {
+  const allBaseSlots = baseSlotsInRoom(ctx.state, roomId);
+  const claimedSlots = assigned.map((a) => a.spaceId);
+  const available = allBaseSlots.filter((s) => !claimedSlots.includes(s));
+  if (available.length === 0) {
+    const patch = {
+      ...(carryPatch ?? {}),
+      ...applyRearrangement(ctx.state, roomId, assigned),
+    };
+    return { kind: 'done', patch };
+  }
+  const pending = {
+    responderId: ctx.triggeringPlayerId,
+    prompt: {
+      kind: 'choose-target-action-space' as const,
+      eligibleSpaceIds: available,
+    },
+    resume: {
+      effectId: self,
+      context: {
+        step: 'assign-slot',
+        roomId,
+        currentMageId: current.mageId,
+        currentOwnerId: current.ownerId,
+        queue: queue as unknown as SerializableContext['queue'],
+        assigned: assigned as unknown as SerializableContext['assigned'],
+      },
+    },
+    source: ctx.source,
+  };
+  return carryPatch
+    ? { kind: 'pause', patch: carryPatch, pending }
+    : { kind: 'pause', pending };
+}

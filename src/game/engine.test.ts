@@ -14529,6 +14529,271 @@ describe('Alt-leader spells', () => {
 });
 
 // ============================================================================
+// Tornado / Hurricane (Taming of the Storm L2 / L3) — rearrange a room's
+// base-position mages; L3 wounds one first.
+// ============================================================================
+
+describe('Tornado (Taming of the Storm L2)', () => {
+  function setupTornado(): GameState {
+    let s = initGame(TWO_PLAYER_CONFIG);
+    s = forceLibrarySideA(s);
+    s = zeroPlayerResources(s, 'p1');
+    s = zeroPlayerResources(s, 'p2');
+    s = addOwnedSpell(s, 'p1', 'base.spell.taming-of-the-storm', {
+      intPlaced: true,
+      wisPlacedLevel2: true,
+    });
+    s = setMana(s, 'p1', 2);
+    // Three placed mages in Library A — two of Alice's, one of Bob's.
+    s = addMage(s, 'p1', {
+      id: 'alice-red-1',
+      cardId: 'base.mage.sorcery',
+      color: 'red',
+    });
+    s = addMage(s, 'p1', {
+      id: 'alice-red-2',
+      cardId: 'base.mage.sorcery',
+      color: 'red',
+    });
+    s = addMage(s, 'p2', {
+      id: 'bob-grey',
+      cardId: 'base.mage.mysticism',
+      color: 'grey',
+    });
+    s = placeMageOnSpace(s, 'p1', 'alice-red-1', 'base.room.library.a.slot-1');
+    s = placeMageOnSpace(s, 'p1', 'alice-red-2', 'base.room.library.a.slot-2');
+    s = placeMageOnSpace(s, 'p2', 'bob-grey', 'base.room.library.a.slot-3');
+    return {
+      ...s,
+      firstPlayerIndex: 0,
+      phase: {
+        kind: 'errands',
+        round: 1,
+        activePlayerIndex: 0,
+        actionUsed: false,
+        fastActionUsed: false,
+      },
+    };
+  }
+
+  it('prompts for a room with placed mages', () => {
+    let s = setupTornado();
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.taming-of-the-storm',
+      level: 2,
+    });
+    const top = topPending(s);
+    if (top.prompt.kind !== 'choose-from-options') throw new Error('unreachable');
+    expect(top.prompt.options.some((o) => o.id === 'base.room.library.a')).toBe(
+      true,
+    );
+  });
+
+  it('walks one mage at a time, narrowing the available slots, and applies the new occupants atomically', () => {
+    let s = setupTornado();
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.taming-of-the-storm',
+      level: 2,
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: {
+        kind: 'option-chosen',
+        optionId: 'base.room.library.a',
+        payload: {},
+      },
+    });
+    // First slot prompt for alice-red-1 — 4 base slots in Library A.
+    let slotPrompt = topPending(s);
+    if (slotPrompt.prompt.kind !== 'choose-target-action-space') throw new Error('unreachable');
+    expect(slotPrompt.prompt.eligibleSpaceIds).toHaveLength(4);
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: slotPrompt.id,
+      answer: { kind: 'space-chosen', spaceId: 'base.room.library.a.slot-2' },
+    });
+    // Second slot prompt for alice-red-2 — 3 slots remain.
+    slotPrompt = topPending(s);
+    if (slotPrompt.prompt.kind !== 'choose-target-action-space') throw new Error('unreachable');
+    expect(slotPrompt.prompt.eligibleSpaceIds).toHaveLength(3);
+    expect(slotPrompt.prompt.eligibleSpaceIds).not.toContain(
+      'base.room.library.a.slot-2',
+    );
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: slotPrompt.id,
+      answer: { kind: 'space-chosen', spaceId: 'base.room.library.a.slot-3' },
+    });
+    // Third slot prompt for bob-grey — 2 slots remain.
+    slotPrompt = topPending(s);
+    if (slotPrompt.prompt.kind !== 'choose-target-action-space') throw new Error('unreachable');
+    expect(slotPrompt.prompt.eligibleSpaceIds).toHaveLength(2);
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: slotPrompt.id,
+      answer: { kind: 'space-chosen', spaceId: 'base.room.library.a.slot-1' },
+    });
+    // After all assignments — each mage's slot reflects the rearrangement.
+    const lib = s.rooms.find((r) => r.id === 'base.room.library.a')!;
+    const slot1 = lib.actionSpaces.find(
+      (sp) => sp.id === 'base.room.library.a.slot-1',
+    )!;
+    const slot2 = lib.actionSpaces.find(
+      (sp) => sp.id === 'base.room.library.a.slot-2',
+    )!;
+    const slot3 = lib.actionSpaces.find(
+      (sp) => sp.id === 'base.room.library.a.slot-3',
+    )!;
+    const slot4 = lib.actionSpaces.find(
+      (sp) => sp.id === 'base.room.library.a.slot-4',
+    )!;
+    expect(slot1.occupant?.mageId).toBe('bob-grey');
+    expect(slot2.occupant?.mageId).toBe('alice-red-1');
+    expect(slot3.occupant?.mageId).toBe('alice-red-2');
+    expect(slot4.occupant).toBeNull();
+    // Each mage's location updated to its new slot.
+    const alice = s.players.find((p) => p.id === 'p1')!;
+    expect(
+      alice.mages.find((m) => m.id === 'alice-red-1')!.location,
+    ).toEqual({ kind: 'action-space', spaceId: 'base.room.library.a.slot-2' });
+    expect(
+      alice.mages.find((m) => m.id === 'alice-red-2')!.location,
+    ).toEqual({ kind: 'action-space', spaceId: 'base.room.library.a.slot-3' });
+    const bob = s.players.find((p) => p.id === 'p2')!;
+    expect(bob.mages.find((m) => m.id === 'bob-grey')!.location).toEqual({
+      kind: 'action-space',
+      spaceId: 'base.room.library.a.slot-1',
+    });
+  });
+
+  it('fizzles when no room has any placed mages', () => {
+    let s = initGame(TWO_PLAYER_CONFIG);
+    s = zeroPlayerResources(s, 'p1');
+    s = addOwnedSpell(s, 'p1', 'base.spell.taming-of-the-storm', {
+      intPlaced: true,
+      wisPlacedLevel2: true,
+    });
+    s = setMana(s, 'p1', 2);
+    s = {
+      ...s,
+      firstPlayerIndex: 0,
+      phase: {
+        kind: 'errands',
+        round: 1,
+        activePlayerIndex: 0,
+        actionUsed: false,
+        fastActionUsed: false,
+      },
+    };
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.taming-of-the-storm',
+      level: 2,
+    });
+    expect(s.pendingResolutionStack).toHaveLength(0);
+  });
+});
+
+describe('Hurricane (Taming of the Storm L3)', () => {
+  function setupHurricane(): GameState {
+    let s = initGame(TWO_PLAYER_CONFIG);
+    s = forceLibrarySideA(s);
+    s = zeroPlayerResources(s, 'p1');
+    s = zeroPlayerResources(s, 'p2');
+    s = addOwnedSpell(s, 'p1', 'base.spell.taming-of-the-storm', {
+      intPlaced: true,
+      wisPlacedLevel2: true,
+      wisPlacedLevel3: true,
+    });
+    s = setMana(s, 'p1', 3);
+    s = addMage(s, 'p2', {
+      id: 'bob-grey-1',
+      cardId: 'base.mage.mysticism',
+      color: 'grey',
+    });
+    s = addMage(s, 'p2', {
+      id: 'bob-grey-2',
+      cardId: 'base.mage.mysticism',
+      color: 'grey',
+    });
+    s = placeMageOnSpace(s, 'p2', 'bob-grey-1', 'base.room.library.a.slot-1');
+    s = placeMageOnSpace(s, 'p2', 'bob-grey-2', 'base.room.library.a.slot-2');
+    return {
+      ...s,
+      firstPlayerIndex: 0,
+      phase: {
+        kind: 'errands',
+        round: 1,
+        activePlayerIndex: 0,
+        actionUsed: false,
+        fastActionUsed: false,
+      },
+    };
+  }
+
+  it('wounds the chosen target then rearranges the rest of that room', () => {
+    let s = setupHurricane();
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.taming-of-the-storm',
+      level: 3,
+    });
+    // Pick wound target.
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'mage-chosen', mageId: 'bob-grey-1' },
+    });
+    // Walk prompts until the room is fully rearranged.
+    let i = 0;
+    while (s.pendingResolutionStack.length > 0 && i++ < 12) {
+      const top = topPending(s);
+      if (top.prompt.kind === 'reaction-window') {
+        s = applyAction(s, {
+          type: 'RESOLVE_PENDING',
+          resolutionId: top.id,
+          answer: { kind: 'reaction-passed' },
+        });
+      } else if (top.prompt.kind === 'choose-from-options') {
+        s = applyAction(s, {
+          type: 'RESOLVE_PENDING',
+          resolutionId: top.id,
+          answer: {
+            kind: 'option-chosen',
+            optionId: top.prompt.options[0]!.id,
+            payload: {},
+          },
+        });
+      } else if (top.prompt.kind === 'choose-target-action-space') {
+        s = applyAction(s, {
+          type: 'RESOLVE_PENDING',
+          resolutionId: top.id,
+          answer: {
+            kind: 'space-chosen',
+            spaceId: top.prompt.eligibleSpaceIds[0]!,
+          },
+        });
+      } else {
+        break;
+      }
+    }
+    const bob = s.players.find((p) => p.id === 'p2')!;
+    expect(bob.mages.find((m) => m.id === 'bob-grey-1')!.isWounded).toBe(true);
+    // bob-grey-2 should still be placed somewhere in the room (rearranged).
+    expect(bob.mages.find((m) => m.id === 'bob-grey-2')!.location.kind).toBe(
+      'action-space',
+    );
+  });
+});
+
+// ============================================================================
 // Bend Time (Temporal Calculus L3) — grants 3 extra actions this turn.
 // (The "different type per action" constraint is a soft rule.)
 // ============================================================================
