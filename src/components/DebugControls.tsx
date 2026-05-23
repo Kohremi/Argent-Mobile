@@ -194,31 +194,37 @@ function injectPhaseSteppers(state: GameState, playerId: PlayerId): GameState {
   };
 }
 
-/** Adds the chosen spell to a player's office at L1 (intPlaced=true) and
- *  unexhausted. If the player already owns the spell, leaves the existing
- *  OwnedSpell alone — debug should be additive, not destructive. */
-function injectSpell(
+/** Acquires (or upgrades) the chosen spell to the given research level:
+ *  - L1 just seats intPlaced=true.
+ *  - L2 also places WIS on the L2 slot.
+ *  - L3 also places WIS on the L2 and L3 slots.
+ *
+ *  Preserves the existing `exhausted` flag if the spell is already owned;
+ *  never downgrades (callers gate L1/L2 buttons when the spell is already
+ *  at a higher level). */
+function injectSpellAtLevel(
   state: GameState,
   playerId: PlayerId,
   cardId: string,
+  level: 1 | 2 | 3,
 ): GameState {
   return {
     ...state,
     players: state.players.map((p) => {
       if (p.id !== playerId) return p;
-      if (p.ownedSpells.some((s) => s.cardId === cardId)) return p;
+      const existing = p.ownedSpells.find((s) => s.cardId === cardId);
+      const fresh = {
+        cardId,
+        intPlaced: true,
+        wisPlacedLevel2: level >= 2,
+        wisPlacedLevel3: level >= 3,
+        exhausted: existing?.exhausted ?? false,
+      };
       return {
         ...p,
-        ownedSpells: [
-          ...p.ownedSpells,
-          {
-            cardId,
-            intPlaced: true,
-            wisPlacedLevel2: false,
-            wisPlacedLevel3: false,
-            exhausted: false,
-          },
-        ],
+        ownedSpells: existing
+          ? p.ownedSpells.map((o) => (o.cardId === cardId ? fresh : o))
+          : [...p.ownedSpells, fresh],
       };
     }),
   };
@@ -2243,28 +2249,63 @@ function SpellAcquirePicker({
       </summary>
       <div className="mt-1 max-h-72 overflow-y-auto space-y-1 pr-1">
         {all.map((sp) => {
-          const owned = player.ownedSpells.some((o) => o.cardId === sp.id);
+          const owned = player.ownedSpells.find((o) => o.cardId === sp.id);
+          const currentLevel: 0 | 1 | 2 | 3 = !owned
+            ? 0
+            : owned.wisPlacedLevel3
+              ? 3
+              : owned.wisPlacedLevel2
+                ? 2
+                : 1;
+          const maxLevels = sp.levels.length; // unique leader spells have just 1
           return (
             <div
               key={sp.id}
               className="rounded bg-slate-950/40 p-1.5 space-y-0.5 border border-slate-800"
             >
-              <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
                 <span className="font-medium text-slate-200">{sp.name}</span>
-                <span className="text-[9px] uppercase tracking-wide text-slate-500 ml-auto">
+                <span className="text-[9px] uppercase tracking-wide text-slate-500">
                   {sp.department}
                 </span>
-                <button
-                  type="button"
-                  onClick={() =>
-                    patchState((s) => injectSpell(s, player.id, sp.id))
-                  }
-                  disabled={owned}
-                  className="px-1.5 py-0.5 rounded bg-amber-500 text-slate-950 hover:bg-amber-400 disabled:bg-slate-700 disabled:text-slate-500 disabled:cursor-not-allowed text-[9px] shrink-0"
-                  title={owned ? 'Already owned' : 'Acquire at L1 (intPlaced)'}
-                >
-                  {owned ? '✓ owned' : 'Add'}
-                </button>
+                {currentLevel > 0 && (
+                  <span className="text-[9px] text-emerald-400">
+                    ✓ L{currentLevel}
+                  </span>
+                )}
+                <span className="ml-auto flex gap-0.5 shrink-0">
+                  {[1, 2, 3].map((lvl) => {
+                    const lvlOk = lvl <= maxLevels;
+                    const disabled = !lvlOk || currentLevel >= lvl;
+                    return (
+                      <button
+                        key={lvl}
+                        type="button"
+                        onClick={() =>
+                          patchState((s) =>
+                            injectSpellAtLevel(
+                              s,
+                              player.id,
+                              sp.id,
+                              lvl as 1 | 2 | 3,
+                            ),
+                          )
+                        }
+                        disabled={disabled}
+                        className="px-1.5 py-0.5 rounded bg-amber-500 text-slate-950 hover:bg-amber-400 disabled:bg-slate-800 disabled:text-slate-500 disabled:cursor-not-allowed text-[9px]"
+                        title={
+                          !lvlOk
+                            ? `This spell has no L${lvl}`
+                            : currentLevel >= lvl
+                              ? `Already at L${currentLevel}`
+                              : `Acquire at L${lvl}${lvl >= 2 ? ' (auto-places WIS)' : ''}`
+                        }
+                      >
+                        L{lvl}
+                      </button>
+                    );
+                  })}
+                </span>
               </div>
               {sp.levels.map((lv) => (
                 <p
