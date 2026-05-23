@@ -10119,23 +10119,21 @@ registerEffect(
 );
 
 /** Moste Holie Litanies L3 "Consecration" — Place as many Mages as you wish
- *  into a single room, then Lock that room. Loop: pick room (once), then
- *  pick mage from office → pick slot in that room → place; repeat or stop.
- *  When the player stops (or runs out), lock the room. */
+ *  into a single room, then Lock that room. Chain:
+ *    initial → pick-room (choose-from-options)
+ *    after-room → Yes/No "place a Mage in <room>?"
+ *      no → apply lock + done
+ *      yes → choose-target-mage (board-clickable) → choose-target-action-space
+ *            → apply → back to Yes/No (until the room is full / office empty,
+ *            at which point we auto-lock).
+ */
 registerEffect('base.spell.moste-holie-litanies.l3', (ctx): EffectResult => {
   const step = ctx.resumeContext?.['step'];
   const self = 'base.spell.moste-holie-litanies.l3';
 
   if (!ctx.resumeAnswer) {
-    // Pick a room that is placeable, not locked, not at-cap, with an open slot
-    // AND the caster has at least one office mage.
-    const player = ctx.state.players.find(
-      (p) => p.id === ctx.triggeringPlayerId,
-    );
-    const hasOfficeMage = !!player?.mages.some(
-      (m) => m.location.kind === 'office' && !m.isWounded,
-    );
-    if (!hasOfficeMage) return { kind: 'done', patch: {} };
+    // Step 0: pick a room. The room must be placeable, not locked, not at
+    // the caster's cap, AND have at least one empty base slot.
     const eligibleRooms = ctx.state.rooms.filter((r) => {
       if (r.cannotBePlacedInDirectly) return false;
       if (ctx.state.roomLocks.some((l) => l.roomId === r.id)) return false;
@@ -10156,50 +10154,45 @@ registerEffect('base.spell.moste-holie-litanies.l3', (ctx): EffectResult => {
             payload: {},
           })),
         },
-        resume: { effectId: self, context: { step: 'pick-mage' } },
+        resume: { effectId: self, context: { step: 'after-room' } },
         source: ctx.source,
       },
     };
   }
 
-  // Step 'pick-mage' (or re-entry after a placement): prompt for mage in
-  // office. Add 'stop' option to let the player end early and trigger the
-  // lock. Carry `roomId` through resumeContext.
-  if (step === 'pick-mage') {
-    let roomId: string;
-    if (ctx.resumeAnswer.kind === 'option-chosen') {
-      roomId = ctx.resumeAnswer.optionId;
-    } else {
-      throw new Error(`${self} pick-mage expected option-chosen`);
+  if (step === 'after-room') {
+    if (ctx.resumeAnswer.kind !== 'option-chosen') {
+      throw new Error(`${self} after-room expected option-chosen`);
     }
-    return openMosteHolieMagePrompt(ctx, self, roomId);
+    const roomId = ctx.resumeAnswer.optionId;
+    return mosteHolieMaybePlaceMore(ctx, self, roomId, {});
+  }
+
+  if (step === 'maybe-continue') {
+    if (ctx.resumeAnswer.kind !== 'option-chosen') {
+      throw new Error(`${self} maybe-continue expected option-chosen`);
+    }
+    const roomId = String(ctx.resumeContext?.['roomId'] ?? '');
+    if (!roomId) return { kind: 'done', patch: {} };
+    if (ctx.resumeAnswer.optionId === 'stop') {
+      return { kind: 'done', patch: applyRoomLockPatch(ctx.state, roomId) };
+    }
+    // 'continue' → surface the clickable mage picker.
+    return mosteHolieSurfaceMagePrompt(ctx, self, roomId);
   }
 
   if (step === 'pick-slot') {
-    if (ctx.resumeAnswer.kind !== 'option-chosen') {
-      throw new Error(`${self} pick-slot expected option-chosen`);
+    if (ctx.resumeAnswer.kind !== 'mage-chosen') {
+      throw new Error(`${self} pick-slot expected mage-chosen`);
     }
-    const roomId = ctx.resumeContext?.['roomId'];
-    if (typeof roomId !== 'string') {
-      throw new Error(`${self} pick-slot: missing roomId`);
-    }
-    if (ctx.resumeAnswer.optionId === 'stop') {
-      // Apply the lock and finish.
-      return {
-        kind: 'done',
-        patch: applyRoomLockPatch(ctx.state, roomId),
-      };
-    }
-    const placerMageId = ctx.resumeAnswer.optionId;
+    const placerMageId = ctx.resumeAnswer.mageId;
+    const roomId = String(ctx.resumeContext?.['roomId'] ?? '');
+    if (!roomId) return { kind: 'done', patch: {} };
     const room = ctx.state.rooms.find((r) => r.id === roomId);
     const openSlots =
       room?.actionSpaces.filter((s) => !s.occupant).map((s) => s.id) ?? [];
     if (openSlots.length === 0) {
-      // No empty slots — apply lock and finish.
-      return {
-        kind: 'done',
-        patch: applyRoomLockPatch(ctx.state, roomId),
-      };
+      return { kind: 'done', patch: applyRoomLockPatch(ctx.state, roomId) };
     }
     return {
       kind: 'pause',
@@ -10222,66 +10215,83 @@ registerEffect('base.spell.moste-holie-litanies.l3', (ctx): EffectResult => {
     if (ctx.resumeAnswer.kind !== 'space-chosen') {
       throw new Error(`${self} apply expected space-chosen`);
     }
-    const roomId = ctx.resumeContext?.['roomId'];
-    const placerMageId = ctx.resumeContext?.['placerMageId'];
-    if (typeof roomId !== 'string' || typeof placerMageId !== 'string') {
-      throw new Error(`${self} apply: missing context fields`);
-    }
-    const spaceId = ctx.resumeAnswer.spaceId;
+    const roomId = String(ctx.resumeContext?.['roomId'] ?? '');
+    const placerMageId = String(ctx.resumeContext?.['placerMageId'] ?? '');
+    if (!roomId || !placerMageId) return { kind: 'done', patch: {} };
     const placePatch = placeOfficeMageOnSpace(
       ctx.state,
       ctx.triggeringPlayerId,
       placerMageId,
-      spaceId,
+      ctx.resumeAnswer.spaceId,
     );
     const afterPlace: GameState = { ...ctx.state, ...placePatch };
-    // After each placement, re-enter the mage prompt; if no more mages or
-    // room is full, apply lock and finish.
-    const stillOfficeMage = afterPlace.players
-      .find((p) => p.id === ctx.triggeringPlayerId)
-      ?.mages.some((m) => m.location.kind === 'office' && !m.isWounded);
-    const stillHasSlot = afterPlace.rooms
-      .find((r) => r.id === roomId)
-      ?.actionSpaces.some((s) => !s.occupant);
-    if (!stillOfficeMage || !stillHasSlot) {
-      return {
-        kind: 'done',
-        patch: {
-          ...placePatch,
-          ...applyRoomLockPatch(afterPlace, roomId),
-        },
-      };
-    }
-    // Surface the next mage prompt (with stop) and pass roomId forward.
-    const next = openMosteHolieMagePrompt(
-      { ...ctx, state: afterPlace },
-      self,
-      roomId,
-    );
-    if (next.kind === 'done') {
-      return {
-        kind: 'done',
-        patch: {
-          ...placePatch,
-          ...applyRoomLockPatch(afterPlace, roomId),
-        },
-      };
-    }
-    return {
-      kind: 'pause',
-      patch: placePatch,
-      pending: next.pending,
-    };
+    return mosteHolieMaybePlaceMore({ ...ctx, state: afterPlace }, self, roomId, placePatch);
   }
 
   throw new Error(`${self} unexpected step ${String(step)}`);
 });
 
-function openMosteHolieMagePrompt(
+/** After a (potentially zero-count) placement, decide whether to ask for
+ *  another mage or auto-lock the room. If the player has no office mages
+ *  left OR the room has no open slots, lock immediately. Otherwise surface
+ *  a Yes/No "place a Mage?" prompt. */
+function mosteHolieMaybePlaceMore(
   ctx: EffectContext,
-  selfEffectId: string,
+  self: string,
   roomId: string,
-): Extract<EffectResult, { kind: 'done' | 'pause' }> {
+  carryPatch: GameStatePatch,
+): EffectResult {
+  const player = ctx.state.players.find(
+    (p) => p.id === ctx.triggeringPlayerId,
+  );
+  const officeAvailable =
+    player?.mages.some(
+      (m) => m.location.kind === 'office' && !m.isWounded,
+    ) ?? false;
+  const roomHasSlot = ctx.state.rooms
+    .find((r) => r.id === roomId)
+    ?.actionSpaces.some((s) => !s.occupant) ?? false;
+  if (!officeAvailable || !roomHasSlot) {
+    return {
+      kind: 'done',
+      patch: { ...carryPatch, ...applyRoomLockPatch(ctx.state, roomId) },
+    };
+  }
+  const pending = {
+    responderId: ctx.triggeringPlayerId,
+    prompt: {
+      kind: 'choose-from-options' as const,
+      options: [
+        {
+          id: 'continue',
+          label: 'Place a Mage in this room',
+          payload: {},
+        },
+        {
+          id: 'stop',
+          label: 'Stop (lock the room)',
+          payload: {},
+        },
+      ],
+    },
+    resume: {
+      effectId: self,
+      context: { step: 'maybe-continue', roomId },
+    },
+    source: ctx.source,
+  };
+  return Object.keys(carryPatch).length === 0
+    ? { kind: 'pause', pending }
+    : { kind: 'pause', patch: carryPatch, pending };
+}
+
+/** Surfaces the mage picker as `choose-target-mage` so the player can click
+ *  the office mage directly in the player card. */
+function mosteHolieSurfaceMagePrompt(
+  ctx: EffectContext,
+  self: string,
+  roomId: string,
+): EffectResult {
   const player = ctx.state.players.find(
     (p) => p.id === ctx.triggeringPlayerId,
   );
@@ -10290,24 +10300,18 @@ function openMosteHolieMagePrompt(
       .filter((m) => m.location.kind === 'office' && !m.isWounded)
       .map((m) => m.id) ?? [];
   if (officeMages.length === 0) {
-    return {
-      kind: 'done',
-      patch: applyRoomLockPatch(ctx.state, roomId),
-    };
+    return { kind: 'done', patch: applyRoomLockPatch(ctx.state, roomId) };
   }
-  const options: ChoiceOption[] = officeMages.map((mid) => ({
-    id: mid,
-    label: `Place ${mid}`,
-    payload: {},
-  }));
-  options.push({ id: 'stop', label: 'Stop (lock the room)', payload: {} });
   return {
     kind: 'pause',
     pending: {
       responderId: ctx.triggeringPlayerId,
-      prompt: { kind: 'choose-from-options', options },
+      prompt: {
+        kind: 'choose-target-mage',
+        eligibleMageIds: officeMages,
+      },
       resume: {
-        effectId: selfEffectId,
+        effectId: self,
         context: { step: 'pick-slot', roomId },
       },
       source: ctx.source,

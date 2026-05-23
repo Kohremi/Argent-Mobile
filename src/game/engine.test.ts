@@ -12705,6 +12705,131 @@ describe('Room locking', () => {
     expect(s.roomLocks).toEqual([]);
   });
 
+  it('Consecration: room pick → Yes/No → click mage → slot → loop → Stop locks the room', () => {
+    let s = setupLockSpell({
+      spellCardId: 'base.spell.moste-holie-litanies',
+      level: 3,
+      casterMana: 6,
+    });
+    s = addMage(s, 'p1', {
+      id: 'alice-red',
+      cardId: 'base.mage.sorcery',
+      color: 'red',
+    });
+    s = addMage(s, 'p1', {
+      id: 'alice-grey',
+      cardId: 'base.mage.mysticism',
+      color: 'grey',
+    });
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.moste-holie-litanies',
+      level: 3,
+    });
+    // Step 1: room pick.
+    const roomPrompt = topPending(s);
+    if (roomPrompt.prompt.kind !== 'choose-from-options') throw new Error('unreachable');
+    expect(roomPrompt.prompt.options.some((o) => o.id === 'base.room.library.a')).toBe(true);
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: roomPrompt.id,
+      answer: {
+        kind: 'option-chosen',
+        optionId: 'base.room.library.a',
+        payload: {},
+      },
+    });
+    // Step 2: Yes/No "place a Mage?" — pick continue.
+    const yesNo1 = topPending(s);
+    if (yesNo1.prompt.kind !== 'choose-from-options') throw new Error('unreachable');
+    expect(yesNo1.prompt.options.map((o) => o.id).sort()).toEqual(
+      ['continue', 'stop'].sort(),
+    );
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: yesNo1.id,
+      answer: { kind: 'option-chosen', optionId: 'continue', payload: {} },
+    });
+    // Step 3: clickable mage picker — choose-target-mage with both mages.
+    const magePick = topPending(s);
+    expect(magePick.prompt.kind).toBe('choose-target-mage');
+    if (magePick.prompt.kind !== 'choose-target-mage') throw new Error('unreachable');
+    expect(magePick.prompt.eligibleMageIds.sort()).toEqual(
+      ['alice-grey', 'alice-red'].sort(),
+    );
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: magePick.id,
+      answer: { kind: 'mage-chosen', mageId: 'alice-red' },
+    });
+    // Step 4: slot picker.
+    const slotPick = topPending(s);
+    expect(slotPick.prompt.kind).toBe('choose-target-action-space');
+    if (slotPick.prompt.kind !== 'choose-target-action-space') throw new Error('unreachable');
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: slotPick.id,
+      answer: {
+        kind: 'space-chosen',
+        spaceId: 'base.room.library.a.slot-1',
+      },
+    });
+    // Step 5: back to Yes/No after the placement — pick stop.
+    const yesNo2 = topPending(s);
+    if (yesNo2.prompt.kind !== 'choose-from-options') throw new Error('unreachable');
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: yesNo2.id,
+      answer: { kind: 'option-chosen', optionId: 'stop', payload: {} },
+    });
+    // alice-red placed; room locked.
+    const slot1 = s.rooms
+      .find((r) => r.id === 'base.room.library.a')!
+      .actionSpaces.find((sp) => sp.id === 'base.room.library.a.slot-1')!;
+    expect(slot1.occupant?.mageId).toBe('alice-red');
+    expect(s.roomLocks.some((l) => l.roomId === 'base.room.library.a')).toBe(true);
+  });
+
+  it('Consecration: picking Stop on the very first Yes/No locks the room with no placements', () => {
+    let s = setupLockSpell({
+      spellCardId: 'base.spell.moste-holie-litanies',
+      level: 3,
+      casterMana: 6,
+    });
+    s = addMage(s, 'p1', {
+      id: 'alice-red',
+      cardId: 'base.mage.sorcery',
+      color: 'red',
+    });
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.moste-holie-litanies',
+      level: 3,
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: {
+        kind: 'option-chosen',
+        optionId: 'base.room.library.a',
+        payload: {},
+      },
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'option-chosen', optionId: 'stop', payload: {} },
+    });
+    expect(s.roomLocks.some((l) => l.roomId === 'base.room.library.a')).toBe(true);
+    // alice-red still in office; no placements happened.
+    const alice = s.players.find((p) => p.id === 'p1')!;
+    expect(alice.mages.find((m) => m.id === 'alice-red')!.location.kind).toBe(
+      'office',
+    );
+  });
+
   it('Mages in a locked room are not targetable by spells (Burn skips them)', () => {
     let s = setupLockSpell({
       spellCardId: 'base.spell.burn',
