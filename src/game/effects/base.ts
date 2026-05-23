@@ -6223,44 +6223,47 @@ registerEffect('base.spell.everyday-paralocation.l3', (ctx): EffectResult => {
   const done = Number(ctx.resumeContext?.['done'] ?? 0);
   const self = 'base.spell.everyday-paralocation.l3';
 
-  if (step === 'pick-mage') {
-    const player = ctx.state.players.find(
+  function teleportCandidates(state: GameState): string[] {
+    const player = state.players.find(
       (p) => p.id === ctx.triggeringPlayerId,
     );
-    const candidates =
+    return (
       player?.mages
         .filter(
           (m) =>
             (m.location.kind === 'action-space' && !m.isWounded) ||
             m.location.kind === 'infirmary',
         )
-        .map((m) => m.id) ?? [];
+        .map((m) => m.id) ?? []
+    );
+  }
+
+  // pick-mage uses `choose-target-mage` so the player can click the mage
+  // directly on the board (Infirmary mages get clickable buttons in the
+  // Infirmary roster). No "Stop" sibling on this prompt — a separate
+  // Yes/No appears after the first move resolves for the optional second.
+  if (step === 'pick-mage') {
+    const candidates = teleportCandidates(ctx.state);
     if (candidates.length === 0) return { kind: 'done', patch: {} };
-    const options: ChoiceOption[] = candidates.map((mid) => ({
-      id: mid,
-      label: `Move ${mid}`,
-      payload: {},
-    }));
-    options.push({ id: 'stop', label: 'Stop', payload: {} });
     return {
       kind: 'pause',
       pending: {
         responderId: ctx.triggeringPlayerId,
-        prompt: { kind: 'choose-from-options', options },
-        resume: { effectId: self, context: { step: 'after-mage', done } },
+        prompt: {
+          kind: 'choose-target-mage',
+          eligibleMageIds: candidates,
+        },
+        resume: { effectId: self, context: { step: 'pick-slot', done } },
         source: ctx.source,
       },
     };
   }
 
-  if (step === 'after-mage') {
-    if (ctx.resumeAnswer?.kind !== 'option-chosen') {
-      throw new Error(`${self} after-mage expected option-chosen`);
+  if (step === 'pick-slot') {
+    if (ctx.resumeAnswer?.kind !== 'mage-chosen') {
+      throw new Error(`${self} pick-slot expected mage-chosen`);
     }
-    if (ctx.resumeAnswer.optionId === 'stop') {
-      return { kind: 'done', patch: {} };
-    }
-    const sourceMageId = ctx.resumeAnswer.optionId;
+    const sourceMageId = ctx.resumeAnswer.mageId;
     const openSlots = listEligiblePlacementSlots(
       ctx.state,
       ctx.triggeringPlayerId,
@@ -6276,20 +6279,20 @@ registerEffect('base.spell.everyday-paralocation.l3', (ctx): EffectResult => {
         },
         resume: {
           effectId: self,
-          context: { step: 'after-slot', done, sourceMageId },
+          context: { step: 'apply', done, sourceMageId },
         },
         source: ctx.source,
       },
     };
   }
 
-  if (step === 'after-slot') {
+  if (step === 'apply') {
     if (ctx.resumeAnswer?.kind !== 'space-chosen') {
-      throw new Error(`${self} after-slot expected space-chosen`);
+      throw new Error(`${self} apply expected space-chosen`);
     }
     const sourceMageId = ctx.resumeContext?.['sourceMageId'];
     if (typeof sourceMageId !== 'string') {
-      throw new Error(`${self} after-slot: missing sourceMageId`);
+      throw new Error(`${self} apply: missing sourceMageId`);
     }
     const destSpaceId = ctx.resumeAnswer.spaceId;
     const sourceMage = ctx.state.players
@@ -6319,35 +6322,49 @@ registerEffect('base.spell.everyday-paralocation.l3', (ctx): EffectResult => {
     if (newDone >= 2) {
       return { kind: 'done', patch: movePatch };
     }
-    // Surface the next pick-mage prompt with a 'stop' option.
-    const player = stateAfter.players.find(
-      (p) => p.id === ctx.triggeringPlayerId,
-    );
-    const candidates =
-      player?.mages
-        .filter(
-          (m) =>
-            (m.location.kind === 'action-space' && !m.isWounded) ||
-            m.location.kind === 'infirmary',
-        )
-        .map((m) => m.id) ?? [];
+    const candidates = teleportCandidates(stateAfter);
     if (candidates.length === 0) return { kind: 'done', patch: movePatch };
-    const options: ChoiceOption[] = candidates.map((mid) => ({
-      id: mid,
-      label: `Move ${mid}`,
-      payload: {},
-    }));
-    options.push({ id: 'stop', label: 'Stop', payload: {} });
+    // After the first move, ask Yes/No for the optional second move. Picking
+    // "continue" loops back to pick-mage; "stop" ends the spell.
     return {
       kind: 'pause',
       patch: movePatch,
       pending: {
         responderId: ctx.triggeringPlayerId,
-        prompt: { kind: 'choose-from-options', options },
+        prompt: {
+          kind: 'choose-from-options',
+          options: [
+            { id: 'continue', label: 'Move another Mage', payload: {} },
+            { id: 'stop', label: 'Stop', payload: {} },
+          ],
+        },
         resume: {
           effectId: self,
-          context: { step: 'after-mage', done: newDone },
+          context: { step: 'maybe-continue', done: newDone },
         },
+        source: ctx.source,
+      },
+    };
+  }
+
+  if (step === 'maybe-continue') {
+    if (ctx.resumeAnswer?.kind !== 'option-chosen') {
+      throw new Error(`${self} maybe-continue expected option-chosen`);
+    }
+    if (ctx.resumeAnswer.optionId === 'stop') {
+      return { kind: 'done', patch: {} };
+    }
+    const candidates = teleportCandidates(ctx.state);
+    if (candidates.length === 0) return { kind: 'done', patch: {} };
+    return {
+      kind: 'pause',
+      pending: {
+        responderId: ctx.triggeringPlayerId,
+        prompt: {
+          kind: 'choose-target-mage',
+          eligibleMageIds: candidates,
+        },
+        resume: { effectId: self, context: { step: 'pick-slot', done } },
         source: ctx.source,
       },
     };

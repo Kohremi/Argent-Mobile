@@ -3949,15 +3949,16 @@ describe('Reaction spells', () => {
       spellCardId: 'base.spell.everyday-paralocation',
       level: 3,
     });
-    // Step 1: pick the Infirmary mage from the menu.
-    const mageMenu = topPending(s);
-    expect(mageMenu.prompt.kind).toBe('choose-from-options');
-    if (mageMenu.prompt.kind !== 'choose-from-options') return;
-    expect(mageMenu.prompt.options.map((o) => o.id)).toContain('alice-mage-1');
+    // Step 1: pick the Infirmary mage — uses `choose-target-mage` so the
+    // player can click directly on the mage piece (or its Infirmary entry).
+    const magePrompt = topPending(s);
+    expect(magePrompt.prompt.kind).toBe('choose-target-mage');
+    if (magePrompt.prompt.kind !== 'choose-target-mage') return;
+    expect(magePrompt.prompt.eligibleMageIds).toContain('alice-mage-1');
     s = applyAction(s, {
       type: 'RESOLVE_PENDING',
-      resolutionId: mageMenu.id,
-      answer: { kind: 'option-chosen', optionId: 'alice-mage-1', payload: {} },
+      resolutionId: magePrompt.id,
+      answer: { kind: 'mage-chosen', mageId: 'alice-mage-1' },
     });
     // Step 2: pick a slot.
     const slotPrompt = topPending(s);
@@ -3971,7 +3972,7 @@ describe('Reaction spells', () => {
         spaceId: 'base.room.library.a.slot-1',
       },
     });
-    // Mage is healed and placed; second mage-pick prompt offers 'stop'.
+    // Mage is healed and placed. Optional second-move Yes/No prompt fires.
     expect(findMageById(s, 'alice-mage-1').isWounded).toBe(false);
     expect(findMageById(s, 'alice-mage-1').location).toEqual({
       kind: 'action-space',
