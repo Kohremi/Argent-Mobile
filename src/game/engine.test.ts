@@ -14529,6 +14529,174 @@ describe('Alt-leader spells', () => {
 });
 
 // ============================================================================
+// Cut Plane (Indefinite Definitives L1) — opposing mage shadows its own slot;
+// caster places one of their mages into the vacated base position.
+// ============================================================================
+
+describe('Cut Plane (Indefinite Definitives L1)', () => {
+  function setupCutPlane(): GameState {
+    let s = initGame(TWO_PLAYER_CONFIG);
+    s = forceLibrarySideA(s);
+    s = zeroPlayerResources(s, 'p1');
+    s = zeroPlayerResources(s, 'p2');
+    s = addOwnedSpell(s, 'p1', 'base.spell.indefinite-definitives', {
+      intPlaced: true,
+    });
+    s = setMana(s, 'p1', 1);
+    s = addMage(s, 'p1', {
+      id: 'alice-red',
+      cardId: 'base.mage.sorcery',
+      color: 'red',
+    });
+    s = addMage(s, 'p2', {
+      id: 'bob-grey',
+      cardId: 'base.mage.mysticism',
+      color: 'grey',
+    });
+    s = placeMageOnSpace(s, 'p2', 'bob-grey', 'base.room.library.a.slot-1');
+    return {
+      ...s,
+      firstPlayerIndex: 0,
+      phase: {
+        kind: 'errands',
+        round: 1,
+        activePlayerIndex: 0,
+        actionUsed: false,
+        fastActionUsed: false,
+      },
+    };
+  }
+
+  it('prompts for an opposing target with an empty shadow slot', () => {
+    let s = setupCutPlane();
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.indefinite-definitives',
+      level: 1,
+    });
+    const top = topPending(s);
+    expect(top.prompt.kind).toBe('choose-target-mage');
+    if (top.prompt.kind !== 'choose-target-mage') throw new Error('unreachable');
+    expect(top.prompt.eligibleMageIds).toEqual(['bob-grey']);
+  });
+
+  it('moves the target to its slot\'s shadow position and then prompts for a placer', () => {
+    let s = setupCutPlane();
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.indefinite-definitives',
+      level: 1,
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'mage-chosen', mageId: 'bob-grey' },
+    });
+    // Slot should now have bob in shadow + base empty.
+    const slot1 = s.rooms
+      .find((r) => r.id === 'base.room.library.a')!
+      .actionSpaces.find((sp) => sp.id === 'base.room.library.a.slot-1')!;
+    expect(slot1.occupant).toBeNull();
+    expect(slot1.shadowOccupant?.mageId).toBe('bob-grey');
+    expect(slot1.shadowOccupant?.ownerId).toBe('p2');
+    // Mage's isShadowing flag flipped.
+    const bob = s.players.find((p) => p.id === 'p2')!;
+    expect(bob.mages.find((m) => m.id === 'bob-grey')!.isShadowing).toBe(true);
+    // Next prompt: pick caster's placer.
+    const placerPrompt = topPending(s);
+    expect(placerPrompt.prompt.kind).toBe('choose-target-mage');
+    if (placerPrompt.prompt.kind !== 'choose-target-mage') throw new Error('unreachable');
+    expect(placerPrompt.prompt.eligibleMageIds).toEqual(['alice-red']);
+  });
+
+  it('apply-place seats the caster\'s mage at the now-vacated base position', () => {
+    let s = setupCutPlane();
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.indefinite-definitives',
+      level: 1,
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'mage-chosen', mageId: 'bob-grey' },
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'mage-chosen', mageId: 'alice-red' },
+    });
+    const slot1 = s.rooms
+      .find((r) => r.id === 'base.room.library.a')!
+      .actionSpaces.find((sp) => sp.id === 'base.room.library.a.slot-1')!;
+    expect(slot1.occupant?.mageId).toBe('alice-red');
+    expect(slot1.occupant?.ownerId).toBe('p1');
+    expect(slot1.shadowOccupant?.mageId).toBe('bob-grey');
+    const alice = s.players.find((p) => p.id === 'p1')!;
+    expect(alice.mages.find((m) => m.id === 'alice-red')!.location).toEqual({
+      kind: 'action-space',
+      spaceId: 'base.room.library.a.slot-1',
+    });
+  });
+
+  it('opposing blue mages are spell-immune and excluded from the target list', () => {
+    let s = setupCutPlane();
+    s = addMage(s, 'p2', {
+      id: 'bob-blue',
+      cardId: 'base.mage.divinity',
+      color: 'blue',
+    });
+    s = placeMageOnSpace(s, 'p2', 'bob-blue', 'base.room.library.a.slot-2');
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.indefinite-definitives',
+      level: 1,
+    });
+    const top = topPending(s);
+    if (top.prompt.kind !== 'choose-target-mage') throw new Error('unreachable');
+    expect(top.prompt.eligibleMageIds).not.toContain('bob-blue');
+  });
+
+  it('skips mages whose shadow slot is already occupied', () => {
+    let s = setupCutPlane();
+    // Pre-shadow Bob's mage: nothing else can shadow it via Cut Plane.
+    s = {
+      ...s,
+      rooms: s.rooms.map((r) => {
+        if (r.id !== 'base.room.library.a') return r;
+        return {
+          ...r,
+          actionSpaces: r.actionSpaces.map((sp) =>
+            sp.id !== 'base.room.library.a.slot-1'
+              ? sp
+              : {
+                  ...sp,
+                  shadowOccupant: {
+                    mageId: 'alice-red',
+                    ownerId: 'p1',
+                    isShadowing: true,
+                  },
+                },
+          ),
+        };
+      }),
+    };
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.indefinite-definitives',
+      level: 1,
+    });
+    // Bob's mage's shadow is occupied → no eligible targets → spell fizzles.
+    expect(s.pendingResolutionStack.length).toBe(0);
+  });
+});
+
+// ============================================================================
 // Accelerate Time (Paralocation L2) — fast action: cast another Spell.
 // ============================================================================
 

@@ -13840,3 +13840,154 @@ function chainLightningCastAnotherPrompt(
     ? { kind: 'pause', patch: carryPatch, pending }
     : { kind: 'pause', pending };
 }
+
+// ============================================================================
+// Indefinite Definitives L1 "Cut Plane" — Action, 1 Mana. An opponent's Mage
+// is now shadowing its slot. Place one of your Mages into the slot they
+// were in.
+//
+// Two-step chain: pick the opposing target (a placed mage whose shadow slot
+// is empty AND whose room isn't at the caster's per-room cap), then pick one
+// of the caster's office mages to seat at the now-vacated base position.
+// Opposing blue mages are spell-immune and excluded from the target list.
+// No reaction window opens for the self-shadow move (the spell forces the
+// reposition; defensive reactions like Phase Steppers / Haunt key off
+// wound/banish/move/shadow events that the engine doesn't synthesize here).
+// ============================================================================
+
+function listCutPlaneTargets(
+  state: GameState,
+  casterId: string,
+): { mageId: string; spaceId: string; ownerId: string }[] {
+  const out: { mageId: string; spaceId: string; ownerId: string }[] = [];
+  for (const r of state.rooms) {
+    if (isRoomLocked(state, r.id)) continue;
+    if (isRoomAtPlayerCap(state, casterId, r.id)) continue;
+    for (const s of r.actionSpaces) {
+      if (!s.occupant) continue;
+      if (s.occupant.ownerId === casterId) continue;
+      if (s.shadowOccupant) continue;
+      const owner = state.players.find((p) => p.id === s.occupant!.ownerId);
+      const mage = owner?.mages.find((m) => m.id === s.occupant!.mageId);
+      if (!mage || mage.color === 'blue') continue;
+      out.push({
+        mageId: s.occupant.mageId,
+        spaceId: s.id,
+        ownerId: s.occupant.ownerId,
+      });
+    }
+  }
+  return out;
+}
+
+registerEffect(
+  'base.spell.indefinite-definitives.l1',
+  (ctx: EffectContext): EffectResult => {
+    const self = 'base.spell.indefinite-definitives.l1';
+    const step = ctx.resumeContext?.['step'];
+
+    if (!ctx.resumeAnswer) {
+      const targets = listCutPlaneTargets(ctx.state, ctx.triggeringPlayerId);
+      if (targets.length === 0) return { kind: 'done', patch: {} };
+      const officeMages = listPlaceWithoutPowersMages(
+        ctx.state,
+        ctx.triggeringPlayerId,
+      );
+      if (officeMages.length === 0) return { kind: 'done', patch: {} };
+      return {
+        kind: 'pause',
+        pending: {
+          responderId: ctx.triggeringPlayerId,
+          prompt: {
+            kind: 'choose-target-mage',
+            eligibleMageIds: targets.map((t) => t.mageId),
+          },
+          resume: { effectId: self, context: { step: 'apply-shadow' } },
+          source: ctx.source,
+        },
+      };
+    }
+
+    if (step === 'apply-shadow') {
+      if (ctx.resumeAnswer.kind !== 'mage-chosen') {
+        throw new Error(`${self} apply-shadow expected mage-chosen`);
+      }
+      const targetMageId = ctx.resumeAnswer.mageId;
+      const target = ctx.state.players
+        .flatMap((p) => p.mages)
+        .find((m) => m.id === targetMageId);
+      if (!target || target.location.kind !== 'action-space') {
+        return { kind: 'done', patch: {} };
+      }
+      const spaceId = target.location.spaceId;
+      const targetOwner = ctx.state.players.find((p) =>
+        p.mages.some((m) => m.id === targetMageId),
+      );
+      if (!targetOwner) return { kind: 'done', patch: {} };
+      const occupancy: WorkerOccupancy = {
+        mageId: targetMageId,
+        ownerId: targetOwner.id,
+        isShadowing: true,
+      };
+      const players = ctx.state.players.map((p): Player =>
+        p.id !== targetOwner.id
+          ? p
+          : {
+              ...p,
+              mages: p.mages.map((m) =>
+                m.id !== targetMageId ? m : { ...m, isShadowing: true },
+              ),
+            },
+      );
+      const rooms = ctx.state.rooms.map((r) => ({
+        ...r,
+        actionSpaces: r.actionSpaces.map((s) =>
+          s.id !== spaceId
+            ? s
+            : { ...s, occupant: null, shadowOccupant: occupancy },
+        ),
+      }));
+      const afterShadow: GameState = { ...ctx.state, players, rooms };
+      const officeMages = listPlaceWithoutPowersMages(
+        afterShadow,
+        ctx.triggeringPlayerId,
+      );
+      if (officeMages.length === 0) {
+        return { kind: 'done', patch: { players, rooms } };
+      }
+      return {
+        kind: 'pause',
+        patch: { players, rooms },
+        pending: {
+          responderId: ctx.triggeringPlayerId,
+          prompt: { kind: 'choose-target-mage', eligibleMageIds: officeMages },
+          resume: {
+            effectId: self,
+            context: { step: 'apply-place', spaceId },
+          },
+          source: ctx.source,
+        },
+      };
+    }
+
+    if (step === 'apply-place') {
+      if (ctx.resumeAnswer.kind !== 'mage-chosen') {
+        throw new Error(`${self} apply-place expected mage-chosen`);
+      }
+      const placerMageId = ctx.resumeAnswer.mageId;
+      const spaceId = String(ctx.resumeContext?.['spaceId'] ?? '');
+      if (!spaceId) return { kind: 'done', patch: {} };
+      return {
+        kind: 'done',
+        patch: placeOfficeMageOnSpace(
+          ctx.state,
+          ctx.triggeringPlayerId,
+          placerMageId,
+          spaceId,
+        ),
+      };
+    }
+
+    throw new Error(`${self} unexpected step ${String(step)}`);
+  },
+);
