@@ -14529,6 +14529,149 @@ describe('Alt-leader spells', () => {
 });
 
 // ============================================================================
+// Energy Drain (Thirteen Greater Mysteries L3) — round-end buff that adds a
+// 1-Mana surcharge to every opposing Spell cast; the surcharge flows to
+// the buff's caster.
+// ============================================================================
+
+describe('Energy Drain (Thirteen Greater Mysteries L3)', () => {
+  function setupEnergyDrain(): GameState {
+    let s = initGame(TWO_PLAYER_CONFIG);
+    s = forceLibrarySideA(s);
+    s = zeroPlayerResources(s, 'p1');
+    s = zeroPlayerResources(s, 'p2');
+    s = addOwnedSpell(s, 'p1', 'base.spell.thirteen-greater-mysteries', {
+      intPlaced: true,
+      wisPlacedLevel2: true,
+      wisPlacedLevel3: true,
+    });
+    s = addOwnedSpell(s, 'p2', 'base.spell.burn', { intPlaced: true });
+    // Bob needs 2 mana to cast Burn (printed 1 + surcharge 1).
+    s = setMana(s, 'p2', 2);
+    s = addMage(s, 'p1', {
+      id: 'alice-red',
+      cardId: 'base.mage.sorcery',
+      color: 'red',
+    });
+    s = placeMageOnSpace(s, 'p1', 'alice-red', 'base.room.library.a.slot-1');
+    return {
+      ...s,
+      firstPlayerIndex: 0,
+      phase: {
+        kind: 'errands',
+        round: 1,
+        activePlayerIndex: 0,
+        actionUsed: false,
+        fastActionUsed: false,
+      },
+    };
+  }
+
+  it('cast adds an energy-drain buff scoped to the caster (round-end)', () => {
+    let s = setupEnergyDrain();
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.thirteen-greater-mysteries',
+      level: 3,
+    });
+    const buff = s.activeBuffs.find((b) => b.kind === 'energy-drain');
+    expect(buff).toBeDefined();
+    if (!buff || buff.kind !== 'energy-drain') throw new Error('unreachable');
+    expect(buff.casterPlayerId).toBe('p1');
+    expect(buff.surcharge).toBe(1);
+    expect(buff.expiresAt).toEqual({ kind: 'round-end' });
+  });
+
+  it('opposing spell costs +1 Mana; that surcharge flows to the buff caster', () => {
+    let s = setupEnergyDrain();
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.thirteen-greater-mysteries',
+      level: 3,
+    });
+    // Turn auto-advanced to Bob. Bob casts Burn at Alice's mage.
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p2',
+      spellCardId: 'base.spell.burn',
+      level: 1,
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'mage-chosen', mageId: 'alice-red' },
+    });
+    const p1 = s.players.find((p) => p.id === 'p1')!;
+    const p2 = s.players.find((p) => p.id === 'p2')!;
+    // Bob: 2 - (1 printed + 1 surcharge) = 0.
+    expect(p2.resources.mana).toBe(0);
+    // Alice: gained the 1-Mana surcharge.
+    expect(p1.resources.mana).toBe(1);
+  });
+
+  it('caster\'s own spell casts are NOT affected by their own Energy Drain', () => {
+    let s = setupEnergyDrain();
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.thirteen-greater-mysteries',
+      level: 3,
+    });
+    // Reset action budget so we can simulate a same-turn cast by Alice.
+    s = {
+      ...s,
+      phase: {
+        kind: 'errands' as const,
+        round: 1,
+        activePlayerIndex: 0,
+        actionUsed: false,
+        fastActionUsed: false,
+      },
+    };
+    // Give Alice a Burn + 1 mana.
+    s = addOwnedSpell(s, 'p1', 'base.spell.burn', { intPlaced: true });
+    s = setMana(s, 'p1', 1);
+    s = addMage(s, 'p2', {
+      id: 'bob-grey',
+      cardId: 'base.mage.mysticism',
+      color: 'grey',
+    });
+    s = placeMageOnSpace(s, 'p2', 'bob-grey', 'base.room.library.a.slot-2');
+    // Cast Burn — should cost only the printed 1 Mana, no surcharge.
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.burn',
+      level: 1,
+    });
+    const p1 = s.players.find((p) => p.id === 'p1')!;
+    expect(p1.resources.mana).toBe(0);
+  });
+
+  it('opposing cast that cannot afford the surcharge is rejected', () => {
+    let s = setupEnergyDrain();
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.thirteen-greater-mysteries',
+      level: 3,
+    });
+    // Bob has only 1 mana; Burn costs 1 + 1 surcharge = 2 needed.
+    s = setMana(s, 'p2', 1);
+    expect(() =>
+      applyAction(s, {
+        type: 'CAST_SPELL',
+        playerId: 'p2',
+        spellCardId: 'base.spell.burn',
+        level: 1,
+      }),
+    ).toThrow(/insufficient mana/);
+  });
+});
+
+// ============================================================================
 // Tap the Well (Thirteen Greater Mysteries L2) — cast a L1 tableau spell,
 // paying all costs.
 // ============================================================================

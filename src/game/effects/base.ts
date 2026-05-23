@@ -58,6 +58,7 @@ import type {
   Department,
   EffectContext,
   EffectResult,
+  EnergyDrainBuff,
   GameState,
   GameStatePatch,
   HarmfulEffectKind,
@@ -14289,5 +14290,34 @@ registerEffect(
     }
 
     throw new Error(`${self} unexpected step ${String(step)}`);
+  },
+);
+
+// ============================================================================
+// Thirteen Greater Mysteries L3 "Energy Drain" — Action, 0 Mana. During this
+// round, opponents must pay 1 extra Mana to cast a Spell — that Mana flows
+// to the caster. Implemented via an EnergyDrainBuff (round-end expiry) +
+// spellManaSurchargesAgainst, which the CAST_SPELL handler reads when
+// computing effectiveManaCost. Multiple Energy Drain buffs stack additively;
+// the buff holder's own casts are unaffected by their own buff.
+// ============================================================================
+
+registerEffect(
+  'base.spell.thirteen-greater-mysteries.l3',
+  (ctx: EffectContext): EffectResult => {
+    const buff: EnergyDrainBuff = {
+      kind: 'energy-drain',
+      casterPlayerId: ctx.triggeringPlayerId,
+      spellCardId: 'base.spell.thirteen-greater-mysteries',
+      label: 'Energy Drain',
+      surcharge: 1,
+      expiresAt: { kind: 'round-end' },
+    };
+    return {
+      kind: 'done',
+      patch: {
+        activeBuffs: [...ctx.state.activeBuffs, buff],
+      },
+    };
   },
 );

@@ -1469,6 +1469,10 @@ function PlayerBuffBadges({
           title = `${b.label} — your wounded Mages can move out of the Infirmary right after they're wounded (${dur})`;
           toneClass = 'text-emerald-300 bg-emerald-500/10 border-emerald-500/30';
           keyBase = b.spellCardId;
+        } else if (b.kind === 'energy-drain') {
+          title = `${b.label} — opponents pay ${b.surcharge} extra Mana on Spell casts (Mana flows to you, ${dur})`;
+          toneClass = 'text-fuchsia-300 bg-fuchsia-500/10 border-fuchsia-500/30';
+          keyBase = b.spellCardId;
         } else {
           // spells-cheaper (Power / Inner Fire)
           title = `${b.label} — your Spells cost ${b.discount} less Mana (${dur})`;

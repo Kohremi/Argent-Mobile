@@ -850,6 +850,21 @@ export interface RevivalBuff {
   expiresAt: BuffExpiry;
 }
 
+/**
+ * Energy Drain buff (Thirteen Greater Mysteries L3). For the rest of the
+ * round, opposing players pay an extra `surcharge` Mana every time they
+ * cast a Spell — the extra Mana is routed to the buff's caster. Caster's
+ * own casts are unaffected.
+ */
+export interface EnergyDrainBuff {
+  kind: 'energy-drain';
+  casterPlayerId: PlayerId;
+  spellCardId: SpellCardId;
+  label: string;
+  surcharge: number;
+  expiresAt: BuffExpiry;
+}
+
 export type ActiveBuff =
   | MageImmunityBuff
   | MagesLosePowersBuff
@@ -857,7 +872,8 @@ export type ActiveBuff =
   | PlacementsBlockedBuff
   | SpellsCheaperBuff
   | SpellsBlockedBuff
-  | RevivalBuff;
+  | RevivalBuff
+  | EnergyDrainBuff;
 
 export type ReactionTriggerEvent =
   | {

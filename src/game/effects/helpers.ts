@@ -317,6 +317,25 @@ export function spellManaDiscountFor(
   return total;
 }
 
+/**
+ * Returns the active Energy Drain buffs owned by OPPONENTS of `playerId` —
+ * each one adds its `surcharge` to the player's spell costs and routes
+ * that mana to its `casterPlayerId`. Caster's own buff doesn't apply to
+ * themselves.
+ */
+export function spellManaSurchargesAgainst(
+  state: GameState,
+  playerId: PlayerId,
+): { casterPlayerId: PlayerId; amount: number }[] {
+  const out: { casterPlayerId: PlayerId; amount: number }[] = [];
+  for (const b of state.activeBuffs) {
+    if (b.kind !== 'energy-drain') continue;
+    if (b.casterPlayerId === playerId) continue;
+    out.push({ casterPlayerId: b.casterPlayerId, amount: b.surcharge });
+  }
+  return out;
+}
+
 /** Returns true when the given action-space sits inside a locked room. */
 export function isSpaceInLockedRoom(
   state: GameState,

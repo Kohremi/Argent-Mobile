@@ -20,6 +20,7 @@ import {
   MAGE_CARD_BY_COLOR,
   placementsBlocked,
   spellManaDiscountFor,
+  spellManaSurchargesAgainst,
   spellsBlocked,
   woundMage,
 } from './effects/helpers';
@@ -1346,10 +1347,15 @@ function handleCastSpell(state: GameState, action: CastSpellAction): GameState {
   // Mana Elixir (and similar) waive the cost of the very next spell this
   // turn. If the flag is set, the mana check is skipped and the cost zeros.
   // Sustained "spells cheaper" buffs (Power bell tower offering) shave more
-  // off the printed cost, floored at 0.
+  // off the printed cost, floored at 0. Energy Drain buffs owned by
+  // opponents add a surcharge — opponents' Mana flows to those buff holders,
+  // the caster still pays it as part of their cost.
   const discount = spellManaDiscountFor(state, action.playerId);
   const discountedCost = Math.max(0, levelDef.manaCost - discount);
-  const effectiveManaCost = player.nextSpellFreeMana ? 0 : discountedCost;
+  const surcharges = spellManaSurchargesAgainst(state, action.playerId);
+  const surchargeTotal = surcharges.reduce((sum, s) => sum + s.amount, 0);
+  const baseCost = player.nextSpellFreeMana ? 0 : discountedCost;
+  const effectiveManaCost = baseCost + surchargeTotal;
   if (player.resources.mana < effectiveManaCost) {
     throw new Error(
       `CAST_SPELL: insufficient mana (need ${effectiveManaCost}, have ${player.resources.mana})`,
@@ -1372,24 +1378,42 @@ function handleCastSpell(state: GameState, action: CastSpellAction): GameState {
   // Spend mana, exhaust spell, consume the free-mana / no-exhaust buffs if
   // either was set. Concentration (`nextSpellSkipsExhaust`) leaves the cast
   // spell unexhausted; one-shot, cleared regardless of which spell was cast.
+  // Energy Drain surcharges are added to each buff holder's mana pool — the
+  // caster's surcharge spend physically becomes the buff holders' gain.
   const skipExhaust = player.nextSpellSkipsExhaust === true;
+  const surchargeByPlayer = new Map<string, number>();
+  for (const s of surcharges) {
+    surchargeByPlayer.set(
+      s.casterPlayerId,
+      (surchargeByPlayer.get(s.casterPlayerId) ?? 0) + s.amount,
+    );
+  }
   let next: GameState = {
     ...state,
-    players: state.players.map((p) =>
-      p.id !== action.playerId
-        ? p
-        : {
-            ...p,
-            resources: { ...p.resources, mana: p.resources.mana - effectiveManaCost },
-            ownedSpells: p.ownedSpells.map((s) =>
-              s.cardId !== action.spellCardId
-                ? s
-                : { ...s, exhausted: skipExhaust ? s.exhausted : true },
-            ),
-            nextSpellFreeMana: false,
-            nextSpellSkipsExhaust: false,
+    players: state.players.map((p) => {
+      if (p.id === action.playerId) {
+        return {
+          ...p,
+          resources: {
+            ...p.resources,
+            mana: p.resources.mana - effectiveManaCost,
           },
-    ),
+          ownedSpells: p.ownedSpells.map((s) =>
+            s.cardId !== action.spellCardId
+              ? s
+              : { ...s, exhausted: skipExhaust ? s.exhausted : true },
+          ),
+          nextSpellFreeMana: false,
+          nextSpellSkipsExhaust: false,
+        };
+      }
+      const gain = surchargeByPlayer.get(p.id) ?? 0;
+      if (gain === 0) return p;
+      return {
+        ...p,
+        resources: { ...p.resources, mana: p.resources.mana + gain },
+      };
+    }),
   };
 
   const source: ResolutionSource = {
