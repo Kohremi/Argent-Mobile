@@ -14529,6 +14529,66 @@ describe('Alt-leader spells', () => {
 });
 
 // ============================================================================
+// Bend Time (Temporal Calculus L3) — grants 3 extra actions this turn.
+// (The "different type per action" constraint is a soft rule.)
+// ============================================================================
+
+describe('Bend Time (Temporal Calculus L3)', () => {
+  function setupBendTime(): GameState {
+    let s = initGame(TWO_PLAYER_CONFIG);
+    s = forceLibrarySideA(s);
+    s = zeroPlayerResources(s, 'p1');
+    s = zeroPlayerResources(s, 'p2');
+    s = addOwnedSpell(s, 'p1', 'base.spell.temporal-calculus-6th-ed', {
+      intPlaced: true,
+      wisPlacedLevel2: true,
+      wisPlacedLevel3: true,
+    });
+    s = setMana(s, 'p1', 4);
+    return {
+      ...s,
+      firstPlayerIndex: 0,
+      phase: {
+        kind: 'errands',
+        round: 1,
+        activePlayerIndex: 0,
+        actionUsed: false,
+        fastActionUsed: false,
+      },
+    };
+  }
+
+  it('cast grants +3 extraActions on the errands phase', () => {
+    let s = setupBendTime();
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.temporal-calculus-6th-ed',
+      level: 3,
+    });
+    if (s.phase.kind !== 'errands') throw new Error('expected errands');
+    expect(s.phase.extraActions).toBe(3);
+    // Base Action was spent by Bend Time itself.
+    expect(s.phase.actionUsed).toBe(true);
+    // Turn doesn't auto-advance while bonus actions remain.
+    expect(s.players[s.phase.activePlayerIndex]!.id).toBe('p1');
+  });
+
+  it('extraActions counter clears on turn change', () => {
+    let s = setupBendTime();
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.temporal-calculus-6th-ed',
+      level: 3,
+    });
+    s = applyAction(s, { type: 'PASS_TURN', playerId: 'p1' });
+    if (s.phase.kind !== 'errands') throw new Error('expected errands');
+    expect(s.phase.extraActions ?? 0).toBe(0);
+  });
+});
+
+// ============================================================================
 // Energy Drain (Thirteen Greater Mysteries L3) — round-end buff that adds a
 // 1-Mana surcharge to every opposing Spell cast; the surcharge flows to
 // the buff's caster.

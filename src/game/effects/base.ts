@@ -14321,3 +14321,25 @@ registerEffect(
     };
   },
 );
+
+// ============================================================================
+// Temporal Calculus 6th Ed. L3 "Bend Time" — Action, 4 Mana. Take up to 3
+// more actions. Each must be a different type of action (using a Vault Card,
+// Supporter, and Spell are all different types).
+//
+// Engine support: grants +3 extra actions via the shared `extraActions`
+// counter on the errands phase (the same counter Flare / Dazzle use). The
+// "different type" constraint is left to player judgement for now — the
+// engine doesn't track which action kinds have been used during the bend-
+// time window. Marked as a soft implementation; if rigid enforcement
+// becomes important we'd add a per-turn `bendTimeUsedKinds: Set<...>` and
+// validate each Action against it.
+// ============================================================================
+
+registerEffect(
+  'base.spell.temporal-calculus-6th-ed.l3',
+  (ctx: EffectContext): EffectResult => ({
+    kind: 'done',
+    patch: grantExtraActions(ctx.state, 3),
+  }),
+);
