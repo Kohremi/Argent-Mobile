@@ -1486,6 +1486,22 @@ function maybeInsertMysticismPending(
   if (!greyCheck) return state;
   if (magesLosePowers(state)) return state;
   if (placementsBlocked(state)) return state;
+  // A mandatory shadow-on-place buff (Inversion) forces every placement to
+  // go to a shadow position. The Mysticism post-cast trigger's slot picker
+  // only supports base placement, so suppress the prompt under mandatory
+  // shadow — the player's grey mage forfeits its bonus action, matching
+  // how Malaise / Mesmerize already gate this prompt. Optional shadow
+  // (Zero Hour) leaves base placement legal, so the prompt still fires.
+  if (
+    state.activeBuffs.some(
+      (b) =>
+        b.kind === 'shadow-on-place' &&
+        b.casterPlayerId === playerId &&
+        b.mode === 'mandatory',
+    )
+  ) {
+    return state;
+  }
   const caster = state.players.find((p) => p.id === playerId);
   const stillHasGrey =
     caster?.mages.some(

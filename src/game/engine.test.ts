@@ -11907,6 +11907,32 @@ describe('Shadow-on-place buffs (Zero Hour L2 / Inversion L3)', () => {
       expect(slot2.occupant?.mageId).toBe('alice-red-1');
       expect(slot2.shadowOccupant?.mageId).toBe('bob-grey-1');
     });
+
+    it('suppresses the grey Mysticism post-cast prompt (mandatory shadow forbids base placement)', () => {
+      let s = setupInfinite(3, 3);
+      // Give p1 a grey mage in office so the post-cast trigger would
+      // normally fire.
+      s = addMage(s, 'p1', {
+        id: 'alice-grey',
+        cardId: 'base.mage.mysticism',
+        color: 'grey',
+      });
+      s = applyAction(s, {
+        type: 'CAST_SPELL',
+        playerId: 'p1',
+        spellCardId: 'base.spell.infinite-universes-realized',
+        level: 3,
+      });
+      // No Mysticism prompt — Inversion suppresses it because the post-cast
+      // placement can only target base slots and Inversion forces shadow.
+      expect(
+        s.pendingResolutionStack.some(
+          (e) =>
+            e.source.kind === 'mage-power' &&
+            e.source.id === 'base.mage.mysticism.place-after-cast',
+        ),
+      ).toBe(false);
+    });
   });
 });
 
