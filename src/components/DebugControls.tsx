@@ -177,30 +177,6 @@ function injectMage(state: GameState, playerId: PlayerId, color: MageColor): Gam
   };
 }
 
-function injectBurnAndMana(state: GameState, playerId: PlayerId): GameState {
-  return {
-    ...state,
-    players: state.players.map((p) =>
-      p.id !== playerId
-        ? p
-        : {
-            ...p,
-            ownedSpells: [
-              ...p.ownedSpells.filter((s) => s.cardId !== 'base.spell.burn'),
-              {
-                cardId: 'base.spell.burn',
-                intPlaced: true,
-                wisPlacedLevel2: false,
-                wisPlacedLevel3: false,
-                exhausted: false,
-              },
-            ],
-            resources: { ...p.resources, mana: Math.max(p.resources.mana, 5) },
-          },
-    ),
-  };
-}
-
 function injectPhaseSteppers(state: GameState, playerId: PlayerId): GameState {
   return {
     ...state,
@@ -221,7 +197,7 @@ function injectPhaseSteppers(state: GameState, playerId: PlayerId): GameState {
 function bumpResource(
   state: GameState,
   playerId: PlayerId,
-  key: 'gold' | 'meritBadges',
+  key: 'gold' | 'meritBadges' | 'mana' | 'intelligence' | 'wisdom',
   delta: number,
 ): GameState {
   return {
@@ -2145,10 +2121,27 @@ function PlayerCard({
           ))}
           <button
             type="button"
-            onClick={() => patchState((s) => injectBurnAndMana(s, player.id))}
-            className="px-1.5 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-[10px]"
+            onClick={() => patchState((s) => bumpResource(s, player.id, 'mana', 5))}
+            className="px-1.5 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-[10px] inline-flex items-center gap-1"
+            title="Gain 5 Mana (repeatable)"
           >
-            +Burn +5 mana
+            +5 <ResourceIcon kind="mana" size={11} />
+          </button>
+          <button
+            type="button"
+            onClick={() => patchState((s) => bumpResource(s, player.id, 'intelligence', 1))}
+            className="px-1.5 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-[10px] inline-flex items-center gap-1"
+            title="Gain 1 INT (repeatable)"
+          >
+            +1 <ResourceIcon kind="intelligence" size={11} />
+          </button>
+          <button
+            type="button"
+            onClick={() => patchState((s) => bumpResource(s, player.id, 'wisdom', 1))}
+            className="px-1.5 py-0.5 rounded bg-slate-800 hover:bg-slate-700 text-[10px] inline-flex items-center gap-1"
+            title="Gain 1 WIS (repeatable)"
+          >
+            +1 <ResourceIcon kind="wisdom" size={11} />
           </button>
           <button
             type="button"
