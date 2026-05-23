@@ -14529,6 +14529,211 @@ describe('Alt-leader spells', () => {
 });
 
 // ============================================================================
+// Fade (Parallel Synchronicity L2) — pick a room, then toggle which placed
+// mages shift to their slots' shadow positions.
+// ============================================================================
+
+describe('Fade (Parallel Synchronicity L2)', () => {
+  function setupFade(): GameState {
+    let s = initGame(TWO_PLAYER_CONFIG);
+    s = forceLibrarySideA(s);
+    s = zeroPlayerResources(s, 'p1');
+    s = zeroPlayerResources(s, 'p2');
+    s = addOwnedSpell(s, 'p1', 'base.spell.parallel-synchronicity', {
+      intPlaced: true,
+      wisPlacedLevel2: true,
+    });
+    s = setMana(s, 'p1', 2);
+    // Alice places her own red in Library A slot-3 (eligible as "yours").
+    s = addMage(s, 'p1', {
+      id: 'alice-red',
+      cardId: 'base.mage.sorcery',
+      color: 'red',
+    });
+    s = placeMageOnSpace(s, 'p1', 'alice-red', 'base.room.library.a.slot-3');
+    // Bob has two grey mages in Library A slots 1 + 2.
+    s = addMage(s, 'p2', {
+      id: 'bob-grey-1',
+      cardId: 'base.mage.mysticism',
+      color: 'grey',
+    });
+    s = addMage(s, 'p2', {
+      id: 'bob-grey-2',
+      cardId: 'base.mage.mysticism',
+      color: 'grey',
+    });
+    s = placeMageOnSpace(s, 'p2', 'bob-grey-1', 'base.room.library.a.slot-1');
+    s = placeMageOnSpace(s, 'p2', 'bob-grey-2', 'base.room.library.a.slot-2');
+    return {
+      ...s,
+      firstPlayerIndex: 0,
+      phase: {
+        kind: 'errands',
+        round: 1,
+        activePlayerIndex: 0,
+        actionUsed: false,
+        fastActionUsed: false,
+      },
+    };
+  }
+
+  it('prompts for a room with placed mages whose shadow slots are empty', () => {
+    let s = setupFade();
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.parallel-synchronicity',
+      level: 2,
+    });
+    const top = topPending(s);
+    if (top.prompt.kind !== 'choose-from-options') throw new Error('unreachable');
+    expect(top.prompt.options.some((o) => o.id === 'base.room.library.a')).toBe(
+      true,
+    );
+  });
+
+  it('after room is chosen, surfaces a toggle prompt with every eligible mage + a Done option', () => {
+    let s = setupFade();
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.parallel-synchronicity',
+      level: 2,
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: {
+        kind: 'option-chosen',
+        optionId: 'base.room.library.a',
+        payload: {},
+      },
+    });
+    const togglePrompt = topPending(s);
+    if (togglePrompt.prompt.kind !== 'choose-from-options') throw new Error('unreachable');
+    const ids = togglePrompt.prompt.options.map((o) => o.id);
+    expect(ids).toContain('alice-red');
+    expect(ids).toContain('bob-grey-1');
+    expect(ids).toContain('bob-grey-2');
+    expect(ids).toContain('done');
+  });
+
+  it('selecting two mages and choosing Done shifts both to shadow position', () => {
+    let s = setupFade();
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.parallel-synchronicity',
+      level: 2,
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: {
+        kind: 'option-chosen',
+        optionId: 'base.room.library.a',
+        payload: {},
+      },
+    });
+    // Toggle bob-grey-1.
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'option-chosen', optionId: 'bob-grey-1', payload: {} },
+    });
+    // Toggle bob-grey-2.
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'option-chosen', optionId: 'bob-grey-2', payload: {} },
+    });
+    // Done.
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'option-chosen', optionId: 'done', payload: {} },
+    });
+    // Both Bob mages in shadow position; Alice's mage unchanged.
+    const lib = s.rooms.find((r) => r.id === 'base.room.library.a')!;
+    const slot1 = lib.actionSpaces.find(
+      (sp) => sp.id === 'base.room.library.a.slot-1',
+    )!;
+    const slot2 = lib.actionSpaces.find(
+      (sp) => sp.id === 'base.room.library.a.slot-2',
+    )!;
+    const slot3 = lib.actionSpaces.find(
+      (sp) => sp.id === 'base.room.library.a.slot-3',
+    )!;
+    expect(slot1.occupant).toBeNull();
+    expect(slot1.shadowOccupant?.mageId).toBe('bob-grey-1');
+    expect(slot2.occupant).toBeNull();
+    expect(slot2.shadowOccupant?.mageId).toBe('bob-grey-2');
+    expect(slot3.occupant?.mageId).toBe('alice-red');
+    expect(slot3.shadowOccupant).toBeUndefined();
+  });
+
+  it('opposing blue mages are spell-immune and excluded from the toggle list', () => {
+    let s = setupFade();
+    s = addMage(s, 'p2', {
+      id: 'bob-blue',
+      cardId: 'base.mage.divinity',
+      color: 'blue',
+    });
+    s = placeMageOnSpace(s, 'p2', 'bob-blue', 'base.room.library.a.slot-4');
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.parallel-synchronicity',
+      level: 2,
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: {
+        kind: 'option-chosen',
+        optionId: 'base.room.library.a',
+        payload: {},
+      },
+    });
+    const togglePrompt = topPending(s);
+    if (togglePrompt.prompt.kind !== 'choose-from-options') throw new Error('unreachable');
+    expect(togglePrompt.prompt.options.map((o) => o.id)).not.toContain(
+      'bob-blue',
+    );
+  });
+
+  it('Done with zero mages selected is a clean no-op', () => {
+    let s = setupFade();
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.parallel-synchronicity',
+      level: 2,
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: {
+        kind: 'option-chosen',
+        optionId: 'base.room.library.a',
+        payload: {},
+      },
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'option-chosen', optionId: 'done', payload: {} },
+    });
+    // Nothing shifted.
+    const slot1 = s.rooms
+      .find((r) => r.id === 'base.room.library.a')!
+      .actionSpaces.find((sp) => sp.id === 'base.room.library.a.slot-1')!;
+    expect(slot1.occupant?.mageId).toBe('bob-grey-1');
+    expect(slot1.shadowOccupant).toBeUndefined();
+  });
+});
+
+// ============================================================================
 // Cut Plane (Indefinite Definitives L1) — opposing mage shadows its own slot;
 // caster places one of their mages into the vacated base position.
 // ============================================================================

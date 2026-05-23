@@ -13991,3 +13991,195 @@ registerEffect(
     throw new Error(`${self} unexpected step ${String(step)}`);
   },
 );
+
+// ============================================================================
+// Parallel Synchronicity L2 "Fade" — Action, 2 Mana. Move any number of
+// Mages (yours or opponents') in a room into the shadow position.
+//
+// Sister to Inversion's mass-move, but room-scoped and applied to any mix of
+// owners. Two-step chain: pick a room (must contain ≥1 base-position mage
+// whose slot's shadow is empty), then a multi-pick prompt that lets the
+// caster toggle which placed mages in that room shift to their slot's
+// shadow position. Opposing blue mages are spell-immune and excluded.
+// No reaction window opens for the moves (matches Inversion's pattern).
+// ============================================================================
+
+function listFadeRooms(state: GameState, casterId: string): string[] {
+  const out: string[] = [];
+  for (const r of state.rooms) {
+    if (isRoomLocked(state, r.id)) continue;
+    let eligibleInRoom = 0;
+    for (const s of r.actionSpaces) {
+      if (!s.occupant) continue;
+      if (s.shadowOccupant) continue;
+      const owner = state.players.find((p) => p.id === s.occupant!.ownerId);
+      const mage = owner?.mages.find((m) => m.id === s.occupant!.mageId);
+      if (!mage) continue;
+      // Opposing blue is spell-immune.
+      if (mage.color === 'blue' && s.occupant.ownerId !== casterId) continue;
+      eligibleInRoom++;
+    }
+    if (eligibleInRoom > 0) out.push(r.id);
+  }
+  return out;
+}
+
+function listFadeCandidates(
+  state: GameState,
+  casterId: string,
+  roomId: string,
+): { mageId: string; spaceId: string; ownerId: string }[] {
+  const room = state.rooms.find((r) => r.id === roomId);
+  if (!room) return [];
+  const out: { mageId: string; spaceId: string; ownerId: string }[] = [];
+  for (const s of room.actionSpaces) {
+    if (!s.occupant) continue;
+    if (s.shadowOccupant) continue;
+    const owner = state.players.find((p) => p.id === s.occupant!.ownerId);
+    const mage = owner?.mages.find((m) => m.id === s.occupant!.mageId);
+    if (!mage) continue;
+    if (mage.color === 'blue' && s.occupant.ownerId !== casterId) continue;
+    out.push({
+      mageId: s.occupant.mageId,
+      spaceId: s.id,
+      ownerId: s.occupant.ownerId,
+    });
+  }
+  return out;
+}
+
+function applyFadeShift(
+  state: GameState,
+  shifts: { mageId: string; spaceId: string; ownerId: string }[],
+): GameStatePatch {
+  let working = state;
+  for (const shift of shifts) {
+    const occupancy: WorkerOccupancy = {
+      mageId: shift.mageId,
+      ownerId: shift.ownerId,
+      isShadowing: true,
+    };
+    working = {
+      ...working,
+      players: working.players.map((p) =>
+        p.id !== shift.ownerId
+          ? p
+          : {
+              ...p,
+              mages: p.mages.map((m) =>
+                m.id !== shift.mageId ? m : { ...m, isShadowing: true },
+              ),
+            },
+      ),
+      rooms: working.rooms.map((r) => ({
+        ...r,
+        actionSpaces: r.actionSpaces.map((s) =>
+          s.id !== shift.spaceId
+            ? s
+            : { ...s, occupant: null, shadowOccupant: occupancy },
+        ),
+      })),
+    };
+  }
+  return { players: working.players, rooms: working.rooms };
+}
+
+registerEffect(
+  'base.spell.parallel-synchronicity.l2',
+  (ctx: EffectContext): EffectResult => {
+    const self = 'base.spell.parallel-synchronicity.l2';
+    const step = ctx.resumeContext?.['step'];
+
+    if (!ctx.resumeAnswer) {
+      const eligibleRoomIds = listFadeRooms(ctx.state, ctx.triggeringPlayerId);
+      if (eligibleRoomIds.length === 0) return { kind: 'done', patch: {} };
+      return {
+        kind: 'pause',
+        pending: {
+          responderId: ctx.triggeringPlayerId,
+          prompt: {
+            kind: 'choose-from-options',
+            options: eligibleRoomIds.map((rid) => {
+              const r = ctx.state.rooms.find((rr) => rr.id === rid)!;
+              return { id: rid, label: r.name, payload: {} };
+            }),
+          },
+          resume: { effectId: self, context: { step: 'pick-mage' } },
+          source: ctx.source,
+        },
+      };
+    }
+
+    if (step === 'pick-mage') {
+      if (ctx.resumeAnswer.kind !== 'option-chosen') {
+        throw new Error(`${self} pick-mage expected option-chosen`);
+      }
+      const roomId = ctx.resumeAnswer.optionId;
+      const picked = (ctx.resumeContext?.['picked'] as string[] | undefined) ?? [];
+      return surfaceFadeMagePrompt(ctx, self, roomId, picked);
+    }
+
+    if (step === 'toggle') {
+      if (ctx.resumeAnswer.kind !== 'option-chosen') {
+        throw new Error(`${self} toggle expected option-chosen`);
+      }
+      const roomId = String(ctx.resumeContext?.['roomId'] ?? '');
+      const picked = (ctx.resumeContext?.['picked'] as string[] | undefined) ?? [];
+      const optionId = ctx.resumeAnswer.optionId;
+      if (optionId === 'done') {
+        const candidates = listFadeCandidates(
+          ctx.state,
+          ctx.triggeringPlayerId,
+          roomId,
+        );
+        const shifts = candidates.filter((c) => picked.includes(c.mageId));
+        if (shifts.length === 0) return { kind: 'done', patch: {} };
+        return { kind: 'done', patch: applyFadeShift(ctx.state, shifts) };
+      }
+      const next = picked.includes(optionId)
+        ? picked.filter((id) => id !== optionId)
+        : [...picked, optionId];
+      return surfaceFadeMagePrompt(ctx, self, roomId, next);
+    }
+
+    throw new Error(`${self} unexpected step ${String(step)}`);
+  },
+);
+
+function surfaceFadeMagePrompt(
+  ctx: EffectContext,
+  self: string,
+  roomId: string,
+  picked: string[],
+): EffectResult {
+  const candidates = listFadeCandidates(
+    ctx.state,
+    ctx.triggeringPlayerId,
+    roomId,
+  );
+  if (candidates.length === 0) return { kind: 'done', patch: {} };
+  const options: ChoiceOption[] = candidates.map((c) => ({
+    id: c.mageId,
+    label: picked.includes(c.mageId)
+      ? `[x] ${c.mageId} (${c.ownerId})`
+      : `[ ] ${c.mageId} (${c.ownerId})`,
+    payload: {},
+  }));
+  options.push({
+    id: 'done',
+    label: `Apply (${picked.length} selected)`,
+    payload: {},
+  });
+  return {
+    kind: 'pause',
+    pending: {
+      responderId: ctx.triggeringPlayerId,
+      prompt: { kind: 'choose-from-options', options },
+      resume: {
+        effectId: self,
+        context: { step: 'toggle', roomId, picked },
+      },
+      source: ctx.source,
+    },
+  };
+}
