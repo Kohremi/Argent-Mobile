@@ -11,8 +11,10 @@ import {
   applyCandidateAllocation,
   buildReactionOptionsFor,
   buildReactionQueue,
+  actsAsColor,
   buildSnakeDraftOrder,
   canArsMagnaTakeSpace,
+  clearInfirmaryBSlots,
   countPlayerMagesInRoom,
   describeSpaceSource,
   magesLosePowers,
@@ -24,11 +26,14 @@ import {
   spellsBlocked,
   woundMage,
 } from './effects/helpers';
+import { buildAdventuringBPickPrompt } from './effects/helpers';
 import type {
   ActionSpace,
   BellTowerCard,
   BellTowerCardId,
+  BendTimeKind,
   BuyVaultCardAction,
+  DiscardBonusActionsAction,
   CastSpellAction,
   ChooseCandidateAction,
   ChooseDraftFirstAction,
@@ -44,6 +49,7 @@ import type {
   EffectResult,
   GameAction,
   GameConfig,
+  GamePhase,
   GameState,
   GameStatePatch,
   OwnedMage,
@@ -93,6 +99,9 @@ export function applyAction(state: GameState, action: GameAction): GameState {
       break;
     case 'PASS_TURN':
       next = handlePassTurn(state, action);
+      break;
+    case 'DISCARD_BONUS_ACTIONS':
+      next = handleDiscardBonusActions(state, action);
       break;
     case 'PLAY_SUPPORTER':
       next = handlePlaySupporter(state, action);
@@ -157,16 +166,43 @@ function consumeActionBudget(
   state: GameState,
   kind: ActionBudgetKind,
   label: string,
+  bendTimeKind?: BendTimeKind,
 ): GameState {
   if (state.phase.kind !== 'errands') {
     throw new Error(`${label}: only valid during errands phase`);
   }
   if (kind === 'action') {
     if (state.phase.actionUsed) {
-      // Bonus actions (Flare / Dazzle) cover the spend after the base
-      // Action is gone — decrement the counter and let the action through.
+      // Bonus actions (Flare / Dazzle / Bend Time) cover the spend after
+      // the base Action is gone — decrement the counter and let the action
+      // through. Under Bend Time, also enforce "each must be a different
+      // type" against the bendTimeUsedKinds tracker.
       const bonus = state.phase.extraActions ?? 0;
       if (bonus > 0) {
+        const used = state.phase.bendTimeUsedKinds;
+        if (used) {
+          // Under Bend Time, the bonus action must be one of the 4 named
+          // types (place / spell / supporter / vault) and each may be used
+          // at most once.
+          if (!bendTimeKind) {
+            throw new Error(
+              `${label}: Bend Time — only Place / Cast Spell / Play Supporter / Play Vault Card count as bonus actions`,
+            );
+          }
+          if (used.includes(bendTimeKind)) {
+            throw new Error(
+              `${label}: Bend Time — already used a ${bendTimeKind} action this turn`,
+            );
+          }
+          return {
+            ...state,
+            phase: {
+              ...state.phase,
+              extraActions: bonus - 1,
+              bendTimeUsedKinds: [...used, bendTimeKind],
+            },
+          };
+        }
         return {
           ...state,
           phase: { ...state.phase, extraActions: bonus - 1 },
@@ -409,10 +445,20 @@ function autoAdvanceIfTurnDone(state: GameState): GameState {
   // first placement may have left a pending entry once its instant-reward
   // chain resolved.
   state = drainPendingPlaceChainIfIdle(state);
+  // Mysticism post-cast trigger: queued at CAST_SPELL time, fires once
+  // the spell's full chain (prompts + reactions + place chain) settles.
+  // Drained AFTER pendingPlaceChain so multi-placement spells (Slow Time)
+  // finish all placements before this surfaces. The drain itself either
+  // pushes the Yes/No prompt or clears the flag silently.
+  state = drainMysticismPostCastIfIdle(state);
   // Revival checks fire after the wound's reaction window and bonus chain
   // have settled — surface them before any further chain advancement so the
   // owner can re-place their wounded mage immediately.
   state = drainRevivalCheckIfIdle(state);
+  // Technomancy (orange) post-placement trigger — same idle-drain
+  // pattern as Mysticism post-cast: surfaces a "Pay 3 Gold to gain a
+  // Research" prompt once the placement chain has fully settled.
+  state = drainTechnomancyTriggerIfIdle(state);
   // Drain a queued research opportunity first — this may add to the stack,
   // in which case we stop and let the player resolve it before any further
   // turn advancement.
@@ -663,6 +709,15 @@ function pumpResolutionPhase(state: GameState): GameState {
       occupant.ownerId,
       position,
     );
+    // Mark the slot's resolution chain as active so handleResolvePending's
+    // auto-complete fires only for chain-ending resumes — not for side
+    // prompts (e.g. queue-drained Research) that surface between slots.
+    if (curr.phase.kind === 'resolution') {
+      curr = {
+        ...curr,
+        phase: { ...curr.phase, slotInProgress: true },
+      };
+    }
     return curr;
   }
   throw new Error('pumpResolutionPhase: hit iteration cap');
@@ -701,19 +756,52 @@ function advanceSlotPosition(
 function advanceResolutionPointer(state: GameState, bumpRoom: boolean): GameState {
   if (state.phase.kind !== 'resolution') return state;
   const phase = state.phase;
+  // When the pointer leaves a room with transient room-state, clean up.
+  //   - Vault A: return revealed cards to the top of the Vault Deck.
+  //   - Adventuring B: return undrafted pool cards to the BOTTOM of each
+  //     respective deck and clear the pool ("discard at end of round").
+  let next: GameState = state;
+  const leavingRoom = bumpRoom ? state.rooms[phase.pendingRoomIndex] : undefined;
+  if (
+    bumpRoom &&
+    state.vaultARevealed !== null &&
+    leavingRoom?.id === 'base.room.vault.a'
+  ) {
+    next = {
+      ...next,
+      vaultDeck: [...state.vaultARevealed, ...state.vaultDeck],
+      vaultARevealed: null,
+    };
+  }
+  if (
+    bumpRoom &&
+    state.adventuringBPool !== null &&
+    leavingRoom?.id === 'base.room.adventuring.b'
+  ) {
+    const pool = state.adventuringBPool;
+    next = {
+      ...next,
+      spellDeck: [...next.spellDeck, ...pool.spells],
+      vaultDeck: [...next.vaultDeck, ...pool.vaultCards],
+      supporterDeck: [...next.supporterDeck, ...pool.supporters],
+      adventuringBPool: null,
+    };
+  }
   return {
-    ...state,
+    ...next,
     phase: bumpRoom
       ? {
           ...phase,
           pendingRoomIndex: phase.pendingRoomIndex + 1,
           pendingSpaceIndex: 0,
           pendingSlotPosition: 'base',
+          slotInProgress: false,
         }
       : {
           ...phase,
           pendingSpaceIndex: phase.pendingSpaceIndex + 1,
           pendingSlotPosition: 'base',
+          slotInProgress: false,
         },
   };
 }
@@ -771,11 +859,12 @@ function completeCurrentSpaceResolution(state: GameState): GameState {
     rooms: updatedRooms,
     players: updatedPlayers,
     phase: advancingToShadow
-      ? { ...phase, pendingSlotPosition: 'shadow' }
+      ? { ...phase, pendingSlotPosition: 'shadow', slotInProgress: false }
       : {
           ...phase,
           pendingSpaceIndex: phase.pendingSpaceIndex + 1,
           pendingSlotPosition: 'base',
+          slotInProgress: false,
         },
   };
 }
@@ -845,15 +934,26 @@ function handlePlaceWorker(state: GameState, action: PlaceWorkerAction): GameSta
 
   // Shadow-on-place buff (Zero Hour / Inversion) lets the caster target a
   // slot's shadow position instead of its base. Inversion makes shadowing
-  // mandatory — base placement is rejected while it's active.
+  // mandatory — base placement is rejected while it's active, except in
+  // rooms with `noShadowSlots: true` (Great Hall), which have no shadow
+  // position to target; placements there go to the base normally.
   const shadowBuff = state.activeBuffs.find(
     (b): b is ShadowOnPlaceBuff =>
       b.kind === 'shadow-on-place' && b.casterPlayerId === action.playerId,
   );
   const requestedShadow = action.isShadowing === true;
-  if (shadowBuff?.mode === 'mandatory' && !requestedShadow) {
+  if (
+    shadowBuff?.mode === 'mandatory' &&
+    !requestedShadow &&
+    !room.noShadowSlots
+  ) {
     throw new Error(
       `PLACE_WORKER: ${shadowBuff.label} requires shadow placement`,
+    );
+  }
+  if (requestedShadow && room.noShadowSlots) {
+    throw new Error(
+      `PLACE_WORKER: ${room.name} has no shadow position`,
     );
   }
   if (requestedShadow && !shadowBuff) {
@@ -868,7 +968,7 @@ function handlePlaceWorker(state: GameState, action: PlaceWorkerAction): GameSta
   // slot.
   const isArsMagnaPlacement =
     !requestedShadow &&
-    mage.color === 'red' &&
+    actsAsColor(mage, 'red') &&
     canArsMagnaTakeSpace(state, action.playerId, space);
   if (!requestedShadow && space.occupant && !isArsMagnaPlacement) {
     throw new Error(`PLACE_WORKER: space ${space.id} already occupied`);
@@ -924,13 +1024,18 @@ function handlePlaceWorker(state: GameState, action: PlaceWorkerAction): GameSta
   // mage late, e.g. after another fast action). Everyone else always
   // consumes the Action budget.
   let budgetKind: ActionBudgetKind = 'action';
-  if (mage.color === 'purple' && !magesLosePowers(state)) {
+  if (actsAsColor(mage, 'purple') && !magesLosePowers(state)) {
     // Mesmerize disables purple's fast-action placement; otherwise prefer
     // fast-action (falling back to the regular action if the fast was
     // already spent this turn).
     budgetKind = state.phase.fastActionUsed ? 'action' : 'fast-action';
   }
-  state = consumeActionBudget(state, budgetKind, 'PLACE_WORKER');
+  state = consumeActionBudget(
+    state,
+    budgetKind,
+    'PLACE_WORKER',
+    budgetKind === 'action' ? 'place' : undefined,
+  );
 
   // Shadow-on-place placement: drop the mage into the slot's shadow
   // position. If the base position is occupied, the base occupant is
@@ -978,8 +1083,28 @@ function handlePlaceWorker(state: GameState, action: PlaceWorkerAction): GameSta
       rooms: updatedRooms,
       players: updatedPlayers,
     };
+    // Instant rooms resolve at placement time. The shadow occupant gets
+    // the same forfeit-or-reward prompt as a base occupant, except shadow
+    // never pays the slot's merit cost (handled inside the helper). When
+    // an opposing mage holds the base, the reaction window is opened on
+    // top — the reward prompt waits on the stack until the window closes.
+    const withInstantPrompt =
+      room.isInstantRoom && hasEffect(space.effectId)
+        ? pushResolutionChoicePrompt(
+            placed,
+            room,
+            space,
+            action.playerId,
+            'shadow',
+          )
+        : placed;
+    const withAdventuring = adventuringBPlacedHook(
+      withInstantPrompt,
+      room,
+      action.playerId,
+    );
     if (!baseOccupant) {
-      return placed;
+      return withAdventuring;
     }
     const event: ReactionTriggerEvent = {
       kind: 'mage-shadowed',
@@ -995,7 +1120,7 @@ function handlePlaceWorker(state: GameState, action: PlaceWorkerAction): GameSta
       description: shadowBuff!.label,
     };
     const ctx: EffectContext = {
-      state: placed,
+      state: withAdventuring,
       source,
       triggeringPlayerId: action.playerId,
       allowReactions: true,
@@ -1004,13 +1129,16 @@ function handlePlaceWorker(state: GameState, action: PlaceWorkerAction): GameSta
       kind: 'open-reaction',
       window: {
         triggerEvents: [event],
-        pendingResponderIds: buildReactionQueue(placed, action.playerId),
+        pendingResponderIds: buildReactionQueue(
+          withAdventuring,
+          action.playerId,
+        ),
         reactedPlayerIds: [],
         afterResume: { effectId: 'base.system.noop', context: {} },
         source,
       },
     };
-    return applyEffectResult(placed, result, ctx);
+    return applyEffectResult(withAdventuring, result, ctx);
   }
 
   // Red Mage Ars Magna: spending 1 mana when placing wounds the slot's
@@ -1107,20 +1235,45 @@ function handlePlaceWorker(state: GameState, action: PlaceWorkerAction): GameSta
     };
   });
 
+  // Technomancy (orange) post-placement trigger — queued here so it
+  // fires AFTER the instant-room reward chain (and the resolution-stack)
+  // settles, mirroring the Mysticism post-cast pattern. This keeps the
+  // ability out of the placement action itself. The Archmage's
+  // Apprentice acts as orange (and every department colour), so
+  // placing it ALSO queues the Technomancy trigger when Mancers is
+  // active — but only if the Mancers pack is seated, since the
+  // Apprentice exists in non-Mancers games too.
+  const triggersTechnomancy =
+    actsAsColor(mage, 'orange') &&
+    state.activePackIds.includes('mancers');
+  const pendingTechnomancyTrigger = triggersTechnomancy
+    ? [
+        ...state.pendingTechnomancyTrigger,
+        { playerId: action.playerId, roomId: room.id },
+      ]
+    : state.pendingTechnomancyTrigger;
+
   const placed: GameState = {
     ...state,
     rooms: updatedRooms,
     players: updatedPlayers,
+    pendingTechnomancyTrigger,
   };
 
   // Instant rooms resolve at placement time. We push the same forfeit-or-
   // reward prompt the resolution pump uses for non-instant rooms, then the
   // resume effect either runs the slot's effect or grants 1 IP and skips it.
   if (room.isInstantRoom && hasEffect(space.effectId)) {
-    return pushResolutionChoicePrompt(placed, room, space, action.playerId);
+    const promptState = pushResolutionChoicePrompt(
+      placed,
+      room,
+      space,
+      action.playerId,
+    );
+    return adventuringBPlacedHook(promptState, room, action.playerId);
   }
 
-  return placed;
+  return adventuringBPlacedHook(placed, room, action.playerId);
 }
 
 /**
@@ -1192,6 +1345,22 @@ function pushResolutionChoicePrompt(
     source,
   };
   return pushPending(state, promptInput);
+}
+
+/**
+ * Adventuring Side B's on-place trigger. When a Mage is placed at any
+ * slot of Adventuring B (base OR shadow), the placing player picks a
+ * card type to add to the room's draft pool. The prompt is pushed onto
+ * the pending stack here; the resume effect handles the deck-pop and
+ * pool update.
+ */
+function adventuringBPlacedHook(
+  state: GameState,
+  room: Room,
+  playerId: PlayerId,
+): GameState {
+  if (room.id !== 'base.room.adventuring.b') return state;
+  return pushPending(state, buildAdventuringBPickPrompt(state, playerId));
 }
 
 function handleBuyVaultCard(
@@ -1368,11 +1537,13 @@ function handleCastSpell(state: GameState, action: CastSpellAction): GameState {
   }
 
   // Consume the appropriate per-turn budget slot (action vs fast-action) per
-  // the level's timing.
+  // the level's timing. Tag the spend as 'spell' under Bend Time so the
+  // "different type" tracker can enforce one spell per bend-time window.
   state = consumeActionBudget(
     state,
     levelDef.timing === 'fast-action' ? 'fast-action' : 'action',
     'CAST_SPELL',
+    levelDef.timing === 'action' ? 'spell' : undefined,
   );
 
   // Spend mana, exhaust spell, consume the free-mana / no-exhaust buffs if
@@ -1424,94 +1595,82 @@ function handleCastSpell(state: GameState, action: CastSpellAction): GameState {
   };
 
   // Grey (Mysticism) mage ability: when a player casts a spell as a full
-  // Action AND has at least one unwounded grey mage in office, they MAY
-  // place one onto an open base slot. The opportunity comes AFTER the
-  // spell fully resolves. Gates are evaluated against the POST-effect
-  // state — a spell that adds a placements-blocking buff (Malaise) or a
-  // mages-lose-powers buff (Mesmerize) in its own resolution should
-  // suppress the prompt for the same cast.
-  const greyCheck =
-    levelDef.timing === 'action' &&
-    (() => {
-      const caster = next.players.find((p) => p.id === action.playerId);
-      return (
-        caster?.mages.some(
-          (m) =>
-            m.color === 'grey' &&
-            m.location.kind === 'office' &&
-            !m.isWounded,
-        ) ?? false
-      );
-    })();
-  const stackLenBeforeEffect = next.pendingResolutionStack.length;
+  // Action, they MAY place a grey office mage onto an open base slot AFTER
+  // the spell fully resolves. Queue the trigger on `pendingMysticismPostCast`;
+  // `drainMysticismPostCastIfIdle` evaluates eligibility (grey-in-office,
+  // Malaise / Mesmerize gates) and pushes the Yes/No prompt only once the
+  // spell's full resolution chain has settled. This is critical for spells
+  // like Dark Pact whose chain banishes / returns mages to office — the
+  // eligibility check has to see the post-resolution state, not the state
+  // mid-chain.
+  const withMysticismQueued: GameState =
+    levelDef.timing === 'action'
+      ? {
+          ...next,
+          pendingMysticismPostCast: [
+            ...next.pendingMysticismPostCast,
+            action.playerId,
+          ],
+        }
+      : next;
 
   // Invoke the spell's effect.
   if (!hasEffect(levelDef.effectId)) {
-    return maybeInsertMysticismPending(
-      next,
-      action.playerId,
-      greyCheck,
-      stackLenBeforeEffect,
-    );
+    return withMysticismQueued;
   }
   const effect = getEffect(levelDef.effectId);
   const ctx: EffectContext = {
-    state: next,
+    state: withMysticismQueued,
     source,
     triggeringPlayerId: action.playerId,
     allowReactions: true,
   };
   const result = effect(ctx);
-  const afterEffect = applyEffectResult(next, result, ctx);
-  return maybeInsertMysticismPending(
-    afterEffect,
-    action.playerId,
-    greyCheck,
-    stackLenBeforeEffect,
-  );
+  return applyEffectResult(withMysticismQueued, result, ctx);
 }
 
 /**
- * Inserts the grey "place after Action Spell" prompt into the resolution
- * stack at the position it would have occupied if pushed before the spell
- * effect ran. Gates on the POST-effect state so a spell that adds Malaise
- * or Mesmerize during its own resolution suppresses its own grey trigger.
+ * Surfaces the Mysticism "place after Action Spell" Yes/No prompt once
+ * the casting spell's full resolution chain has settled (stack idle, no
+ * active reactions, no pendingPlaceChain). Evaluates eligibility against
+ * the CURRENT state — so spells that move a grey mage into office during
+ * their own resolution (Dark Pact's banish, etc.) trigger correctly. The
+ * trigger is cleared whether the prompt was actually pushed or skipped.
+ *
+ * Gates (any one suppresses the trigger):
+ *   - Mesmerize (`mages-lose-powers`) — disables mage powers globally.
+ *   - Malaise (`placements-blocked`) — disables all placements globally.
+ *   - No unwounded grey mage in the caster's office.
+ *
+ * Mandatory shadow-on-place (Inversion) is NOT a suppress gate — the
+ * post-cast effect itself detects the buff and offers shadow slots.
  */
-function maybeInsertMysticismPending(
-  state: GameState,
-  playerId: PlayerId,
-  greyCheck: boolean,
-  insertAt: number,
-): GameState {
-  if (!greyCheck) return state;
-  if (magesLosePowers(state)) return state;
-  if (placementsBlocked(state)) return state;
-  // A mandatory shadow-on-place buff (Inversion) forces every placement to
-  // go to a shadow position. The Mysticism post-cast trigger's slot picker
-  // only supports base placement, so suppress the prompt under mandatory
-  // shadow — the player's grey mage forfeits its bonus action, matching
-  // how Malaise / Mesmerize already gate this prompt. Optional shadow
-  // (Zero Hour) leaves base placement legal, so the prompt still fires.
-  if (
-    state.activeBuffs.some(
-      (b) =>
-        b.kind === 'shadow-on-place' &&
-        b.casterPlayerId === playerId &&
-        b.mode === 'mandatory',
-    )
-  ) {
-    return state;
-  }
-  const caster = state.players.find((p) => p.id === playerId);
-  const stillHasGrey =
+function drainMysticismPostCastIfIdle(state: GameState): GameState {
+  const queue = state.pendingMysticismPostCast;
+  if (queue.length === 0) return state;
+  if (state.pendingResolutionStack.length > 0) return state;
+  if (state.activeReactionWindows.length > 0) return state;
+  if (state.pendingPlaceChain !== null) return state;
+
+  const [playerId, ...rest] = queue;
+  if (playerId === undefined) return state;
+  const cleared: GameState = { ...state, pendingMysticismPostCast: rest };
+  if (magesLosePowers(cleared)) return cleared;
+  if (placementsBlocked(cleared)) return cleared;
+  const caster = cleared.players.find((p) => p.id === playerId);
+  // The Archmage's Apprentice acts as every department colour — so a
+  // caster holding the Apprentice (rather than a literal grey mage)
+  // still qualifies for the Mysticism post-cast placement.
+  const hasGrey =
     caster?.mages.some(
       (m) =>
-        m.color === 'grey' &&
+        actsAsColor(m, 'grey') &&
         m.location.kind === 'office' &&
         !m.isWounded,
     ) ?? false;
-  if (!stillHasGrey) return state;
-  const minted = mintId(state, 'r');
+  if (!hasGrey) return cleared;
+
+  const minted = mintId(cleared, 'r');
   const pending: PendingResolution = {
     id: minted.id,
     responderId: playerId,
@@ -1537,14 +1696,71 @@ function maybeInsertMysticismPending(
       description: 'Mysticism Mage — place after Action Spell',
     },
   };
-  const stack = minted.state.pendingResolutionStack;
   return {
     ...minted.state,
-    pendingResolutionStack: [
-      ...stack.slice(0, insertAt),
-      pending,
-      ...stack.slice(insertAt),
-    ],
+    pendingResolutionStack: [...minted.state.pendingResolutionStack, pending],
+  };
+}
+
+/**
+ * Surfaces the next Technomancy post-placement prompt once the stack is
+ * idle. Each queue entry is a `{ playerId, roomId }` tuple captured at
+ * the moment an orange Mage was placed by its owner. The trigger fires
+ * AFTER any instant-room reward chain, the place-chain pump, and the
+ * mysticism drain — so the player resolves them in priority order
+ * without their Technomancy decision tangled into the placement step.
+ *
+ * Gates (any one suppresses):
+ *   - Mesmerize (`mages-lose-powers`) — disables mage powers globally.
+ *   - Malaise (`placements-blocked`) — disables placements globally and
+ *     by extension any placement-tied trigger.
+ *   - The triggering player has < 3 Gold (can't pay; skip silently).
+ */
+function drainTechnomancyTriggerIfIdle(state: GameState): GameState {
+  const queue = state.pendingTechnomancyTrigger;
+  if (queue.length === 0) return state;
+  if (state.pendingResolutionStack.length > 0) return state;
+  if (state.activeReactionWindows.length > 0) return state;
+  if (state.pendingPlaceChain !== null) return state;
+  const [entry, ...rest] = queue;
+  if (entry === undefined) return state;
+  const cleared: GameState = { ...state, pendingTechnomancyTrigger: rest };
+  if (magesLosePowers(cleared)) return cleared;
+  if (placementsBlocked(cleared)) return cleared;
+  const player = cleared.players.find((p) => p.id === entry.playerId);
+  if (!player) return cleared;
+  // The Side A power costs 3 Gold. If the player can't afford it, the
+  // trigger fizzles silently — no point opening a prompt with only Skip.
+  if (player.resources.gold < 3) return cleared;
+  const minted = mintId(cleared, 'r');
+  const pending: PendingResolution = {
+    id: minted.id,
+    responderId: entry.playerId,
+    prompt: {
+      kind: 'choose-from-options',
+      options: [
+        {
+          id: 'pay',
+          label: 'Pay 3 Gold → gain a Research',
+          payload: {},
+        },
+        { id: 'skip', label: 'Skip', payload: {} },
+      ],
+    },
+    resume: {
+      effectId: 'mancers.mage.technomancy.place-after',
+      context: { roomId: entry.roomId },
+    },
+    source: {
+      kind: 'mage-power',
+      id: 'mancers.mage.technomancy.place-after',
+      triggeringPlayerId: entry.playerId,
+      description: 'Technomancer — post-placement (Side A)',
+    },
+  };
+  return {
+    ...minted.state,
+    pendingResolutionStack: [...minted.state.pendingResolutionStack, pending],
   };
 }
 
@@ -1776,6 +1992,42 @@ function handlePassTurn(state: GameState, action: PassTurnAction): GameState {
 }
 
 /**
+ * DISCARD_BONUS_ACTIONS: drops any remaining bonus actions (extraActions /
+ * Bend Time tracker) so the turn auto-advances on the next idle moment.
+ * Used by the UI's "Discard remaining bonus actions" button under Bend
+ * Time. No-op if Bend Time / Flare / Dazzle isn't actually active.
+ */
+function handleDiscardBonusActions(
+  state: GameState,
+  action: DiscardBonusActionsAction,
+): GameState {
+  if (state.phase.kind !== 'errands') {
+    throw new Error('DISCARD_BONUS_ACTIONS: only valid during errands phase');
+  }
+  if (state.pendingResolutionStack.length > 0) {
+    throw new Error(
+      'DISCARD_BONUS_ACTIONS: resolve pending prompt first',
+    );
+  }
+  const activePlayerId = state.players[state.phase.activePlayerIndex]?.id;
+  if (activePlayerId !== action.playerId) {
+    throw new Error(
+      `DISCARD_BONUS_ACTIONS: not your turn (active=${activePlayerId}, you=${action.playerId})`,
+    );
+  }
+  const phase = state.phase;
+  const cleared: GamePhase = {
+    kind: 'errands',
+    round: phase.round,
+    activePlayerIndex: phase.activePlayerIndex,
+    actionUsed: phase.actionUsed,
+    fastActionUsed: phase.fastActionUsed,
+    extraActions: 0,
+  };
+  return { ...state, phase: cleared };
+}
+
+/**
  * PLAY_SUPPORTER: spend the supporter from the player's office to invoke its
  * effect. Consumes Action or Fast-Action budget based on the card's timing,
  * moves the card to the personal discard pile, and dispatches to the effect.
@@ -1828,6 +2080,7 @@ function handlePlaySupporter(
     state,
     card.timing === 'fast-action' ? 'fast-action' : 'action',
     'PLAY_SUPPORTER',
+    card.timing === 'action' ? 'supporter' : undefined,
   );
 
   // Move the card from office → personal discard.
@@ -1921,6 +2174,7 @@ function handlePlayVaultCard(
     state,
     card.timing === 'fast-action' ? 'fast-action' : 'action',
     'PLAY_VAULT_CARD',
+    card.timing === 'action' ? 'vault' : undefined,
   );
 
   // Treasures exhaust in place; consumables go to discard.
@@ -2080,14 +2334,21 @@ function handleResolvePending(
     curr = resolveNormalPending(curr, top, action.answer);
   }
 
-  // If we landed back in resolution with no pending, complete current space
-  // and pump forward (the pause was mid-space-resolution).
+  // If we landed back in resolution with no pending, complete the current
+  // space only when its chain was actively in progress, then pump forward.
+  // The `slotInProgress` flag distinguishes a chain-ending resume (true —
+  // run completeCurrentSpaceResolution) from a side prompt the engine
+  // surfaced between slots — e.g. a Research entry drained from
+  // `researchQueue` after the previous slot's chain already ended (false
+  // — just pump; completing here would clobber the next slot's occupant).
   if (
     curr.phase.kind === 'resolution' &&
     curr.pendingResolutionStack.length === 0 &&
     curr.activeReactionWindows.length === 0
   ) {
-    curr = completeCurrentSpaceResolution(curr);
+    if (curr.phase.slotInProgress) {
+      curr = completeCurrentSpaceResolution(curr);
+    }
     curr = pumpResolutionPhase(curr);
   }
 
@@ -2218,6 +2479,16 @@ function validateAnswerForPrompt(
       }
       return;
     case 'choose-target-mage':
+      // `pass` answers are accepted only when the prompt opted in via
+      // `canPass: true` (Ice Comet's optional wound / banish / move legs).
+      if (answer.kind === 'pass') {
+        if (!prompt.prompt.canPass) {
+          throw new Error(
+            `validateAnswer: this choose-target-mage prompt does not accept pass`,
+          );
+        }
+        return;
+      }
       if (answer.kind !== 'mage-chosen') {
         throw new Error(`validateAnswer: expected mage-chosen, got ${answer.kind}`);
       }
@@ -2347,6 +2618,7 @@ function handleAdvancePhase(state: GameState): GameState {
 function processRoundSetup(state: GameState, round: RoundNumber): GameState {
   let updated = state;
   if (round > 1) {
+    updated = clearArchmagesApprentice(updated);
     updated = returnSummonedMagesToSupply(updated);
     updated = refreshPlayerCardsAndMerit(updated);
     updated = redealTableaus(updated);
@@ -2362,6 +2634,65 @@ function processRoundSetup(state: GameState, round: RoundNumber): GameState {
       actionUsed: false,
       fastActionUsed: false,
     },
+  };
+}
+
+/**
+ * The Archmage's Apprentice is a one-of-one "joker" mage gained for a
+ * single round only. At round-setup we strip it from the owner's
+ * mages array (regardless of where it sits — office, on a slot, or in
+ * the infirmary) and clear the owner pointer. Slot occupancy is
+ * cleaned up too so the apprentice doesn't ghost into the next round.
+ *
+ * If the apprentice is currently on an action space, the slot's
+ * `occupant` / `shadowOccupant` reference is also cleared. This is
+ * defensive — the Resolution pump's standard cleanup already returns
+ * mages to office before round-setup runs, but Side-A/B Studies can
+ * grant the apprentice mid-errands and a player could leave it sitting
+ * on a slot in some edge case (e.g. if the apprentice was placed via
+ * a spell chain). Keep the rooms clean either way.
+ */
+function clearArchmagesApprentice(state: GameState): GameState {
+  if (state.archmagesApprenticeOwner === null) return state;
+  // Find the apprentice mage id (if it still exists) so we can scrub
+  // any slot references in one pass.
+  let apprenticeMageId: string | null = null;
+  for (const p of state.players) {
+    if (p.id !== state.archmagesApprenticeOwner) continue;
+    const m = p.mages.find((mm) => mm.cardId === 'base.mage.archmages-apprentice');
+    if (m) apprenticeMageId = m.id;
+    break;
+  }
+  const players = state.players.map((p) =>
+    p.id !== state.archmagesApprenticeOwner
+      ? p
+      : {
+          ...p,
+          mages: p.mages.filter(
+            (m) => m.cardId !== 'base.mage.archmages-apprentice',
+          ),
+        },
+  );
+  const rooms = apprenticeMageId
+    ? state.rooms.map((r) => ({
+        ...r,
+        actionSpaces: r.actionSpaces.map((s) => {
+          let next = s;
+          if (next.occupant?.mageId === apprenticeMageId) {
+            next = { ...next, occupant: null };
+          }
+          if (next.shadowOccupant?.mageId === apprenticeMageId) {
+            next = { ...next, shadowOccupant: null };
+          }
+          return next;
+        }),
+      }))
+    : state.rooms;
+  return {
+    ...state,
+    archmagesApprenticeOwner: null,
+    players,
+    rooms,
   };
 }
 
@@ -2402,7 +2733,7 @@ function returnSummonedMagesToSupply(state: GameState): GameState {
  * start of each new round. Run as part of `processRoundSetup` for rounds 2+.
  */
 function healInfirmaryMages(state: GameState): GameState {
-  return {
+  const healed: GameState = {
     ...state,
     players: state.players.map((p) => ({
       ...p,
@@ -2418,6 +2749,10 @@ function healInfirmaryMages(state: GameState): GameState {
       ),
     })),
   };
+  // Reset Infirmary B's buffed-bonus slot occupants alongside the heal
+  // sweep — the slots track "claimed this round," and a new round
+  // starts now.
+  return { ...healed, ...clearInfirmaryBSlots(healed) };
 }
 
 function refreshPlayerCardsAndMerit(state: GameState): GameState {
@@ -2515,6 +2850,8 @@ function processErrandsAdvance(state: GameState): GameState {
       roomLocks: [],
       activeBuffs: [],
       pendingRevivalChecks: [],
+      pendingMysticismPostCast: [],
+      pendingTechnomancyTrigger: [],
       phase: {
         kind: 'resolution',
         round: errandsPhase.round,
@@ -2532,17 +2869,28 @@ function processErrandsAdvance(state: GameState): GameState {
     (b) =>
       !(b.expiresAt.kind === 'turn-start' && b.expiresAt.playerId === incomingId),
   );
+  // Rebuild the phase from scratch so the Bend Time tracker doesn't bleed
+  // across turns. (Spreading `...errandsPhase` would carry over a
+  // `bendTimeUsedKinds` array; under exactOptionalPropertyTypes we can't
+  // just set it to `undefined`.)
+  const nextPhase: GamePhase = {
+    kind: 'errands',
+    round: errandsPhase.round,
+    activePlayerIndex: next,
+    actionUsed: false,
+    fastActionUsed: false,
+    extraActions: 0,
+  };
   return {
     ...state,
     players,
     activeBuffs: trimmedBuffs,
-    phase: {
-      ...errandsPhase,
-      activePlayerIndex: next,
-      actionUsed: false,
-      fastActionUsed: false,
-      extraActions: 0,
-    },
+    // Defensive: the Mysticism + Technomancy triggers should have
+    // drained earlier in autoAdvanceIfTurnDone — but reset here so any
+    // stray queue entries can't leak across turn boundaries.
+    pendingMysticismPostCast: [],
+    pendingTechnomancyTrigger: [],
+    phase: nextPhase,
   };
 }
 

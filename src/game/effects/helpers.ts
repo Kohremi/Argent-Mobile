@@ -7,6 +7,7 @@ import type {
   ActionSpaceId,
   Candidate,
   CandidateId,
+  ChoiceOption,
   ConsortiumVoter,
   ConsortiumVoterId,
   GameState,
@@ -15,13 +16,17 @@ import type {
   MageColor,
   OwnedMage,
   OwnedMageId,
+  PendingResolution,
+  PendingResolutionInput,
   Player,
   PlayerId,
   ReactionTriggerEvent,
+  ResolutionAnswer,
   ResolutionSource,
   Room,
   RoomId,
   SerializableContext,
+  SerializableValue,
   SpellCard,
   SpellCardId,
   SupporterCard,
@@ -216,15 +221,17 @@ export function buildHarmfulMageTargets(
       //   Green is wound-immune only.
       //   Blue is immune to opposing spells across all effect kinds.
       const powersLost = magesLosePowers(state);
+      // The Archmage's Apprentice acts as every colour, so it picks up
+      // green's wound-immunity and blue's spell-immunity too.
       if (
         !powersLost &&
         opts.effect === 'wound' &&
-        m.color === 'green'
+        actsAsColor(m, 'green')
       ) {
         continue;
       }
       if (
-        m.color === 'blue' &&
+        actsAsColor(m, 'blue') &&
         opts.source === 'spell' &&
         p.id !== casterId
       ) {
@@ -560,11 +567,15 @@ export function banishMage(
           ),
         },
   );
-  const rooms: Room[] = slotLookup
+  // Banish can pull a wounded mage out of the Infirmary — when that
+  // mage was occupying an Infirmary B buffed-bonus slot the slot must
+  // reopen so the next wound can claim the buff again.
+  const roomsAfterSlot: readonly Room[] = slotLookup
     ? clearSpaceOccupant(state.rooms, slotLookup.spaceId, slotLookup.position)
     : state.rooms;
+  const rooms = releaseInfirmaryBSlotForMage(roomsAfterSlot, targetMageId);
   return {
-    patch: { players, rooms },
+    patch: { players, rooms: rooms as Room[] },
     triggerEvent: {
       kind: 'mage-banished',
       mageId: targetMageId,
@@ -595,7 +606,8 @@ export function buildBanishTargets(
   for (const p of state.players) {
     for (const m of p.mages) {
       if (m.location.kind !== 'infirmary') continue;
-      if (m.color === 'blue' && p.id !== casterId) continue;
+      // Apprentice acts as blue too — gets the same opposing-spell immunity.
+      if (actsAsColor(m, 'blue') && p.id !== casterId) continue;
       targets.push(m.id);
     }
   }
@@ -708,6 +720,7 @@ export function returnMageToOfficePatch(
       `returnMageToOfficePatch: ${mageId} is not in the infirmary`,
     );
   }
+  const releasedRooms = releaseInfirmaryBSlotForMage(state.rooms, mageId);
   return {
     players: state.players.map((p) =>
       p.id !== owner.id
@@ -726,6 +739,9 @@ export function returnMageToOfficePatch(
             ),
           },
     ),
+    ...(releasedRooms !== state.rooms
+      ? { rooms: releasedRooms as Room[] }
+      : {}),
   };
 }
 
@@ -749,6 +765,10 @@ export function healMageToSpace(
     ownerId: owner.id,
     isShadowing: false,
   };
+  // Release the Infirmary B buffed-bonus slot FIRST so the destination
+  // map below operates on a rooms array where this mage no longer
+  // occupies a buff slot. Then layer the destination occupancy on top.
+  const releasedRooms = releaseInfirmaryBSlotForMage(state.rooms, targetMageId);
   return {
     players: state.players.map((p) =>
       p.id !== owner.id
@@ -767,7 +787,7 @@ export function healMageToSpace(
             ),
           },
     ),
-    rooms: state.rooms.map((r) => ({
+    rooms: releasedRooms.map((r) => ({
       ...r,
       actionSpaces: r.actionSpaces.map((s) =>
         s.id === toSpaceId ? { ...s, occupant: occupancy } : s,
@@ -807,12 +827,115 @@ export function buildMageShadowedEvent(
   };
 }
 
+// ============================================================================
+// Adventuring B on-place hook helpers. Moved here so the shared placement
+// helpers (`placeOfficeMageOnSpace` / `placeOfficeMageAsShadow`) can bake
+// the pick-card-type prompt push directly into their output — every
+// placement source (Mysticism, Paralocation, Shadow Potion, Slow Time
+// chain placements, etc.) then picks up the trigger automatically.
+// ============================================================================
+
+export const ADVENTURING_B_CAP = 3;
+
+const EMPTY_ADVENTURING_POOL: NonNullable<GameState['adventuringBPool']> = {
+  spells: [],
+  vaultCards: [],
+  supporters: [],
+};
+
+export function adventuringPoolOrEmpty(
+  state: GameState,
+): NonNullable<GameState['adventuringBPool']> {
+  return state.adventuringBPool ?? EMPTY_ADVENTURING_POOL;
+}
+
+/**
+ * Returns the on-place "pick a Spell / Vault / Supporter" prompt that
+ * fires when a Mage is placed at Adventuring B. The exposed options
+ * exclude types whose deck is empty OR whose pool slice is already
+ * capped at 3. A "Skip" option is always offered.
+ */
+export function buildAdventuringBPickPrompt(
+  state: GameState,
+  playerId: PlayerId,
+): PendingResolutionInput {
+  const pool = adventuringPoolOrEmpty(state);
+  const options: ChoiceOption[] = [];
+  if (state.spellDeck.length > 0 && pool.spells.length < ADVENTURING_B_CAP) {
+    options.push({ id: 'spell', label: 'Add a Spell card', payload: {} });
+  }
+  if (
+    state.vaultDeck.length > 0 &&
+    pool.vaultCards.length < ADVENTURING_B_CAP
+  ) {
+    options.push({ id: 'vault', label: 'Add a Vault card', payload: {} });
+  }
+  if (
+    state.supporterDeck.length > 0 &&
+    pool.supporters.length < ADVENTURING_B_CAP
+  ) {
+    options.push({
+      id: 'supporter',
+      label: 'Add a Supporter card',
+      payload: {},
+    });
+  }
+  options.push({ id: 'skip', label: 'Skip (add nothing)', payload: {} });
+  return {
+    responderId: playerId,
+    prompt: { kind: 'choose-from-options', options },
+    resume: {
+      effectId: 'base.system.adventuring-b.pick-card-type',
+      context: {},
+    },
+    source: {
+      kind: 'room-action',
+      id: 'base.room.adventuring.b',
+      triggeringPlayerId: playerId,
+      description: 'Adventuring: pick a card type to add to the room',
+    },
+  };
+}
+
+/**
+ * Returns a patch that pushes the Adventuring B pick-card-type prompt
+ * onto `pendingResolutionStack` (and bumps `nextSequenceId`) if the
+ * given space lives in Adventuring B. Otherwise returns `{}`. The
+ * placement helpers below merge this into their normal placement patch
+ * so every placement source — regardless of how it builds its
+ * EffectResult — picks up the trigger.
+ */
+export function adventuringBPlacementHookPatch(
+  state: GameState,
+  spaceId: ActionSpaceId,
+  ownerId: PlayerId,
+): GameStatePatch {
+  const room = state.rooms.find((r) =>
+    r.actionSpaces.some((s) => s.id === spaceId),
+  );
+  if (room?.id !== 'base.room.adventuring.b') return {};
+  const promptInput = buildAdventuringBPickPrompt(state, ownerId);
+  const seq = state.nextSequenceId;
+  const fullPrompt: PendingResolution = {
+    ...promptInput,
+    id: `r-${seq}`,
+  };
+  return {
+    pendingResolutionStack: [...state.pendingResolutionStack, fullPrompt],
+    nextSequenceId: seq + 1,
+  };
+}
+
 /**
  * Places one of a player's office mages into a slot's SHADOW position.
  * Used by Shadow Potion and Phase Steppers / Invisibility Cloak reactions.
  * Throws if the mage isn't in the player's office or the shadow slot is
  * already occupied. Pre-existing base occupant is left alone — the slot
  * now has both positions filled.
+ *
+ * When the target slot is in Adventuring B, the returned patch ALSO
+ * pushes the room's on-place pick-card-type prompt onto the resolution
+ * stack so the placing player can add to the draft pool.
  */
 export function placeOfficeMageAsShadow(
   state: GameState,
@@ -851,7 +974,7 @@ export function placeOfficeMageAsShadow(
     ownerId,
     isShadowing: true,
   };
-  return {
+  const placePatch: GameStatePatch = {
     players: state.players.map((p) =>
       p.id !== ownerId
         ? p
@@ -874,6 +997,10 @@ export function placeOfficeMageAsShadow(
         s.id !== spaceId ? s : { ...s, shadowOccupant: occupancy },
       ),
     })),
+  };
+  return {
+    ...placePatch,
+    ...adventuringBPlacementHookPatch(state, spaceId, ownerId),
   };
 }
 
@@ -935,6 +1062,10 @@ export function placeAnyMageAsShadow(
     ownerId,
     isShadowing: true,
   };
+  // Wound reverts (Phase Steppers / Invisibility Cloak) pull the mage
+  // out of the infirmary into a shadow slot. Release the buffed-bonus
+  // slot first so the next wound can claim it.
+  const releasedRooms = releaseInfirmaryBSlotForMage(state.rooms, mageId);
   return {
     players: state.players.map((p) =>
       p.id !== ownerId
@@ -953,7 +1084,7 @@ export function placeAnyMageAsShadow(
             ),
           },
     ),
-    rooms: state.rooms.map((r) => ({
+    rooms: releasedRooms.map((r) => ({
       ...r,
       actionSpaces: r.actionSpaces.map((s) =>
         s.id !== spaceId ? s : { ...s, shadowOccupant: occupancy },
@@ -2028,15 +2159,16 @@ export function applyGainMark(
  *
  * Returns the patch on success, or `null` if the trade can't happen:
  *   - player can't pay the gold cost, OR
- *   - the requested color's pool is non-empty AND the player is already at
- *     the 2-per-color cap for it, OR
- *   - the requested color's pool is empty AND the off-white fallback can't
- *     fire either (off-white pool empty OR player at 2-neutral cap).
+ *   - the requested color is unavailable (pool empty OR player at 2-per-
+ *     color cap) AND the off-white fallback also can't fire (off-white
+ *     pool empty OR player at 2-neutral cap).
  *
- * Fallback: when the supply for `color` is empty but the player could still
- * accept a mage, they receive an off-white neutral mage instead (same gold
- * cost). This mirrors the rulebook's "if the specific color supply is empty,
- * substitute a neutral" guidance for paid-mage cards.
+ * Fallback: when the requested color is unavailable — either because the
+ * supply for that color is empty OR because the player already owns the
+ * 2-per-color cap of it — they receive an off-white neutral mage instead
+ * (same gold cost). The neutral path has its own pool/cap checks. This
+ * mirrors the rulebook's "if the specific color is unavailable, substitute
+ * a neutral" guidance for paid-mage cards.
  */
 export function applyGoldForMageSwap(
   state: GameState,
@@ -2049,9 +2181,15 @@ export function applyGoldForMageSwap(
   if (player.resources.gold < goldCost) return null;
 
   const requestedPool = state.mageDraftPool[color] ?? 0;
+  const ownedOfColor = player.mages.filter((m) => m.color === color).length;
+  const canTakeColor = requestedPool > 0 && ownedOfColor < 2;
+
   let givenColor: MageColor = color;
-  if (requestedPool <= 0) {
-    // Fall back to neutral when the specific color is empty.
+  if (!canTakeColor) {
+    // Fall back to neutral when the specific color is unavailable —
+    // either the supply is empty OR the player is already at the
+    // per-color cap of 2. Same off-white substitution applies in both
+    // cases; the neutral path has its own supply/cap checks.
     const neutralPool = state.mageDraftPool['off-white'] ?? 0;
     const ownedNeutral = player.mages.filter(
       (m) => m.color === 'off-white',
@@ -2059,9 +2197,6 @@ export function applyGoldForMageSwap(
     if (neutralPool <= 0) return null;
     if (ownedNeutral >= 2) return null;
     givenColor = 'off-white';
-  } else {
-    const ownedOfColor = player.mages.filter((m) => m.color === color).length;
-    if (ownedOfColor >= 2) return null;
   }
 
   const givenPool = state.mageDraftPool[givenColor] ?? 0;
@@ -2187,17 +2322,53 @@ export function checkInfirmaryBonusApplies(
  * Applies the chosen bonus to the recipient. Called by both the system
  * resume effect (Burn L1's case) and inline from chained resumes that need
  * to compose with follow-up steps (Ars Magna's case).
+ *
+ * Infirmary Side B buffs the gold / mana options when the corresponding
+ * "buffed bonus" slot is empty: gold → 4 instead of 2, mana → 2 instead
+ * of 1. The opts.payload (echoed back from the prompt's option) carries
+ * `buffed: true` when that branch fires; the wounded mage is then
+ * recorded as the slot occupant so subsequent wounds this round see the
+ * slot as taken and fall back to the standard reward.
  */
 export function applyInfirmaryBonusPatch(
   state: GameState,
   recipientId: PlayerId,
   optionId: string,
+  opts?: {
+    payload?: SerializableValue;
+    woundedMageId?: OwnedMageId;
+  },
 ): GameStatePatch {
+  const buffed =
+    opts?.payload != null &&
+    typeof opts.payload === 'object' &&
+    !Array.isArray(opts.payload) &&
+    (opts.payload as { buffed?: unknown }).buffed === true;
   switch (optionId) {
-    case 'gold':
-      return gainResourcePatch(state, recipientId, 'gold', 2);
-    case 'mana':
-      return gainResourcePatch(state, recipientId, 'mana', 1);
+    case 'gold': {
+      const amount = buffed ? 4 : 2;
+      const resPatch = gainResourcePatch(state, recipientId, 'gold', amount);
+      if (!buffed || !opts?.woundedMageId) return resPatch;
+      const occupied = occupyInfirmaryBSlotPatch(
+        { ...state, ...resPatch },
+        recipientId,
+        opts.woundedMageId,
+        'base.room.infirmary.b.slot-1' as ActionSpaceId,
+      );
+      return { ...resPatch, ...occupied };
+    }
+    case 'mana': {
+      const amount = buffed ? 2 : 1;
+      const resPatch = gainResourcePatch(state, recipientId, 'mana', amount);
+      if (!buffed || !opts?.woundedMageId) return resPatch;
+      const occupied = occupyInfirmaryBSlotPatch(
+        { ...state, ...resPatch },
+        recipientId,
+        opts.woundedMageId,
+        'base.room.infirmary.b.slot-2' as ActionSpaceId,
+      );
+      return { ...resPatch, ...occupied };
+    }
     case 'ip':
       return bumpInfluencePatch(state, recipientId, 1);
     default:
@@ -2205,17 +2376,233 @@ export function applyInfirmaryBonusPatch(
   }
 }
 
+/**
+ * Convenience wrapper around `applyInfirmaryBonusPatch` for resume
+ * effects that receive an `option-chosen` answer + a context that may
+ * carry `woundedMageId` (planted there by `bonusPromptFor`). Lets every
+ * wound source honor Infirmary B's buffed slots without each caller
+ * re-doing the same context extraction.
+ */
+export function applyInfirmaryBonusFromCtx(
+  state: GameState,
+  recipientId: PlayerId,
+  resumeAnswer: ResolutionAnswer | undefined,
+  resumeContext: SerializableContext | undefined,
+): GameStatePatch {
+  if (resumeAnswer?.kind !== 'option-chosen') {
+    throw new Error(
+      `applyInfirmaryBonusFromCtx: expected option-chosen, got ${resumeAnswer?.kind}`,
+    );
+  }
+  const woundedMageRaw = resumeContext?.['woundedMageId'];
+  const woundedMageId =
+    typeof woundedMageRaw === 'string'
+      ? (woundedMageRaw as OwnedMageId)
+      : undefined;
+  return applyInfirmaryBonusPatch(
+    state,
+    recipientId,
+    resumeAnswer.optionId,
+    {
+      payload: resumeAnswer.payload,
+      ...(woundedMageId ? { woundedMageId } : {}),
+    },
+  );
+}
+
+/**
+ * Returns the standard 3-option Infirmary bonus choice, buffed when
+ * Side B is in play and the relevant unique slot is unoccupied. The
+ * picked option's `payload` carries `buffed: true` when it's the
+ * upgraded variant so the apply step can credit the extra reward + set
+ * the slot occupant.
+ */
+export function buildInfirmaryBonusOptions(state: GameState): Array<{
+  id: string;
+  label: string;
+  payload: SerializableValue;
+}> {
+  const infirmary = state.rooms.find((r) => r.name === 'Infirmary');
+  const isSideB = infirmary?.side === 'B';
+  const fourGoldSlot = isSideB
+    ? infirmary!.actionSpaces.find(
+        (s) => s.id === 'base.room.infirmary.b.slot-1',
+      )
+    : undefined;
+  const twoManaSlot = isSideB
+    ? infirmary!.actionSpaces.find(
+        (s) => s.id === 'base.room.infirmary.b.slot-2',
+      )
+    : undefined;
+  const goldBuffed = fourGoldSlot !== undefined && fourGoldSlot.occupant === null;
+  const manaBuffed = twoManaSlot !== undefined && twoManaSlot.occupant === null;
+  return [
+    {
+      id: 'gold',
+      label: goldBuffed ? 'Gain 4 Gold' : 'Gain 2 Gold',
+      payload: goldBuffed ? { buffed: true } : {},
+    },
+    {
+      id: 'mana',
+      label: manaBuffed ? 'Gain 2 Mana' : 'Gain 1 Mana',
+      payload: manaBuffed ? { buffed: true } : {},
+    },
+    { id: 'ip', label: 'Gain 1 IP', payload: {} },
+  ];
+}
+
+/**
+ * Marks the given Infirmary B slot as occupied by the wounded mage.
+ * The mage's own `location` stays `infirmary` (it's still wounded);
+ * the slot's `occupant` is a "this slot is taken this round" flag
+ * that `buildInfirmaryBonusOptions` reads. Cleared when the heal
+ * sweep at round-setup empties the Infirmary.
+ */
+function occupyInfirmaryBSlotPatch(
+  state: GameState,
+  ownerId: PlayerId,
+  woundedMageId: OwnedMageId,
+  slotId: ActionSpaceId,
+): GameStatePatch {
+  return {
+    rooms: state.rooms.map((r) =>
+      r.id !== 'base.room.infirmary.b'
+        ? r
+        : {
+            ...r,
+            actionSpaces: r.actionSpaces.map((s) =>
+              s.id !== slotId
+                ? s
+                : {
+                    ...s,
+                    occupant: {
+                      mageId: woundedMageId,
+                      ownerId,
+                      isShadowing: false,
+                    },
+                  },
+            ),
+          },
+    ),
+  };
+}
+
+/**
+ * Returns a `rooms` array with Infirmary B's buffed-bonus slot cleared if
+ * its occupant marker matches `mageId`. No-op if Infirmary B isn't in
+ * play, or the mage doesn't currently occupy either of its slots. Used
+ * by every heal/banish path so the slot reopens for the next wounded
+ * mage the moment the marked one leaves the infirmary mid-round.
+ *
+ * Operates on the rooms array directly (not a patch) because callers
+ * already build their own rooms patch — chaining the transform avoids
+ * one map clobbering the other when both touch action spaces.
+ */
+export function releaseInfirmaryBSlotForMage(
+  rooms: readonly Room[],
+  mageId: OwnedMageId,
+): readonly Room[] {
+  const infirmary = rooms.find((r) => r.id === 'base.room.infirmary.b');
+  if (!infirmary) return rooms;
+  const occupies = infirmary.actionSpaces.some(
+    (s) => s.occupant?.mageId === mageId,
+  );
+  if (!occupies) return rooms;
+  return rooms.map((r) =>
+    r.id !== 'base.room.infirmary.b'
+      ? r
+      : {
+          ...r,
+          actionSpaces: r.actionSpaces.map((s) =>
+            s.occupant?.mageId === mageId ? { ...s, occupant: null } : s,
+          ),
+        },
+  );
+}
+
+/**
+ * Clears any occupants from Infirmary B's buffed-bonus slots. Run at
+ * round-setup right after `healInfirmaryMages` so the slots reset
+ * each round.
+ */
+export function clearInfirmaryBSlots(state: GameState): GameStatePatch {
+  const infirmary = state.rooms.find(
+    (r) => r.id === 'base.room.infirmary.b',
+  );
+  if (!infirmary) return {};
+  const anyOccupied = infirmary.actionSpaces.some((s) => s.occupant !== null);
+  if (!anyOccupied) return {};
+  return {
+    rooms: state.rooms.map((r) =>
+      r.id !== 'base.room.infirmary.b'
+        ? r
+        : {
+            ...r,
+            actionSpaces: r.actionSpaces.map((s) =>
+              s.occupant === null ? s : { ...s, occupant: null },
+            ),
+          },
+    ),
+  };
+}
+
 // ============================================================================
 // Candidate / Mage allocation helpers
 // ============================================================================
 
-/** Maps each Mage piece color to the Mage *card* id in the base pack. */
+/**
+ * Maps each Mage piece colour to its Mage *card* id. Base-pack colours
+ * resolve to base cards; orange (Technomancy) lives in the Mancers
+ * expansion, so its card id is `mancers.mage.technomancy`. Callers that
+ * spawn orange mages must verify Mancers is in `state.activePackIds`
+ * before using the entry. Rainbow maps to the Archmage's Apprentice
+ * — a one-of-one mage gained via the Archmage's Study, never from a
+ * supply pool or draft.
+ */
+/**
+ * The Archmage's Apprentice — a unique "joker" mage gained from the
+ * Archmage's Study. Per the rulebook it has ALL Mage Powers, so every
+ * per-colour gate (Ars Magna eligibility, wound / spell immunity,
+ * fast-action placement, post-cast triggers, Technomancy on-place)
+ * routes through `actsAsColor(mage, color)` which returns true for an
+ * exact colour match OR for the apprentice piece.
+ */
+export const ARCHMAGES_APPRENTICE_CARD_ID =
+  'base.mage.archmages-apprentice' as const;
+
+export function isArchmagesApprentice(m: OwnedMage): boolean {
+  return m.cardId === ARCHMAGES_APPRENTICE_CARD_ID;
+}
+
+/**
+ * True iff `m` should be treated as a `color` mage for power purposes.
+ * Apprentice piece counts as every department colour (excluding
+ * `off-white` / `rainbow` themselves — there's no apprentice-of-an-
+ * apprentice case to worry about).
+ */
+export function actsAsColor(m: OwnedMage, color: MageColor): boolean {
+  if (m.color === color) return true;
+  if (isArchmagesApprentice(m)) {
+    return (
+      color === 'red' ||
+      color === 'blue' ||
+      color === 'green' ||
+      color === 'purple' ||
+      color === 'grey' ||
+      color === 'orange'
+    );
+  }
+  return false;
+}
+
 export const MAGE_CARD_BY_COLOR: Record<MageColor, string> = {
   red: 'base.mage.sorcery',
   grey: 'base.mage.mysticism',
   green: 'base.mage.natural-magick',
   purple: 'base.mage.planar-studies',
   blue: 'base.mage.divinity',
+  orange: 'mancers.mage.technomancy',
+  rainbow: 'base.mage.archmages-apprentice',
   'off-white': 'base.mage.neutral',
 };
 
@@ -2364,8 +2751,10 @@ export function buildArsMagnaTargets(
       // block it (Tome of Protection L2 / Heart of the Mountain L3);
       // spell-only buffs don't.
       if (isMageImmuneByBuff(state, p.id, 'wound', 'non-spell')) continue;
-      if (m.color === 'green') continue;
-      if (m.color === 'blue') continue; // Always opposing here.
+      // Green wound-immunity / opposing-blue spell-immunity also pick
+      // up the apprentice via `actsAsColor`.
+      if (actsAsColor(m, 'green')) continue;
+      if (actsAsColor(m, 'blue')) continue; // Always opposing here.
       targets.push(m.id);
     }
   }
@@ -2401,7 +2790,10 @@ export function canArsMagnaTakeSpace(
   if (!targetLookup) return false;
   const { mage: target } = targetLookup;
   if (target.isWounded) return false;
-  if (target.color === 'green') return false;
-  if (target.color === 'blue') return false;
+  // Green wound-immunity and opposing-blue spell-immunity protect the
+  // target — including when the target IS the apprentice (acts as
+  // both green and blue).
+  if (actsAsColor(target, 'green')) return false;
+  if (actsAsColor(target, 'blue')) return false;
   return true;
 }

@@ -1,0 +1,15 @@
+Name	Expansion	Title	Department	Side	Spell Name	Spell Cost	Spell Timing	Spell Effect
+Rheye Cal	Base	Vice Dean of Divinity	Divinity	A	Bless	1.0	Fast Action	Move a Mage from the Infirmary to an open slot of your choice.
+Monad Riverime	Base	University Auditor	Divinity	B	Holy Smite	1.0	Action	Wound a Mage and gain 1 IP.
+Byron Krane	Base	Vice Dean of Mysticism	Mysticism	A	Trance	Free	Action	Gain 2 mana.
+Jesca Renetton	Base	Curriculum Planner	Mysticism	B	Dark Pact	1.0	Action	Banish one of your own Mages and wound another Mage.
+Exhufern Le Marigras	Base	Dean of Natural Magick	Natural Magick	A	Strength of Earth	1.0	Action	Move an opponent's Mage to another open slot in the same room, then replace it with one of your own.
+Mannheim Wildern	Base	Director of Development	Natural Magick	B	Gust of Wind	1.0	Action	Move any Mage (yours or opponent's) to an open slot in an adjacent room (but not into the Infirmary or the Great Hall).
+Trias Blackwind	Base	Student Body President	Student Body	A	Living Image	1.0	Action	Place a neutral Mage from the supply into an empty slot, claiming it as your own. Return it to the supply after the round.
+Jion Erjon	Base	Honor Council Chief Justice	Student Body	B	Tardy	1.0	Reaction	After the last Bell Tower Offering is taken by another player, take one more ‘Place a Mage’ action, without using Mage Powers.
+Xal Ezra	Base	Senior Researcher	Planar Studies	A	Paralocation	1.0	Action	Shadow an opponent's Mage with one of your Mages.
+Lavanina	Base	Dean of Planar Studies	Planar Studies	B	Shadow Bolt	1.0	Fast Action	An opponent's Mage is now shadowing its slot.
+Larimore Burman	Base	Dean of Sorcery	Sorcery	A	Flash of Light	1.0	Fast Action	Banish a Mage.
+Rikhi Kanhamme	Base	Head of Applied Sorcery	Sorcery	B	Burnout	Free	Action	Send one of your own Mages from your Office to the Infirmary (gain no bonus), then gain 3 Mana.
+Sophica Sentavra	Mancers/Technomancy	Interim Dean of Technomancy	Technomancy	A	Arcane Surge	Free	Fast Action	Give an opponent 1 mana and wound one of their Mages.
+Riflam Lenshear	Mancers/Technomancy	Admissions Coordinator	Technomancy	B	Arcane Investigation	1.0	Action	Gain a Research OR gain a Mark.

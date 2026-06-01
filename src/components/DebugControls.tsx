@@ -9,9 +9,10 @@ import { useGameStore } from '../store/gameStore';
 import { baseGamePack } from '../content/packs/base';
 import { listPacks } from '../content/registry';
 import { computeFinalScoring, type VoterAward } from '../game/scoring';
-import { countPlayerMagesInRoom } from '../game/effects/helpers';
+import { actsAsColor, countPlayerMagesInRoom } from '../game/effects/helpers';
 import { BellIcon, LockIcon, MageIcon, ResourceIcon, ShieldIcon, type ResourceKind } from './icons';
 import type {
+  BendTimeKind,
   Candidate,
   Department,
   GameAction,
@@ -136,6 +137,7 @@ const INJECTABLE_MAGE_COLORS: MageColor[] = [
   'green',
   'purple',
   'grey',
+  'orange',
   'off-white',
 ];
 
@@ -145,6 +147,8 @@ const MAGE_CARD_BY_COLOR: Record<MageColor, string> = {
   green: 'base.mage.natural-magick',
   purple: 'base.mage.planar-studies',
   grey: 'base.mage.mysticism',
+  orange: 'mancers.mage.technomancy',
+  rainbow: 'base.mage.archmages-apprentice',
   'off-white': 'base.mage.neutral',
 };
 
@@ -322,7 +326,8 @@ function isArsMagnaPlacement(
   mage: OwnedMage,
   space: GameState['rooms'][number]['actionSpaces'][number],
 ): boolean {
-  if (mage.color !== 'red') return false;
+  // Red OR the Archmage's Apprentice (acts as red).
+  if (!actsAsColor(mage, 'red')) return false;
   if (!space.occupant) return false;
   const owner = state.players.find((p) =>
     p.mages.some((m) => m.id === mage.id),
@@ -335,8 +340,10 @@ function isArsMagnaPlacement(
     ?.mages.find((m) => m.id === space.occupant?.mageId);
   if (!occMage) return false;
   if (occMage.isWounded) return false;
-  if (occMage.color === 'green') return false;
-  if (occMage.color === 'blue') return false;
+  // Green wound-immunity / opposing-blue spell-immunity (apprentice
+  // target acts as both).
+  if (actsAsColor(occMage, 'green')) return false;
+  if (actsAsColor(occMage, 'blue')) return false;
   return true;
 }
 
@@ -387,14 +394,17 @@ function placementBlockedReason(
   // but can fall back to the Regular Action when the Fast Action is
   // spent — they're blocked only if BOTH budgets are gone (or the
   // Regular Action is already spent, which prevents any Fast Action by
-  // the "Fast before Regular" rule).
-  if (mage.color === 'purple') {
-    if (state.phase.actionUsed) return 'Action already used';
-    if (state.phase.fastActionUsed && state.phase.actionUsed) {
+  // the "Fast before Regular" rule). Bonus actions (Flare / Dazzle /
+  // Bend Time) keep the Action budget open even after `actionUsed`.
+  const bonus = state.phase.extraActions ?? 0;
+  const actionOpen = !state.phase.actionUsed || bonus > 0;
+  if (actsAsColor(mage, 'purple')) {
+    if (!actionOpen) return 'Action already used';
+    if (state.phase.fastActionUsed && !actionOpen) {
       return 'no Actions left this turn';
     }
   } else {
-    if (state.phase.actionUsed) return 'Action already used';
+    if (!actionOpen) return 'Action already used';
   }
   return null;
 }
@@ -441,10 +451,14 @@ function shadowPlacementBlockedReason(
     const occupyingHere = countPlayerMagesInRoom(state, owner.id, room.id);
     if (occupyingHere >= roomLimit) return `${room.name}: already at room limit this round`;
   }
-  if (mage.color === 'purple') {
-    if (state.phase.actionUsed) return 'Action already used';
+  // Bonus actions (Flare / Dazzle / Bend Time) keep the Action budget open
+  // even after `actionUsed`.
+  const bonus = state.phase.extraActions ?? 0;
+  const actionOpen = !state.phase.actionUsed || bonus > 0;
+  if (actsAsColor(mage, 'purple')) {
+    if (!actionOpen) return 'Action already used';
   } else {
-    if (state.phase.actionUsed) return 'Action already used';
+    if (!actionOpen) return 'Action already used';
   }
   return null;
 }
@@ -979,13 +993,22 @@ function PendingPanel({
     reactionAwaitingSlot.resolutionId === pending.id;
   const researchActive =
     researchMode !== null && researchMode.resolutionId === pending.id;
+  // Surface the prompt's step-specific label (e.g. "Choose a Mage to
+  // wound") as the banner header when present — that's what tells the
+  // player what they're picking for, and it's visible regardless of
+  // whether they interact via board-click or the button list below.
+  const promptLabel =
+    pending.prompt.kind === 'choose-target-mage' ||
+    pending.prompt.kind === 'choose-target-action-space'
+      ? pending.prompt.label
+      : undefined;
   return (
     <section className="rounded-lg border border-amber-500/60 bg-amber-500/10 p-4 space-y-3">
       <div>
         <h2 className="text-lg font-medium text-amber-100">
           {researchActive
             ? `${responderLabel} is spending a Research`
-            : `Pending: ${pending.prompt.kind}`}
+            : promptLabel ?? `Pending: ${pending.prompt.kind}`}
         </h2>
         {!researchActive && (
           <p className="text-sm text-slate-300">
@@ -1052,9 +1075,27 @@ function PendingPanel({
           </button>
         </div>
       ) : hasBoardSelection ? (
-        <p className="text-xs text-amber-200/90 italic">
-          Click a highlighted target on the board to choose.
-        </p>
+        <div className="space-y-2">
+          <p className="text-xs text-amber-200/90 italic">
+            Click a highlighted target on the board to choose.
+          </p>
+          {pending.prompt.kind === 'choose-target-mage' &&
+            pending.prompt.canPass && (
+              <button
+                type="button"
+                onClick={() =>
+                  dispatch({
+                    type: 'RESOLVE_PENDING',
+                    resolutionId: pending.id,
+                    answer: { kind: 'pass' },
+                  })
+                }
+                className="px-3 py-1.5 rounded bg-slate-700 text-slate-200 hover:bg-slate-600 text-sm"
+              >
+                Pass (skip this step)
+              </button>
+            )}
+        </div>
       ) : (
         <PromptControls
           prompt={pending.prompt}
@@ -1118,36 +1159,59 @@ function PromptControls({
 
     case 'choose-target-mage':
       return (
-        <div className="flex flex-wrap gap-2">
-          {prompt.eligibleMageIds.length === 0 && (
-            <p className="text-xs text-slate-400">no eligible targets</p>
+        <div className="space-y-1.5">
+          {prompt.label && (
+            <p className="text-xs text-amber-200/90 font-medium">
+              {prompt.label}
+            </p>
           )}
-          {prompt.eligibleMageIds.map((mid) => (
-            <button
-              key={mid}
-              type="button"
-              onClick={() => resolve({ kind: 'mage-chosen', mageId: mid })}
-              className="px-3 py-1.5 rounded bg-amber-500 text-slate-950 hover:bg-amber-400"
-            >
-              {findOwnerLabel(state, mid)}
-            </button>
-          ))}
+          <div className="flex flex-wrap gap-2">
+            {prompt.eligibleMageIds.length === 0 && (
+              <p className="text-xs text-slate-400">no eligible targets</p>
+            )}
+            {prompt.eligibleMageIds.map((mid) => (
+              <button
+                key={mid}
+                type="button"
+                onClick={() => resolve({ kind: 'mage-chosen', mageId: mid })}
+                className="px-3 py-1.5 rounded bg-amber-500 text-slate-950 hover:bg-amber-400"
+              >
+                {findOwnerLabel(state, mid)}
+              </button>
+            ))}
+            {prompt.canPass && (
+              <button
+                type="button"
+                onClick={() => resolve({ kind: 'pass' })}
+                className="px-3 py-1.5 rounded bg-slate-700 text-slate-200 hover:bg-slate-600"
+              >
+                Pass
+              </button>
+            )}
+          </div>
         </div>
       );
 
     case 'choose-target-action-space':
       return (
-        <div className="flex flex-wrap gap-2">
-          {prompt.eligibleSpaceIds.map((sid) => (
-            <button
-              key={sid}
-              type="button"
-              onClick={() => resolve({ kind: 'space-chosen', spaceId: sid })}
-              className="px-3 py-1.5 rounded bg-amber-500 text-slate-950 hover:bg-amber-400"
-            >
-              {sid}
-            </button>
-          ))}
+        <div className="space-y-1.5">
+          {prompt.label && (
+            <p className="text-xs text-amber-200/90 font-medium">
+              {prompt.label}
+            </p>
+          )}
+          <div className="flex flex-wrap gap-2">
+            {prompt.eligibleSpaceIds.map((sid) => (
+              <button
+                key={sid}
+                type="button"
+                onClick={() => resolve({ kind: 'space-chosen', spaceId: sid })}
+                className="px-3 py-1.5 rounded bg-amber-500 text-slate-950 hover:bg-amber-400"
+              >
+                {sid}
+              </button>
+            ))}
+          </div>
         </div>
       );
 
@@ -1363,6 +1427,72 @@ function ReactionWindowsPanel({ state }: { state: GameState }) {
   );
 }
 
+/**
+ * Visible only while Bend Time has seeded the bonus-action tracker on the
+ * active player's errands phase. Shows the four valid action kinds with the
+ * already-used ones crossed off, the remaining bonus-action count, and a
+ * button to discard the rest (auto-advances to the next turn on next idle).
+ */
+function BendTimePanel({
+  usedKinds,
+  extraActions,
+  canAct,
+  onDiscard,
+}: {
+  usedKinds: readonly BendTimeKind[];
+  extraActions: number;
+  canAct: boolean;
+  onDiscard: () => void;
+}) {
+  const ALL: { kind: BendTimeKind; label: string }[] = [
+    { kind: 'place', label: 'Place a Mage' },
+    { kind: 'spell', label: 'Cast Action Spell' },
+    { kind: 'supporter', label: 'Play Action Supporter' },
+    { kind: 'vault', label: 'Play Action Vault Card' },
+  ];
+  return (
+    <div className="rounded border border-indigo-400/40 bg-indigo-500/5 p-2 space-y-1.5">
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-[10px] uppercase tracking-wide text-indigo-300">
+          Bend Time · {extraActions} bonus action{extraActions === 1 ? '' : 's'} left
+        </span>
+        <button
+          type="button"
+          disabled={!canAct}
+          onClick={onDiscard}
+          className={clsx(
+            'text-[10px] px-2 py-0.5 rounded border',
+            canAct
+              ? 'border-indigo-400/60 text-indigo-200 hover:bg-indigo-500/15'
+              : 'border-slate-700 text-slate-600 cursor-not-allowed',
+          )}
+          title="Drop remaining bonus actions and end Bend Time"
+        >
+          Discard remaining bonus actions
+        </button>
+      </div>
+      <div className="flex flex-wrap gap-1 text-[11px]">
+        {ALL.map(({ kind, label }) => {
+          const used = usedKinds.includes(kind);
+          return (
+            <span
+              key={kind}
+              className={clsx(
+                'px-1.5 py-0.5 rounded',
+                used
+                  ? 'bg-slate-800 text-slate-500 line-through'
+                  : 'bg-indigo-500/15 text-indigo-200',
+              )}
+            >
+              {label}
+            </span>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 function ResourceLine({ player }: { player: Player }) {
   const r = player.resources;
   // Total INT/WIS "earned" = currently unused + already spent on spell
@@ -1564,8 +1694,25 @@ function PlayerCard({
     state.phase.kind === 'errands' && isErrandsActive
       ? state.phase.fastActionUsed
       : false;
-  const canTakeAction = canAct && !actionUsed;
-  const canTakeFastAction = canAct && !fastActionUsed;
+  // Bonus-action counter (Flare / Dazzle / Bend Time). Keeps the Action
+  // budget "open" even when the base Action has been spent. Fast Action
+  // is NOT extended by bonus actions — and the engine bars Fast Action
+  // once the Action is gone — so the Fast button greys out as soon as
+  // either pool is consumed.
+  const extraActions =
+    state.phase.kind === 'errands' && isErrandsActive
+      ? (state.phase.extraActions ?? 0)
+      : 0;
+  const canTakeAction = canAct && (!actionUsed || extraActions > 0);
+  const canTakeFastAction = canAct && !fastActionUsed && !actionUsed;
+  // Bend Time bonus-action tracker: only visible while the spell has seeded
+  // `bendTimeUsedKinds` on the errands phase. The four valid action kinds
+  // mirror the engine's `BendTimeKind` union.
+  const bendTimeUsedKinds =
+    state.phase.kind === 'errands' && isErrandsActive
+      ? state.phase.bendTimeUsedKinds
+      : undefined;
+  const bendTimeActive = bendTimeUsedKinds !== undefined;
 
   return (
     <div
@@ -1621,6 +1768,17 @@ function PlayerCard({
 
       <ResourceLine player={player} />
 
+      {bendTimeActive && (
+        <BendTimePanel
+          usedKinds={bendTimeUsedKinds!}
+          extraActions={extraActions}
+          canAct={canAct}
+          onDiscard={() =>
+            dispatch({ type: 'DISCARD_BONUS_ACTIONS', playerId: player.id })
+          }
+        />
+      )}
+
       <div>
         <p className="text-[10px] uppercase tracking-wide text-slate-500 mb-1">
           Workers ({player.mages.length})
@@ -1636,8 +1794,9 @@ function PlayerCard({
             // Purple (Planar Studies) mages prefer the Fast Action but can
             // fall back to the Regular Action when Fast is spent — so the
             // tile stays clickable as long as the Regular Action is still
-            // available. Non-purple mages always consume the Regular Action.
-            const budgetOpen = !actionUsed;
+            // available (including bonus actions from Flare / Dazzle / Bend
+            // Time). Non-purple mages always consume the Regular Action.
+            const budgetOpen = canTakeAction;
             const mageTargetable = mageMode?.eligibleIds.has(m.id) ?? false;
             // Prompt-driven targeting wins over placement selection: an
             // active prompt blocks normal play anyway, and the eligibility
@@ -1972,7 +2131,7 @@ function PlayerCard({
               canAct &&
               !v.exhausted &&
               (card.timing === 'action' || card.timing === 'fast-action') &&
-              (isFast ? !fastActionUsed : !actionUsed);
+              (isFast ? canTakeFastAction : canTakeAction);
             const reason =
               v.exhausted
                 ? 'exhausted — refreshes at next round'
@@ -2058,7 +2217,7 @@ function PlayerCard({
             const playable =
               canAct &&
               (card.timing === 'action' || card.timing === 'fast-action') &&
-              (isFast ? !fastActionUsed : !actionUsed);
+              (isFast ? canTakeFastAction : canTakeAction);
             const reasonNotPlayable =
               card.timing === 'passive'
                 ? 'familiar — passive, never played'
@@ -2764,6 +2923,66 @@ function TableauPanel({
           </ul>
         </div>
         <div>
+          {state.vaultARevealed && state.vaultARevealed.length > 0 && (
+            <div className="mb-2 rounded border border-indigo-400/40 bg-indigo-500/5 p-2">
+              <p className="font-medium text-indigo-200 text-xs uppercase tracking-wide mb-1">
+                Vault — revealed ({state.vaultARevealed.length})
+              </p>
+              <ul className="space-y-1">
+                {state.vaultARevealed.map((cid, i) => {
+                  const card = findVaultCard(state, cid);
+                  if (!card) {
+                    return <li key={`revealed-${cid}-${i}`}>{cid}</li>;
+                  }
+                  const eligible = vaultMode?.eligibleIds.has(cid) ?? false;
+                  const body = (
+                    <>
+                      <div className="flex items-baseline gap-1.5 flex-wrap">
+                        <span className="font-medium text-slate-200">
+                          {card.name}
+                        </span>
+                        <span className="text-[10px] uppercase tracking-wide text-slate-500">
+                          {card.type}
+                        </span>
+                        <span className="text-[10px] uppercase tracking-wide text-slate-400">
+                          {card.timing}
+                        </span>
+                      </div>
+                      {card.description && (
+                        <div className="text-[11px] text-slate-300/90">
+                          {card.description}
+                        </div>
+                      )}
+                    </>
+                  );
+                  if (vaultMode && eligible) {
+                    return (
+                      <li key={`revealed-${cid}-${i}`}>
+                        <button
+                          type="button"
+                          onClick={() => vaultMode.onSelect(cid)}
+                          className="w-full text-left rounded px-2 py-1 bg-slate-950/40 ring-2 ring-amber-400 hover:bg-amber-400/15 hover:ring-amber-300 cursor-pointer"
+                        >
+                          {body}
+                        </button>
+                      </li>
+                    );
+                  }
+                  return (
+                    <li
+                      key={`revealed-${cid}-${i}`}
+                      className={clsx(
+                        'rounded bg-slate-950/40 px-2 py-1',
+                        vaultMode && !eligible && 'opacity-50',
+                      )}
+                    >
+                      {body}
+                    </li>
+                  );
+                })}
+              </ul>
+            </div>
+          )}
           <p className="font-medium text-slate-200">
             Vault ({state.vaultTableau.length}/3)
           </p>
@@ -2952,12 +3171,16 @@ function CandidateDraftScreen({
   }
 
   // Group candidates by department to render pairs side by side.
+  // Order: base-pack departments first (rulebook order), then expansion
+  // departments (Technomancy from Mancers). Departments without any
+  // candidates from active packs are filtered below via `pair.length`.
   const departmentOrder: Department[] = [
     'sorcery',
     'natural-magick',
     'mysticism',
     'planar-studies',
     'divinity',
+    'technomancy',
     'students',
   ];
   const byDept = new Map<Department, Candidate[]>();
@@ -2972,6 +3195,7 @@ function CandidateDraftScreen({
     mysticism: 'Mysticism',
     'planar-studies': 'Planar Studies',
     divinity: 'Divinity',
+    technomancy: 'Technomancy',
     students: 'Student Council',
     wild: 'Wild',
   };
@@ -3290,9 +3514,24 @@ function MageDraftScreen({
         <h2 className="text-lg font-medium mb-2">Pool</h2>
         {activePlayer ? (
           <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-            {(
-              ['red', 'grey', 'green', 'blue', 'purple', 'off-white'] as MageColor[]
-            ).map((color) => {
+            {(() => {
+              // Base colours plus Technomancy (orange) when Mancers is
+              // active. Orange piece supply lives only in the Mancers
+              // expansion so we omit the swatch in non-Mancers games to
+              // avoid a perpetually-empty "pool is empty" tile.
+              const colors: MageColor[] = [
+                'red',
+                'grey',
+                'green',
+                'blue',
+                'purple',
+              ];
+              if (state.activePackIds.includes('mancers')) {
+                colors.push('orange');
+              }
+              colors.push('off-white');
+              return colors;
+            })().map((color) => {
               const remaining = state.mageDraftPool[color] ?? 0;
               const owned = activePlayer.mages.filter(
                 (m) => m.color === color,
@@ -3565,6 +3804,107 @@ function MageDraftPoolPanel({ state }: { state: GameState }) {
  * "move from infirmary" effects (Heal, Chain of Healing, Amelioration, Rheye
  * Cal's spell, etc.) will need to pick from this set.
  */
+/**
+ * Returns the slots that should be RENDERED for a room. Most rooms
+ * surface every action space as-is. The Great Hall is the exception: it
+ * has a deep pre-allocated slot pool (10 per side) so any number of
+ * mages can be placed, but the player only ever needs to see the
+ * occupied slots + the next empty one ("an open slot shown, slots
+ * appear as they fill"). This helper produces that view.
+ */
+function visibleActionSpaces(
+  room: GameState['rooms'][number],
+): GameState['rooms'][number]['actionSpaces'] {
+  const isGreatHall =
+    room.id === 'base.room.great-hall.a' || room.id === 'base.room.great-hall.b';
+  if (!isGreatHall) return room.actionSpaces;
+  const out: GameState['rooms'][number]['actionSpaces'] = [];
+  let firstEmptyShown = false;
+  for (const s of room.actionSpaces) {
+    if (s.occupant || s.shadowOccupant) {
+      out.push(s);
+      continue;
+    }
+    if (!firstEmptyShown) {
+      out.push(s);
+      firstEmptyShown = true;
+    }
+  }
+  return out;
+}
+
+/**
+ * Side B Infirmary buffed-bonus slots. Each renders as a small labelled
+ * box showing the reward (4 Gold / 2 Mana) and the mage currently
+ * holding the slot — or "empty" when the upgrade is still up for grabs.
+ * Drawn ABOVE the wounded-mage roster so the player can see at a glance
+ * which buffs are still in play this round. These slots have no shadow.
+ */
+function InfirmaryBBuffSlots({
+  room,
+  state,
+}: {
+  room: GameState['rooms'][number];
+  state: GameState;
+}) {
+  const slot1 = room.actionSpaces.find(
+    (s) => s.id === 'base.room.infirmary.b.slot-1',
+  );
+  const slot2 = room.actionSpaces.find(
+    (s) => s.id === 'base.room.infirmary.b.slot-2',
+  );
+  if (!slot1 || !slot2) return null;
+  const occupantColor = (occ: { ownerId: string; mageId: string }): MageColor =>
+    state.players
+      .find((p) => p.id === occ.ownerId)
+      ?.mages.find((m) => m.id === occ.mageId)?.color ?? 'off-white';
+  const renderBox = (args: {
+    label: string;
+    amount: number;
+    kind: ResourceKind;
+    occupant: typeof slot1.occupant;
+  }) => (
+    <div className="flex-1 rounded border border-slate-600 bg-slate-950/40 p-1.5 space-y-1">
+      <div className="flex items-center gap-1 text-[10px] uppercase tracking-wide text-slate-300">
+        <span className="font-medium">{args.label}</span>
+        <span className="ml-auto inline-flex items-center gap-0.5">
+          +{args.amount}
+          <ResourceIcon kind={args.kind} size={11} />
+        </span>
+      </div>
+      <div className="flex items-center justify-center h-6">
+        {args.occupant ? (
+          <span
+            className="inline-flex items-center gap-1 text-[10px] text-slate-200"
+            title={`${args.occupant.ownerId} occupies this slot`}
+          >
+            <MageIcon color={occupantColor(args.occupant)} size={14} />
+            <span className="text-slate-400">{args.occupant.ownerId}</span>
+          </span>
+        ) : (
+          <span className="italic text-slate-500 text-[10px]">empty</span>
+        )}
+      </div>
+    </div>
+  );
+  return (
+    <div className="flex gap-2">
+      {renderBox({
+        label: 'Slot 1',
+        amount: 4,
+        kind: 'gold',
+        occupant: slot1.occupant,
+      })}
+      {renderBox({
+        label: 'Slot 2',
+        amount: 2,
+        kind: 'mana',
+        occupant: slot2.occupant,
+      })}
+    </div>
+  );
+}
+
 function InfirmaryRoster({
   state,
   selectionMode,
@@ -3625,6 +3965,126 @@ function InfirmaryRoster({
         );
       })}
     </ul>
+  );
+}
+
+/**
+ * Compact slot row for rooms with `noShadowSlots: true` (currently just
+ * Great Hall A/B). Renders the occupied slots plus the first empty slot
+ * as a horizontal row of unlabelled square tiles — base-only, no shadow
+ * tile, no "Slot N" / type / description chrome. The visibility filter
+ * comes from `visibleActionSpaces`. Each tile dispatches PLACE_WORKER on
+ * click when a mage is selected and the placement is legal, or selects
+ * the occupant in a mage-target prompt when one is active.
+ */
+function NoShadowSlotsRow({
+  state,
+  room,
+  selectedMage,
+  dispatch,
+  onPlaced,
+  selectionMode,
+}: {
+  state: GameState;
+  room: GameState['rooms'][number];
+  selectedMage: OwnedMage | null;
+  dispatch: (action: GameAction) => void;
+  onPlaced: () => void;
+  selectionMode: SelectionMode | null;
+}) {
+  const mageMode = selectionMode?.kind === 'mage' ? selectionMode : null;
+  const spaceMode =
+    selectionMode?.kind === 'action-space' ? selectionMode : null;
+  const occupantColor = (occ: { ownerId: string; mageId: string }): MageColor =>
+    state.players
+      .find((p) => p.id === occ.ownerId)
+      ?.mages.find((m) => m.id === occ.mageId)?.color ?? 'off-white';
+  const tiles = visibleActionSpaces(room);
+  return (
+    <div className="flex flex-wrap gap-1">
+      {tiles.map((s) => {
+        const placeBlocked = selectedMage
+          ? placementBlockedReason(state, selectedMage, room, s)
+          : 'no mage selected';
+        const isPlaceable = selectedMage !== null && placeBlocked === null;
+        const spaceEligible = spaceMode?.eligibleIds.has(s.id) ?? false;
+        const occupantMageEligible =
+          s.occupant !== null &&
+          (mageMode?.eligibleIds.has(s.occupant.mageId) ?? false);
+        const onClick: (() => void) | undefined =
+          spaceMode && spaceEligible
+            ? () => spaceMode.onSelect(s.id)
+            : isPlaceable && selectedMage
+              ? () => {
+                  dispatch({
+                    type: 'PLACE_WORKER',
+                    playerId:
+                      state.players.find((p) =>
+                        p.mages.some((m) => m.id === selectedMage.id),
+                      )?.id ?? '',
+                    mageId: selectedMage.id,
+                    actionSpaceId: s.id,
+                  });
+                  onPlaced();
+                }
+              : occupantMageEligible && mageMode
+                ? () => mageMode.onSelect(s.occupant!.mageId)
+                : undefined;
+        const ring =
+          spaceMode && spaceEligible
+            ? 'ring-2 ring-amber-400'
+            : isPlaceable
+              ? 'ring-2 ring-amber-400'
+              : occupantMageEligible && mageMode
+                ? 'ring-2 ring-amber-400'
+                : '';
+        const filledClass = s.occupant
+          ? 'bg-amber-400/15'
+          : 'bg-slate-950/40';
+        const title = s.occupant
+          ? `${s.occupant.ownerId}`
+          : isPlaceable
+            ? `place ${selectedMage?.color ?? ''} mage here`
+            : 'empty slot';
+        const content = s.occupant ? (
+          <div className="flex flex-col items-center gap-0.5">
+            <MageIcon color={occupantColor(s.occupant)} size={18} />
+            <span className="text-[8px] uppercase tracking-wide text-slate-400 leading-none">
+              {s.occupant.ownerId}
+            </span>
+          </div>
+        ) : null;
+        const className = clsx(
+          'w-9 h-9 rounded border-2 border-slate-500 flex items-center justify-center flex-shrink-0',
+          filledClass,
+          ring,
+        );
+        if (onClick) {
+          return (
+            <button
+              key={s.id}
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                onClick();
+              }}
+              title={title}
+              className={clsx(
+                className,
+                'hover:bg-amber-400/25 cursor-pointer transition-colors',
+              )}
+            >
+              {content}
+            </button>
+          );
+        }
+        return (
+          <div key={s.id} title={title} className={className}>
+            {content}
+          </div>
+        );
+      })}
+    </div>
   );
 }
 
@@ -3740,14 +4200,31 @@ function RoomsPanel({
                 </p>
               )}
               {room.cannotBePlacedInDirectly ? (
-                <InfirmaryRoster state={state} selectionMode={selectionMode} />
+                <div className="space-y-2">
+                  {room.id === 'base.room.infirmary.b' && (
+                    <InfirmaryBBuffSlots room={room} state={state} />
+                  )}
+                  <InfirmaryRoster
+                    state={state}
+                    selectionMode={selectionMode}
+                  />
+                </div>
               ) : room.actionSpaces.length === 0 ? (
                 <p className="text-[10px] text-slate-500 italic">
                   no action spaces (or specials handled elsewhere)
                 </p>
+              ) : room.noShadowSlots ? (
+                <NoShadowSlotsRow
+                  state={state}
+                  room={room}
+                  selectedMage={selectedMage}
+                  dispatch={dispatch}
+                  onPlaced={onPlaced}
+                  selectionMode={selectionMode}
+                />
               ) : (
                 <ul className="space-y-1">
-                  {room.actionSpaces.map((s) => {
+                  {visibleActionSpaces(room).map((s) => {
                     const slotIndex = (s.id.split('.').pop() ?? '').replace(
                       'slot-',
                       'Slot ',
@@ -4002,9 +4479,61 @@ function RoomsPanel({
                   })}
                 </ul>
               )}
+              {room.id === 'mancers.room.laboratory.a' && (
+                <LaboratoryRewards side="A" />
+              )}
+              {room.id === 'mancers.room.laboratory.b' && (
+                <LaboratoryRewards side="B" />
+              )}
             </div>
           );
   }
+}
+
+/**
+ * Tiny per-mage-colour reward key shown at the bottom of each Laboratory
+ * side. Helps the player remember which colour grants which reward
+ * without having to consult the rulebook each placement.
+ */
+function LaboratoryRewards({ side }: { side: 'A' | 'B' }) {
+  const rowsA: Array<{ color: MageColor; label: string; icon: JSX.Element }> = [
+    { color: 'red', label: '+2', icon: <ResourceIcon kind="mana" size={11} /> },
+    { color: 'green', label: '+4', icon: <ResourceIcon kind="gold" size={11} /> },
+    { color: 'purple', label: '+1', icon: <ResourceIcon kind="research" size={11} /> },
+    { color: 'grey', label: '+1', icon: <ResourceIcon kind="marks" size={11} /> },
+    { color: 'blue', label: 'Heal+Move', icon: <></> },
+  ];
+  const rowsB: Array<{ color: MageColor; label: string; icon: JSX.Element }> = [
+    { color: 'blue', label: '+3', icon: <ResourceIcon kind="mana" size={11} /> },
+    { color: 'grey', label: '+1', icon: <ResourceIcon kind="marks" size={11} /> },
+    { color: 'green', label: '+1', icon: <ResourceIcon kind="intelligence" size={11} /> },
+    { color: 'purple', label: '+1', icon: <ResourceIcon kind="wisdom" size={11} /> },
+    { color: 'red', label: '+1', icon: <ResourceIcon kind="research" size={11} /> },
+  ];
+  const rows = side === 'A' ? rowsA : rowsB;
+  return (
+    <div className="mt-2 pt-2 border-t border-slate-700/70 space-y-1">
+      <div className="text-[9px] uppercase tracking-wide text-slate-400">
+        Reward by Mage colour
+      </div>
+      <div className="flex flex-wrap gap-x-2 gap-y-1 items-center">
+        {rows.map((r) => (
+          <span
+            key={r.color}
+            className="inline-flex items-center gap-0.5 text-[10px] text-slate-300"
+          >
+            <MageIcon color={r.color} size={12} />
+            <span className="text-slate-500">→</span>
+            <span className="font-medium">{r.label}</span>
+            {r.icon}
+          </span>
+        ))}
+      </div>
+      <div className="text-[9px] text-slate-500 italic">
+        Slot 1 doubles the reward.
+      </div>
+    </div>
+  );
 }
 
 function BellTowerPanel({
@@ -4018,8 +4547,12 @@ function BellTowerPanel({
     state.phase.kind === 'errands'
       ? state.players[state.phase.activePlayerIndex] ?? null
       : null;
+  // Claiming the Bell Tower spends an Action. Bonus actions (Flare /
+  // Dazzle / Bend Time) extend the budget after the base Action is gone.
   const actionAvailable =
-    state.phase.kind === 'errands' ? !state.phase.actionUsed : false;
+    state.phase.kind === 'errands'
+      ? !state.phase.actionUsed || (state.phase.extraActions ?? 0) > 0
+      : false;
   const canClaim =
     activePlayer !== null &&
     state.pendingResolutionStack.length === 0 &&

@@ -40,7 +40,7 @@ export function startingResourceBundle(): ResourceBundle {
   };
 }
 
-/** Returns the matching Department for a Mage piece color, or null for off-white. */
+/** Returns the matching Department for a Mage piece color, or null for off-white / rainbow. */
 export function mageColorToDepartment(color: MageColor): Department | null {
   switch (color) {
     case 'red':
@@ -53,6 +53,13 @@ export function mageColorToDepartment(color: MageColor): Department | null {
       return 'planar-studies';
     case 'blue':
       return 'divinity';
+    case 'orange':
+      return 'technomancy';
+    case 'rainbow':
+      // Archmage's Apprentice — conceptually has all departments. The
+      // scoring side treats it as no specific department; per-power
+      // checks consult `isArchmagesApprentice` separately.
+      return null;
     case 'off-white':
       return null;
   }

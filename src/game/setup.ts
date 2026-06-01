@@ -6,6 +6,7 @@ import type {
   GamePhase,
   GameState,
   MageColor,
+  PackId,
   Player,
   Room,
   RoomId,
@@ -24,6 +25,22 @@ const MAX_PLAYERS = 6;
 
 /** Hard cap on grid columns ("3 across" per the rulebook layout). */
 const MAX_GRID_COLS = 3;
+
+/**
+ * Fixed beginner layout for `roomLayoutMode: { kind: 'first-time' }` —
+ * all 8 base rooms, side A, listed in grid row-major order (2 cols × 4
+ * rows). Matches the rulebook-recommended starter board.
+ */
+export const FIRST_TIME_LAYOUT_ROOM_IDS: RoomId[] = [
+  'base.room.vault.a',
+  'base.room.training-fields.a',
+  'base.room.infirmary.a',
+  'base.room.courtyard.a',
+  'base.room.catacombs.a',
+  'base.room.guilds.a',
+  'base.room.library.a',
+  'base.room.council-chamber.a',
+];
 
 /**
  * Default number of rooms in play, by player count. Overridable via
@@ -90,9 +107,55 @@ function makePlaceholderRoom(index: number, packId: string): Room {
 }
 
 /**
+ * For random-layout mode: produce a one-side-per-name pool by flipping
+ * a coin per room. Both sides must be "playable" (at least one action
+ * space, OR `cannotBePlacedInDirectly` like the Infirmary, which is
+ * playable via the wound-arrival bonus). If only one side qualifies,
+ * it's used unconditionally; if neither does, Side A is the safe
+ * fallback. The RNG state is threaded through and returned so the
+ * caller can continue advancing it.
+ */
+function pickRandomSidesForRandom(
+  allRooms: Room[],
+  rng: RngState,
+): { rooms: Room[]; rng: RngState } {
+  const byName = new Map<string, Room[]>();
+  for (const r of allRooms) {
+    const existing = byName.get(r.name) ?? [];
+    existing.push(r);
+    byName.set(r.name, existing);
+  }
+  const out: Room[] = [];
+  let nextRng = rng;
+  const isPlayable = (r: Room | undefined): r is Room =>
+    r !== undefined &&
+    (r.actionSpaces.length > 0 || r.cannotBePlacedInDirectly);
+  for (const sides of byName.values()) {
+    const a = sides.find((r) => r.side === 'A');
+    const b = sides.find((r) => r.side === 'B');
+    const aOk = isPlayable(a);
+    const bOk = isPlayable(b);
+    if (aOk && bOk) {
+      const step = nextRandom(nextRng);
+      nextRng = step.state;
+      out.push(step.value < 0.5 ? a! : b!);
+    } else if (aOk) {
+      out.push(a!);
+    } else if (bOk) {
+      out.push(b!);
+    } else if (a) {
+      out.push(a);
+    } else if (b) {
+      out.push(b);
+    }
+  }
+  return { rooms: out, rng: nextRng };
+}
+
+/**
  * Builds the in-play room list for this game:
  *   - All University-Central rooms (Council, Library, Infirmary) on side A.
- *   - Non-UC rooms (side A) shuffled, then drawn until the total reaches
+ *   - Non-UC rooms shuffled, then drawn until the total reaches
  *     `targetCount`.
  *   - If pool is smaller than `targetCount`, fill the remainder with
  *     placeholder rooms.
@@ -257,29 +320,96 @@ export function buildInitialState(config: GameConfig): GameState {
   let rng = createRngState(rngSeed);
 
   // ---- Room selection + grid placement ----
-  const targetRoomCount =
-    config.numberOfRooms ?? defaultRoomCountForPlayerCount(playerCount);
-  const allRoomsSideA = allRooms.filter((r) => r.side === 'A');
-  const roomSelection = selectInPlayRooms(
-    allRoomsSideA,
-    targetRoomCount,
-    rng,
-    'base',
-  );
-  rng = roomSelection.rng;
-  const { cols, rows } = pickGridForRoomCount(roomSelection.rooms.length);
-  const grid = placeRoomsInGrid(roomSelection.rooms, cols, rows, rng);
-  rng = grid.rng;
-  const roomLayout: RoomLayout = { cols, rows, grid: grid.grid };
+  // Layout mode controls both which rooms are in play AND how they sit on
+  // the grid. Defaults to 'random' (legacy behavior) for back-compat with
+  // existing tests; the SetupScreen UI offers 'first-time' as the
+  // recommended default for new games.
+  const layoutMode = config.roomLayoutMode ?? { kind: 'random' };
+  const allRoomsById = new Map(allRooms.map((r) => [r.id, r] as const));
+  let selectedRooms: Room[];
+  let cols: number;
+  let rows: number;
+  let gridCells: (RoomId | null)[][];
+
+  if (layoutMode.kind === 'first-time' || layoutMode.kind === 'custom') {
+    const inputIds =
+      layoutMode.kind === 'first-time'
+        ? FIRST_TIME_LAYOUT_ROOM_IDS
+        : layoutMode.roomIds;
+    // 'first-time' uses the exact rulebook order. 'custom' shuffles the
+    // user's selection so the player doesn't have to think about grid
+    // positioning — they just pick which rooms (and which side) to include.
+    let orderedIds: readonly RoomId[];
+    if (layoutMode.kind === 'custom') {
+      const shuffled = shuffleWithState(inputIds, rng);
+      rng = shuffled.state;
+      orderedIds = shuffled.value;
+    } else {
+      orderedIds = inputIds;
+    }
+    selectedRooms = orderedIds.map((rid) => {
+      const r = allRoomsById.get(rid);
+      if (!r) {
+        throw new Error(
+          `buildInitialState: room ${rid} not found in any active pack`,
+        );
+      }
+      return r;
+    });
+    const dims = pickGridForRoomCount(selectedRooms.length);
+    cols = dims.cols;
+    rows = dims.rows;
+    // Row-major fill: first N cells of the grid get the rooms in order,
+    // any leftover cells are null.
+    const flat: (RoomId | null)[] = new Array(cols * rows).fill(null);
+    for (let i = 0; i < selectedRooms.length; i++) {
+      flat[i] = selectedRooms[i]!.id;
+    }
+    gridCells = [];
+    for (let r = 0; r < rows; r++) {
+      const row: (RoomId | null)[] = [];
+      for (let c = 0; c < cols; c++) {
+        row.push(flat[r * cols + c]!);
+      }
+      gridCells.push(row);
+    }
+  } else {
+    // Random mode. For each named room, flip a coin between Side A and
+    // Side B (per the rulebook's setup variant), then shuffle / draw
+    // the target count from that pool. Both sides of every base room
+    // are wired, so the flip is fair across the board; the picker
+    // gracefully falls back if a future expansion pack ships a
+    // one-sided room.
+    const targetRoomCount =
+      config.numberOfRooms ?? defaultRoomCountForPlayerCount(playerCount);
+    const sidePick = pickRandomSidesForRandom(allRooms, rng);
+    rng = sidePick.rng;
+    const roomSelection = selectInPlayRooms(
+      sidePick.rooms,
+      targetRoomCount,
+      rng,
+      'base',
+    );
+    rng = roomSelection.rng;
+    const dims = pickGridForRoomCount(roomSelection.rooms.length);
+    cols = dims.cols;
+    rows = dims.rows;
+    const grid = placeRoomsInGrid(roomSelection.rooms, cols, rows, rng);
+    rng = grid.rng;
+    gridCells = grid.grid;
+    selectedRooms = roomSelection.rooms;
+  }
+
+  const roomLayout: RoomLayout = { cols, rows, grid: gridCells };
   // Reorder rooms to match the grid's row-major traversal (left to right,
   // top to bottom). The Resolution pump walks `state.rooms` by index, so
   // this guarantees rooms resolve in the canonical board order regardless
   // of how the random grid placement scrambled the selection list.
   const gridOrderedRooms: Room[] = [];
-  const byId = new Map(roomSelection.rooms.map((r) => [r.id, r] as const));
+  const byId = new Map(selectedRooms.map((r) => [r.id, r] as const));
   for (let r = 0; r < rows; r++) {
     for (let c = 0; c < cols; c++) {
-      const cell = grid.grid[r]?.[c];
+      const cell = gridCells[r]?.[c];
       if (cell == null) continue;
       const room = byId.get(cell);
       if (room) gridOrderedRooms.push(room);
@@ -385,7 +515,7 @@ export function buildInitialState(config: GameConfig): GameState {
     bellTower: { available: bellAvailable, taken: [] },
     archmagesApprenticeOwner: null,
     roomLocks: [],
-    mageDraftPool: makeInitialMageDraftPool(),
+    mageDraftPool: makeInitialMageDraftPool(config.activePackIds),
     phase: initialPhase(config, firstPlayerIndex),
     pendingResolutionStack: [],
     activeReactionWindows: [],
@@ -394,19 +524,37 @@ export function buildInitialState(config: GameConfig): GameState {
     pendingPlaceChain: null,
     pendingContractResearch: null,
     pendingRevivalChecks: [],
+    pendingMysticismPostCast: [],
+    pendingTechnomancyTrigger: [],
+    vaultARevealed: null,
+    adventuringBPool: null,
     activeBuffs: [],
     nextSequenceId: 1,
     actionLog: [],
   };
 }
 
-function makeInitialMageDraftPool(): Record<MageColor, number> {
+/**
+ * Initial Mage piece supply. Base pack seeds 4 of each base colour + 10
+ * neutrals. Orange (Technomancy) only appears when the Mancers pack is
+ * active — the pool stays at 0 otherwise so neither the candidate
+ * allocator nor the Dormitory colour picker offer it without Mancers
+ * seated.
+ */
+function makeInitialMageDraftPool(
+  activePackIds: PackId[],
+): Record<MageColor, number> {
+  const hasMancers = activePackIds.includes('mancers');
   return {
     red: 4,
     grey: 4,
     green: 4,
     blue: 4,
     purple: 4,
+    orange: hasMancers ? 4 : 0,
+    // Rainbow is the Archmage's Apprentice — it doesn't live in a
+    // supply. Owners are tracked via `state.archmagesApprenticeOwner`.
+    rainbow: 0,
     'off-white': 10,
   };
 }

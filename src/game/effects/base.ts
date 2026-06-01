@@ -6,18 +6,24 @@ import { computeFinalScoring, playerOwnsWildSupporter } from '../scoring';
 import { getPack } from '../../content/registry';
 import { getOrthogonallyAdjacentRoomIds } from '../setup';
 import {
+  actsAsColor,
   affordableVaultCards,
+  ADVENTURING_B_CAP,
+  adventuringBPlacementHookPatch,
+  adventuringPoolOrEmpty,
   applyAddWisToSpell,
   applyDiscardOwnedSpell,
   applyDraftLegendarySpell,
   applyDraftSpell,
   applyGainMark,
   applyGoldForMageSwap,
-  applyInfirmaryBonusPatch,
+  applyInfirmaryBonusFromCtx,
+  buildInfirmaryBonusOptions,
   applyMoveWisBetweenSpells,
   applySecretSupporterDraw,
   applySupporterDraft,
   applyVaultDraft,
+  applyVaultPurchase,
   applyVaultPurchaseMaybeWaived,
   banishMage,
   buildArsMagnaTargets,
@@ -43,6 +49,8 @@ import {
   isRoomAtPlayerCap,
   isRoomLocked,
   lookupSpellCardDef,
+  lookupVaultCardDef,
+  MAGE_CARD_BY_COLOR,
   moveMageToSpace,
   placeOfficeMageAsShadow,
   refreshOwnedSpellPatch,
@@ -415,6 +423,8 @@ function departmentLabel(d: Department): string {
       return 'Planar Studies';
     case 'divinity':
       return 'Divinity';
+    case 'technomancy':
+      return 'Technomancy';
     case 'students':
       return 'Student';
     case 'wild':
@@ -905,7 +915,7 @@ registerEffect('base.system.post-wound-bonus', (ctx) => {
   if (event && checkInfirmaryBonusApplies(ctx.state, event)) {
     return {
       kind: 'pause',
-      pending: bonusPromptFor(event, ctx.triggeringPlayerId),
+      pending: bonusPromptFor(ctx.state, event, ctx.triggeringPlayerId),
     };
   }
   return { kind: 'done', patch: {} };
@@ -917,7 +927,7 @@ registerEffect('base.spell.burn.l1.complete', (ctx) => {
   if (event && checkInfirmaryBonusApplies(ctx.state, event)) {
     return {
       kind: 'pause',
-      pending: bonusPromptFor(event, ctx.triggeringPlayerId),
+      pending: bonusPromptFor(ctx.state, event, ctx.triggeringPlayerId),
     };
   }
   // TODO: Mysticism placement follow-up when caster is grey.
@@ -1451,14 +1461,15 @@ registerEffect('base.system.vault-buy', (ctx): EffectResult => {
 });
 
 // ============================================================================
-// Vault A — three slots per the room file:
+// Vault B — three slots per the room file (this is the "draft / gain gold"
+// face of the room; rulebook Side A is the unwired reveal-3-pick-1 face):
 //   Slot 1 (merit, costs 1 MB to place): Draft a Vault Card AND Gain 4 Gold
 //   Slot 2 (regular):                    Draft a Vault Card OR Gain 5 Gold
 //   Slot 3 (regular):                    Gain 3 Gold
 // ============================================================================
 
-/** Vault A slot 1 — merit. Draft + 4 gold. Merit cost paid at placement. */
-registerEffect('base.room.vault-a.slot-1', (ctx: EffectContext): EffectResult => {
+/** Vault B slot 1 — merit. Draft + 4 gold. Merit cost paid at placement. */
+registerEffect('base.room.vault-b.slot-1', (ctx: EffectContext): EffectResult => {
   if (!ctx.resumeAnswer) {
     if (ctx.state.vaultTableau.length === 0) {
       // No card to draft — still get the gold.
@@ -1475,14 +1486,14 @@ registerEffect('base.room.vault-a.slot-1', (ctx: EffectContext): EffectResult =>
           kind: 'choose-vault-card',
           eligibleCardIds: [...ctx.state.vaultTableau],
         },
-        resume: { effectId: 'base.room.vault-a.slot-1', context: {} },
+        resume: { effectId: 'base.room.vault-b.slot-1', context: {} },
         source: ctx.source,
       },
     };
   }
   if (ctx.resumeAnswer.kind !== 'card-chosen') {
     throw new Error(
-      `vault-a.slot-1 expected card-chosen, got ${ctx.resumeAnswer.kind}`,
+      `vault-b.slot-1 expected card-chosen, got ${ctx.resumeAnswer.kind}`,
     );
   }
   let working = ctx.state;
@@ -1501,7 +1512,7 @@ registerEffect('base.room.vault-a.slot-1', (ctx: EffectContext): EffectResult =>
 });
 
 /** Vault A slot 2 — regular. Draft a Vault Card OR Gain 5 Gold. */
-registerEffect('base.room.vault-a.slot-2', (ctx: EffectContext): EffectResult => {
+registerEffect('base.room.vault-b.slot-2', (ctx: EffectContext): EffectResult => {
   if (!ctx.resumeAnswer) {
     return {
       kind: 'pause',
@@ -1514,7 +1525,7 @@ registerEffect('base.room.vault-a.slot-2', (ctx: EffectContext): EffectResult =>
             { id: 'gold', label: 'Gain 5 Gold', payload: {} },
           ],
         },
-        resume: { effectId: 'base.room.vault-a.slot-2', context: { step: 'or' } },
+        resume: { effectId: 'base.room.vault-b.slot-2', context: { step: 'or' } },
         source: ctx.source,
       },
     };
@@ -1523,7 +1534,7 @@ registerEffect('base.room.vault-a.slot-2', (ctx: EffectContext): EffectResult =>
   const step = ctx.resumeContext?.['step'];
   if (step === 'or') {
     if (ctx.resumeAnswer.kind !== 'option-chosen') {
-      throw new Error(`vault-a.slot-2 OR expected option-chosen`);
+      throw new Error(`vault-b.slot-2 OR expected option-chosen`);
     }
     if (ctx.resumeAnswer.optionId === 'gold') {
       return {
@@ -1545,18 +1556,18 @@ registerEffect('base.room.vault-a.slot-2', (ctx: EffectContext): EffectResult =>
             eligibleCardIds: [...ctx.state.vaultTableau],
           },
           resume: {
-            effectId: 'base.room.vault-a.slot-2',
+            effectId: 'base.room.vault-b.slot-2',
             context: { step: 'pick' },
           },
           source: ctx.source,
         },
       };
     }
-    throw new Error(`vault-a.slot-2 unknown option: ${ctx.resumeAnswer.optionId}`);
+    throw new Error(`vault-b.slot-2 unknown option: ${ctx.resumeAnswer.optionId}`);
   }
   if (step === 'pick') {
     if (ctx.resumeAnswer.kind !== 'card-chosen') {
-      throw new Error(`vault-a.slot-2 pick expected card-chosen`);
+      throw new Error(`vault-b.slot-2 pick expected card-chosen`);
     }
     return {
       kind: 'done',
@@ -1567,16 +1578,383 @@ registerEffect('base.room.vault-a.slot-2', (ctx: EffectContext): EffectResult =>
       ),
     };
   }
-  throw new Error(`vault-a.slot-2 unexpected step: ${String(step)}`);
+  throw new Error(`vault-b.slot-2 unexpected step: ${String(step)}`);
 });
 
-/** Vault A slot 3 — regular. Gain 3 Gold. */
-registerEffect('base.room.vault-a.slot-3', (ctx: EffectContext): EffectResult => {
+/** Vault B slot 3 — regular. Gain 3 Gold. */
+registerEffect('base.room.vault-b.slot-3', (ctx: EffectContext): EffectResult => {
   return {
     kind: 'done',
     patch: gainResourcePatch(ctx.state, ctx.triggeringPlayerId, 'gold', 3),
   };
 });
+
+// ============================================================================
+// Vault A — shared slot effect. First invocation in a resolution pops
+// the top 3 of the Vault Deck into `state.vaultARevealed`; subsequent
+// invocations draft from the same pool. The resolution pump clears the
+// pool and returns leftovers to the top of the deck once it advances
+// past Vault A (see `advanceResolutionPointer`).
+// ============================================================================
+
+registerEffect('base.room.vault-a.slot', (ctx: EffectContext): EffectResult => {
+  if (!ctx.resumeAnswer) {
+    // First entry for this slot: ensure the revealed pool is seeded,
+    // then prompt the player to pick one of the revealed cards.
+    let working = ctx.state;
+    if (working.vaultARevealed === null) {
+      const popped = working.vaultDeck.slice(0, 3);
+      working = {
+        ...working,
+        vaultARevealed: popped,
+        vaultDeck: working.vaultDeck.slice(popped.length),
+      };
+    }
+    const pool = working.vaultARevealed ?? [];
+    const seedPatch: GameStatePatch =
+      working === ctx.state
+        ? {}
+        : { vaultARevealed: working.vaultARevealed, vaultDeck: working.vaultDeck };
+    if (pool.length === 0) {
+      // Deck was empty (or fewer than the previous occupants drafted) —
+      // nothing to draft.
+      return { kind: 'done', patch: seedPatch };
+    }
+    return {
+      kind: 'pause',
+      patch: seedPatch,
+      pending: {
+        responderId: ctx.triggeringPlayerId,
+        prompt: {
+          kind: 'choose-vault-card',
+          eligibleCardIds: [...pool],
+        },
+        resume: { effectId: 'base.room.vault-a.slot', context: {} },
+        source: ctx.source,
+      },
+    };
+  }
+  if (ctx.resumeAnswer.kind !== 'card-chosen') {
+    throw new Error(
+      `vault-a.slot expected card-chosen, got ${ctx.resumeAnswer.kind}`,
+    );
+  }
+  const cardId = ctx.resumeAnswer.cardId;
+  const pool = ctx.state.vaultARevealed ?? [];
+  if (!pool.includes(cardId)) {
+    throw new Error(`vault-a.slot: ${cardId} not in revealed pool`);
+  }
+  const newPool = pool.filter((id) => id !== cardId);
+  const players = ctx.state.players.map((p) =>
+    p.id !== ctx.triggeringPlayerId
+      ? p
+      : {
+          ...p,
+          vaultCards: [...p.vaultCards, { cardId, exhausted: false }],
+        },
+  );
+  return {
+    kind: 'done',
+    patch: {
+      vaultARevealed: newPool,
+      players,
+    },
+  };
+});
+
+// ============================================================================
+// Adventuring B — on-place "pick a card type, add to room pool" + resolution
+// "draft from the room pool". The on-place trigger and prompt builder live in
+// `effects/helpers.ts` so the shared placement helpers can bake the prompt
+// push directly into their output patch — every placement source picks up
+// the trigger automatically. PLACE_WORKER's inlined placement uses an
+// equivalent engine-side hook (`adventuringBPlacedHook` in engine.ts).
+// ============================================================================
+
+/**
+ * Resume handler for the on-place pick prompt. Moves the top of the
+ * chosen deck into the room's pool. Silently no-ops on Skip or if the
+ * chosen type happens to be capped/empty at apply time.
+ */
+registerEffect(
+  'base.system.adventuring-b.pick-card-type',
+  (ctx: EffectContext): EffectResult => {
+    if (ctx.resumeAnswer?.kind !== 'option-chosen') {
+      throw new Error(
+        `adventuring-b.pick-card-type expected option-chosen, got ${ctx.resumeAnswer?.kind}`,
+      );
+    }
+    const choice = ctx.resumeAnswer.optionId;
+    if (choice === 'skip') return { kind: 'done', patch: {} };
+    const pool = adventuringPoolOrEmpty(ctx.state);
+    if (choice === 'spell') {
+      if (
+        ctx.state.spellDeck.length === 0 ||
+        pool.spells.length >= ADVENTURING_B_CAP
+      ) {
+        return { kind: 'done', patch: {} };
+      }
+      const [drawn, ...rest] = ctx.state.spellDeck;
+      if (drawn === undefined) return { kind: 'done', patch: {} };
+      return {
+        kind: 'done',
+        patch: {
+          spellDeck: rest,
+          adventuringBPool: { ...pool, spells: [...pool.spells, drawn] },
+        },
+      };
+    }
+    if (choice === 'vault') {
+      if (
+        ctx.state.vaultDeck.length === 0 ||
+        pool.vaultCards.length >= ADVENTURING_B_CAP
+      ) {
+        return { kind: 'done', patch: {} };
+      }
+      const [drawn, ...rest] = ctx.state.vaultDeck;
+      if (drawn === undefined) return { kind: 'done', patch: {} };
+      return {
+        kind: 'done',
+        patch: {
+          vaultDeck: rest,
+          adventuringBPool: {
+            ...pool,
+            vaultCards: [...pool.vaultCards, drawn],
+          },
+        },
+      };
+    }
+    if (choice === 'supporter') {
+      if (
+        ctx.state.supporterDeck.length === 0 ||
+        pool.supporters.length >= ADVENTURING_B_CAP
+      ) {
+        return { kind: 'done', patch: {} };
+      }
+      const [drawn, ...rest] = ctx.state.supporterDeck;
+      if (drawn === undefined) return { kind: 'done', patch: {} };
+      return {
+        kind: 'done',
+        patch: {
+          supporterDeck: rest,
+          adventuringBPool: {
+            ...pool,
+            supporters: [...pool.supporters, drawn],
+          },
+        },
+      };
+    }
+    throw new Error(
+      `adventuring-b.pick-card-type unknown option ${choice}`,
+    );
+  },
+);
+
+/**
+ * Resolution-time slot effect for Adventuring B: surface a "pick a card
+ * from the pool" prompt. The option id encodes `<type>::<cardId>` so
+ * the apply step knows which slice to mutate. If the pool is empty,
+ * the slot's effect silently completes.
+ */
+registerEffect(
+  'base.room.adventuring-b.draft',
+  (ctx: EffectContext): EffectResult => {
+    const pool = adventuringPoolOrEmpty(ctx.state);
+    if (!ctx.resumeAnswer) {
+      // Look up display names from the active packs. Falls back to the
+      // raw id if the pack isn't seated or the card isn't found.
+      const findVaultName = (cardId: string): string | undefined => {
+        for (const pid of ctx.state.activePackIds) {
+          const pack = getPack(pid);
+          if (!pack) continue;
+          const found = pack.vaultCards.find((v) => v.id === cardId);
+          if (found) return found.name;
+        }
+        return undefined;
+      };
+      const findSupporterName = (cardId: string): string | undefined => {
+        for (const pid of ctx.state.activePackIds) {
+          const pack = getPack(pid);
+          if (!pack) continue;
+          const found = pack.supporters.find((s) => s.id === cardId);
+          if (found) return found.name;
+        }
+        return undefined;
+      };
+      // Drafting a spell from the pool works like a Library draft: the
+      // player spends 1 INT to learn the card. Without spare INT the
+      // spell entries stay visible but unavailable so the player can see
+      // what they're locked out of.
+      const drafter = ctx.state.players.find(
+        (p) => p.id === ctx.triggeringPlayerId,
+      );
+      const canLearnSpell = (drafter?.resources.intelligence ?? 0) >= 1;
+      const options: ChoiceOption[] = [];
+      for (const cardId of pool.spells) {
+        const def = lookupSpellCardDef(ctx.state, cardId);
+        options.push({
+          id: `spell::${cardId}`,
+          label: `Spell: ${def?.name ?? cardId}`,
+          payload: {},
+          available: canLearnSpell,
+          ...(canLearnSpell
+            ? {}
+            : {
+                unavailableReason: `requires 1 INT to learn (you have ${
+                  drafter?.resources.intelligence ?? 0
+                })`,
+              }),
+        });
+      }
+      for (const cardId of pool.vaultCards) {
+        options.push({
+          id: `vault::${cardId}`,
+          label: `Vault: ${findVaultName(cardId) ?? cardId}`,
+          payload: {},
+        });
+      }
+      for (const cardId of pool.supporters) {
+        options.push({
+          id: `supporter::${cardId}`,
+          label: `Supporter: ${findSupporterName(cardId) ?? cardId}`,
+          payload: {},
+        });
+      }
+      if (options.length === 0) {
+        return { kind: 'done', patch: {} };
+      }
+      // Always offer a "Pass" so a player whose only available picks
+      // are unaffordable (e.g. spells-only pool + no spare INT) can't
+      // get bricked into resolving an impossible draft.
+      options.push({ id: 'pass', label: 'Pass — forgo this draft', payload: {} });
+      return {
+        kind: 'pause',
+        pending: {
+          responderId: ctx.triggeringPlayerId,
+          prompt: { kind: 'choose-from-options', options },
+          resume: {
+            effectId: 'base.room.adventuring-b.draft',
+            context: {},
+          },
+          source: ctx.source,
+        },
+      };
+    }
+    if (ctx.resumeAnswer.kind !== 'option-chosen') {
+      throw new Error(
+        `adventuring-b.draft expected option-chosen, got ${ctx.resumeAnswer.kind}`,
+      );
+    }
+    if (ctx.resumeAnswer.optionId === 'pass') {
+      return { kind: 'done', patch: {} };
+    }
+    const sepIdx = ctx.resumeAnswer.optionId.indexOf('::');
+    if (sepIdx < 0) {
+      throw new Error(
+        `adventuring-b.draft malformed optionId ${ctx.resumeAnswer.optionId}`,
+      );
+    }
+    const kind = ctx.resumeAnswer.optionId.slice(0, sepIdx);
+    const cardId = ctx.resumeAnswer.optionId.slice(sepIdx + 2);
+    if (kind === 'spell') {
+      if (!pool.spells.includes(cardId)) {
+        throw new Error(`adventuring-b.draft: ${cardId} not in spell pool`);
+      }
+      // Drafting a spell from the Adventuring pool learns it the same
+      // way a Library draft does: spend 1 INT, add to ownedSpells with
+      // intPlaced=true. Belt-and-suspenders enforcement matching the
+      // prompt-time `available: false` guard above.
+      const drafter = ctx.state.players.find(
+        (p) => p.id === ctx.triggeringPlayerId,
+      );
+      if (!drafter || drafter.resources.intelligence < 1) {
+        throw new Error(
+          'adventuring-b.draft: requires 1 INT to learn the spell',
+        );
+      }
+      const players = ctx.state.players.map((p) =>
+        p.id !== ctx.triggeringPlayerId
+          ? p
+          : {
+              ...p,
+              resources: {
+                ...p.resources,
+                intelligence: p.resources.intelligence - 1,
+              },
+              ownedSpells: [
+                ...p.ownedSpells,
+                {
+                  cardId,
+                  intPlaced: true,
+                  wisPlacedLevel2: false,
+                  wisPlacedLevel3: false,
+                  exhausted: false,
+                },
+              ],
+            },
+      );
+      return {
+        kind: 'done',
+        patch: {
+          players,
+          adventuringBPool: {
+            ...pool,
+            spells: pool.spells.filter((id) => id !== cardId),
+          },
+        },
+      };
+    }
+    if (kind === 'vault') {
+      if (!pool.vaultCards.includes(cardId)) {
+        throw new Error(`adventuring-b.draft: ${cardId} not in vault pool`);
+      }
+      const players = ctx.state.players.map((p) =>
+        p.id !== ctx.triggeringPlayerId
+          ? p
+          : {
+              ...p,
+              vaultCards: [
+                ...p.vaultCards,
+                { cardId, exhausted: false },
+              ],
+            },
+      );
+      return {
+        kind: 'done',
+        patch: {
+          players,
+          adventuringBPool: {
+            ...pool,
+            vaultCards: pool.vaultCards.filter((id) => id !== cardId),
+          },
+        },
+      };
+    }
+    if (kind === 'supporter') {
+      if (!pool.supporters.includes(cardId)) {
+        throw new Error(
+          `adventuring-b.draft: ${cardId} not in supporter pool`,
+        );
+      }
+      const players = ctx.state.players.map((p) =>
+        p.id !== ctx.triggeringPlayerId
+          ? p
+          : { ...p, supporters: [...p.supporters, cardId] },
+      );
+      return {
+        kind: 'done',
+        patch: {
+          players,
+          adventuringBPool: {
+            ...pool,
+            supporters: pool.supporters.filter((id) => id !== cardId),
+          },
+        },
+      };
+    }
+    throw new Error(`adventuring-b.draft unknown kind ${kind}`);
+  },
+);
 
 // ============================================================================
 // Training Fields A — flat resource gains
@@ -1604,7 +1982,11 @@ registerEffect('base.room.training-fields-a.slot-3', (ctx: EffectContext): Effec
 }));
 
 // ============================================================================
-// Guilds A — INSTANT room. Pick gold OR mana per slot.
+// Guilds — Pick gold OR mana per slot. Same OR-prompt shape on both
+// sides; the only differences are payout sizes and instant vs non-
+// instant resolution timing (encoded on the room itself).
+//   Side A (non-instant, bigger): 8/4, 6/3, 4/2
+//   Side B (instant, smaller):    6/3, 4/2, 2/1
 // ============================================================================
 
 function guildsOrPrompt(
@@ -1649,13 +2031,23 @@ function guildsOrPrompt(
 }
 
 registerEffect('base.room.guilds-a.slot-1', (ctx) =>
-  guildsOrPrompt(ctx, 6, 3, 'base.room.guilds-a.slot-1'),
+  guildsOrPrompt(ctx, 8, 4, 'base.room.guilds-a.slot-1'),
 );
 registerEffect('base.room.guilds-a.slot-2', (ctx) =>
-  guildsOrPrompt(ctx, 4, 2, 'base.room.guilds-a.slot-2'),
+  guildsOrPrompt(ctx, 6, 3, 'base.room.guilds-a.slot-2'),
 );
 registerEffect('base.room.guilds-a.slot-3', (ctx) =>
-  guildsOrPrompt(ctx, 2, 1, 'base.room.guilds-a.slot-3'),
+  guildsOrPrompt(ctx, 4, 2, 'base.room.guilds-a.slot-3'),
+);
+
+registerEffect('base.room.guilds-b.slot-1', (ctx) =>
+  guildsOrPrompt(ctx, 6, 3, 'base.room.guilds-b.slot-1'),
+);
+registerEffect('base.room.guilds-b.slot-2', (ctx) =>
+  guildsOrPrompt(ctx, 4, 2, 'base.room.guilds-b.slot-2'),
+);
+registerEffect('base.room.guilds-b.slot-3', (ctx) =>
+  guildsOrPrompt(ctx, 2, 1, 'base.room.guilds-b.slot-3'),
 );
 
 // ============================================================================
@@ -1689,6 +2081,453 @@ registerEffect('base.room.courtyard-a.slot-3', (ctx) => ({
 }));
 
 // ============================================================================
+// Library B — same UC slot count as A but with Research-heavy variants.
+// Slot 3's "2 Buys OR 1 Buy + 1 Research" is partially wired: the
+// 2-Buys branch isn't sequenced yet, so the slot collapses to the
+// simpler "1 Buy + 1 Research" path (same as Side A slot 3).
+// ============================================================================
+
+/** Library B slot 1 (merit, 1 MB): Gain 1 Research AND draft a Vault Card. */
+registerEffect('base.room.library-b.slot-1', (ctx: EffectContext): EffectResult => {
+  if (!ctx.resumeAnswer) {
+    if (ctx.state.vaultTableau.length === 0) {
+      // No vault card to draft — just queue the research.
+      return {
+        kind: 'done',
+        patch: appendResearchQueue(
+          ctx.state,
+          ctx.triggeringPlayerId,
+          ctx.source,
+          1,
+        ),
+      };
+    }
+    return {
+      kind: 'pause',
+      pending: {
+        responderId: ctx.triggeringPlayerId,
+        prompt: {
+          kind: 'choose-vault-card',
+          eligibleCardIds: [...ctx.state.vaultTableau],
+        },
+        resume: { effectId: 'base.room.library-b.slot-1', context: {} },
+        source: ctx.source,
+      },
+    };
+  }
+  if (ctx.resumeAnswer.kind !== 'card-chosen') {
+    throw new Error(
+      `library-b.slot-1 expected card-chosen, got ${ctx.resumeAnswer.kind}`,
+    );
+  }
+  let working = ctx.state;
+  working = {
+    ...working,
+    ...applyVaultDraft(working, ctx.triggeringPlayerId, ctx.resumeAnswer.cardId),
+  };
+  const researchPatch = appendResearchQueue(
+    working,
+    ctx.triggeringPlayerId,
+    ctx.source,
+    1,
+  );
+  return {
+    kind: 'done',
+    patch: {
+      players: working.players,
+      vaultTableau: working.vaultTableau,
+      ...researchPatch,
+    },
+  };
+});
+
+/** Library B slot 2 (merit, 1 MB): Gain 1 INT + 1 WIS OR gain 3 Research. */
+registerEffect('base.room.library-b.slot-2', (ctx: EffectContext): EffectResult => {
+  if (!ctx.resumeAnswer) {
+    return {
+      kind: 'pause',
+      pending: {
+        responderId: ctx.triggeringPlayerId,
+        prompt: {
+          kind: 'choose-from-options',
+          options: [
+            { id: 'int-wis', label: 'Gain 1 INT and 1 WIS', payload: {} },
+            { id: 'research', label: 'Gain 3 Research', payload: {} },
+          ],
+        },
+        resume: { effectId: 'base.room.library-b.slot-2', context: {} },
+        source: ctx.source,
+      },
+    };
+  }
+  if (ctx.resumeAnswer.kind !== 'option-chosen') {
+    throw new Error(
+      `library-b.slot-2 expected option-chosen, got ${ctx.resumeAnswer.kind}`,
+    );
+  }
+  if (ctx.resumeAnswer.optionId === 'int-wis') {
+    return {
+      kind: 'done',
+      patch: gainResourcesPatch(ctx.state, ctx.triggeringPlayerId, {
+        intelligence: 1,
+        wisdom: 1,
+      }),
+    };
+  }
+  if (ctx.resumeAnswer.optionId === 'research') {
+    return {
+      kind: 'done',
+      patch: appendResearchQueue(
+        ctx.state,
+        ctx.triggeringPlayerId,
+        ctx.source,
+        3,
+      ),
+    };
+  }
+  throw new Error(
+    `library-b.slot-2 unknown option: ${ctx.resumeAnswer.optionId}`,
+  );
+});
+
+/**
+ * Library B slot 3 (regular): "Gain 2 Buys OR gain 1 Buy and 1 Research."
+ *
+ * Currently wired as "1 Buy + 1 Research" only (delegated to Side A slot
+ * 3). The "2 Buys" alternative would need a sequenced double-buy chain;
+ * left as TODO so the slot is at least playable.
+ */
+registerEffect('base.room.library-b.slot-3', (ctx: EffectContext): EffectResult =>
+  getEffect('base.room.library-a.slot-3')(ctx),
+);
+
+/** Library B slot 4 (regular): Gain 1 INT OR 1 WIS OR 1 Research. */
+registerEffect('base.room.library-b.slot-4', (ctx: EffectContext): EffectResult =>
+  getEffect('base.room.library-a.slot-4')(ctx),
+);
+
+// ============================================================================
+// Training Fields B — three slots per the room file.
+// ============================================================================
+
+/** Slot 1 (merit, 1 MB): Gain 1 INT OR 1 WIS; gain 2 Research. */
+registerEffect(
+  'base.room.training-fields-b.slot-1',
+  (ctx: EffectContext): EffectResult => {
+    if (!ctx.resumeAnswer) {
+      return {
+        kind: 'pause',
+        pending: {
+          responderId: ctx.triggeringPlayerId,
+          prompt: {
+            kind: 'choose-from-options',
+            options: [
+              { id: 'int', label: 'Gain 1 INT', payload: {} },
+              { id: 'wis', label: 'Gain 1 WIS', payload: {} },
+            ],
+          },
+          resume: {
+            effectId: 'base.room.training-fields-b.slot-1',
+            context: {},
+          },
+          source: ctx.source,
+        },
+      };
+    }
+    if (ctx.resumeAnswer.kind !== 'option-chosen') {
+      throw new Error(
+        `training-fields-b.slot-1 expected option-chosen, got ${ctx.resumeAnswer.kind}`,
+      );
+    }
+    const resource =
+      ctx.resumeAnswer.optionId === 'int'
+        ? 'intelligence'
+        : ctx.resumeAnswer.optionId === 'wis'
+          ? 'wisdom'
+          : null;
+    if (resource === null) {
+      throw new Error(
+        `training-fields-b.slot-1 unknown option: ${ctx.resumeAnswer.optionId}`,
+      );
+    }
+    let working = ctx.state;
+    const resourcePatch = gainResourcePatch(
+      working,
+      ctx.triggeringPlayerId,
+      resource,
+      1,
+    );
+    working = { ...working, ...resourcePatch };
+    const researchPatch = appendResearchQueue(
+      working,
+      ctx.triggeringPlayerId,
+      ctx.source,
+      2,
+    );
+    return {
+      kind: 'done',
+      patch: { players: working.players, ...researchPatch },
+    };
+  },
+);
+
+/** Slot 2 (regular): Gain 1 INT OR gain 1 WIS. */
+registerEffect(
+  'base.room.training-fields-b.slot-2',
+  (ctx: EffectContext): EffectResult => {
+    if (!ctx.resumeAnswer) {
+      return {
+        kind: 'pause',
+        pending: {
+          responderId: ctx.triggeringPlayerId,
+          prompt: {
+            kind: 'choose-from-options',
+            options: [
+              { id: 'int', label: 'Gain 1 INT', payload: {} },
+              { id: 'wis', label: 'Gain 1 WIS', payload: {} },
+            ],
+          },
+          resume: {
+            effectId: 'base.room.training-fields-b.slot-2',
+            context: {},
+          },
+          source: ctx.source,
+        },
+      };
+    }
+    if (ctx.resumeAnswer.kind !== 'option-chosen') {
+      throw new Error(
+        `training-fields-b.slot-2 expected option-chosen, got ${ctx.resumeAnswer.kind}`,
+      );
+    }
+    const resource =
+      ctx.resumeAnswer.optionId === 'int' ? 'intelligence' : 'wisdom';
+    return {
+      kind: 'done',
+      patch: gainResourcePatch(
+        ctx.state,
+        ctx.triggeringPlayerId,
+        resource,
+        1,
+      ),
+    };
+  },
+);
+
+/** Slot 3 (regular): Gain 2 Mana OR gain 2 Research. */
+registerEffect(
+  'base.room.training-fields-b.slot-3',
+  (ctx: EffectContext): EffectResult => {
+    if (!ctx.resumeAnswer) {
+      return {
+        kind: 'pause',
+        pending: {
+          responderId: ctx.triggeringPlayerId,
+          prompt: {
+            kind: 'choose-from-options',
+            options: [
+              { id: 'mana', label: 'Gain 2 Mana', payload: {} },
+              { id: 'research', label: 'Gain 2 Research', payload: {} },
+            ],
+          },
+          resume: {
+            effectId: 'base.room.training-fields-b.slot-3',
+            context: {},
+          },
+          source: ctx.source,
+        },
+      };
+    }
+    if (ctx.resumeAnswer.kind !== 'option-chosen') {
+      throw new Error(
+        `training-fields-b.slot-3 expected option-chosen, got ${ctx.resumeAnswer.kind}`,
+      );
+    }
+    if (ctx.resumeAnswer.optionId === 'mana') {
+      return {
+        kind: 'done',
+        patch: gainResourcePatch(
+          ctx.state,
+          ctx.triggeringPlayerId,
+          'mana',
+          2,
+        ),
+      };
+    }
+    return {
+      kind: 'done',
+      patch: appendResearchQueue(
+        ctx.state,
+        ctx.triggeringPlayerId,
+        ctx.source,
+        2,
+      ),
+    };
+  },
+);
+
+// ============================================================================
+// Catacombs B — Gold/IP trade-offs.
+// ============================================================================
+
+/** Slot 1 (merit, 1 MB): one-shot Yes/No — Swap 1 IP for 10 Gold. */
+registerEffect(
+  'base.room.catacombs-b.slot-1',
+  (ctx: EffectContext): EffectResult => {
+    if (!ctx.resumeAnswer) {
+      const player = ctx.state.players.find(
+        (p) => p.id === ctx.triggeringPlayerId,
+      );
+      // Can't afford the swap → no prompt, silent done.
+      if (!player || player.resources.influence < 1) {
+        return { kind: 'done', patch: {} };
+      }
+      return {
+        kind: 'pause',
+        pending: {
+          responderId: ctx.triggeringPlayerId,
+          prompt: {
+            kind: 'choose-from-options',
+            options: [
+              { id: 'swap', label: 'Swap 1 IP for 10 Gold', payload: {} },
+              { id: 'skip', label: 'Skip', payload: {} },
+            ],
+          },
+          resume: { effectId: 'base.room.catacombs-b.slot-1', context: {} },
+          source: ctx.source,
+        },
+      };
+    }
+    if (ctx.resumeAnswer.kind !== 'option-chosen') {
+      throw new Error(
+        `catacombs-b.slot-1 expected option-chosen, got ${ctx.resumeAnswer.kind}`,
+      );
+    }
+    if (ctx.resumeAnswer.optionId === 'skip') {
+      return { kind: 'done', patch: {} };
+    }
+    if (ctx.resumeAnswer.optionId !== 'swap') {
+      throw new Error(
+        `catacombs-b.slot-1 unknown option: ${ctx.resumeAnswer.optionId}`,
+      );
+    }
+    // Apply IP change via the influence-specific helper (handles
+    // arrival-sequence + MB bonuses), then layer +10 Gold on top.
+    const ipPatch = bumpInfluencePatch(ctx.state, ctx.triggeringPlayerId, -1);
+    const working: GameState = { ...ctx.state, ...ipPatch };
+    const goldPatch = gainResourcePatch(
+      working,
+      ctx.triggeringPlayerId,
+      'gold',
+      10,
+    );
+    return {
+      kind: 'done',
+      patch: {
+        ...ipPatch,
+        ...goldPatch,
+      },
+    };
+  },
+);
+
+/** Slot 2 (regular): Swap 2 Gold for 1 IP, up to 4 times. */
+registerEffect('base.room.catacombs-b.slot-2', (ctx): EffectResult =>
+  swapLoop(ctx, 'base.room.catacombs-b.slot-2', {
+    label: 'Swap 2 Gold for 1 IP',
+    goldCost: 2,
+    total: 4,
+    immediateGain: (state) =>
+      bumpInfluencePatch(state, ctx.triggeringPlayerId, 1),
+  }),
+);
+
+/** Slot 3 (regular): Swap 1 Gold for 1 IP, up to 3 times. */
+registerEffect('base.room.catacombs-b.slot-3', (ctx): EffectResult =>
+  swapLoop(ctx, 'base.room.catacombs-b.slot-3', {
+    label: 'Swap 1 Gold for 1 IP',
+    goldCost: 1,
+    total: 3,
+    immediateGain: (state) =>
+      bumpInfluencePatch(state, ctx.triggeringPlayerId, 1),
+  }),
+);
+
+// ============================================================================
+// Courtyard B — Mana scaling with WIS, with research / half-WIS variants.
+// ============================================================================
+
+/** Slot 1 (merit, 1 MB): Gain Mana equal to your WIS, then gain 1 Research. */
+registerEffect(
+  'base.room.courtyard-b.slot-1',
+  (ctx: EffectContext): EffectResult => {
+    const player = ctx.state.players.find(
+      (p) => p.id === ctx.triggeringPlayerId,
+    );
+    if (!player) throw new Error('courtyard-b.slot-1: player not found');
+    let working = ctx.state;
+    if (player.resources.wisdom > 0) {
+      working = {
+        ...working,
+        ...gainResourcePatch(
+          working,
+          ctx.triggeringPlayerId,
+          'mana',
+          player.resources.wisdom,
+        ),
+      };
+    }
+    const researchPatch = appendResearchQueue(
+      working,
+      ctx.triggeringPlayerId,
+      ctx.source,
+      1,
+    );
+    return {
+      kind: 'done',
+      patch: { players: working.players, ...researchPatch },
+    };
+  },
+);
+
+/** Slot 2 (regular): Gain Mana equal to your WIS. */
+registerEffect('base.room.courtyard-b.slot-2', (ctx) => {
+  const player = ctx.state.players.find(
+    (p) => p.id === ctx.triggeringPlayerId,
+  );
+  if (!player) throw new Error('courtyard-b.slot-2: player not found');
+  if (player.resources.wisdom <= 0) return { kind: 'done', patch: {} };
+  return {
+    kind: 'done',
+    patch: gainResourcePatch(
+      ctx.state,
+      ctx.triggeringPlayerId,
+      'mana',
+      player.resources.wisdom,
+    ),
+  };
+});
+
+/** Slot 3 (regular): Gain Mana equal to half your WIS, rounded up. */
+registerEffect('base.room.courtyard-b.slot-3', (ctx) => {
+  const player = ctx.state.players.find(
+    (p) => p.id === ctx.triggeringPlayerId,
+  );
+  if (!player) throw new Error('courtyard-b.slot-3: player not found');
+  const amount = Math.ceil(player.resources.wisdom / 2);
+  if (amount <= 0) return { kind: 'done', patch: {} };
+  return {
+    kind: 'done',
+    patch: gainResourcePatch(
+      ctx.state,
+      ctx.triggeringPlayerId,
+      'mana',
+      amount,
+    ),
+  };
+});
+
+// ============================================================================
 // Infirmary on-wound bonus — used by every wound source via afterResume
 // ============================================================================
 //
@@ -1698,12 +2537,6 @@ registerEffect('base.room.courtyard-a.slot-3', (ctx) => ({
 // `bonusPromptFor(...)`. Sources with no follow-up steps (Burn L1) use the
 // shared system resume; sources that need to chain more work (Ars Magna)
 // supply a custom resume that handles the bonus inline.
-
-const INFIRMARY_BONUS_OPTIONS: ChoiceOption[] = [
-  { id: 'gold', label: 'Gain 2 Gold', payload: {} },
-  { id: 'mana', label: 'Gain 1 Mana', payload: {} },
-  { id: 'ip', label: 'Gain 1 IP', payload: {} },
-];
 
 function readTriggerEvent(ctx: EffectContext): ReactionTriggerEvent | null {
   const raw = ctx.resumeContext?.['triggerEvent'];
@@ -1716,7 +2549,16 @@ function triggerEventToContext(event: ReactionTriggerEvent): SerializableContext
   return event as unknown as SerializableContext;
 }
 
+/**
+ * Builds the Infirmary wound-arrival bonus prompt. The option set is
+ * computed from `state` via `buildInfirmaryBonusOptions` so Infirmary
+ * Side B's buffed slots (4 Gold / 2 Mana) get offered when their slot
+ * is empty. The wounded mage's id is threaded into the resume context
+ * so the apply step can record slot occupancy when a buffed option
+ * fires.
+ */
 function bonusPromptFor(
+  state: GameState,
   event: ReactionTriggerEvent,
   casterId: PlayerId,
   customResume?: ResumeContinuation,
@@ -1724,16 +2566,30 @@ function bonusPromptFor(
   if (event.kind !== 'mage-wounded') {
     throw new Error('bonusPromptFor: only mage-wounded events trigger the bonus');
   }
+  const baseContext: SerializableContext = {
+    recipientPlayerId: event.ownerId,
+    woundedMageId: event.mageId,
+  };
+  // Auto-inject the wounded mage's id into the resume context (custom
+  // or default) so the apply step can mark the buffed Infirmary B slot
+  // occupant when the buffed branch fires. Caller-supplied context keys
+  // win on collision.
+  const resume: ResumeContinuation = customResume
+    ? {
+        ...customResume,
+        context: { ...baseContext, ...(customResume.context ?? {}) },
+      }
+    : {
+        effectId: 'base.system.infirmary-bonus',
+        context: baseContext,
+      };
   return {
     responderId: event.ownerId,
     prompt: {
       kind: 'choose-from-options',
-      options: INFIRMARY_BONUS_OPTIONS,
+      options: buildInfirmaryBonusOptions(state),
     },
-    resume: customResume ?? {
-      effectId: 'base.system.infirmary-bonus',
-      context: { recipientPlayerId: event.ownerId },
-    },
+    resume,
     source: {
       kind: 'system',
       id: 'base.system.infirmary-bonus',
@@ -1843,21 +2699,17 @@ registerEffect('base.system.resolution-choice', (ctx: EffectContext): EffectResu
 });
 
 registerEffect('base.system.infirmary-bonus', (ctx) => {
-  if (ctx.resumeAnswer?.kind !== 'option-chosen') {
-    throw new Error(
-      `infirmary-bonus expected option-chosen, got ${ctx.resumeAnswer?.kind}`,
-    );
-  }
   const recipientId = ctx.resumeContext?.['recipientPlayerId'];
   if (typeof recipientId !== 'string') {
     throw new Error('infirmary-bonus: missing recipientPlayerId');
   }
   return {
     kind: 'done',
-    patch: applyInfirmaryBonusPatch(
+    patch: applyInfirmaryBonusFromCtx(
       ctx.state,
       recipientId,
-      ctx.resumeAnswer.optionId,
+      ctx.resumeAnswer,
+      ctx.resumeContext,
     ),
   };
 });
@@ -2067,6 +2919,255 @@ registerEffect('base.room.council-chamber-a.slot', (ctx: EffectContext): EffectR
 });
 
 // ============================================================================
+// Council Chamber B — pick N of {Draft a Supporter, Gain 1 IP, Gain a Mark}.
+//
+// One shared chain handler powers all five slots; the slot's effectId
+// encodes its N (1 / 2 / 3). Each pick is applied as it's chosen, then
+// the chain loops back to ask for the next pick out of the remaining
+// options. Sub-actions that would fizzle (empty supporter tableau / no
+// eligible voters) silently count as completed so the chain doesn't
+// stall.
+// ============================================================================
+
+const COUNCIL_B_OPTION_IDS = ['draft', 'ip', 'mark'] as const;
+type CouncilBOptionId = (typeof COUNCIL_B_OPTION_IDS)[number];
+
+function councilChamberBLabel(o: CouncilBOptionId): string {
+  switch (o) {
+    case 'draft':
+      return 'Draft a Supporter';
+    case 'ip':
+      return 'Gain 1 IP';
+    case 'mark':
+      return 'Gain a Mark';
+  }
+}
+
+function councilChamberBLoop(
+  ctx: EffectContext,
+  selfEffectId: string,
+  totalPicks: number,
+  picked: CouncilBOptionId[],
+  working: GameState,
+): EffectResult {
+  if (picked.length >= totalPicks) {
+    return { kind: 'done', patch: councilBDiff(working) };
+  }
+  const remaining = COUNCIL_B_OPTION_IDS.filter((o) => !picked.includes(o));
+  if (remaining.length === 0) {
+    return { kind: 'done', patch: councilBDiff(working) };
+  }
+  if (remaining.length === 1) {
+    // Auto-execute the forced final pick — no point asking the player.
+    return councilChamberBExecute(
+      ctx,
+      selfEffectId,
+      totalPicks,
+      picked,
+      working,
+      remaining[0]!,
+    );
+  }
+  return {
+    kind: 'pause',
+    patch: councilBDiff(working),
+    pending: {
+      responderId: ctx.triggeringPlayerId,
+      prompt: {
+        kind: 'choose-from-options',
+        options: remaining.map((o) => ({
+          id: o,
+          label: councilChamberBLabel(o),
+          payload: {},
+        })),
+      },
+      resume: {
+        effectId: selfEffectId,
+        context: { step: 'after-or-pick', picked, totalPicks },
+      },
+      source: ctx.source,
+    },
+  };
+}
+
+/**
+ * Field-by-field patch of every GameState slice the chain might have
+ * touched (supporter draft + IP bump + Mark all go through different
+ * fields). Cheaper than spreading the full state.
+ */
+function councilBDiff(working: GameState): GameStatePatch {
+  return {
+    players: working.players,
+    supporterTableau: working.supporterTableau,
+    voterMarks: working.voterMarks,
+    nextSequenceId: working.nextSequenceId,
+  };
+}
+
+function councilChamberBExecute(
+  ctx: EffectContext,
+  selfEffectId: string,
+  totalPicks: number,
+  picked: CouncilBOptionId[],
+  working: GameState,
+  choice: CouncilBOptionId,
+): EffectResult {
+  if (choice === 'ip') {
+    const patch = bumpInfluencePatch(working, ctx.triggeringPlayerId, 1);
+    const next: GameState = { ...working, ...patch };
+    return councilChamberBLoop(
+      ctx,
+      selfEffectId,
+      totalPicks,
+      [...picked, 'ip'],
+      next,
+    );
+  }
+  if (choice === 'draft') {
+    // Empty tableau → silent fizzle; chain continues with this pick counted.
+    if (working.supporterTableau.length === 0) {
+      return councilChamberBLoop(
+        ctx,
+        selfEffectId,
+        totalPicks,
+        [...picked, 'draft'],
+        working,
+      );
+    }
+    return {
+      kind: 'pause',
+      patch: councilBDiff(working),
+      pending: {
+        responderId: ctx.triggeringPlayerId,
+        prompt: {
+          kind: 'choose-supporter-card',
+          eligibleCardIds: [...working.supporterTableau],
+        },
+        resume: {
+          effectId: selfEffectId,
+          context: { step: 'after-supporter-pick', picked, totalPicks },
+        },
+        source: ctx.source,
+      },
+    };
+  }
+  // choice === 'mark'
+  const markPromptInput = spawnGainMarkPrompt(
+    working,
+    ctx.triggeringPlayerId,
+    ctx.source,
+  );
+  if (markPromptInput === null) {
+    // No eligible voters → fizzle; chain continues with this pick counted.
+    return councilChamberBLoop(
+      ctx,
+      selfEffectId,
+      totalPicks,
+      [...picked, 'mark'],
+      working,
+    );
+  }
+  return {
+    kind: 'pause',
+    patch: councilBDiff(working),
+    pending: {
+      responderId: ctx.triggeringPlayerId,
+      prompt: markPromptInput.prompt,
+      resume: {
+        effectId: selfEffectId,
+        context: { step: 'after-mark-pick', picked, totalPicks },
+      },
+      source: ctx.source,
+    },
+  };
+}
+
+function councilChamberBChain(
+  ctx: EffectContext,
+  selfEffectId: string,
+  totalPicks: number,
+): EffectResult {
+  const step = ctx.resumeContext?.['step'];
+  const pickedRaw = ctx.resumeContext?.['picked'];
+  const picked: CouncilBOptionId[] = Array.isArray(pickedRaw)
+    ? pickedRaw.filter((x): x is CouncilBOptionId =>
+        typeof x === 'string' &&
+        (COUNCIL_B_OPTION_IDS as readonly string[]).includes(x),
+      )
+    : [];
+
+  // Resume from a sub-prompt: apply the answered sub-action, then loop.
+  if (step === 'after-supporter-pick') {
+    if (ctx.resumeAnswer?.kind !== 'card-chosen') {
+      throw new Error(
+        `${selfEffectId} after-supporter-pick expected card-chosen`,
+      );
+    }
+    const patch = applySupporterDraft(
+      ctx.state,
+      ctx.triggeringPlayerId,
+      ctx.resumeAnswer.cardId,
+    );
+    const working: GameState = { ...ctx.state, ...patch };
+    return councilChamberBLoop(
+      ctx,
+      selfEffectId,
+      totalPicks,
+      [...picked, 'draft'],
+      working,
+    );
+  }
+  if (step === 'after-mark-pick') {
+    if (ctx.resumeAnswer?.kind !== 'voter-chosen') {
+      throw new Error(`${selfEffectId} after-mark-pick expected voter-chosen`);
+    }
+    const patch = applyGainMark(
+      ctx.state,
+      ctx.triggeringPlayerId,
+      ctx.resumeAnswer.voterId,
+    );
+    const working: GameState = { ...ctx.state, ...patch };
+    return councilChamberBLoop(
+      ctx,
+      selfEffectId,
+      totalPicks,
+      [...picked, 'mark'],
+      working,
+    );
+  }
+  if (step === 'after-or-pick') {
+    if (ctx.resumeAnswer?.kind !== 'option-chosen') {
+      throw new Error(`${selfEffectId} after-or-pick expected option-chosen`);
+    }
+    const choice = ctx.resumeAnswer.optionId;
+    if (!(COUNCIL_B_OPTION_IDS as readonly string[]).includes(choice)) {
+      throw new Error(`${selfEffectId}: unknown choice ${choice}`);
+    }
+    return councilChamberBExecute(
+      ctx,
+      selfEffectId,
+      totalPicks,
+      picked,
+      ctx.state,
+      choice as CouncilBOptionId,
+    );
+  }
+
+  // First entry — start the chain.
+  return councilChamberBLoop(ctx, selfEffectId, totalPicks, picked, ctx.state);
+}
+
+registerEffect('base.room.council-chamber-b.do-1', (ctx) =>
+  councilChamberBChain(ctx, 'base.room.council-chamber-b.do-1', 1),
+);
+registerEffect('base.room.council-chamber-b.do-2', (ctx) =>
+  councilChamberBChain(ctx, 'base.room.council-chamber-b.do-2', 2),
+);
+registerEffect('base.room.council-chamber-b.do-3', (ctx) =>
+  councilChamberBChain(ctx, 'base.room.council-chamber-b.do-3', 3),
+);
+
+// ============================================================================
 // Catacombs A
 // ============================================================================
 
@@ -2110,6 +3211,1518 @@ registerEffect('base.room.catacombs-a.slot-3', (ctx) => {
 });
 
 // ============================================================================
+// Adventuring A — Side A of the Adventuring room.
+//   Slot 1 (merit, 1 MB):  Gain a Secret Supporter AND Gain 3 Gold
+//   Slot 2 (regular):      Draw a Vault Card OR Gain 2 IP OR Gain 1 INT
+//   Slot 3 (regular):      Draw a Spell Card OR Gain 2 IP OR Gain 1 WIS
+//
+// Both regular slots are simple `choose-from-options` prompts. A drawn
+// Spell goes into the spellbook UNLEARNED (intPlaced=false) — the player
+// pays INT later if they want to actually use it.
+// ============================================================================
+
+registerEffect(
+  'base.room.adventuring-a.slot-1',
+  (ctx: EffectContext): EffectResult => {
+    const drawPatch = applySecretSupporterDraw(
+      ctx.state,
+      ctx.triggeringPlayerId,
+    );
+    // Compose: draft updates `players` (personalDiscard) and may update
+    // `supporterDeck`. Gold then re-derives `players` from the post-draft
+    // state so both updates land.
+    const afterDraw: GameState = { ...ctx.state, ...drawPatch };
+    const goldPatch = gainResourcePatch(
+      afterDraw,
+      ctx.triggeringPlayerId,
+      'gold',
+      3,
+    );
+    return {
+      kind: 'done',
+      patch: { ...drawPatch, ...goldPatch },
+    };
+  },
+);
+
+registerEffect(
+  'base.room.adventuring-a.slot-2',
+  (ctx: EffectContext): EffectResult => {
+    if (!ctx.resumeAnswer) {
+      return {
+        kind: 'pause',
+        pending: {
+          responderId: ctx.triggeringPlayerId,
+          prompt: {
+            kind: 'choose-from-options',
+            options: [
+              { id: 'vault', label: 'Draw a Vault Card', payload: {} },
+              { id: 'ip', label: 'Gain 2 IP', payload: {} },
+              { id: 'int', label: 'Gain 1 INT', payload: {} },
+            ],
+          },
+          resume: {
+            effectId: 'base.room.adventuring-a.slot-2',
+            context: {},
+          },
+          source: ctx.source,
+        },
+      };
+    }
+    if (ctx.resumeAnswer.kind !== 'option-chosen') {
+      throw new Error(
+        `adventuring-a.slot-2 expected option-chosen, got ${ctx.resumeAnswer.kind}`,
+      );
+    }
+    const optionId = ctx.resumeAnswer.optionId;
+    if (optionId === 'vault') {
+      return {
+        kind: 'done',
+        patch: drawTopOfVaultDeck(ctx.state, ctx.triggeringPlayerId, 1),
+      };
+    }
+    if (optionId === 'ip') {
+      return {
+        kind: 'done',
+        patch: bumpInfluencePatch(ctx.state, ctx.triggeringPlayerId, 2),
+      };
+    }
+    if (optionId === 'int') {
+      return {
+        kind: 'done',
+        patch: gainResourcePatch(
+          ctx.state,
+          ctx.triggeringPlayerId,
+          'intelligence',
+          1,
+        ),
+      };
+    }
+    throw new Error(`adventuring-a.slot-2: unknown option ${optionId}`);
+  },
+);
+
+registerEffect(
+  'base.room.adventuring-a.slot-3',
+  (ctx: EffectContext): EffectResult => {
+    if (!ctx.resumeAnswer) {
+      // Drawing a spell costs 1 INT (same as a Library / Adventuring B
+      // draft) — the spell is learned on the spot. Without spare INT the
+      // option stays visible but unavailable so the player can see what
+      // they're locked out of.
+      const drafter = ctx.state.players.find(
+        (p) => p.id === ctx.triggeringPlayerId,
+      );
+      const canLearnSpell = (drafter?.resources.intelligence ?? 0) >= 1;
+      return {
+        kind: 'pause',
+        pending: {
+          responderId: ctx.triggeringPlayerId,
+          prompt: {
+            kind: 'choose-from-options',
+            options: [
+              {
+                id: 'spell',
+                label: 'Draw a Spell Card',
+                payload: {},
+                available: canLearnSpell,
+                ...(canLearnSpell
+                  ? {}
+                  : {
+                      unavailableReason: `requires 1 INT to learn (you have ${
+                        drafter?.resources.intelligence ?? 0
+                      })`,
+                    }),
+              },
+              { id: 'ip', label: 'Gain 2 IP', payload: {} },
+              { id: 'wis', label: 'Gain 1 WIS', payload: {} },
+            ],
+          },
+          resume: {
+            effectId: 'base.room.adventuring-a.slot-3',
+            context: {},
+          },
+          source: ctx.source,
+        },
+      };
+    }
+    if (ctx.resumeAnswer.kind !== 'option-chosen') {
+      throw new Error(
+        `adventuring-a.slot-3 expected option-chosen, got ${ctx.resumeAnswer.kind}`,
+      );
+    }
+    const optionId = ctx.resumeAnswer.optionId;
+    if (optionId === 'spell') {
+      // `drawAndLearnTopOfSpellDeck` throws if INT < 1 — belt-and-
+      // suspenders match for the prompt-time `available: false` guard.
+      return {
+        kind: 'done',
+        patch: drawAndLearnTopOfSpellDeck(
+          ctx.state,
+          ctx.triggeringPlayerId,
+        ),
+      };
+    }
+    if (optionId === 'ip') {
+      return {
+        kind: 'done',
+        patch: bumpInfluencePatch(ctx.state, ctx.triggeringPlayerId, 2),
+      };
+    }
+    if (optionId === 'wis') {
+      return {
+        kind: 'done',
+        patch: gainResourcePatch(
+          ctx.state,
+          ctx.triggeringPlayerId,
+          'wisdom',
+          1,
+        ),
+      };
+    }
+    throw new Error(`adventuring-a.slot-3: unknown option ${optionId}`);
+  },
+);
+
+// ============================================================================
+// Chapel — both sides. Every slot grants a Mark on top of its primary
+// reward (Side A is non-instant, Side B fires at placement). The shared
+// `applyPatchThenMarkPrompt` helper applies the primary patch and hands
+// off to `base.system.gain-mark` via `spawnGainMarkPrompt`. The slot
+// effect never resumes itself for single-mark slots — the mark chain
+// owns its own continuation. Side B slot 1's 2-mark chain is the one
+// exception; it self-resumes via `chapelBMarkChain` further down.
+//
+// Side A:
+//   Slot 1 (merit, 1 MB): Gain 1 INT + 1 WIS, then gain a Mark
+//   Slot 2 (regular):     Gain 2 IP, then gain a Mark
+//   Slot 3 (regular):     Gain 2 Gold OR Gain 2 Mana, then gain a Mark
+// ============================================================================
+
+function applyPatchThenMarkPrompt(
+  ctx: EffectContext,
+  primaryPatch: GameStatePatch,
+): EffectResult {
+  const afterPrimary: GameState = { ...ctx.state, ...primaryPatch };
+  const markPrompt = spawnGainMarkPrompt(
+    afterPrimary,
+    ctx.triggeringPlayerId,
+    ctx.source,
+  );
+  if (markPrompt === null) {
+    // No eligible voter — apply the primary reward and stop.
+    return { kind: 'done', patch: primaryPatch };
+  }
+  return { kind: 'pause', patch: primaryPatch, pending: markPrompt };
+}
+
+/** Slot 1 (merit, 1 MB): Gain 1 INT AND Gain 1 WIS, then gain a Mark. */
+registerEffect(
+  'base.room.chapel-a.slot-1',
+  (ctx: EffectContext): EffectResult => {
+    if (ctx.resumeAnswer) {
+      throw new Error(
+        'chapel-a.slot-1 should not be re-invoked (mark handles its own resume)',
+      );
+    }
+    return applyPatchThenMarkPrompt(
+      ctx,
+      gainResourcesPatch(ctx.state, ctx.triggeringPlayerId, {
+        intelligence: 1,
+        wisdom: 1,
+      }),
+    );
+  },
+);
+
+/** Slot 2 (regular): Gain 2 IP, then gain a Mark. */
+registerEffect(
+  'base.room.chapel-a.slot-2',
+  (ctx: EffectContext): EffectResult => {
+    if (ctx.resumeAnswer) {
+      throw new Error(
+        'chapel-a.slot-2 should not be re-invoked (mark handles its own resume)',
+      );
+    }
+    return applyPatchThenMarkPrompt(
+      ctx,
+      bumpInfluencePatch(ctx.state, ctx.triggeringPlayerId, 2),
+    );
+  },
+);
+
+/**
+ * Slot 3 (regular): Gain 2 Gold OR Gain 2 Mana, then gain a Mark.
+ *
+ * Two-step: open the gold/mana OR prompt; on the chosen-option resume,
+ * apply the picked resource and hand off to the mark chain.
+ */
+registerEffect(
+  'base.room.chapel-a.slot-3',
+  (ctx: EffectContext): EffectResult => {
+    if (!ctx.resumeAnswer) {
+      return {
+        kind: 'pause',
+        pending: {
+          responderId: ctx.triggeringPlayerId,
+          prompt: {
+            kind: 'choose-from-options',
+            options: [
+              { id: 'gold', label: 'Gain 2 Gold', payload: {} },
+              { id: 'mana', label: 'Gain 2 Mana', payload: {} },
+            ],
+          },
+          resume: {
+            effectId: 'base.room.chapel-a.slot-3',
+            context: { step: 'after-pick' },
+          },
+          source: ctx.source,
+        },
+      };
+    }
+    if (ctx.resumeAnswer.kind !== 'option-chosen') {
+      throw new Error(
+        `chapel-a.slot-3 expected option-chosen, got ${ctx.resumeAnswer.kind}`,
+      );
+    }
+    const optionId = ctx.resumeAnswer.optionId;
+    if (optionId !== 'gold' && optionId !== 'mana') {
+      throw new Error(`chapel-a.slot-3: unknown option ${optionId}`);
+    }
+    const kind = optionId === 'gold' ? 'gold' : 'mana';
+    return applyPatchThenMarkPrompt(
+      ctx,
+      gainResourcePatch(ctx.state, ctx.triggeringPlayerId, kind, 2),
+    );
+  },
+);
+
+// ============================================================================
+// Chapel B — INSTANT room. Slot effects resolve at placement.
+//   Slot 1 (merit, 1 MB): Immediately gain 2 Marks
+//   Slot 2 (regular):     Immediately gain 1 IP AND gain a Mark
+//   Slot 3 (regular):     Immediately gain a Mark
+//
+// Slot 1 chains two voter prompts: it pauses with `remaining` in
+// resumeContext, applies the picked mark, and either re-pauses for the
+// second mark or returns done. Slots 2 and 3 reuse the Catacombs A
+// pattern (one prompt; the standard `base.system.gain-mark` resume
+// handles the apply step).
+// ============================================================================
+
+/**
+ * Chains `total` mark prompts. First entry seeds the chain; the
+ * self-resume context carries `remaining = total - already-applied`.
+ * `carryPatch` is the cumulative mark-application diff so far.
+ * Fizzles silently if no voter is eligible (mirrors single-mark fizzle).
+ */
+function chapelBMarkChain(
+  ctx: EffectContext,
+  selfEffectId: string,
+  total: 1 | 2,
+  carryPatch: GameStatePatch = {},
+): EffectResult {
+  const eligible = eligibleVotersForMark(ctx.state, ctx.triggeringPlayerId);
+  if (eligible.length === 0) {
+    return { kind: 'done', patch: carryPatch };
+  }
+  const remaining = total - 1;
+  return {
+    kind: 'pause',
+    patch: carryPatch,
+    pending: {
+      responderId: ctx.triggeringPlayerId,
+      prompt: {
+        kind: 'choose-voter',
+        eligibleVoterIds: eligible.map((v) => v.id),
+      },
+      resume: {
+        effectId: selfEffectId,
+        context: { step: 'after-mark', remaining },
+      },
+      source: ctx.source,
+    },
+  };
+}
+
+/** Slot 1 (merit, 1 MB): Immediately gain 2 Marks. */
+registerEffect(
+  'base.room.chapel-b.slot-1',
+  (ctx: EffectContext): EffectResult => {
+    const step = ctx.resumeContext?.['step'];
+    const selfEffectId = 'base.room.chapel-b.slot-1';
+
+    // First entry — start the 2-mark chain.
+    if (step === undefined) {
+      return chapelBMarkChain(ctx, selfEffectId, 2);
+    }
+
+    if (step === 'after-mark') {
+      if (ctx.resumeAnswer?.kind !== 'voter-chosen') {
+        throw new Error(
+          `${selfEffectId} after-mark expected voter-chosen, got ${ctx.resumeAnswer?.kind}`,
+        );
+      }
+      const patch = applyGainMark(
+        ctx.state,
+        ctx.triggeringPlayerId,
+        ctx.resumeAnswer.voterId,
+      );
+      const working: GameState = { ...ctx.state, ...patch };
+      const remaining = Number(ctx.resumeContext?.['remaining'] ?? 0);
+      if (remaining <= 0) {
+        return { kind: 'done', patch };
+      }
+      // Recurse via the helper to spawn the next prompt against the
+      // post-apply state, carrying the cumulative players/voterMarks
+      // patch forward so it isn't dropped at the next pause.
+      return chapelBMarkChain(
+        { ...ctx, state: working },
+        selfEffectId,
+        1,
+        {
+          players: working.players,
+          voterMarks: working.voterMarks,
+        },
+      );
+    }
+
+    throw new Error(`${selfEffectId} unexpected step ${String(step)}`);
+  },
+);
+
+/** Slot 2 (regular): Immediately gain 1 IP AND gain a Mark. */
+registerEffect(
+  'base.room.chapel-b.slot-2',
+  (ctx: EffectContext): EffectResult => {
+    if (ctx.resumeAnswer) {
+      throw new Error(
+        'chapel-b.slot-2 should not be re-invoked (mark handles its own resume)',
+      );
+    }
+    return applyPatchThenMarkPrompt(
+      ctx,
+      bumpInfluencePatch(ctx.state, ctx.triggeringPlayerId, 1),
+    );
+  },
+);
+
+/** Slot 3 (regular): Immediately gain a Mark. */
+registerEffect(
+  'base.room.chapel-b.slot-3',
+  (ctx: EffectContext): EffectResult => {
+    if (ctx.resumeAnswer) {
+      throw new Error(
+        'chapel-b.slot-3 should not be re-invoked (mark handles its own resume)',
+      );
+    }
+    return applyPatchThenMarkPrompt(ctx, {});
+  },
+);
+
+// ============================================================================
+// Dormitory — both sides. Pick a Mage colour from the supply and gain a
+// mage of that colour. 2-per-colour cap on owned mages (neutral is
+// uncapped per user spec). Each slot has its own primary cost:
+//   A.slot-1 (merit, 1 MB): 2 Gold
+//   A.slot-2 (regular):     6 Gold
+//   B.slot-1 (merit, 1 MB): free
+//   B.slot-2 (regular):     2 IP
+//
+// All four share `dormitoryGainMage`. The slot fizzles silently if
+// the player can't afford the primary cost OR no colour is selectable
+// (every colour is either at the 2-cap or out of supply).
+// ============================================================================
+
+type DormitoryCost =
+  | { kind: 'gold'; amount: number }
+  | { kind: 'ip'; amount: number }
+  | null;
+
+const DORMITORY_COLOR_OPTIONS: {
+  color: MageColor;
+  label: string;
+  /** Only offered when this pack is in `state.activePackIds`. */
+  requiresPackId?: string;
+}[] = [
+  { color: 'red', label: 'Sorcery (red)' },
+  { color: 'blue', label: 'Divinity (blue)' },
+  { color: 'grey', label: 'Mysticism (grey)' },
+  { color: 'green', label: 'Natural Magick (green)' },
+  { color: 'purple', label: 'Planar Studies (purple)' },
+  {
+    color: 'orange',
+    label: 'Technomancy (orange)',
+    requiresPackId: 'mancers',
+  },
+  { color: 'off-white', label: 'Neutral (off-white) — uncapped' },
+];
+
+/**
+ * Per-colour availability for the Dormitory prompt. Available iff the
+ * supply pool isn't empty AND (the colour is neutral OR the player has
+ * fewer than 2 of that colour). Neutral mages are explicitly uncapped.
+ */
+function dormitoryColorAvailable(
+  state: GameState,
+  player: Player,
+  color: MageColor,
+): { available: boolean; reasons: string[] } {
+  const poolCount = state.mageDraftPool[color] ?? 0;
+  const ownedCount = player.mages.filter((m) => m.color === color).length;
+  const poolEmpty = poolCount === 0;
+  const capReached = color !== 'off-white' && ownedCount >= 2;
+  const reasons: string[] = [];
+  if (poolEmpty) reasons.push('supply empty');
+  if (capReached) reasons.push('already have 2');
+  return { available: !poolEmpty && !capReached, reasons };
+}
+
+function dormitoryGainMage(
+  ctx: EffectContext,
+  selfEffectId: string,
+  cost: DormitoryCost,
+): EffectResult {
+  const player = ctx.state.players.find(
+    (p) => p.id === ctx.triggeringPlayerId,
+  );
+  if (!player) return { kind: 'done', patch: {} };
+
+  // First entry — open the colour picker.
+  if (!ctx.resumeAnswer) {
+    // Affordability check up front; if the player can't pay the slot's
+    // primary cost, fizzle silently.
+    if (cost?.kind === 'gold' && player.resources.gold < cost.amount) {
+      return { kind: 'done', patch: {} };
+    }
+    if (cost?.kind === 'ip' && player.resources.influence < cost.amount) {
+      return { kind: 'done', patch: {} };
+    }
+    // Skip colour rows whose backing pack isn't seated (e.g. Technomancy
+    // when Mancers isn't active) — the option doesn't belong in this game
+    // at all, distinct from "supply empty within this game".
+    const offered = DORMITORY_COLOR_OPTIONS.filter(
+      ({ requiresPackId }) =>
+        requiresPackId === undefined ||
+        ctx.state.activePackIds.includes(requiresPackId),
+    );
+    const options: ChoiceOption[] = offered.map(({ color, label }) => {
+      const { available, reasons } = dormitoryColorAvailable(
+        ctx.state,
+        player,
+        color,
+      );
+      return {
+        id: color,
+        label,
+        payload: {},
+        available,
+        ...(available ? {} : { unavailableReason: reasons.join(' + ') }),
+      };
+    });
+    // If every colour is locked, fizzle rather than show a useless prompt.
+    if (!options.some((o) => o.available)) {
+      return { kind: 'done', patch: {} };
+    }
+    return {
+      kind: 'pause',
+      pending: {
+        responderId: ctx.triggeringPlayerId,
+        prompt: { kind: 'choose-from-options', options },
+        resume: { effectId: selfEffectId, context: {} },
+        source: ctx.source,
+      },
+    };
+  }
+
+  // Resume — apply the chosen colour.
+  if (ctx.resumeAnswer.kind !== 'option-chosen') {
+    throw new Error(
+      `${selfEffectId} expected option-chosen, got ${ctx.resumeAnswer.kind}`,
+    );
+  }
+  const color = ctx.resumeAnswer.optionId as MageColor;
+  if (!(color in MAGE_CARD_BY_COLOR)) {
+    throw new Error(`${selfEffectId}: unknown colour ${color}`);
+  }
+  // Belt-and-suspenders: re-check availability and affordability. State
+  // may have shifted between prompt and resume (other reactions, etc.).
+  const { available } = dormitoryColorAvailable(ctx.state, player, color);
+  if (!available) return { kind: 'done', patch: {} };
+  if (cost?.kind === 'gold' && player.resources.gold < cost.amount) {
+    return { kind: 'done', patch: {} };
+  }
+  if (cost?.kind === 'ip' && player.resources.influence < cost.amount) {
+    return { kind: 'done', patch: {} };
+  }
+
+  // Apply the primary cost first against the original state, then layer
+  // the mage-add patch on top of the post-cost state so both updates
+  // land in `players` cleanly.
+  let working: GameState = ctx.state;
+  if (cost?.kind === 'gold') {
+    const goldPatch = gainResourcePatch(
+      working,
+      ctx.triggeringPlayerId,
+      'gold',
+      -cost.amount,
+    );
+    working = { ...working, ...goldPatch };
+  } else if (cost?.kind === 'ip') {
+    const ipPatch = bumpInfluencePatch(
+      working,
+      ctx.triggeringPlayerId,
+      -cost.amount,
+    );
+    working = { ...working, ...ipPatch };
+  }
+
+  const seq = working.nextSequenceId;
+  const poolCount = working.mageDraftPool[color] ?? 0;
+  return {
+    kind: 'done',
+    patch: {
+      nextSequenceId: seq + 1,
+      mageDraftPool: { ...working.mageDraftPool, [color]: poolCount - 1 },
+      players: working.players.map((p) =>
+        p.id !== ctx.triggeringPlayerId
+          ? p
+          : {
+              ...p,
+              mages: [
+                ...p.mages,
+                {
+                  id: `m-${seq}`,
+                  cardId: MAGE_CARD_BY_COLOR[color],
+                  color,
+                  location: {
+                    kind: 'office' as const,
+                    playerId: ctx.triggeringPlayerId,
+                  },
+                  isShadowing: false,
+                  isWounded: false,
+                },
+              ],
+            },
+      ),
+    },
+  };
+}
+
+registerEffect(
+  'base.room.dormitory-a.slot-1',
+  (ctx: EffectContext): EffectResult =>
+    dormitoryGainMage(ctx, 'base.room.dormitory-a.slot-1', {
+      kind: 'gold',
+      amount: 2,
+    }),
+);
+
+registerEffect(
+  'base.room.dormitory-a.slot-2',
+  (ctx: EffectContext): EffectResult =>
+    dormitoryGainMage(ctx, 'base.room.dormitory-a.slot-2', {
+      kind: 'gold',
+      amount: 6,
+    }),
+);
+
+registerEffect(
+  'base.room.dormitory-b.slot-1',
+  (ctx: EffectContext): EffectResult =>
+    dormitoryGainMage(ctx, 'base.room.dormitory-b.slot-1', null),
+);
+
+registerEffect(
+  'base.room.dormitory-b.slot-2',
+  (ctx: EffectContext): EffectResult =>
+    dormitoryGainMage(ctx, 'base.room.dormitory-b.slot-2', {
+      kind: 'ip',
+      amount: 2,
+    }),
+);
+
+// ============================================================================
+// Student Stores — both sides grant N Buys via a chain prompt. Each Buy is
+// one of:
+//   Side A: Vault Card | 1 INT (4g) | 1 WIS (4g) | 1 Research (4g) | Skip
+//   Side B: Vault Card | (once) Pay 1g to re-deal Vault Tableau | Skip
+// Side B slot 1 grants 2 Gold off every Vault Buy (discount). The re-deal
+// option is "once per slot resolution" — tracked via `redealUsed` in the
+// resume context.
+//
+// Research buys append to `researchQueue`; the engine drains the queue
+// after the chain finishes, so the research prompt opens after all
+// remaining buys.
+// ============================================================================
+
+type StudentStoresOpts = {
+  side: 'A' | 'B';
+  discount: number;
+  initialBuys: number;
+};
+
+/**
+ * Affordable vault cards given a `discount` off the printed cost. Cards
+ * are affordable when `goldCost - discount <= player.gold`. Catalyst
+ * waives the cost entirely (every card affordable).
+ */
+function affordableVaultCardsDiscounted(
+  state: GameState,
+  playerId: PlayerId,
+  discount: number,
+): string[] {
+  const player = state.players.find((p) => p.id === playerId);
+  if (!player) return [];
+  const hasCatalyst = playerHasAuricCatalyst(player);
+  const out: string[] = [];
+  for (const cardId of state.vaultTableau) {
+    const def = lookupVaultCardDef(state, cardId);
+    if (!def) continue;
+    if (hasCatalyst) {
+      out.push(cardId);
+      continue;
+    }
+    const netCost = Math.max(0, def.goldCost - discount);
+    if (netCost <= player.resources.gold) out.push(cardId);
+  }
+  return out;
+}
+
+/**
+ * Apply a vault purchase with a per-buy `discount`. If the buyer has a
+ * waived gold cost (Auric Catalyst), discount is irrelevant — defer to
+ * the standard maybe-waived helper. Otherwise pre-credit the discount
+ * before the standard purchase, so the net deduction is goldCost -
+ * discount.
+ */
+function applyVaultPurchaseDiscounted(
+  state: GameState,
+  playerId: PlayerId,
+  cardId: string,
+  discount: number,
+): GameStatePatch {
+  const player = state.players.find((p) => p.id === playerId);
+  if (!player) throw new Error('applyVaultPurchaseDiscounted: player not found');
+  if (player.nextGoldCostWaived || discount <= 0) {
+    return applyVaultPurchaseMaybeWaived(state, playerId, cardId);
+  }
+  // Pre-credit the discount so applyVaultPurchase's full goldCost deduction
+  // nets to (goldCost - discount).
+  const creditPatch = gainResourcePatch(state, playerId, 'gold', discount);
+  const working: GameState = { ...state, ...creditPatch };
+  return applyVaultPurchase(working, playerId, cardId);
+}
+
+/**
+ * Moves the entire current Vault Tableau to the bottom of the Vault Deck
+ * and draws the top 3 (or fewer if the deck has been exhausted) back into
+ * the tableau. Used by Student Stores Side B's "pay 1 Gold to re-deal"
+ * option.
+ */
+function redealVaultTableau(state: GameState): GameStatePatch {
+  const tableauSize = state.vaultTableau.length;
+  if (tableauSize === 0) return {};
+  const combined = [...state.vaultDeck, ...state.vaultTableau];
+  return {
+    vaultTableau: combined.slice(0, tableauSize),
+    vaultDeck: combined.slice(tableauSize),
+  };
+}
+
+/**
+ * Builds the per-Buy option prompt. Vault is always offered (greyed when
+ * unaffordable). Side A adds the 4-Gold INT/WIS/Research options. Side B
+ * adds the once-per-resolution re-deal option (omitted entirely once
+ * used). Skip is always available so the player can decline a Buy.
+ */
+function studentStoresOpenBuy(
+  state: GameState,
+  ctx: EffectContext,
+  selfEffectId: string,
+  opts: StudentStoresOpts,
+  remaining: number,
+  redealUsed: boolean,
+  carryPatch: GameStatePatch,
+): EffectResult {
+  if (remaining <= 0) {
+    return { kind: 'done', patch: carryPatch };
+  }
+  const player = state.players.find((p) => p.id === ctx.triggeringPlayerId);
+  if (!player) return { kind: 'done', patch: carryPatch };
+
+  const options: ChoiceOption[] = [];
+
+  const affordable = affordableVaultCardsDiscounted(
+    state,
+    ctx.triggeringPlayerId,
+    opts.discount,
+  );
+  const vaultLabel =
+    opts.discount > 0
+      ? `Buy a Vault Item (${opts.discount} Gold off)`
+      : 'Buy a Vault Item';
+  options.push({
+    id: 'vault',
+    label: vaultLabel,
+    payload: {},
+    available: affordable.length > 0,
+    ...(affordable.length === 0
+      ? { unavailableReason: 'no affordable Vault Card' }
+      : {}),
+  });
+
+  if (opts.side === 'A') {
+    const canPay4 = player.resources.gold >= 4;
+    const reason4 = `requires 4 Gold (you have ${player.resources.gold})`;
+    options.push({
+      id: 'int',
+      label: 'Buy 1 INT for 4 Gold',
+      payload: {},
+      available: canPay4,
+      ...(canPay4 ? {} : { unavailableReason: reason4 }),
+    });
+    options.push({
+      id: 'wis',
+      label: 'Buy 1 WIS for 4 Gold',
+      payload: {},
+      available: canPay4,
+      ...(canPay4 ? {} : { unavailableReason: reason4 }),
+    });
+    options.push({
+      id: 'research',
+      label: 'Buy 1 Research for 4 Gold',
+      payload: {},
+      available: canPay4,
+      ...(canPay4 ? {} : { unavailableReason: reason4 }),
+    });
+  }
+
+  if (opts.side === 'B' && !redealUsed) {
+    const canPay1 = player.resources.gold >= 1;
+    options.push({
+      id: 'redeal',
+      label: 'Pay 1 Gold to discard and re-deal the Vault Tableau',
+      payload: {},
+      available: canPay1,
+      ...(canPay1 ? {} : { unavailableReason: 'requires 1 Gold' }),
+    });
+  }
+
+  options.push({
+    id: 'skip',
+    label: `Skip this Buy (${remaining} remaining)`,
+    payload: {},
+  });
+
+  return {
+    kind: 'pause',
+    patch: carryPatch,
+    pending: {
+      responderId: ctx.triggeringPlayerId,
+      prompt: { kind: 'choose-from-options', options },
+      resume: {
+        effectId: selfEffectId,
+        context: {
+          step: 'after-buy-choice',
+          remaining,
+          redealUsed,
+        },
+      },
+      source: ctx.source,
+    },
+  };
+}
+
+function studentStoresChain(
+  ctx: EffectContext,
+  selfEffectId: string,
+  opts: StudentStoresOpts,
+): EffectResult {
+  const step = ctx.resumeContext?.['step'];
+  const remaining =
+    step === undefined
+      ? opts.initialBuys
+      : Number(ctx.resumeContext?.['remaining'] ?? 0);
+  const redealUsed = ctx.resumeContext?.['redealUsed'] === true;
+
+  // Resume from a vault-card-chosen prompt → apply purchase, decrement, loop.
+  if (step === 'after-vault-pick') {
+    if (ctx.resumeAnswer?.kind !== 'card-chosen') {
+      throw new Error(
+        `${selfEffectId} after-vault-pick expected card-chosen, got ${ctx.resumeAnswer?.kind}`,
+      );
+    }
+    const buyPatch = applyVaultPurchaseDiscounted(
+      ctx.state,
+      ctx.triggeringPlayerId,
+      ctx.resumeAnswer.cardId,
+      opts.discount,
+    );
+    const working: GameState = { ...ctx.state, ...buyPatch };
+    return studentStoresOpenBuy(
+      working,
+      ctx,
+      selfEffectId,
+      opts,
+      remaining - 1,
+      redealUsed,
+      {
+        players: working.players,
+        vaultTableau: working.vaultTableau,
+        vaultDeck: working.vaultDeck,
+      },
+    );
+  }
+
+  // Resume from the buy-option pick.
+  if (step === 'after-buy-choice') {
+    if (ctx.resumeAnswer?.kind !== 'option-chosen') {
+      throw new Error(
+        `${selfEffectId} after-buy-choice expected option-chosen, got ${ctx.resumeAnswer?.kind}`,
+      );
+    }
+    const optionId = ctx.resumeAnswer.optionId;
+
+    if (optionId === 'skip') {
+      return studentStoresOpenBuy(
+        ctx.state,
+        ctx,
+        selfEffectId,
+        opts,
+        remaining - 1,
+        redealUsed,
+        {},
+      );
+    }
+
+    if (optionId === 'vault') {
+      const affordable = affordableVaultCardsDiscounted(
+        ctx.state,
+        ctx.triggeringPlayerId,
+        opts.discount,
+      );
+      if (affordable.length === 0) {
+        // Affordability may have shifted between prompts (reactions
+        // etc.) — silently consume this Buy and continue.
+        return studentStoresOpenBuy(
+          ctx.state,
+          ctx,
+          selfEffectId,
+          opts,
+          remaining - 1,
+          redealUsed,
+          {},
+        );
+      }
+      return {
+        kind: 'pause',
+        pending: {
+          responderId: ctx.triggeringPlayerId,
+          prompt: { kind: 'choose-vault-card', eligibleCardIds: affordable },
+          resume: {
+            effectId: selfEffectId,
+            context: {
+              step: 'after-vault-pick',
+              remaining,
+              redealUsed,
+            },
+          },
+          source: ctx.source,
+        },
+      };
+    }
+
+    if (optionId === 'int' || optionId === 'wis') {
+      const goldPatch = gainResourcePatch(
+        ctx.state,
+        ctx.triggeringPlayerId,
+        'gold',
+        -4,
+      );
+      const afterGold: GameState = { ...ctx.state, ...goldPatch };
+      const resKind: 'intelligence' | 'wisdom' =
+        optionId === 'int' ? 'intelligence' : 'wisdom';
+      const resPatch = gainResourcePatch(
+        afterGold,
+        ctx.triggeringPlayerId,
+        resKind,
+        1,
+      );
+      const afterRes: GameState = { ...afterGold, ...resPatch };
+      return studentStoresOpenBuy(
+        afterRes,
+        ctx,
+        selfEffectId,
+        opts,
+        remaining - 1,
+        redealUsed,
+        { players: afterRes.players },
+      );
+    }
+
+    if (optionId === 'research') {
+      const goldPatch = gainResourcePatch(
+        ctx.state,
+        ctx.triggeringPlayerId,
+        'gold',
+        -4,
+      );
+      const afterGold: GameState = { ...ctx.state, ...goldPatch };
+      const researchPatch = appendResearchQueue(
+        afterGold,
+        ctx.triggeringPlayerId,
+        ctx.source,
+        1,
+      );
+      const afterRes: GameState = { ...afterGold, ...researchPatch };
+      return studentStoresOpenBuy(
+        afterRes,
+        ctx,
+        selfEffectId,
+        opts,
+        remaining - 1,
+        redealUsed,
+        {
+          players: afterRes.players,
+          researchQueue: afterRes.researchQueue,
+        },
+      );
+    }
+
+    if (optionId === 'redeal') {
+      if (opts.side !== 'B' || redealUsed) {
+        throw new Error(`${selfEffectId}: redeal not allowed here`);
+      }
+      const goldPatch = gainResourcePatch(
+        ctx.state,
+        ctx.triggeringPlayerId,
+        'gold',
+        -1,
+      );
+      const afterGold: GameState = { ...ctx.state, ...goldPatch };
+      const redealPatch = redealVaultTableau(afterGold);
+      const afterRedeal: GameState = { ...afterGold, ...redealPatch };
+      // Same Buy stays up for grabs — do NOT decrement remaining.
+      return studentStoresOpenBuy(
+        afterRedeal,
+        ctx,
+        selfEffectId,
+        opts,
+        remaining,
+        true,
+        {
+          players: afterRedeal.players,
+          vaultTableau: afterRedeal.vaultTableau,
+          vaultDeck: afterRedeal.vaultDeck,
+        },
+      );
+    }
+
+    throw new Error(`${selfEffectId}: unknown option ${optionId}`);
+  }
+
+  // First entry — open the first Buy prompt.
+  return studentStoresOpenBuy(
+    ctx.state,
+    ctx,
+    selfEffectId,
+    opts,
+    remaining,
+    redealUsed,
+    {},
+  );
+}
+
+registerEffect(
+  'base.room.student-stores-a.slot-1',
+  (ctx: EffectContext): EffectResult =>
+    studentStoresChain(ctx, 'base.room.student-stores-a.slot-1', {
+      side: 'A',
+      discount: 0,
+      initialBuys: 3,
+    }),
+);
+
+registerEffect(
+  'base.room.student-stores-a.slot-2',
+  (ctx: EffectContext): EffectResult =>
+    studentStoresChain(ctx, 'base.room.student-stores-a.slot-2', {
+      side: 'A',
+      discount: 0,
+      initialBuys: 2,
+    }),
+);
+
+registerEffect(
+  'base.room.student-stores-a.slot-3',
+  (ctx: EffectContext): EffectResult =>
+    studentStoresChain(ctx, 'base.room.student-stores-a.slot-3', {
+      side: 'A',
+      discount: 0,
+      initialBuys: 1,
+    }),
+);
+
+registerEffect(
+  'base.room.student-stores-b.slot-1',
+  (ctx: EffectContext): EffectResult =>
+    studentStoresChain(ctx, 'base.room.student-stores-b.slot-1', {
+      side: 'B',
+      discount: 2,
+      initialBuys: 2,
+    }),
+);
+
+registerEffect(
+  'base.room.student-stores-b.slot-2',
+  (ctx: EffectContext): EffectResult =>
+    studentStoresChain(ctx, 'base.room.student-stores-b.slot-2', {
+      side: 'B',
+      discount: 0,
+      initialBuys: 2,
+    }),
+);
+
+registerEffect(
+  'base.room.student-stores-b.slot-3',
+  (ctx: EffectContext): EffectResult =>
+    studentStoresChain(ctx, 'base.room.student-stores-b.slot-3', {
+      side: 'B',
+      discount: 0,
+      initialBuys: 1,
+    }),
+);
+
+// ============================================================================
+// Great Hall — both sides are INSTANT rooms with a "place up to 3 mages
+// together" chain. Side A grants 1 IP per placement; Side B grants 2
+// Gold OR 1 Mana per placement. After applying the reward, the slot
+// effect sets up `pendingPlaceChain` (remaining=2, restricted to this
+// Great Hall, allowStop=true) so the engine surfaces up to 2 more
+// placement prompts. The chain set-up is gated on "no chain already
+// exists for this room" so the chained placements don't re-set it.
+// ============================================================================
+
+/**
+ * Sets up the Great Hall chain on the FIRST placement of a sequence. If
+ * a chain restricted to this same room is already in flight, leaves it
+ * alone — we're mid-chain and the engine's drain pump will surface the
+ * next placement prompt.
+ */
+function maybeSetGreatHallChain(
+  state: GameState,
+  roomId: string,
+  playerId: PlayerId,
+  source: ResolutionSource,
+  carryPatch: GameStatePatch,
+): EffectResult {
+  const chain = state.pendingPlaceChain;
+  const alreadyChaining =
+    chain !== null &&
+    chain.playerId === playerId &&
+    chain.restrictRoomId === roomId;
+  if (alreadyChaining) {
+    return { kind: 'done', patch: carryPatch };
+  }
+  return {
+    kind: 'done',
+    patch: {
+      ...carryPatch,
+      pendingPlaceChain: {
+        playerId,
+        source,
+        // remaining=2: drain pump decrements then surfaces a placement
+        // prompt, so 2 means up to 2 more placements (3 total with the
+        // initial one).
+        remaining: 2,
+        restrictRoomId: roomId,
+        allowStop: true,
+      },
+    },
+  };
+}
+
+/** Side A slot: gain 1 IP, then maybe set up the chain. */
+registerEffect(
+  'base.room.great-hall-a.slot',
+  (ctx: EffectContext): EffectResult => {
+    const ipPatch = bumpInfluencePatch(ctx.state, ctx.triggeringPlayerId, 1);
+    const afterIp: GameState = { ...ctx.state, ...ipPatch };
+    return maybeSetGreatHallChain(
+      afterIp,
+      'base.room.great-hall.a',
+      ctx.triggeringPlayerId,
+      ctx.source,
+      ipPatch,
+    );
+  },
+);
+
+/**
+ * Side B slot: prompt Gold/Mana, apply the chosen resource, then maybe
+ * set up the chain. The chain set-up happens on the resume after the
+ * resource pick.
+ */
+registerEffect(
+  'base.room.great-hall-b.slot',
+  (ctx: EffectContext): EffectResult => {
+    if (!ctx.resumeAnswer) {
+      return {
+        kind: 'pause',
+        pending: {
+          responderId: ctx.triggeringPlayerId,
+          prompt: {
+            kind: 'choose-from-options',
+            options: [
+              { id: 'gold', label: 'Gain 2 Gold', payload: {} },
+              { id: 'mana', label: 'Gain 1 Mana', payload: {} },
+            ],
+          },
+          resume: {
+            effectId: 'base.room.great-hall-b.slot',
+            context: { step: 'after-pick' },
+          },
+          source: ctx.source,
+        },
+      };
+    }
+    if (ctx.resumeAnswer.kind !== 'option-chosen') {
+      throw new Error(
+        `great-hall-b.slot expected option-chosen, got ${ctx.resumeAnswer.kind}`,
+      );
+    }
+    const optionId = ctx.resumeAnswer.optionId;
+    let resourcePatch: GameStatePatch;
+    if (optionId === 'gold') {
+      resourcePatch = gainResourcePatch(
+        ctx.state,
+        ctx.triggeringPlayerId,
+        'gold',
+        2,
+      );
+    } else if (optionId === 'mana') {
+      resourcePatch = gainResourcePatch(
+        ctx.state,
+        ctx.triggeringPlayerId,
+        'mana',
+        1,
+      );
+    } else {
+      throw new Error(`great-hall-b.slot: unknown option ${optionId}`);
+    }
+    const afterResource: GameState = { ...ctx.state, ...resourcePatch };
+    return maybeSetGreatHallChain(
+      afterResource,
+      'base.room.great-hall.b',
+      ctx.triggeringPlayerId,
+      ctx.source,
+      resourcePatch,
+    );
+  },
+);
+
+// ============================================================================
+// Archmage's Study Side A — INSTANT room.
+//   Slot 1 (merit, 1 MB): pay 1 Mana → gain the Archmage's Apprentice
+//                         for the round.
+//   Slot 2 (regular):     gain 1 IP and swap the placed Mage for
+//                         another from the supply.
+//   Slot 3 (regular):     swap the placed Mage for another from the
+//                         supply.
+//
+// The Apprentice is the "joker" mage with all Mage Powers. It cannot
+// be traded, swapped, or otherwise transferred. Tracked via
+// `state.archmagesApprenticeOwner`; the round-end cleanup removes it
+// from the owner's office and clears the pointer.
+// ============================================================================
+
+const ARCHMAGES_APPRENTICE_CARD_ID = 'base.mage.archmages-apprentice';
+
+/** True iff `m` is the special Archmage's Apprentice piece. */
+function isArchmagesApprentice(m: OwnedMage): boolean {
+  return m.cardId === ARCHMAGES_APPRENTICE_CARD_ID;
+}
+
+/**
+ * Looks up the mage currently sitting on `spaceId` for `playerId` (base
+ * occupant first, then shadow). Returns null if the slot has no
+ * matching occupant — handles e.g. Phase Steppers reverting a placement
+ * between PLACE_WORKER and the resolution-choice resume.
+ */
+function findPlacedMageOnSpace(
+  state: GameState,
+  spaceId: string,
+  playerId: PlayerId,
+): OwnedMage | null {
+  for (const r of state.rooms) {
+    for (const s of r.actionSpaces) {
+      if (s.id !== spaceId) continue;
+      const candidates: { mageId: string; ownerId: string }[] = [];
+      if (s.occupant && s.occupant.ownerId === playerId) candidates.push(s.occupant);
+      if (s.shadowOccupant && s.shadowOccupant.ownerId === playerId) candidates.push(s.shadowOccupant);
+      for (const occ of candidates) {
+        const owner = state.players.find((p) => p.id === occ.ownerId);
+        const m = owner?.mages.find((mm) => mm.id === occ.mageId);
+        if (m) return m;
+      }
+    }
+  }
+  return null;
+}
+
+/** Eligible swap-target colours for slots 2 / 3: pool > 0, player not at
+ *  the 2-per-colour cap, never apprentice / rainbow / orange unless
+ *  the relevant pack is seated. */
+function archmagesStudySwapColours(
+  state: GameState,
+  playerId: PlayerId,
+  excludeColor: MageColor,
+): MageColor[] {
+  const player = state.players.find((p) => p.id === playerId);
+  if (!player) return [];
+  const out: MageColor[] = [];
+  const candidates: MageColor[] = [
+    'red',
+    'blue',
+    'grey',
+    'green',
+    'purple',
+    'orange',
+    'off-white',
+  ];
+  for (const c of candidates) {
+    if (c === excludeColor) continue;
+    if (c === 'orange' && !state.activePackIds.includes('mancers')) continue;
+    if ((state.mageDraftPool[c] ?? 0) <= 0) continue;
+    const owned = player.mages.filter((m) => m.color === c).length;
+    if (c !== 'off-white' && owned >= 2) continue;
+    out.push(c);
+  }
+  return out;
+}
+
+/** Builds a `Mage` color-label for the swap prompt option text. */
+function colorPromptLabel(color: MageColor): string {
+  switch (color) {
+    case 'red':
+      return 'Sorcery (red)';
+    case 'blue':
+      return 'Divinity (blue)';
+    case 'grey':
+      return 'Mysticism (grey)';
+    case 'green':
+      return 'Natural Magick (green)';
+    case 'purple':
+      return 'Planar Studies (purple)';
+    case 'orange':
+      return 'Technomancy (orange)';
+    case 'off-white':
+      return 'Neutral (off-white)';
+    case 'rainbow':
+      return "Archmage's Apprentice";
+  }
+}
+
+/**
+ * Returns the apprentice card id mapped per colour. Wraps the helper
+ * MAGE_CARD_BY_COLOR lookup so the apprentice never appears as a swap
+ * target (`'rainbow'` is filtered out upstream).
+ */
+function cardIdForColor(color: MageColor): string {
+  return MAGE_CARD_BY_COLOR[color];
+}
+
+/**
+ * Swaps a mage's color in place. Decrements the source pool back up
+ * by one, decrements the target pool, and rewrites the mage's color +
+ * cardId on the owning player. Slot occupancy references the mage id,
+ * not its color, so the placement stays put.
+ */
+function applyArchmagesSwap(
+  state: GameState,
+  playerId: PlayerId,
+  mage: OwnedMage,
+  newColor: MageColor,
+): GameStatePatch {
+  const oldColor = mage.color;
+  const pool: Record<MageColor, number> = {
+    ...state.mageDraftPool,
+    [oldColor]: (state.mageDraftPool[oldColor] ?? 0) + 1,
+    [newColor]: (state.mageDraftPool[newColor] ?? 0) - 1,
+  };
+  return {
+    mageDraftPool: pool,
+    players: state.players.map((p) =>
+      p.id !== playerId
+        ? p
+        : {
+            ...p,
+            mages: p.mages.map((m) =>
+              m.id !== mage.id
+                ? m
+                : { ...m, color: newColor, cardId: cardIdForColor(newColor) },
+            ),
+          },
+    ),
+  };
+}
+
+/** Slot 1 (merit, 1 MB): pay 1 Mana → gain the Archmage's Apprentice. */
+registerEffect(
+  'base.room.archmages-study-a.slot-1',
+  (ctx: EffectContext): EffectResult => {
+    // Already claimed by someone else (including the caller): the
+    // Apprentice is a one-of-one. Fizzle silently.
+    if (ctx.state.archmagesApprenticeOwner !== null) {
+      return { kind: 'done', patch: {} };
+    }
+    const player = ctx.state.players.find(
+      (p) => p.id === ctx.triggeringPlayerId,
+    );
+    if (!player || player.resources.mana < 1) {
+      return { kind: 'done', patch: {} };
+    }
+    const seq = ctx.state.nextSequenceId;
+    return {
+      kind: 'done',
+      patch: {
+        nextSequenceId: seq + 1,
+        archmagesApprenticeOwner: ctx.triggeringPlayerId,
+        players: ctx.state.players.map((p) =>
+          p.id !== ctx.triggeringPlayerId
+            ? p
+            : {
+                ...p,
+                resources: { ...p.resources, mana: p.resources.mana - 1 },
+                mages: [
+                  ...p.mages,
+                  {
+                    id: `m-${seq}`,
+                    cardId: ARCHMAGES_APPRENTICE_CARD_ID,
+                    color: 'rainbow' as const,
+                    location: {
+                      kind: 'office' as const,
+                      playerId: ctx.triggeringPlayerId,
+                    },
+                    isShadowing: false,
+                    isWounded: false,
+                  },
+                ],
+              },
+        ),
+      },
+    };
+  },
+);
+
+/**
+ * Shared resolver for slots 2 and 3: applies the up-front bonus
+ * (`bonusPatch`), then opens the colour-swap prompt. The apprentice can
+ * never be swapped; if it's the placed mage the slot just applies the
+ * bonus and finishes.
+ */
+function archmagesStudySwapSlot(
+  ctx: EffectContext,
+  selfEffectId: string,
+  bonusPatch: GameStatePatch,
+): EffectResult {
+  if (!ctx.resumeAnswer) {
+    if (ctx.source.kind !== 'room-action') {
+      return { kind: 'done', patch: bonusPatch };
+    }
+    const mage = findPlacedMageOnSpace(
+      ctx.state,
+      ctx.source.id,
+      ctx.triggeringPlayerId,
+    );
+    // Apprentice is untradeable. Apply the bonus (slot 2) and stop.
+    if (!mage || isArchmagesApprentice(mage)) {
+      return { kind: 'done', patch: bonusPatch };
+    }
+    // After applying the bonus, evaluate swap targets against the
+    // post-bonus state so the prompt sees fresh resources.
+    const afterBonus: GameState = { ...ctx.state, ...bonusPatch };
+    const colours = archmagesStudySwapColours(
+      afterBonus,
+      ctx.triggeringPlayerId,
+      mage.color,
+    );
+    if (colours.length === 0) {
+      return { kind: 'done', patch: bonusPatch };
+    }
+    return {
+      kind: 'pause',
+      patch: bonusPatch,
+      pending: {
+        responderId: ctx.triggeringPlayerId,
+        prompt: {
+          kind: 'choose-from-options',
+          options: colours.map((c) => ({
+            id: c,
+            label: colorPromptLabel(c),
+            payload: {},
+          })),
+        },
+        resume: {
+          effectId: selfEffectId,
+          context: { step: 'after-pick', mageId: mage.id },
+        },
+        source: ctx.source,
+      },
+    };
+  }
+  if (ctx.resumeAnswer.kind !== 'option-chosen') {
+    throw new Error(
+      `${selfEffectId} expected option-chosen, got ${ctx.resumeAnswer.kind}`,
+    );
+  }
+  const mageIdRaw = ctx.resumeContext?.['mageId'];
+  if (typeof mageIdRaw !== 'string') {
+    throw new Error(`${selfEffectId}: missing mageId`);
+  }
+  const owner = ctx.state.players.find((p) => p.id === ctx.triggeringPlayerId);
+  const mage = owner?.mages.find((m) => m.id === mageIdRaw);
+  if (!owner || !mage) return { kind: 'done', patch: {} };
+  if (isArchmagesApprentice(mage)) return { kind: 'done', patch: {} };
+  const newColor = ctx.resumeAnswer.optionId as MageColor;
+  // Re-validate availability — state may have shifted between prompt
+  // and resume (other reactions, etc.).
+  const eligible = archmagesStudySwapColours(
+    ctx.state,
+    ctx.triggeringPlayerId,
+    mage.color,
+  );
+  if (!eligible.includes(newColor)) return { kind: 'done', patch: {} };
+  return {
+    kind: 'done',
+    patch: applyArchmagesSwap(ctx.state, ctx.triggeringPlayerId, mage, newColor),
+  };
+}
+
+/** Slot 2 (regular): gain 1 IP, then swap the placed Mage. */
+registerEffect(
+  'base.room.archmages-study-a.slot-2',
+  (ctx: EffectContext): EffectResult =>
+    archmagesStudySwapSlot(
+      ctx,
+      'base.room.archmages-study-a.slot-2',
+      bumpInfluencePatch(ctx.state, ctx.triggeringPlayerId, 1),
+    ),
+);
+
+/** Slot 3 (regular): swap the placed Mage. No upfront bonus. */
+registerEffect(
+  'base.room.archmages-study-a.slot-3',
+  (ctx: EffectContext): EffectResult =>
+    archmagesStudySwapSlot(
+      ctx,
+      'base.room.archmages-study-a.slot-3',
+      {},
+    ),
+);
+
+// ============================================================================
 // Sorcery Mage — Ars Magna (fast action: spend 1 Mana, wound a Mage, take its slot)
 // ============================================================================
 
@@ -2124,7 +4737,8 @@ registerEffect('base.mage.sorcery.ars-magna', (ctx: EffectContext): EffectResult
     if (!redMage) {
       throw new Error(`Ars Magna: source mage ${sourceMageId} not owned`);
     }
-    if (redMage.color !== 'red') {
+    // The apprentice acts as red and may use Ars Magna.
+    if (!actsAsColor(redMage, 'red')) {
       throw new Error('Ars Magna: source mage must be red (Sorcery)');
     }
     if (redMage.location.kind !== 'office') {
@@ -2250,10 +4864,11 @@ registerEffect('base.mage.sorcery.ars-magna.complete', (ctx: EffectContext): Eff
     if (typeof recipientId !== 'string' || typeof casterId !== 'string') {
       throw new Error('ars-magna.complete after-bonus: missing context fields');
     }
-    const bonusPatch = applyInfirmaryBonusPatch(
+    const bonusPatch = applyInfirmaryBonusFromCtx(
       ctx.state,
       recipientId,
-      ctx.resumeAnswer.optionId,
+      ctx.resumeAnswer,
+      ctx.resumeContext,
     );
     const afterBonus: GameState = { ...ctx.state, ...bonusPatch };
     const placePatch = moveRedMagePatch(
@@ -2276,7 +4891,7 @@ registerEffect('base.mage.sorcery.ars-magna.complete', (ctx: EffectContext): Eff
   if (event && checkInfirmaryBonusApplies(ctx.state, event)) {
     return {
       kind: 'pause',
-      pending: bonusPromptFor(event, ctx.triggeringPlayerId, {
+      pending: bonusPromptFor(ctx.state, event, ctx.triggeringPlayerId, {
         effectId: 'base.mage.sorcery.ars-magna.complete',
         context: {
           step: 'after-bonus',
@@ -3415,6 +6030,28 @@ registerEffect('base.supporter.yinsei-arlington', (ctx): EffectResult => {
 registerEffect('base.system.noop', () => ({ kind: 'done', patch: {} }));
 
 /**
+ * `afterResume` continuation that fires the instant-room reward prompt
+ * (position='shadow') for a slot once a `mage-shadowed` reaction window
+ * closes. No-op when the slot's room isn't an instant room with a
+ * registered effect — used by the Mysticism post-cast trigger when
+ * shadow-placing under Inversion.
+ */
+registerEffect(
+  'base.system.shadow-instant-reward',
+  (ctx): EffectResult => {
+    const spaceId = ctx.resumeContext?.['spaceId'];
+    if (typeof spaceId !== 'string') return { kind: 'done', patch: {} };
+    return patchWithMaybeInstantReward(
+      ctx.state,
+      {},
+      spaceId,
+      ctx.triggeringPlayerId,
+      'shadow',
+    );
+  },
+);
+
+/**
  * Wild-department choice (White Ash) — fires once per White Ash owner
  * during the 'final-scoring' phase, before voters are revealed. The
  * prompt's optionId is the chosen Department. We save the choice on the
@@ -3516,7 +6153,9 @@ registerEffect(
         player?.mages
           .filter(
             (m) =>
-              m.color === 'grey' &&
+              // Apprentice acts as grey (and every department colour),
+              // so the post-cast placement offers it as a candidate too.
+              actsAsColor(m, 'grey') &&
               m.location.kind === 'office' &&
               !m.isWounded,
           )
@@ -3560,6 +6199,24 @@ registerEffect(
         );
       }
       const spaceId = ctx.resumeAnswer.spaceId;
+      // Under a mandatory shadow-on-place buff (Inversion), the grey
+      // mage must shadow-place: write `shadowOccupant` instead of
+      // `occupant`, mark the mage as shadowing, and fire a mage-shadowed
+      // reaction if an opposing mage is at the base. Shadow occupants
+      // never collect the slot's reward, so we skip the instant-reward
+      // prompt for this branch.
+      const mandatoryShadow = findMandatoryShadowBuff(
+        ctx.state,
+        ctx.triggeringPlayerId,
+      );
+      if (mandatoryShadow) {
+        return shadowPlaceMysticismMage(
+          ctx,
+          placerMageId,
+          spaceId,
+          mandatoryShadow,
+        );
+      }
       const placePatch = placeOfficeMageOnSpace(
         ctx.state,
         ctx.triggeringPlayerId,
@@ -3599,6 +6256,130 @@ function listEligiblePlacementSlots(
     }
   }
   return openSlots;
+}
+
+/**
+ * Same gating as `listEligiblePlacementSlots`, but returns slots whose
+ * SHADOW position is open. Used by the Mysticism post-cast trigger when
+ * the caster is under Inversion (mandatory shadow-on-place). Under
+ * Inversion's mandatory mode, shadow placement is legal even when the
+ * base is empty or owned by the caster — only `shadowOccupant` must be
+ * empty.
+ */
+function listEligibleShadowSlots(
+  state: GameState,
+  playerId: string,
+): string[] {
+  const out: string[] = [];
+  for (const r of state.rooms) {
+    if (r.cannotBePlacedInDirectly) continue;
+    if (isRoomLocked(state, r.id)) continue;
+    if (isRoomAtPlayerCap(state, playerId, r.id)) continue;
+    for (const s of r.actionSpaces) {
+      if (!s.shadowOccupant) out.push(s.id);
+    }
+  }
+  return out;
+}
+
+/**
+ * Lookup helper: returns the active mandatory shadow-on-place buff for
+ * `playerId` (Inversion), or null. The optional-mode buff (Zero Hour)
+ * doesn't change the post-cast placement path.
+ */
+function findMandatoryShadowBuff(
+  state: GameState,
+  playerId: PlayerId,
+): ShadowOnPlaceBuff | null {
+  return (
+    state.activeBuffs.find(
+      (b): b is ShadowOnPlaceBuff =>
+        b.kind === 'shadow-on-place' &&
+        b.casterPlayerId === playerId &&
+        b.mode === 'mandatory',
+    ) ?? null
+  );
+}
+
+/**
+ * Shadow-places a grey office mage during the Mysticism post-cast trigger
+ * under Inversion. Mirrors the shadow branch of engine.ts `PLACE_WORKER`:
+ *   - writes the slot's `shadowOccupant`, never `occupant`;
+ *   - marks the mage `isShadowing: true` (via `placeOfficeMageAsShadow`);
+ *   - if an opposing mage sits at the base, opens a `mage-shadowed`
+ *     reaction window; the instant-room reward (if any) fires via the
+ *     `shadow-instant-reward` afterResume once the window closes;
+ *   - otherwise routes through `patchWithMaybeInstantReward` so empty-
+ *     base shadow placements at instant rooms still get the reward
+ *     prompt.
+ */
+function shadowPlaceMysticismMage(
+  ctx: EffectContext,
+  placerMageId: string,
+  spaceId: string,
+  buff: ShadowOnPlaceBuff,
+): EffectResult {
+  const room = ctx.state.rooms.find((r) =>
+    r.actionSpaces.some((s) => s.id === spaceId),
+  );
+  const space = room?.actionSpaces.find((s) => s.id === spaceId);
+  if (!room || !space) {
+    throw new Error(
+      `mysticism-place-after-cast apply: space ${spaceId} not found`,
+    );
+  }
+  const playerId = ctx.triggeringPlayerId;
+  const placePatch = placeOfficeMageAsShadow(
+    ctx.state,
+    playerId,
+    placerMageId,
+    spaceId,
+  );
+  const baseOccupant = space.occupant;
+  // No reaction window when the base is empty or already same-owner.
+  // Fall through to the shared instant-reward helper. (The placePatch
+  // from `placeOfficeMageAsShadow` already bakes in the Adventuring B
+  // on-place pick prompt push when applicable.)
+  if (!baseOccupant || baseOccupant.ownerId === playerId) {
+    return patchWithMaybeInstantReward(
+      ctx.state,
+      placePatch,
+      spaceId,
+      playerId,
+      'shadow',
+    );
+  }
+  // Opposing base — fire mage-shadowed, then chain the instant-room
+  // reward (if any) via the afterResume continuation.
+  const placed: GameState = { ...ctx.state, ...placePatch };
+  const source: ResolutionSource = {
+    kind: 'spell',
+    id: buff.spellCardId,
+    triggeringPlayerId: playerId,
+    description: buff.label,
+  };
+  return {
+    kind: 'open-reaction',
+    patch: placePatch,
+    window: {
+      triggerEvents: [
+        {
+          kind: 'mage-shadowed',
+          mageId: baseOccupant.mageId,
+          ownerId: baseOccupant.ownerId,
+          byPlayerId: playerId,
+          spaceId: space.id,
+        },
+      ],
+      pendingResponderIds: buildReactionQueue(placed, playerId),
+      reactedPlayerIds: [],
+      afterResume: {
+        effectId: 'base.system.shadow-instant-reward',
+        context: { spaceId },
+      },
+      source,
+    },
+  };
 }
 
 /**
@@ -3703,10 +6484,16 @@ function openSlotPrompt(
   ctx: EffectContext,
   placerMageId: string,
 ): EffectResult {
-  const openSlots = listEligiblePlacementSlots(
+  // Under Inversion (mandatory shadow-on-place), the grey mage must
+  // shadow-place. The slot picker offers shadow-eligible slots; the
+  // `apply` step routes through `shadowPlaceMysticismMage`.
+  const mandatoryShadow = findMandatoryShadowBuff(
     ctx.state,
     ctx.triggeringPlayerId,
   );
+  const openSlots = mandatoryShadow
+    ? listEligibleShadowSlots(ctx.state, ctx.triggeringPlayerId)
+    : listEligiblePlacementSlots(ctx.state, ctx.triggeringPlayerId);
   if (openSlots.length === 0) return { kind: 'done', patch: {} };
   return {
     kind: 'pause',
@@ -4739,7 +7526,7 @@ function woundAndPlaceEffect(opts: {
       ) {
         return {
           kind: 'pause',
-          pending: bonusPromptFor(event, ctx.triggeringPlayerId, {
+          pending: bonusPromptFor(ctx.state, event, ctx.triggeringPlayerId, {
             effectId: selfEffectId,
             context: {
               step: 'after-bonus',
@@ -4828,10 +7615,11 @@ function woundAndPlaceEffect(opts: {
       if (typeof recipientId !== 'string' || typeof slotId !== 'string') {
         throw new Error(`${selfEffectId} after-bonus: missing context fields`);
       }
-      const bonusPatch = applyInfirmaryBonusPatch(
+      const bonusPatch = applyInfirmaryBonusFromCtx(
         ctx.state,
         recipientId,
-        ctx.resumeAnswer.optionId,
+        ctx.resumeAnswer,
+        ctx.resumeContext,
       );
       const afterBonus: GameState = { ...ctx.state, ...bonusPatch };
       return tryPlaceForWoundPlace(ctx, selfEffectId, slotId, afterBonus);
@@ -5156,7 +7944,7 @@ function placeOfficeMageOnSpace(
   if (mage.location.kind !== 'office') {
     throw new Error('placeOfficeMageOnSpace: mage not in office');
   }
-  return {
+  const placePatch: GameStatePatch = {
     players: state.players.map((p) =>
       p.id !== playerId
         ? p
@@ -5185,6 +7973,14 @@ function placeOfficeMageOnSpace(
       ),
     })),
   };
+  return {
+    ...placePatch,
+    ...adventuringBPlacementHookPatch(
+      state,
+      spaceId as ActionSpaceId,
+      playerId,
+    ),
+  };
 }
 
 function drawTopOfVaultDeck(
@@ -5204,6 +8000,52 @@ function drawTopOfVaultDeck(
             vaultCards: [
               ...p.vaultCards,
               ...taken.map((cardId) => ({ cardId, exhausted: false })),
+            ],
+          },
+    ),
+  };
+}
+
+/**
+ * "Draw a Spell Card" — pulls the top of the spell deck into the player's
+ * spellbook and spends 1 INT to learn it (`intPlaced: true`), mirroring
+ * Adventuring B's draft INT cost. Returns an empty patch when the deck
+ * is empty. Throws if the player has no spare INT — callers should gate
+ * the option behind an availability check so the prompt UI grays it out
+ * before the engine has to defend itself.
+ */
+function drawAndLearnTopOfSpellDeck(
+  state: GameState,
+  playerId: PlayerId,
+): GameStatePatch {
+  const top = state.spellDeck[0];
+  if (top === undefined) return {};
+  const player = state.players.find((p) => p.id === playerId);
+  if (!player || player.resources.intelligence < 1) {
+    throw new Error(
+      'drawAndLearnTopOfSpellDeck: requires 1 INT to learn the spell',
+    );
+  }
+  return {
+    spellDeck: state.spellDeck.slice(1),
+    players: state.players.map((p) =>
+      p.id !== playerId
+        ? p
+        : {
+            ...p,
+            resources: {
+              ...p.resources,
+              intelligence: p.resources.intelligence - 1,
+            },
+            ownedSpells: [
+              ...p.ownedSpells,
+              {
+                cardId: top,
+                intPlaced: true,
+                wisPlacedLevel2: false,
+                wisPlacedLevel3: false,
+                exhausted: false,
+              },
             ],
           },
     ),
@@ -5293,7 +8135,7 @@ function manaRepeatLoop(
     if (event && checkInfirmaryBonusApplies(ctx.state, event)) {
       return {
         kind: 'pause',
-        pending: bonusPromptFor(event, ctx.triggeringPlayerId, {
+        pending: bonusPromptFor(ctx.state, event, ctx.triggeringPlayerId, {
           effectId: selfEffectId,
           context: {
             step: 'after-bonus',
@@ -5313,10 +8155,11 @@ function manaRepeatLoop(
     if (typeof recipientId !== 'string') {
       throw new Error(`${selfEffectId} after-bonus: missing recipientPlayerId`);
     }
-    const bonusPatch = applyInfirmaryBonusPatch(
+    const bonusPatch = applyInfirmaryBonusFromCtx(
       ctx.state,
       recipientId,
-      ctx.resumeAnswer.optionId,
+      ctx.resumeAnswer,
+      ctx.resumeContext,
     );
     const afterBonus: GameState = { ...ctx.state, ...bonusPatch };
     return askManaRepeat(
@@ -6537,7 +9380,7 @@ registerEffect('base.spell.lightning-and-you.l2', (ctx): EffectResult => {
     if (event && checkInfirmaryBonusApplies(ctx.state, event)) {
       return {
         kind: 'pause',
-        pending: bonusPromptFor(event, ctx.triggeringPlayerId, {
+        pending: bonusPromptFor(ctx.state, event, ctx.triggeringPlayerId, {
           effectId: self,
           context: { step: 'after-bonus', recipientPlayerId: event.ownerId },
         }),
@@ -6611,10 +9454,11 @@ registerEffect('base.spell.lightning-and-you.l2', (ctx): EffectResult => {
     if (typeof recipientId !== 'string') {
       throw new Error('lightning.l2 after-bonus: missing recipientPlayerId');
     }
-    const bonusPatch = applyInfirmaryBonusPatch(
+    const bonusPatch = applyInfirmaryBonusFromCtx(
       ctx.state,
       recipientId,
-      ctx.resumeAnswer.optionId,
+      ctx.resumeAnswer,
+      ctx.resumeContext,
     );
     const afterBonus: GameState = { ...ctx.state, ...bonusPatch };
     const placerPrompt = placeAnyOfficeMagePrompt(
@@ -6703,7 +9547,7 @@ registerEffect('base.spell.a-brighter-flame.l3', (ctx): EffectResult => {
     if (event && checkInfirmaryBonusApplies(ctx.state, event)) {
       return {
         kind: 'pause',
-        pending: bonusPromptFor(event, ctx.triggeringPlayerId, {
+        pending: bonusPromptFor(ctx.state, event, ctx.triggeringPlayerId, {
           effectId: self,
           context: {
             step: 'after-bonus',
@@ -6838,10 +9682,11 @@ registerEffect('base.spell.a-brighter-flame.l3', (ctx): EffectResult => {
     ) {
       throw new Error('immolation after-bonus: missing context fields');
     }
-    const bonusPatch = applyInfirmaryBonusPatch(
+    const bonusPatch = applyInfirmaryBonusFromCtx(
       ctx.state,
       recipientId,
-      ctx.resumeAnswer.optionId,
+      ctx.resumeAnswer,
+      ctx.resumeContext,
     );
     const afterBonus: GameState = { ...ctx.state, ...bonusPatch };
     return immolationFinalPlace(ctx, placerMageId, targetSpaceId, afterBonus);
@@ -7214,10 +10059,12 @@ registerEffect('base.spell.rites-of-renewal.l1', (ctx): EffectResult => {
   if (remaining.length === 0) {
     if (working === ctx.state) return { kind: 'done', patch: {} };
     // We've applied a prior heal patch; return done with the accumulated patch.
+    // Include `rooms` if any heals released Infirmary B buffed slots.
     return {
       kind: 'done',
       patch: {
         players: working.players,
+        ...(working.rooms !== ctx.state.rooms ? { rooms: working.rooms } : {}),
       },
     };
   }
@@ -7241,7 +10088,10 @@ registerEffect('base.spell.rites-of-renewal.l1', (ctx): EffectResult => {
   }
   return {
     kind: 'pause',
-    patch: { players: working.players },
+    patch: {
+      players: working.players,
+      ...(working.rooms !== ctx.state.rooms ? { rooms: working.rooms } : {}),
+    },
     pending,
   };
 });
@@ -7258,7 +10108,16 @@ registerEffect('base.spell.rites-of-renewal.l2', (ctx): EffectResult => {
   for (const mid of woundedOwnIds) {
     working = { ...working, ...returnMageToOfficePatch(working, mid) };
   }
-  return { kind: 'done', patch: { players: working.players } };
+  // Forward `rooms` too: `returnMageToOfficePatch` may release Infirmary B
+  // buffed slots, and dropping that diff leaves the slot stuck "occupied"
+  // even though the mage is no longer wounded.
+  return {
+    kind: 'done',
+    patch: {
+      players: working.players,
+      ...(working.rooms !== ctx.state.rooms ? { rooms: working.rooms } : {}),
+    },
+  };
 });
 
 /**
@@ -7281,9 +10140,13 @@ registerEffect('base.spell.rites-of-renewal.l3', (ctx): EffectResult => {
     if (owner && owner.id !== ctx.triggeringPlayerId) healedOpponent = true;
     working = { ...working, ...returnMageToOfficePatch(working, mid) };
   }
+  // Forward `rooms` too so Infirmary B buffed slots vacated by any of the
+  // chained heals actually clear in the engine state.
+  const roomsPatch =
+    working.rooms !== ctx.state.rooms ? { rooms: working.rooms } : {};
   const players = working.players;
   if (!healedOpponent) {
-    return { kind: 'done', patch: { players } };
+    return { kind: 'done', patch: { players, ...roomsPatch } };
   }
   // +2 IP for returning at least one opponent's mage.
   const stateWithHeals: GameState = { ...ctx.state, players };
@@ -7292,7 +10155,7 @@ registerEffect('base.spell.rites-of-renewal.l3', (ctx): EffectResult => {
     ctx.triggeringPlayerId,
     2,
   );
-  return { kind: 'done', patch: { ...ipPatch } };
+  return { kind: 'done', patch: { ...ipPatch, ...roomsPatch } };
 });
 
 // ============================================================================
@@ -7879,10 +10742,11 @@ registerEffect('base.system.batch-post-wound-bonus', (ctx): EffectResult => {
     if (typeof recipientId !== 'string') {
       throw new Error('batch-post-wound-bonus: missing recipientPlayerId on resume');
     }
-    const patch = applyInfirmaryBonusPatch(
+    const patch = applyInfirmaryBonusFromCtx(
       ctx.state,
       recipientId,
-      ctx.resumeAnswer.optionId,
+      ctx.resumeAnswer,
+      ctx.resumeContext,
     );
     workingState = { ...ctx.state, ...patch };
     nextIndex = startIndex + 1;
@@ -7903,7 +10767,7 @@ registerEffect('base.system.batch-post-wound-bonus', (ctx): EffectResult => {
       return {
         kind: 'pause',
         ...(accumulatedPatch ? { patch: accumulatedPatch } : {}),
-        pending: bonusPromptFor(event, ctx.triggeringPlayerId, {
+        pending: bonusPromptFor(ctx.state, event, ctx.triggeringPlayerId, {
           effectId: 'base.system.batch-post-wound-bonus',
           context: {
             events: eventsArrayToContext(events),
@@ -9679,7 +12543,7 @@ registerEffect('base.spell.wrath-of-heaven.l1.react', (ctx): EffectResult => {
       return {
         kind: 'pause',
         patch: wounded.patch,
-        pending: bonusPromptFor(wounded.triggerEvent, ctx.triggeringPlayerId),
+        pending: bonusPromptFor(ctx.state, wounded.triggerEvent, ctx.triggeringPlayerId),
       };
     }
     return { kind: 'done', patch: wounded.patch };
@@ -11276,14 +14140,37 @@ type IceCometPicks = {
   banishMageId?: string;
   moveMageId?: string;
   moveDestSpaceId?: string;
+  /**
+   * Reaction-trigger events accumulated across the walk. Each step that
+   * actually applies an effect (wound / banish / move-dest) appends its
+   * event here. The final reaction window fires with this list at the end.
+   */
+  events?: ReactionTriggerEvent[];
 };
 
+/**
+ * Walks the Ice Comet pick sequence. Effects are applied step-by-step:
+ *   - When the wound step resolves with a target, `woundMage` patches the
+ *     state immediately (mage moves to infirmary, slot empties) and the
+ *     event is appended to `picks.events`.
+ *   - When the banish step resolves with a target, `banishMage` patches
+ *     the state (mage returns to office, slot empties).
+ *   - When the move-dest step resolves, `moveMageToSpace` patches the
+ *     state.
+ *
+ * So by the time the move-source / move-dest prompts open, the board
+ * already reflects the wound + banish — vacated slots are available as
+ * move destinations. The walk carries `patchSoFar` so the engine sees
+ * the updated state when the next prompt is pushed; subsequent resume
+ * steps receive the post-patch state via `ctx.state`.
+ */
 function iceCometWalk(
   ctx: EffectContext,
   self: string,
   picks: IceCometPicks,
+  patchSoFar: GameStatePatch = {},
 ): EffectResult {
-  // Wound pick.
+  // Wound pick — optional.
   if (picks.woundMageId === undefined) {
     const targets = buildWoundableMagesInRoom(
       ctx.state,
@@ -11291,13 +14178,24 @@ function iceCometWalk(
       picks.roomId,
     );
     if (targets.length === 0) {
-      return iceCometWalk(ctx, self, { ...picks, woundMageId: ICE_COMET_SKIP });
+      return iceCometWalk(
+        ctx,
+        self,
+        { ...picks, woundMageId: ICE_COMET_SKIP },
+        patchSoFar,
+      );
     }
     return {
       kind: 'pause',
+      patch: patchSoFar,
       pending: {
         responderId: ctx.triggeringPlayerId,
-        prompt: { kind: 'choose-target-mage', eligibleMageIds: targets },
+        prompt: {
+          kind: 'choose-target-mage',
+          eligibleMageIds: targets,
+          canPass: true,
+          label: 'Choose a Mage to wound (or pass)',
+        },
         resume: {
           effectId: self,
           context: { step: 'wound-chosen', picks: picksToContext(picks) },
@@ -11306,24 +14204,34 @@ function iceCometWalk(
       },
     };
   }
-  // Banish pick (exclude wound target).
+  // Banish pick — optional. The wounded mage is now in the infirmary so
+  // it's already excluded from `buildBanishableMagesInRoom`; no extra
+  // exclusion filter needed.
   if (picks.banishMageId === undefined) {
     const targets = buildBanishableMagesInRoom(
       ctx.state,
       ctx.triggeringPlayerId,
       picks.roomId,
-    ).filter((id) => id !== picks.woundMageId);
+    );
     if (targets.length === 0) {
-      return iceCometWalk(ctx, self, {
-        ...picks,
-        banishMageId: ICE_COMET_SKIP,
-      });
+      return iceCometWalk(
+        ctx,
+        self,
+        { ...picks, banishMageId: ICE_COMET_SKIP },
+        patchSoFar,
+      );
     }
     return {
       kind: 'pause',
+      patch: patchSoFar,
       pending: {
         responderId: ctx.triggeringPlayerId,
-        prompt: { kind: 'choose-target-mage', eligibleMageIds: targets },
+        prompt: {
+          kind: 'choose-target-mage',
+          eligibleMageIds: targets,
+          canPass: true,
+          label: 'Choose a Mage to banish (or pass)',
+        },
         resume: {
           effectId: self,
           context: { step: 'banish-chosen', picks: picksToContext(picks) },
@@ -11332,34 +14240,45 @@ function iceCometWalk(
       },
     };
   }
-  // Move source (exclude wound + banish targets); need ≥1 open dest in room.
+  // Move source — optional. Wound + banish patches are already applied,
+  // so wounded/banished mages aren't in the room. Move source needs ≥1
+  // open dest (other than its own slot); openBaseSlotsInRoom now includes
+  // vacated slots from prior steps.
   if (picks.moveMageId === undefined) {
     const candidates = buildMovableMagesInRoom(
       ctx.state,
       ctx.triggeringPlayerId,
       picks.roomId,
-    ).filter(
-      (id) => id !== picks.woundMageId && id !== picks.banishMageId,
     );
     const opens = openBaseSlotsInRoom(ctx.state, picks.roomId);
-    // Each source needs an open dest that ISN'T its own current slot.
     const sources = candidates.filter((mid) => {
       const pos = findMageSlotPosition(ctx.state, mid);
       const otherOpens = opens.filter((sid) => pos?.spaceId !== sid);
       return otherOpens.length > 0;
     });
     if (sources.length === 0) {
-      return iceCometWalk(ctx, self, {
-        ...picks,
-        moveMageId: ICE_COMET_SKIP,
-        moveDestSpaceId: ICE_COMET_SKIP,
-      });
+      return iceCometWalk(
+        ctx,
+        self,
+        {
+          ...picks,
+          moveMageId: ICE_COMET_SKIP,
+          moveDestSpaceId: ICE_COMET_SKIP,
+        },
+        patchSoFar,
+      );
     }
     return {
       kind: 'pause',
+      patch: patchSoFar,
       pending: {
         responderId: ctx.triggeringPlayerId,
-        prompt: { kind: 'choose-target-mage', eligibleMageIds: sources },
+        prompt: {
+          kind: 'choose-target-mage',
+          eligibleMageIds: sources,
+          canPass: true,
+          label: 'Choose a Mage to move (or pass)',
+        },
         resume: {
           effectId: self,
           context: {
@@ -11371,13 +14290,15 @@ function iceCometWalk(
       },
     };
   }
-  // Move dest.
+  // Move dest (mandatory once a source is picked).
   if (picks.moveDestSpaceId === undefined) {
     if (picks.moveMageId === ICE_COMET_SKIP) {
-      return iceCometWalk(ctx, self, {
-        ...picks,
-        moveDestSpaceId: ICE_COMET_SKIP,
-      });
+      return iceCometWalk(
+        ctx,
+        self,
+        { ...picks, moveDestSpaceId: ICE_COMET_SKIP },
+        patchSoFar,
+      );
     }
     const pos = findMageSlotPosition(
       ctx.state,
@@ -11387,19 +14308,26 @@ function iceCometWalk(
       (sid) => pos?.spaceId !== sid,
     );
     if (dests.length === 0) {
-      return iceCometWalk(ctx, self, {
-        ...picks,
-        moveMageId: ICE_COMET_SKIP,
-        moveDestSpaceId: ICE_COMET_SKIP,
-      });
+      return iceCometWalk(
+        ctx,
+        self,
+        {
+          ...picks,
+          moveMageId: ICE_COMET_SKIP,
+          moveDestSpaceId: ICE_COMET_SKIP,
+        },
+        patchSoFar,
+      );
     }
     return {
       kind: 'pause',
+      patch: patchSoFar,
       pending: {
         responderId: ctx.triggeringPlayerId,
         prompt: {
           kind: 'choose-target-action-space',
           eligibleSpaceIds: dests,
+          label: 'Choose the destination slot',
         },
         resume: {
           effectId: self,
@@ -11409,7 +14337,7 @@ function iceCometWalk(
       },
     };
   }
-  return iceCometFinalize(ctx, picks);
+  return iceCometFinalize(ctx, picks, patchSoFar);
 }
 
 function picksToContext(picks: IceCometPicks): SerializableContext {
@@ -11419,6 +14347,9 @@ function picksToContext(picks: IceCometPicks): SerializableContext {
   if (picks.moveMageId !== undefined) out['moveMageId'] = picks.moveMageId;
   if (picks.moveDestSpaceId !== undefined)
     out['moveDestSpaceId'] = picks.moveDestSpaceId;
+  if (picks.events !== undefined && picks.events.length > 0) {
+    out['events'] = eventsArrayToContext(picks.events);
+  }
   return out;
 }
 
@@ -11429,55 +14360,33 @@ function picksFromContext(ctx: EffectContext): IceCometPicks {
   if (typeof raw['banishMageId'] === 'string') out.banishMageId = raw['banishMageId'];
   if (typeof raw['moveMageId'] === 'string') out.moveMageId = raw['moveMageId'];
   if (typeof raw['moveDestSpaceId'] === 'string') out.moveDestSpaceId = raw['moveDestSpaceId'];
+  if (Array.isArray(raw['events'])) {
+    out.events = raw['events'] as unknown as ReactionTriggerEvent[];
+  }
   return out;
 }
 
+/**
+ * Opens the single combined reaction window for any events accumulated
+ * across the walk. By this point the wound / banish / move patches are
+ * already merged into `ctx.state` (and any not-yet-emitted patch lives
+ * in `patchSoFar`). Fizzles silently when nothing actually fired.
+ */
 function iceCometFinalize(
   ctx: EffectContext,
   picks: IceCometPicks,
+  patchSoFar: GameStatePatch,
 ): EffectResult {
-  let working = ctx.state;
-  const events: ReactionTriggerEvent[] = [];
+  const events = picks.events ?? [];
+  if (events.length === 0) {
+    return { kind: 'done', patch: patchSoFar };
+  }
   const byPlayerId = ctx.triggeringPlayerId;
-
-  if (picks.woundMageId && picks.woundMageId !== ICE_COMET_SKIP) {
-    const w = woundMage(working, picks.woundMageId, byPlayerId);
-    working = { ...working, ...w.patch };
-    events.push(w.triggerEvent);
-  }
-  if (picks.banishMageId && picks.banishMageId !== ICE_COMET_SKIP) {
-    const b = banishMage(working, picks.banishMageId, byPlayerId);
-    working = { ...working, ...b.patch };
-    events.push(b.triggerEvent);
-  }
-  if (
-    picks.moveMageId &&
-    picks.moveMageId !== ICE_COMET_SKIP &&
-    picks.moveDestSpaceId &&
-    picks.moveDestSpaceId !== ICE_COMET_SKIP
-  ) {
-    const m = moveMageToSpace(
-      working,
-      picks.moveMageId,
-      picks.moveDestSpaceId,
-      byPlayerId,
-    );
-    working = { ...working, ...m.patch };
-    events.push(m.triggerEvent);
-  }
-
-  if (events.length === 0) return { kind: 'done', patch: {} };
-
-  const patch: GameStatePatch = {
-    players: working.players,
-    rooms: working.rooms,
-  };
   const reactorQueue = buildBatchReactorQueue(ctx.state, byPlayerId, events);
   const orderedEvents = orderEventsByTurn(ctx.state, byPlayerId, events);
-
   return {
     kind: 'open-reaction',
-    patch,
+    patch: patchSoFar,
     window: {
       triggerEvents: events,
       pendingResponderIds: reactorQueue,
@@ -11550,40 +14459,99 @@ registerEffect(
     const picks = picksFromContext(ctx);
 
     if (step === 'wound-chosen') {
-      if (ctx.resumeAnswer.kind !== 'mage-chosen') {
-        throw new Error(`${self} wound-chosen expected mage-chosen`);
+      const ans = ctx.resumeAnswer;
+      if (ans.kind === 'pass') {
+        return iceCometWalk(ctx, self, {
+          ...picks,
+          woundMageId: ICE_COMET_SKIP,
+        });
       }
-      return iceCometWalk(ctx, self, {
-        ...picks,
-        woundMageId: ctx.resumeAnswer.mageId,
-      });
+      if (ans.kind !== 'mage-chosen') {
+        throw new Error(`${self} wound-chosen expected mage-chosen or pass`);
+      }
+      // Apply the wound NOW so the banish + move prompts see the
+      // post-wound board (mage in infirmary, slot empty).
+      const w = woundMage(ctx.state, ans.mageId, ctx.triggeringPlayerId);
+      const newCtx: EffectContext = { ...ctx, state: { ...ctx.state, ...w.patch } };
+      return iceCometWalk(
+        newCtx,
+        self,
+        {
+          ...picks,
+          woundMageId: ans.mageId,
+          events: [...(picks.events ?? []), w.triggerEvent],
+        },
+        w.patch,
+      );
     }
     if (step === 'banish-chosen') {
-      if (ctx.resumeAnswer.kind !== 'mage-chosen') {
-        throw new Error(`${self} banish-chosen expected mage-chosen`);
+      const ans = ctx.resumeAnswer;
+      if (ans.kind === 'pass') {
+        return iceCometWalk(ctx, self, {
+          ...picks,
+          banishMageId: ICE_COMET_SKIP,
+        });
       }
-      return iceCometWalk(ctx, self, {
-        ...picks,
-        banishMageId: ctx.resumeAnswer.mageId,
-      });
+      if (ans.kind !== 'mage-chosen') {
+        throw new Error(`${self} banish-chosen expected mage-chosen or pass`);
+      }
+      // Apply the banish NOW so the move prompts see the freed slot.
+      const b = banishMage(ctx.state, ans.mageId, ctx.triggeringPlayerId);
+      const newCtx: EffectContext = { ...ctx, state: { ...ctx.state, ...b.patch } };
+      return iceCometWalk(
+        newCtx,
+        self,
+        {
+          ...picks,
+          banishMageId: ans.mageId,
+          events: [...(picks.events ?? []), b.triggerEvent],
+        },
+        b.patch,
+      );
     }
     if (step === 'move-source-chosen') {
-      if (ctx.resumeAnswer.kind !== 'mage-chosen') {
-        throw new Error(`${self} move-source-chosen expected mage-chosen`);
+      const ans = ctx.resumeAnswer;
+      if (ans.kind === 'pass') {
+        // Pass on move = skip both source and dest.
+        return iceCometWalk(ctx, self, {
+          ...picks,
+          moveMageId: ICE_COMET_SKIP,
+          moveDestSpaceId: ICE_COMET_SKIP,
+        });
       }
+      if (ans.kind !== 'mage-chosen') {
+        throw new Error(`${self} move-source-chosen expected mage-chosen or pass`);
+      }
+      // No patch yet — source just records the choice; the move applies
+      // once the dest is also picked.
       return iceCometWalk(ctx, self, {
         ...picks,
-        moveMageId: ctx.resumeAnswer.mageId,
+        moveMageId: ans.mageId,
       });
     }
     if (step === 'move-dest-chosen') {
       if (ctx.resumeAnswer.kind !== 'space-chosen') {
         throw new Error(`${self} move-dest-chosen expected space-chosen`);
       }
-      return iceCometWalk(ctx, self, {
-        ...picks,
-        moveDestSpaceId: ctx.resumeAnswer.spaceId,
-      });
+      // Apply the move NOW; the final reaction window then fires with
+      // all accumulated events.
+      const m = moveMageToSpace(
+        ctx.state,
+        picks.moveMageId!,
+        ctx.resumeAnswer.spaceId,
+        ctx.triggeringPlayerId,
+      );
+      const newCtx: EffectContext = { ...ctx, state: { ...ctx.state, ...m.patch } };
+      return iceCometWalk(
+        newCtx,
+        self,
+        {
+          ...picks,
+          moveDestSpaceId: ctx.resumeAnswer.spaceId,
+          events: [...(picks.events ?? []), m.triggerEvent],
+        },
+        m.patch,
+      );
     }
     throw new Error(`${self}: unexpected step ${String(step)}`);
   },
@@ -12087,7 +15055,8 @@ function buildPossessionTargets(
   for (const p of state.players) {
     for (const m of p.mages) {
       if (m.location.kind !== 'action-space') continue;
-      if (m.color === 'blue' && p.id !== casterId) continue;
+      // Opposing-blue spell-immunity (also picks up the apprentice).
+      if (actsAsColor(m, 'blue') && p.id !== casterId) continue;
       if (m.id === excludeMageId) continue;
       out.push(m.id);
     }
@@ -13348,6 +16317,9 @@ type CastAnotherCandidate = {
   level: 1 | 2 | 3;
   manaCost: number;
   effectId: string;
+  /** Borrowed cast's timing — action-timed borrows queue their own
+   *  Mysticism post-cast trigger (in addition to the outer spell's). */
+  timing: 'action' | 'fast-action';
   label: string;
 };
 
@@ -13379,6 +16351,7 @@ function listCastAnotherCandidates(
         level: lvl,
         manaCost: lvlDef.manaCost,
         effectId: lvlDef.effectId,
+        timing: lvlDef.timing,
         label: `${def.name} L${lvl} "${lvlDef.title}" (${lvlDef.manaCost} Mana)`,
       });
     }
@@ -13436,8 +16409,15 @@ registerEffect(
         excludeSpellId,
       ).find((c) => c.spellCardId === chosenSpellId && c.level === level);
       if (!candidate) return { kind: 'done', patch: {} };
+      // Borrowed action-timed casts queue their own Mysticism post-cast
+      // trigger (in addition to whatever the outer spell already queued).
+      const mysticismQueue =
+        candidate.timing === 'action'
+          ? [...ctx.state.pendingMysticismPostCast, ctx.triggeringPlayerId]
+          : ctx.state.pendingMysticismPostCast;
       const paidState: GameState = {
         ...ctx.state,
+        pendingMysticismPostCast: mysticismQueue,
         players: ctx.state.players.map((p) =>
           p.id !== ctx.triggeringPlayerId
             ? p
@@ -13461,7 +16441,10 @@ registerEffect(
         triggeringPlayerId: ctx.triggeringPlayerId,
         allowReactions: ctx.allowReactions,
       });
-      return composeWithDelegate(delegate, { players: paidState.players });
+      return composeWithDelegate(delegate, {
+        players: paidState.players,
+        pendingMysticismPostCast: paidState.pendingMysticismPostCast,
+      });
     }
 
     throw new Error(`${self} unexpected step ${String(step)}`);
@@ -13577,8 +16560,18 @@ registerEffect(
           patch: { pendingPlaceChain: baseChainState.pendingPlaceChain },
         };
       }
+      // Borrowed action-timed casts get their own Mysticism post-cast
+      // trigger queued in addition to Mystic Link's own.
+      const mysticismQueue =
+        candidate.timing === 'action'
+          ? [
+              ...baseChainState.pendingMysticismPostCast,
+              ctx.triggeringPlayerId,
+            ]
+          : baseChainState.pendingMysticismPostCast;
       const paidState: GameState = {
         ...baseChainState,
+        pendingMysticismPostCast: mysticismQueue,
         players: baseChainState.players.map((p) =>
           p.id !== ctx.triggeringPlayerId
             ? p
@@ -13605,6 +16598,7 @@ registerEffect(
       return composeWithDelegate(delegate, {
         players: paidState.players,
         pendingPlaceChain: paidState.pendingPlaceChain,
+        pendingMysticismPostCast: paidState.pendingMysticismPostCast,
       });
     }
 
@@ -13634,7 +16628,7 @@ registerEffect('base.spell.lightning-and-you.l3', (ctx): EffectResult => {
     if (event && checkInfirmaryBonusApplies(ctx.state, event)) {
       return {
         kind: 'pause',
-        pending: bonusPromptFor(event, ctx.triggeringPlayerId, {
+        pending: bonusPromptFor(ctx.state, event, ctx.triggeringPlayerId, {
           effectId: self,
           context: { step: 'after-bonus', recipientPlayerId: event.ownerId },
         }),
@@ -13710,10 +16704,11 @@ registerEffect('base.spell.lightning-and-you.l3', (ctx): EffectResult => {
     if (typeof recipientId !== 'string') {
       throw new Error(`${self} after-bonus: missing recipientPlayerId`);
     }
-    const bonusPatch = applyInfirmaryBonusPatch(
+    const bonusPatch = applyInfirmaryBonusFromCtx(
       ctx.state,
       recipientId,
-      ctx.resumeAnswer.optionId,
+      ctx.resumeAnswer,
+      ctx.resumeContext,
     );
     const afterBonus: GameState = { ...ctx.state, ...bonusPatch };
     const placerPrompt = placeAnyOfficeMagePrompt(
@@ -13801,8 +16796,13 @@ registerEffect('base.spell.lightning-and-you.l3', (ctx): EffectResult => {
       'base.spell.lightning-and-you',
     ).find((c) => c.spellCardId === chosenSpellId && c.level === level);
     if (!candidate) return { kind: 'done', patch: {} };
+    const mysticismQueue =
+      candidate.timing === 'action'
+        ? [...ctx.state.pendingMysticismPostCast, ctx.triggeringPlayerId]
+        : ctx.state.pendingMysticismPostCast;
     const paidState: GameState = {
       ...ctx.state,
+      pendingMysticismPostCast: mysticismQueue,
       players: ctx.state.players.map((p) =>
         p.id !== ctx.triggeringPlayerId
           ? p
@@ -13826,7 +16826,10 @@ registerEffect('base.spell.lightning-and-you.l3', (ctx): EffectResult => {
       triggeringPlayerId: ctx.triggeringPlayerId,
       allowReactions: ctx.allowReactions,
     });
-    return composeWithDelegate(delegate, { players: paidState.players });
+    return composeWithDelegate(delegate, {
+      players: paidState.players,
+      pendingMysticismPostCast: paidState.pendingMysticismPostCast,
+    });
   }
 
   throw new Error(`${self} unexpected step ${String(step)}`);
@@ -13891,7 +16894,8 @@ function listCutPlaneTargets(
       if (s.shadowOccupant) continue;
       const owner = state.players.find((p) => p.id === s.occupant!.ownerId);
       const mage = owner?.mages.find((m) => m.id === s.occupant!.mageId);
-      if (!mage || mage.color === 'blue') continue;
+      // Opposing-blue (and apprentice acting as blue) spell-immunity.
+      if (!mage || actsAsColor(mage, 'blue')) continue;
       out.push({
         mageId: s.occupant.mageId,
         spaceId: s.id,
@@ -14037,8 +17041,8 @@ function listFadeRooms(state: GameState, casterId: string): string[] {
       const owner = state.players.find((p) => p.id === s.occupant!.ownerId);
       const mage = owner?.mages.find((m) => m.id === s.occupant!.mageId);
       if (!mage) continue;
-      // Opposing blue is spell-immune.
-      if (mage.color === 'blue' && s.occupant.ownerId !== casterId) continue;
+      // Opposing blue is spell-immune (apprentice acts as blue too).
+      if (actsAsColor(mage, 'blue') && s.occupant.ownerId !== casterId) continue;
       eligibleInRoom++;
     }
     if (eligibleInRoom > 0) out.push(r.id);
@@ -14060,7 +17064,8 @@ function listFadeCandidates(
     const owner = state.players.find((p) => p.id === s.occupant!.ownerId);
     const mage = owner?.mages.find((m) => m.id === s.occupant!.mageId);
     if (!mage) continue;
-    if (mage.color === 'blue' && s.occupant.ownerId !== casterId) continue;
+    // Opposing blue (apprentice acts as blue) is spell-immune.
+    if (actsAsColor(mage, 'blue') && s.occupant.ownerId !== casterId) continue;
     out.push({
       mageId: s.occupant.mageId,
       spaceId: s.id,
@@ -14345,24 +17350,41 @@ registerEffect(
 
 // ============================================================================
 // Temporal Calculus 6th Ed. L3 "Bend Time" — Action, 4 Mana. Take up to 3
-// more actions. Each must be a different type of action (using a Vault Card,
-// Supporter, and Spell are all different types).
+// more bonus actions, each of a DIFFERENT type. The engine recognises four
+// action kinds: place a mage (`place`), cast an Action spell (`spell`), play
+// an Action Supporter (`supporter`), and play an Action Vault Card —
+// Treasure or Consumable (`vault`).
 //
-// Engine support: grants +3 extra actions via the shared `extraActions`
-// counter on the errands phase (the same counter Flare / Dazzle use). The
-// "different type" constraint is left to player judgement for now — the
-// engine doesn't track which action kinds have been used during the bend-
-// time window. Marked as a soft implementation; if rigid enforcement
-// becomes important we'd add a per-turn `bendTimeUsedKinds: Set<...>` and
-// validate each Action against it.
+// Implementation:
+//   - +3 extra actions on the errands phase (shared counter with Flare /
+//     Dazzle / etc.).
+//   - Seeds `bendTimeUsedKinds: []` on the phase. While this array is set,
+//     `consumeActionBudget` rejects any bonus-action spend that repeats a
+//     kind already in the list, and records each new kind as it's used.
+//   - The DISCARD_BONUS_ACTIONS action drops any remaining bonus actions
+//     and clears the tracker. The tracker also clears on turn change via
+//     `processErrandsAdvance`.
+//   - Each bonus action runs through the normal handler, so each gets its
+//     own Mysticism post-cast trigger, reaction window, etc.
 // ============================================================================
 
 registerEffect(
   'base.spell.temporal-calculus-6th-ed.l3',
-  (ctx: EffectContext): EffectResult => ({
-    kind: 'done',
-    patch: grantExtraActions(ctx.state, 3),
-  }),
+  (ctx: EffectContext): EffectResult => {
+    if (ctx.state.phase.kind !== 'errands') {
+      return { kind: 'done', patch: {} };
+    }
+    return {
+      kind: 'done',
+      patch: {
+        phase: {
+          ...ctx.state.phase,
+          extraActions: (ctx.state.phase.extraActions ?? 0) + 3,
+          bendTimeUsedKinds: [],
+        },
+      },
+    };
+  },
 );
 
 // ============================================================================
@@ -14626,7 +17648,7 @@ registerEffect('base.spell.taming-of-the-storm.l3', (ctx): EffectResult => {
     if (event && checkInfirmaryBonusApplies(ctx.state, event)) {
       return {
         kind: 'pause',
-        pending: bonusPromptFor(event, ctx.triggeringPlayerId, {
+        pending: bonusPromptFor(ctx.state, event, ctx.triggeringPlayerId, {
           effectId: self,
           context: {
             step: 'after-bonus',
@@ -14652,10 +17674,11 @@ registerEffect('base.spell.taming-of-the-storm.l3', (ctx): EffectResult => {
     if (typeof recipientId !== 'string') {
       throw new Error(`${self} after-bonus: missing recipientPlayerId`);
     }
-    const bonusPatch = applyInfirmaryBonusPatch(
+    const bonusPatch = applyInfirmaryBonusFromCtx(
       ctx.state,
       recipientId,
-      ctx.resumeAnswer.optionId,
+      ctx.resumeAnswer,
+      ctx.resumeContext,
     );
     const afterBonus: GameState = { ...ctx.state, ...bonusPatch };
     return hurricaneEnterRearrange(

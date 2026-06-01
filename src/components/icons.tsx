@@ -194,6 +194,10 @@ const MAGE_COLOR_CLASS: Record<MageColor, string> = {
   green: 'text-emerald-500',
   blue: 'text-sky-400',
   purple: 'text-purple-400',
+  orange: 'text-orange-500',
+  // Rainbow gets a violet base tint; the per-shape draw routine paints
+  // the joker accents directly so it reads as multicolor regardless.
+  rainbow: 'text-violet-400',
   'off-white': 'text-stone-100',
 };
 
@@ -203,6 +207,8 @@ const MAGE_COLOR_LABEL: Record<MageColor, string> = {
   green: 'Natural Magick (green)',
   blue: 'Divinity (blue)',
   purple: 'Planar Studies (purple)',
+  orange: 'Technomancy (orange)',
+  rainbow: "Archmage's Apprentice (joker)",
   'off-white': 'Neutral (off-white)',
 };
 
@@ -286,6 +292,25 @@ function hatShape(color: MageColor) {
           <path d="M 11 10 L 16 1 L 21 10 Z" />
         </>
       );
+    case 'orange':
+      // Technomancy: angular trapezoidal "hardhat" silhouette — a
+      // squared-off shape evoking machinery / fabrication.
+      return (
+        <>
+          <ellipse cx="16" cy="10" rx="7" ry="0.9" />
+          <path d="M 11 10 L 12 4 L 20 4 L 21 10 Z" />
+        </>
+      );
+    case 'rainbow':
+      // Archmage's Apprentice — three-pointed jester's hat. The points
+      // are drawn in the base colour; the per-point bell accents are
+      // painted by `hatDecoration`.
+      return (
+        <>
+          <ellipse cx="16" cy="10" rx="7" ry="0.9" />
+          <path d="M 10 10 L 11 4 L 14 9 L 16 3 L 18 9 L 21 4 L 22 10 Z" />
+        </>
+      );
     case 'off-white':
       // Neutral: humble apprentice's skullcap.
       return <path d="M 12 10 Q 12 6 16 6 Q 20 6 20 10 Z" />;
@@ -346,6 +371,26 @@ function hatDecoration(color: MageColor) {
             strokeWidth="0.5"
           />
           <circle cx="16" cy="5" r="0.55" fill="#e9d5ff" />
+        </>
+      );
+    case 'orange':
+      // Technomancy: a cog / gear sitting between the bands.
+      return (
+        <>
+          <rect x="14" y="5.5" width="4" height="1" fill="#fde68a" />
+          <rect x="14" y="7.5" width="4" height="1" fill="#fde68a" />
+          <circle cx="16" cy="6.5" r="0.4" fill="currentColor" />
+        </>
+      );
+    case 'rainbow':
+      // Joker bells on each of the jester hat's three points — each
+      // point gets a distinct colour so the multi-coloured silhouette
+      // pops even at small sizes.
+      return (
+        <>
+          <circle cx="11" cy="4" r="0.85" fill="#fb7185" />
+          <circle cx="16" cy="3" r="0.85" fill="#fde047" />
+          <circle cx="21" cy="4" r="0.85" fill="#60a5fa" />
         </>
       );
     case 'off-white':
@@ -429,6 +474,40 @@ function robeAccent(color: MageColor) {
           strokeWidth="0.7"
           strokeLinecap="round"
         />
+      );
+    case 'orange':
+      // Technomancy: a cog wheel chest emblem (toothed circle).
+      return (
+        <>
+          <circle
+            cx="16"
+            cy="24.5"
+            r="1.7"
+            fill="none"
+            stroke="#fde68a"
+            strokeOpacity="0.95"
+            strokeWidth="0.6"
+          />
+          <path
+            d="M 16 22.4 V 23.1 M 16 25.9 V 26.6 M 13.9 24.5 H 14.6 M 17.4 24.5 H 18.1 M 14.4 22.9 L 14.85 23.35 M 17.15 25.65 L 17.6 26.1 M 14.4 26.1 L 14.85 25.65 M 17.15 23.35 L 17.6 22.9"
+            stroke="#fde68a"
+            strokeOpacity="0.85"
+            strokeWidth="0.5"
+            strokeLinecap="round"
+          />
+        </>
+      );
+    case 'rainbow':
+      // Diamond harlequin pattern across the chest — small alternating
+      // colours so the apprentice reads as a "joker" mage.
+      return (
+        <>
+          <path d="M 13 23 l 1.5 1.5 l -1.5 1.5 l -1.5 -1.5 Z" fill="#fb7185" />
+          <path d="M 16 22 l 1.5 1.5 l -1.5 1.5 l -1.5 -1.5 Z" fill="#fde047" />
+          <path d="M 19 23 l 1.5 1.5 l -1.5 1.5 l -1.5 -1.5 Z" fill="#34d399" />
+          <path d="M 14.5 25.5 l 1.5 1.5 l -1.5 1.5 l -1.5 -1.5 Z" fill="#60a5fa" />
+          <path d="M 17.5 25.5 l 1.5 1.5 l -1.5 1.5 l -1.5 -1.5 Z" fill="#a78bfa" />
+        </>
       );
     case 'off-white':
       // Plain robe with a sash.

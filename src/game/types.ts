@@ -38,6 +38,7 @@ export type Department =
   | 'natural-magick' // Green
   | 'planar-studies' // Purple
   | 'divinity' // Blue
+  | 'technomancy' // Orange (Mancers expansion)
   | 'students' // Off-white / neutral candidates
   | 'wild'; // Special: counts as any department for scoring (e.g., White Ash)
 
@@ -47,21 +48,36 @@ export const DEPARTMENTS: readonly Department[] = [
   'natural-magick',
   'planar-studies',
   'divinity',
+  'technomancy',
   'students',
   'wild',
 ];
 
 /**
- * Mage piece colors. Each maps 1:1 to a Department except `off-white`, which
- * is neutral. Ability summary by color (per rulebook):
+ * Mage piece colors. Each maps 1:1 to a Department except `off-white`
+ * (neutral) and `rainbow` (the Archmage's Apprentice). Ability summary
+ * by color (per rulebook):
  *  - red:       Ars Magna — wound a Mage and take its slot
  *  - blue:      immune to rival spells
  *  - green:     cannot be wounded
  *  - purple:    place as a fast action
  *  - grey:      may place after casting a spell
+ *  - orange:    Technomancy (Mancers expansion) — Place: spend 3 Gold
+ *               when placing this Mage to gain a Research.
+ *  - rainbow:   Archmage's Apprentice — a special "joker" mage gained
+ *               from the Archmage's Study. Has all Mage Powers.
+ *               Untradeable; cleared at round-end.
  *  - off-white: no department ability
  */
-export type MageColor = 'red' | 'grey' | 'green' | 'purple' | 'blue' | 'off-white';
+export type MageColor =
+  | 'red'
+  | 'grey'
+  | 'green'
+  | 'purple'
+  | 'blue'
+  | 'orange'
+  | 'rainbow'
+  | 'off-white';
 
 export const MAGE_COLORS: readonly MageColor[] = [
   'red',
@@ -69,6 +85,8 @@ export const MAGE_COLORS: readonly MageColor[] = [
   'green',
   'purple',
   'blue',
+  'orange',
+  'rainbow',
   'off-white',
 ];
 
@@ -406,6 +424,14 @@ export interface Room {
   maxMagesPerPlayerPerRound?: number;
   /** Free-form room description (e.g., Infirmary's on-wound rules). */
   description?: string;
+  /**
+   * Marks the room as having no shadow positions on its slots — base-only
+   * placement. Great Hall ("holds any number of mages") is the canonical
+   * use case. Under a mandatory shadow-on-place buff (Inversion), the
+   * engine treats placements here as base placements instead of
+   * rejecting them. Defaults to false.
+   */
+  noShadowSlots?: boolean;
 }
 
 // ============================================================================
@@ -469,6 +495,14 @@ export interface BellTowerCard {
 
 export type RoundNumber = 1 | 2 | 3 | 4 | 5;
 
+/**
+ * Action kinds tracked by Bend Time's "each must be a different type" rule.
+ * The 4 named action categories the rulebook lists; other action-budget
+ * operations (BUY_VAULT_CARD, USE_ABILITY, CLAIM_BELL_TOWER) don't carry a
+ * kind and aren't tracked here.
+ */
+export type BendTimeKind = 'place' | 'spell' | 'supporter' | 'vault';
+
 export type GamePhase =
   | { kind: 'setup' }
   | { kind: 'candidate-draft'; activePlayerIndex: number }
@@ -517,12 +551,26 @@ export type GamePhase =
       fastActionUsed: boolean;
       /**
        * Bonus Action grants in addition to the base Action. Granted by
-       * spells like Flare (+1) and Dazzle (+2). When consuming an Action
-       * with `actionUsed: true`, decrements this counter instead of
-       * throwing — so the player can spend their bonus actions after the
-       * base one is used. Reset to 0 on every turn change.
+       * spells like Flare (+1), Dazzle (+2), and Bend Time (+3). When
+       * consuming an Action with `actionUsed: true`, decrements this
+       * counter instead of throwing — so the player can spend their
+       * bonus actions after the base one is used. Reset to 0 on every
+       * turn change.
        */
       extraActions?: number;
+      /**
+       * Set by Bend Time (Temporal Calculus L3). Each bonus action must be
+       * a DIFFERENT type from this list:
+       *   - 'place'     PLACE_WORKER
+       *   - 'spell'     CAST_SPELL (action timing)
+       *   - 'supporter' PLAY_SUPPORTER (action timing)
+       *   - 'vault'     PLAY_VAULT_CARD (action timing)
+       *
+       * The engine appends each used kind here; subsequent attempts of
+       * the same kind throw under Bend Time. Cleared on every turn change
+       * and by DISCARD_BONUS_ACTIONS. Absent = Bend Time isn't active.
+       */
+      bendTimeUsedKinds?: BendTimeKind[];
     }
   | {
       kind: 'resolution';
@@ -535,6 +583,17 @@ export type GamePhase =
        * 'base' for backward compatibility with serialized state).
        */
       pendingSlotPosition?: 'base' | 'shadow';
+      /**
+       * True between `pushResolutionChoicePrompt` (the pump pushes the
+       * forfeit-or-reward prompt for the current slot) and
+       * `completeCurrentSpaceResolution` (the slot's effect chain ends and
+       * the mage returns to office). Used to gate auto-complete on
+       * RESOLVE_PENDING: prompts surfaced OUTSIDE an active slot chain —
+       * e.g. drained from `researchQueue` between slots — must not
+       * trigger an extra completeCurrentSpaceResolution call (that would
+       * advance past the next slot without firing it).
+       */
+      slotInProgress?: boolean;
     }
   | { kind: 'mid-game-scoring'; round: RoundNumber }
   | { kind: 'final-scoring' }
@@ -617,8 +676,24 @@ export interface ReactionOption {
 
 export type PendingPrompt =
   | { kind: 'choose-from-options'; options: ChoiceOption[] }
-  | { kind: 'choose-target-mage'; eligibleMageIds: OwnedMageId[] }
-  | { kind: 'choose-target-action-space'; eligibleSpaceIds: ActionSpaceId[] }
+  /**
+   * Target-mage pick. When `canPass` is true, the responder may decline
+   * the pick (answer kind `'pass'`); the effect treats that as a skip.
+   * `label`, when set, is rendered as a step-specific banner above the
+   * choice buttons ("Choose a Mage to wound" / "Choose a Mage to banish"
+   * / etc.). Used by Ice Comet's optional wound / banish / move legs.
+   */
+  | {
+      kind: 'choose-target-mage';
+      eligibleMageIds: OwnedMageId[];
+      canPass?: boolean;
+      label?: string;
+    }
+  | {
+      kind: 'choose-target-action-space';
+      eligibleSpaceIds: ActionSpaceId[];
+      label?: string;
+    }
   | { kind: 'choose-vault-card'; eligibleCardIds: VaultCardId[] }
   | { kind: 'choose-supporter-card'; eligibleCardIds: SupporterCardId[] }
   /**
@@ -660,6 +735,11 @@ export type ResolutionAnswer =
   | { kind: 'level-chosen'; level: 1 | 2 | 3 }
   | { kind: 'deck-chosen'; deck: 'spell' | 'vault' | 'supporter' }
   | { kind: 'voter-chosen'; voterId: ConsortiumVoterId }
+  /**
+   * Decline a `canPass`-enabled pick prompt (Ice Comet's optional wound /
+   * banish / move legs). Effect handlers treat this as a skip.
+   */
+  | { kind: 'pass' }
   | {
       kind: 'reaction-played';
       effectId: EffectId;
@@ -1087,6 +1167,35 @@ export interface GameState {
   pendingRevivalChecks: { ownerId: PlayerId; mageId: OwnedMageId }[];
 
   /**
+   * Mysticism post-cast trigger queue. Each entry is the caster's id of
+   * an action-timed spell whose post-cast Mysticism mage-placement hasn't
+   * yet been offered. `handleCastSpell` appends one entry per action
+   * cast; `drainMysticismPostCastIfIdle` shifts the head off the queue
+   * once the spell's full resolution chain has settled and either
+   * surfaces the Yes/No prompt or skips silently.
+   *
+   * Multiple entries can be in flight when a spell like Mystic Link or
+   * Chain Lightning L3 borrows a cast — both the outer cast AND the
+   * borrowed cast trigger their own Mysticism opportunity (if it was
+   * action-timed). The queue is reset between turns.
+   */
+  pendingMysticismPostCast: PlayerId[];
+
+  /**
+   * Technomancy post-placement trigger queue. Each entry holds the
+   * placer's id and the room id their orange (Technomancy) mage just
+   * landed in. The queue mirrors the Mysticism post-cast pattern — it
+   * drains AFTER the placement (and any instant-room reward chain) has
+   * fully resolved and the stack is idle, surfacing the Side A "Pay 3
+   * Gold to gain a Research" prompt. Keeping the trigger out of the
+   * placement chain itself prevents action-time complications.
+   *
+   * The queue is reset at the same lifecycle points as
+   * `pendingMysticismPostCast` (resolution transition + turn change).
+   */
+  pendingTechnomancyTrigger: { playerId: PlayerId; roomId: RoomId }[];
+
+  /**
    * Active "immunity" buffs (Moste Holie Litanies / Heart of the Mountain
    * / Tome of Protection). Each buff protects its owner's mages from one
    * or more harmful effect kinds for a bounded duration.
@@ -1104,6 +1213,30 @@ export interface GameState {
   spellTableau: SpellCardId[];
   vaultDeck: VaultCardId[];
   vaultTableau: VaultCardId[];
+  /**
+   * Pool of cards added to Adventuring Side B during the errands phase
+   * via its on-place trigger. Each occupant who places a Mage on the
+   * room picks a card type (Spell / Vault / Supporter) and the top of
+   * that deck is moved here, capped at 3 per type. At resolution every
+   * occupant drafts from this pool; whatever's left at the end of the
+   * round (= when the pump leaves the room) is returned to the bottom
+   * of each respective deck. `null` outside Adventuring B's lifetime.
+   */
+  adventuringBPool: {
+    spells: SpellCardId[];
+    vaultCards: VaultCardId[];
+    supporters: SupporterCardId[];
+  } | null;
+
+  /**
+   * Transient revealed pool used by Vault Side A's slot effects: when
+   * the first occupied slot resolves, three cards are popped from the
+   * top of the vault deck and stashed here so the remaining slots can
+   * draft from the same pool in slot order. The resolution pump clears
+   * the field once it leaves Vault A and returns any unclaimed cards to
+   * the top of the deck. `null` outside Vault A's resolution.
+   */
+  vaultARevealed: VaultCardId[] | null;
   supporterDeck: SupporterCardId[];
   supporterTableau: SupporterCardId[];
   legendarySpells: SpellCardId[];
@@ -1164,10 +1297,28 @@ export interface GameConfig {
    * Number of rooms in play this game. Defaults to 8 (2-3 players), 10 (4
    * players), 12 (5+ players). Always ≥ the number of UC rooms in the pack.
    * If the available room pool is smaller than the requested count, the
-   * remainder is filled with placeholder rooms (no action spaces).
+   * remainder is filled with placeholder rooms (no action spaces). Ignored
+   * when `roomLayoutMode.kind === 'first-time'` (always 8) or `'custom'`
+   * (count = `roomIds.length`).
    */
   numberOfRooms?: number;
+  /**
+   * How rooms are arranged on the board:
+   *   - `'first-time'`: fixed 8-room beginner layout, all side A, in the
+   *     row-major order Vault, Training Fields, Infirmary, Courtyard,
+   *     Catacombs, Guilds, Library, Council Chamber (2 cols × 4 rows).
+   *   - `'random'`: select rooms via the random pump and shuffle them
+   *     into the grid. Legacy default; preserved for existing tests.
+   *   - `'custom'`: caller provides the exact room IDs in row-major
+   *     order; the grid dimensions are derived from the count.
+   */
+  roomLayoutMode?: RoomLayoutMode;
 }
+
+export type RoomLayoutMode =
+  | { kind: 'first-time' }
+  | { kind: 'random' }
+  | { kind: 'custom'; roomIds: RoomId[] };
 
 /**
  * 2-D grid layout for rooms in play. `cols × rows` cells, each holding a
@@ -1225,6 +1376,16 @@ export interface PlaySupporterAction {
 
 export interface PassTurnAction {
   type: 'PASS_TURN';
+  playerId: PlayerId;
+}
+
+/**
+ * Discards remaining bonus actions (extraActions / Bend Time tracker) and
+ * lets the turn auto-advance immediately. Issued from the UI's "Discard
+ * remaining bonus actions" button under Bend Time.
+ */
+export interface DiscardBonusActionsAction {
+  type: 'DISCARD_BONUS_ACTIONS';
   playerId: PlayerId;
 }
 
@@ -1288,6 +1449,7 @@ export type GameAction =
   | RecruitSupporterAction
   | PlaySupporterAction
   | PassTurnAction
+  | DiscardBonusActionsAction
   | UseAbilityAction
   | ResolvePendingAction
   | ChooseCandidateAction

@@ -1,0 +1,63 @@
+Name	Expansion	Cost	Type	Timing	Effect	Copies
+Ancient Armor	Base	5.0	Treasure	Reaction	After an opponent moves or wounds one of your Mages, you may move your Mage to any open slot on the board.	2.0
+The Arcane Eye	Base	4.0	Treasure	Action	Gain a Mark.	2.0
+Auric Catalyst	Base	1.0	Consumable	Reaction	Reduce any Gold cost (not a swap) you would pay to zero.	1.0
+Bottled Memories	Base	1.0	Consumable	Fast Action	Refresh an exhausted Spell.	1.0
+Bottled Rage	Base	1.0	Consumable	Action	Wound a Mage and place one of yours in its slot.	1.0
+The Contract	Base	2.0	Consumable	Fast Action	Gain 3 Research. Use this Research on spells of a single chosen type.	1.0
+Endless Coin Purse	Base	3.0	Treasure	Action	Gain 1 Gold. Gain a Buy.	2.0
+Force Gloves	Base	5.0	Consumable	Action	Spend 2 Mana to banish a Mage. Do this any number of times.	1.0
+Gilded Chalice	Base	4.0	Treasure	Action	Gain 2 IP.	2.0
+Healing Drops	Base	1.0	Consumable	Action	Move a Mage from the Infirmary to an open slot of your choice.	1.0
+Invisibility Cloak	Base	4.0	Treasure	Reaction	When one of your Mages would be wounded, banished, or moved, it shadows the original slot instead.	1.0
+Liquid Lightning	Base	1.0	Consumable	Fast Action	Place a Mage.	1.0
+Malefic Torch	Base	5.0	Consumable	Action	Spend 2 Mana to wound a Mage. Repeat this any number of times.	1.0
+Mana Crystal	Base	3.0	Treasure	Action	Gain 2 Mana.	2.0
+Mana Elixir	Base	2.0	Consumable	Fast Action	The next Spell you play this turn costs no Mana.	1.0
+Mystic Amulet	Base	5.0	Treasure	Reaction	After an opponent banishes or sahdows one of your Mages, you may move your Mage to any open slot on the board.	2.0
+Mystic Lantern	Base	3.0	Consumable	Fast Action	Look at the top 3 cards of the Supporter Deck. Gain one as a Secret Supporter. Discard the others.	1.0
+Phase Steppers	Base	1.0	Consumable	Reaction	When one of your Mages would be wounded, banished, or moved, it shadows its original slot instead.	1.0
+Runestone	Base	4.0	Consumable	Fast Action	Gain 1 INT OR gain 1 WIS.	2.0
+Sealed Jar	Base	1.0	Consumable	Fast Action	Gain 7 Gold OR draw a Vault Card.	1.0
+Sealed Scroll	Base	5.0	Treasure	Fast Action	Research a Legendary Spell of your choice, then place this into your personal discard pile.	5.0
+Shadow Potion	Base	1.0	Consumable	Action	Shadow a slot with one of your Mages.	1.0
+Shield Potion	Base	1.0	Consumable	Reaction	When one of your Mages would be wounded, banished, or moved, place it into any empty slot instead.	1.0
+Spellblade	Base	4.0	Treasure	Action	Wound a Mage, then place one of yours into its slot.	1.0
+Spirits	Base	1.0	Consumable	Fast Action	Gain a Mark.	2.0
+Unbreakable Box	Base	5.0	Consumable	Action	Spend 6 Mana to gain the top 3 cards of the Vault Deck.	1.0
+Ancient Tablet	Promo 1	4.0	Treasure	Action	Move one of your mages on the board to any empty slot.	1.0
+Crystal Skull	Promo 1	2.0	Consumable	Fast Action	Learn a spell from the tableau without spending INT, placing this card on it. It can never be researched further.	1.0
+Alkahest Potion	Mancers/Stuff	2.0	Consumable	Action	Discard another Vault Card to you rdiscard. Gain its cost in Gold and gain 2 Mana.	2.0
+Chrysopoeia Potion	Mancers/Stuff	2.0	Consumable	Action	Swap 1 Mana for 3 Gold, up to 4 times.	2.0
+Clockwerk Replicator	Mancers/Stuff	5.0	Treasure	Fast Action	The next time you would discard a Vault Card this turn, keep it in your office or readied instead.	1.0
+Diviner's Mitre	Mancers/Stuff	3.0	Treasure	Reaction	When one of your Mages would be wounded, banished, or moved by a Spell, place it in any empty slot.	1.0
+Elixir of Life	Mancers/Stuff	3.0	Consumable	Fast Action	Move all of your Mages in the Infirmary to open slots of your choice.	2.0
+Mystic's Cowl	Mancers/Stuff	3.0	Treasure	Fast Action	The next time you cast a Spell this turn, place a Mage immediately after.	1.0
+Nature Mage's Cap	Mancers/Stuff	3.0	Treasure	Action	Move an opponent's Mage to another slot in the same room and put one of your Mages in its place.	1.0
+Philosopher's Stone	Mancers/Stuff	4.0	Treasure	Action	Gain 4 Gold.	1.0
+Planar Scouter	Mancers/Stuff	3.0	Treasure	Fast Action	Place a Mage.	1.0
+Potion of Vigor	Mancers/Stuff	3.0	Consumable	Action	Take a Supporter from your discard and place it in your office.	2.0
+Shadow Salve	Mancers/Stuff	1.0	Consumable	Action	Shadow one of your own Mages.	2.0
+Sorceror's Hat	Mancers/Stuff	3.0	Treasure	Action	Wound a Mage and place one of yours in its slot.	1.0
+Technomancer's Top Hat	Mancers/Stuff	3.0	Treasure	Action	Place a Mage, then gain a Research.	1.0
+Time Prism	Mancers/Stuff	6.0	Consumable	Action	Lock or Unlock a room.	1.0
+Tonic of Panacea	Mancers/Stuff	2.0	Consumable	Fast Actoin	Return all of your Mages in the Infirmary to your office.	2.0
+Trickster's Cape	Mancers/Stuff	3.0	Treasure	Action	Shadow with one of your Mages.	1.0
+Endless Well of Mana	Mancers/Synthesis		Synthesis Treasure	Fast Action	Gain 2 Mana.	1.0
+Hourglass of Fate	Mancers/Synthesis		Synthesis Treasure	Reaction	When the last Bell Tower Offering is taken by another player, you may place a Mage.	1.0
+Lightning Totem	Mancers/Synthesis		Synthesis Treasure	Fast Action	Spend 1 Mana to wound up to two Mages in the same room.	1.0
+Sacred Shield	Mancers/Synthesis		Synthesis Treasure	Always	Spend 1 Mana after one of your Mages is wounded to move it to any open slot.	1.0
+Sword of Flame	Mancers/Synthesis		Synthesis Treasure	Fast Action	Spend 1 Mana to wound a Mage and place one of yours in its slot.	1.0
+Vanishing Staff	Mancers/Synthesis		Synthesis Treasure	Action	Spend 1 Mana to shadow any space (even your own Mage or an empty slot).	1.0
+Chancellor's Yacht Keys	Summer Break	6.0	Treasure	Action	Gain a Secret Supporter.	1.0
+Divine Beach Hat	Summer Break	6.0	Treasure	Action	Gain 1 Mana and then cast a Spell.	1.0
+Sorceror's Beach Towel	Summer Break	4.0	Treasure	Action	Spend 2 Mana to make your Mages immune to wounding for the rest of the Round.	1.0
+Magic Sunblock	Summer Break	2.0	Consumable	Fast Action	Your Mages are immune to wounding for the rest of the round.	1.0
+Beach Brew	Summer Break	1.0	Consumable	Reaction	Resolve a Merit slot without exhausting a Merit Badge.	1.0
+Planar Ice Cream	Summer Break	1.0	Consumable	Fast Action	Take a random room from the box and add it to the bottom left of the University Board on the A side.	1.0
+Dainty Gloves	Festival/Stuff	3.0	Consumable	Fast Action	Gain a second Mask by drawing one from the top of the deck.	1.0
+Lunar Fireworks	Festival/Masks	2.0	Consumable	Fast Action	Wound up to 2 Mages in the same room.	1.0
+Dream Champagne	Festival/Masks	2.0	Consumable	Fast Action	Swap Masks with an opponent. Both of you gain their Instant effects.	1.0
+Mystery Box	Festival/Masks	3.0	Treasure	Action	Draw a Mask from the Mask deck. Discard it or replace and discard your current Mask.	1.0
+Deep Mirror	Festival/Masks	3.0	Treasure	Action	Gain the Instant effect of your Mask.	1.0
+Planar Endorsement	Festival/Masks	5.0	Treasure	Treasure	Place a Mage, then shadow that Mage with another Mage. This may only be used if you have no Masks.	1.0

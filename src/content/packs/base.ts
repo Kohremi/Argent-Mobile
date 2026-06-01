@@ -84,10 +84,10 @@ const mages: Mage[] = [
     id: 'base.mage.archmages-apprentice',
     name: "Archmage's Apprentice",
     sourcePackId: PACK_ID,
-    color: 'off-white',
+    color: 'rainbow',
     department: null,
     description:
-      "Special Mage gained from the Archmage's Study; not in the starting Mage allocation.",
+      "Special joker Mage gained from the Archmage's Study. Has ALL Mage Powers. Belongs to the claiming player for the current round only — cannot be traded, swapped, or otherwise transferred. Cleared at round-end.",
   },
 ];
 
@@ -1582,6 +1582,43 @@ const councilChamberA: Room = {
   maxMagesPerPlayerPerRound: 1,
 };
 
+// Council Chamber Side B — five slots, each pulling N of three "council
+// options" (Draft a Supporter, Gain 1 IP, Gain a Mark). Per the room
+// file, Side B drops the "1 mage per player per round" cap that Side A
+// imposes — anyone can stack here.
+//   Slot 1 (merit, 1 MB): Do all three
+//   Slot 2 (regular):     Choose two
+//   Slot 3 (regular):     Choose two
+//   Slot 4 (regular):     Choose one
+//   Slot 5 (regular):     Choose one
+
+function councilSlotB(
+  index: number,
+  slotType: 'regular' | 'merit',
+  totalPicks: 1 | 2 | 3,
+): ActionSpace {
+  const id = `base.room.council-chamber.b.slot-${index}`;
+  const label =
+    totalPicks === 3
+      ? 'Do all three (Draft a Supporter, Gain 1 IP, Gain a Mark)'
+      : totalPicks === 2
+        ? 'Choose two of: Draft a Supporter / Gain 1 IP / Gain a Mark'
+        : 'Choose one of: Draft a Supporter / Gain 1 IP / Gain a Mark';
+  const base: ActionSpace = {
+    id,
+    roomId: 'base.room.council-chamber.b',
+    index: index - 1,
+    slotType,
+    occupant: null,
+    effectId: `base.room.council-chamber-b.do-${totalPicks}`,
+    description: label,
+  };
+  if (slotType === 'merit') {
+    return { ...base, costToActivate: { meritBadges: 1 } };
+  }
+  return base;
+}
+
 const councilChamberB: Room = {
   id: 'base.room.council-chamber.b',
   name: 'Council Chamber',
@@ -1591,7 +1628,13 @@ const councilChamberB: Room = {
   isInstantRoom: false,
   cannotBePlacedInDirectly: false,
   cannotBeLocked: false,
-  actionSpaces: [],
+  actionSpaces: [
+    councilSlotB(1, 'merit', 3),
+    councilSlotB(2, 'regular', 2),
+    councilSlotB(3, 'regular', 2),
+    councilSlotB(4, 'regular', 1),
+    councilSlotB(5, 'regular', 1),
+  ],
 };
 
 // Library Side A — per the room file:
@@ -1654,6 +1697,57 @@ const libraryA: Room = {
   actionSpaces: [librarySlot1, librarySlot2, librarySlot3, librarySlot4],
 };
 
+// Library Side B — four slots per the room file:
+//   Slot 1 (merit, 1 MB): Gain 1 Research AND draft a Vault Card
+//   Slot 2 (merit, 1 MB): Gain 1 INT and 1 WIS OR gain 3 Research
+//   Slot 3 (regular):     Gain 2 Buys OR gain 1 Buy and 1 Research
+//                         (TODO: 2-Buys branch not wired; both options
+//                         currently produce the simpler "1 Buy + 1
+//                         Research" path inherited from Side A slot 3.)
+//   Slot 4 (regular):     Gain 1 INT OR gain 1 WIS OR gain 1 Research
+
+const libraryBSlot1: ActionSpace = {
+  id: 'base.room.library.b.slot-1',
+  roomId: 'base.room.library.b',
+  index: 0,
+  slotType: 'merit',
+  occupant: null,
+  effectId: 'base.room.library-b.slot-1',
+  costToActivate: { meritBadges: 1 },
+  description: 'Gain 1 Research AND Draft a Vault Card.',
+};
+
+const libraryBSlot2: ActionSpace = {
+  id: 'base.room.library.b.slot-2',
+  roomId: 'base.room.library.b',
+  index: 1,
+  slotType: 'merit',
+  occupant: null,
+  effectId: 'base.room.library-b.slot-2',
+  costToActivate: { meritBadges: 1 },
+  description: 'Gain 1 INT and 1 WIS OR gain 3 Research.',
+};
+
+const libraryBSlot3: ActionSpace = {
+  ...regularSlot({
+    id: 'base.room.library.b.slot-3',
+    roomId: 'base.room.library.b',
+    index: 2,
+    effectId: 'base.room.library-b.slot-3',
+  }),
+  description: 'Gain a Buy AND Gain 1 Research.',
+};
+
+const libraryBSlot4: ActionSpace = {
+  ...regularSlot({
+    id: 'base.room.library.b.slot-4',
+    roomId: 'base.room.library.b',
+    index: 3,
+    effectId: 'base.room.library-b.slot-4',
+  }),
+  description: 'Choose 1: Gain 1 INT / Gain 1 WIS / Gain 1 Research.',
+};
+
 const libraryB: Room = {
   id: 'base.room.library.b',
   name: 'Library',
@@ -1663,7 +1757,7 @@ const libraryB: Room = {
   isInstantRoom: false,
   cannotBePlacedInDirectly: false,
   cannotBeLocked: false,
-  actionSpaces: [],
+  actionSpaces: [libraryBSlot1, libraryBSlot2, libraryBSlot3, libraryBSlot4],
 };
 
 // Infirmary — single-slot UC room. Mages can't be placed directly; wounded
@@ -1685,6 +1779,42 @@ const infirmaryA: Room = {
   actionSpaces: [],
 };
 
+// Infirmary Side B — same wound-arrival semantics as Side A, but with
+// two "buffed bonus" slots above the standard wound-arrival reward:
+//   Slot 1 (unique, no shadow): Immediately gain 4 Gold (vs. the
+//                               standard 2 Gold).
+//   Slot 2 (unique, no shadow): Immediately gain 2 Mana (vs. the
+//                               standard 1 Mana).
+// These slots can't be placed in directly (the room keeps
+// `cannotBePlacedInDirectly: true`). They're "filled" via the wound
+// bonus chain: when a wounded mage arrives, if the relevant buffed slot
+// is empty, the corresponding bonus option is offered at the upgraded
+// amount AND the wounded mage occupies that slot. Occupants are cleared
+// when the round-setup heal sweep empties the Infirmary.
+const infirmaryBSlot1: ActionSpace = {
+  id: 'base.room.infirmary.b.slot-1',
+  roomId: 'base.room.infirmary.b',
+  index: 0,
+  slotType: 'regular',
+  occupant: null,
+  // Slot effect runs via the wound-bonus chain rather than the
+  // resolution pump (the Infirmary stays `cannotBePlacedInDirectly`).
+  // A no-op effect id keeps the slot inert if anything ever walks it
+  // by accident.
+  effectId: 'base.system.noop',
+  description: 'When wounded: gain 4 Gold and occupy this slot.',
+};
+
+const infirmaryBSlot2: ActionSpace = {
+  id: 'base.room.infirmary.b.slot-2',
+  roomId: 'base.room.infirmary.b',
+  index: 1,
+  slotType: 'regular',
+  occupant: null,
+  effectId: 'base.system.noop',
+  description: 'When wounded: gain 2 Mana and occupy this slot.',
+};
+
 const infirmaryB: Room = {
   id: 'base.room.infirmary.b',
   name: 'Infirmary',
@@ -1694,7 +1824,9 @@ const infirmaryB: Room = {
   isInstantRoom: true,
   cannotBePlacedInDirectly: true,
   cannotBeLocked: true,
-  actionSpaces: [],
+  description:
+    'Wounded mages move here automatically; you cannot place directly. Side B adds two buffed-bonus slots above the standard wound-arrival reward.',
+  actionSpaces: [infirmaryBSlot1, infirmaryBSlot2],
 };
 
 // Training Fields Side A:
@@ -1743,6 +1875,42 @@ const trainingFieldsA: Room = {
   ],
 };
 
+// Training Fields Side B — three slots per the room file:
+//   Slot 1 (merit, 1 MB): Gain 1 INT OR gain 1 WIS; gain 2 Research
+//   Slot 2 (regular):     Gain 1 INT OR gain 1 WIS
+//   Slot 3 (regular):     Gain 2 Mana OR gain 2 Research
+
+const trainingFieldsBSlot1: ActionSpace = {
+  id: 'base.room.training-fields.b.slot-1',
+  roomId: 'base.room.training-fields.b',
+  index: 0,
+  slotType: 'merit',
+  occupant: null,
+  effectId: 'base.room.training-fields-b.slot-1',
+  costToActivate: { meritBadges: 1 },
+  description: 'Choose Gain 1 INT or Gain 1 WIS; gain 2 Research.',
+};
+
+const trainingFieldsBSlot2: ActionSpace = {
+  ...regularSlot({
+    id: 'base.room.training-fields.b.slot-2',
+    roomId: 'base.room.training-fields.b',
+    index: 1,
+    effectId: 'base.room.training-fields-b.slot-2',
+  }),
+  description: 'Choose 1: Gain 1 INT / Gain 1 WIS.',
+};
+
+const trainingFieldsBSlot3: ActionSpace = {
+  ...regularSlot({
+    id: 'base.room.training-fields.b.slot-3',
+    roomId: 'base.room.training-fields.b',
+    index: 2,
+    effectId: 'base.room.training-fields-b.slot-3',
+  }),
+  description: 'Choose 1: Gain 2 Mana / Gain 2 Research.',
+};
+
 const trainingFieldsB: Room = {
   id: 'base.room.training-fields.b',
   name: 'Training Fields',
@@ -1752,13 +1920,69 @@ const trainingFieldsB: Room = {
   isInstantRoom: false,
   cannotBePlacedInDirectly: false,
   cannotBeLocked: false,
-  actionSpaces: [],
+  actionSpaces: [
+    trainingFieldsBSlot1,
+    trainingFieldsBSlot2,
+    trainingFieldsBSlot3,
+  ],
 };
 
-// Guilds Side A — INSTANT room (effects resolve at placement, not resolution):
+// Guilds — Side B per the room file (this is the INSTANT face: slot
+// effects resolve at placement). Rulebook Side A is a NON-instant
+// version with bigger payouts (8/6/4 Gold or 4/3/2 Mana) — those slot
+// effects aren't wired yet, so Side A sits below as a content stub.
 //   Slot 1 (merit, 1 MB): Immediately gain either 6 Gold OR 3 Mana
 //   Slot 2 (regular):     Immediately gain either 4 Gold OR 2 Mana
 //   Slot 3 (regular):     Immediately gain either 2 Gold OR 1 Mana
+
+const guildsB: Room = {
+  id: 'base.room.guilds.b',
+  name: 'Guilds',
+  sourcePackId: PACK_ID,
+  isUniversityCentral: false,
+  side: 'B',
+  isInstantRoom: true,
+  cannotBePlacedInDirectly: false,
+  cannotBeLocked: false,
+  description: 'Instant room — slot effects resolve at placement.',
+  actionSpaces: [
+    {
+      id: 'base.room.guilds.b.slot-1',
+      roomId: 'base.room.guilds.b',
+      index: 0,
+      slotType: 'merit',
+      occupant: null,
+      effectId: 'base.room.guilds-b.slot-1',
+      costToActivate: { meritBadges: 1 },
+      description: 'Immediately gain either 6 Gold OR 3 Mana.',
+    },
+    {
+      ...regularSlot({
+        id: 'base.room.guilds.b.slot-2',
+        roomId: 'base.room.guilds.b',
+        index: 1,
+        effectId: 'base.room.guilds-b.slot-2',
+      }),
+      description: 'Immediately gain either 4 Gold OR 2 Mana.',
+    },
+    {
+      ...regularSlot({
+        id: 'base.room.guilds.b.slot-3',
+        roomId: 'base.room.guilds.b',
+        index: 2,
+        effectId: 'base.room.guilds-b.slot-3',
+      }),
+      description: 'Immediately gain either 2 Gold OR 1 Mana.',
+    },
+  ],
+};
+
+// Guilds Side A — NON-instant variant of the gold-or-mana room. Same OR
+// shape as Side B but slot effects resolve at the resolution phase and
+// pay out more:
+//   Slot 1 (merit, 1 MB): Gain 8 Gold OR gain 4 Mana
+//   Slot 2 (regular):     Gain 6 Gold OR gain 3 Mana
+//   Slot 3 (regular):     Gain 4 Gold OR gain 2 Mana
 
 const guildsA: Room = {
   id: 'base.room.guilds.a',
@@ -1766,10 +1990,9 @@ const guildsA: Room = {
   sourcePackId: PACK_ID,
   isUniversityCentral: false,
   side: 'A',
-  isInstantRoom: true,
+  isInstantRoom: false,
   cannotBePlacedInDirectly: false,
   cannotBeLocked: false,
-  description: 'Instant room — slot effects resolve at placement.',
   actionSpaces: [
     {
       id: 'base.room.guilds.a.slot-1',
@@ -1779,7 +2002,7 @@ const guildsA: Room = {
       occupant: null,
       effectId: 'base.room.guilds-a.slot-1',
       costToActivate: { meritBadges: 1 },
-      description: 'Immediately gain either 6 Gold OR 3 Mana.',
+      description: 'Gain 8 Gold OR gain 4 Mana.',
     },
     {
       ...regularSlot({
@@ -1788,7 +2011,7 @@ const guildsA: Room = {
         index: 1,
         effectId: 'base.room.guilds-a.slot-2',
       }),
-      description: 'Immediately gain either 4 Gold OR 2 Mana.',
+      description: 'Gain 6 Gold OR gain 3 Mana.',
     },
     {
       ...regularSlot({
@@ -1797,21 +2020,9 @@ const guildsA: Room = {
         index: 2,
         effectId: 'base.room.guilds-a.slot-3',
       }),
-      description: 'Immediately gain either 2 Gold OR 1 Mana.',
+      description: 'Gain 4 Gold OR gain 2 Mana.',
     },
   ],
-};
-
-const guildsB: Room = {
-  id: 'base.room.guilds.b',
-  name: 'Guilds',
-  sourcePackId: PACK_ID,
-  isUniversityCentral: false,
-  side: 'B',
-  isInstantRoom: false,
-  cannotBePlacedInDirectly: false,
-  cannotBeLocked: false,
-  actionSpaces: [],
 };
 
 // Catacombs Side A:
@@ -1860,6 +2071,42 @@ const catacombsA: Room = {
   ],
 };
 
+// Catacombs Side B — three slots per the room file:
+//   Slot 1 (merit, 1 MB): Swap 1 IP for 10 Gold (one-shot Yes/No)
+//   Slot 2 (regular):     Swap 2 Gold for 1 IP, up to 4 times
+//   Slot 3 (regular):     Swap 1 Gold for 1 IP, up to 3 times
+
+const catacombsBSlot1: ActionSpace = {
+  id: 'base.room.catacombs.b.slot-1',
+  roomId: 'base.room.catacombs.b',
+  index: 0,
+  slotType: 'merit',
+  occupant: null,
+  effectId: 'base.room.catacombs-b.slot-1',
+  costToActivate: { meritBadges: 1 },
+  description: 'Swap 1 IP for 10 Gold.',
+};
+
+const catacombsBSlot2: ActionSpace = {
+  ...regularSlot({
+    id: 'base.room.catacombs.b.slot-2',
+    roomId: 'base.room.catacombs.b',
+    index: 1,
+    effectId: 'base.room.catacombs-b.slot-2',
+  }),
+  description: 'Swap 2 Gold for 1 IP, up to 4 times.',
+};
+
+const catacombsBSlot3: ActionSpace = {
+  ...regularSlot({
+    id: 'base.room.catacombs.b.slot-3',
+    roomId: 'base.room.catacombs.b',
+    index: 2,
+    effectId: 'base.room.catacombs-b.slot-3',
+  }),
+  description: 'Swap 1 Gold for 1 IP, up to 3 times.',
+};
+
 const catacombsB: Room = {
   id: 'base.room.catacombs.b',
   name: 'Catacombs',
@@ -1869,7 +2116,7 @@ const catacombsB: Room = {
   isInstantRoom: false,
   cannotBePlacedInDirectly: false,
   cannotBeLocked: false,
-  actionSpaces: [],
+  actionSpaces: [catacombsBSlot1, catacombsBSlot2, catacombsBSlot3],
 };
 
 // Courtyard Side A:
@@ -1918,6 +2165,42 @@ const courtyardA: Room = {
   ],
 };
 
+// Courtyard Side B — three slots per the room file:
+//   Slot 1 (merit, 1 MB): Gain Mana equal to your WIS; gain 1 Research
+//   Slot 2 (regular):     Gain Mana equal to your WIS
+//   Slot 3 (regular):     Gain Mana equal to half your WIS (round up)
+
+const courtyardBSlot1: ActionSpace = {
+  id: 'base.room.courtyard.b.slot-1',
+  roomId: 'base.room.courtyard.b',
+  index: 0,
+  slotType: 'merit',
+  occupant: null,
+  effectId: 'base.room.courtyard-b.slot-1',
+  costToActivate: { meritBadges: 1 },
+  description: 'Gain Mana equal to your WIS; gain 1 Research.',
+};
+
+const courtyardBSlot2: ActionSpace = {
+  ...regularSlot({
+    id: 'base.room.courtyard.b.slot-2',
+    roomId: 'base.room.courtyard.b',
+    index: 1,
+    effectId: 'base.room.courtyard-b.slot-2',
+  }),
+  description: 'Gain Mana equal to your WIS.',
+};
+
+const courtyardBSlot3: ActionSpace = {
+  ...regularSlot({
+    id: 'base.room.courtyard.b.slot-3',
+    roomId: 'base.room.courtyard.b',
+    index: 2,
+    effectId: 'base.room.courtyard-b.slot-3',
+  }),
+  description: 'Gain Mana equal to half your WIS (round up).',
+};
+
 const courtyardB: Room = {
   id: 'base.room.courtyard.b',
   name: 'Courtyard',
@@ -1927,13 +2210,57 @@ const courtyardB: Room = {
   isInstantRoom: false,
   cannotBePlacedInDirectly: false,
   cannotBeLocked: false,
-  actionSpaces: [],
+  actionSpaces: [courtyardBSlot1, courtyardBSlot2, courtyardBSlot3],
 };
 
-// Vault A — three distinct slot effects per the room file:
+// Vault — Side B per the room file (this is the "draft / gain gold" room).
+// Side A in the rulebook is a different mechanic ("reveal top 3 of the
+// Vault Deck on resolution, each occupant picks one") that isn't wired
+// yet; it sits below as a stub.
 //   Slot 1 (merit, costs 1 MB to place): Draft a Vault Card AND Gain 4 Gold
 //   Slot 2 (regular):                    Draft a Vault Card OR Gain 5 Gold
 //   Slot 3 (regular):                    Gain 3 Gold
+
+const vaultBSlot1: ActionSpace = {
+  id: 'base.room.vault.b.slot-1',
+  roomId: 'base.room.vault.b',
+  index: 0,
+  slotType: 'merit',
+  occupant: null,
+  effectId: 'base.room.vault-b.slot-1',
+  costToActivate: { meritBadges: 1 },
+  description: 'Draft a Vault Card AND Gain 4 Gold.',
+};
+
+const vaultBSlot2: ActionSpace = {
+  id: 'base.room.vault.b.slot-2',
+  roomId: 'base.room.vault.b',
+  index: 1,
+  slotType: 'regular',
+  occupant: null,
+  effectId: 'base.room.vault-b.slot-2',
+  description: 'Draft a Vault Card OR Gain 5 Gold.',
+};
+
+const vaultBSlot3: ActionSpace = {
+  id: 'base.room.vault.b.slot-3',
+  roomId: 'base.room.vault.b',
+  index: 2,
+  slotType: 'regular',
+  occupant: null,
+  effectId: 'base.room.vault-b.slot-3',
+  description: 'Gain 3 Gold.',
+};
+
+// Vault Side A — non-instant. When the room resolves, the top 3 cards of
+// the Vault Deck are revealed; each occupant (in slot order) drafts one
+// of the remaining revealed cards for free. Unclaimed cards return to
+// the top of the deck in their original order once resolution leaves
+// the room. All three slots share the same effect — the slot index
+// only matters for the resolution-pump's draft order.
+//   Slot 1 (merit, 1 MB): Select and gain one of the revealed cards.
+//   Slot 2 (regular):     Same.
+//   Slot 3 (regular):     Same.
 
 const vaultASlot1: ActionSpace = {
   id: 'base.room.vault.a.slot-1',
@@ -1941,29 +2268,29 @@ const vaultASlot1: ActionSpace = {
   index: 0,
   slotType: 'merit',
   occupant: null,
-  effectId: 'base.room.vault-a.slot-1',
+  effectId: 'base.room.vault-a.slot',
   costToActivate: { meritBadges: 1 },
-  description: 'Draft a Vault Card AND Gain 4 Gold.',
+  description: 'Select and gain one of the revealed Vault Cards.',
 };
 
 const vaultASlot2: ActionSpace = {
-  id: 'base.room.vault.a.slot-2',
-  roomId: 'base.room.vault.a',
-  index: 1,
-  slotType: 'regular',
-  occupant: null,
-  effectId: 'base.room.vault-a.slot-2',
-  description: 'Draft a Vault Card OR Gain 5 Gold.',
+  ...regularSlot({
+    id: 'base.room.vault.a.slot-2',
+    roomId: 'base.room.vault.a',
+    index: 1,
+    effectId: 'base.room.vault-a.slot',
+  }),
+  description: 'Select and gain one of the revealed Vault Cards.',
 };
 
 const vaultASlot3: ActionSpace = {
-  id: 'base.room.vault.a.slot-3',
-  roomId: 'base.room.vault.a',
-  index: 2,
-  slotType: 'regular',
-  occupant: null,
-  effectId: 'base.room.vault-a.slot-3',
-  description: 'Gain 3 Gold.',
+  ...regularSlot({
+    id: 'base.room.vault.a.slot-3',
+    roomId: 'base.room.vault.a',
+    index: 2,
+    effectId: 'base.room.vault-a.slot',
+  }),
+  description: 'Select and gain one of the revealed Vault Cards.',
 };
 
 const vaultA: Room = {
@@ -1975,6 +2302,8 @@ const vaultA: Room = {
   isInstantRoom: false,
   cannotBePlacedInDirectly: false,
   cannotBeLocked: false,
+  description:
+    'When this room resolves, reveal the top 3 cards of the Vault Deck. Each occupant drafts one in slot order; unclaimed cards return to the top of the deck.',
   actionSpaces: [vaultASlot1, vaultASlot2, vaultASlot3],
 };
 
@@ -1987,12 +2316,559 @@ const vaultB: Room = {
   isInstantRoom: false,
   cannotBePlacedInDirectly: false,
   cannotBeLocked: false,
-  actionSpaces: [],
+  actionSpaces: [vaultBSlot1, vaultBSlot2, vaultBSlot3],
 };
 
-// (Helper for stub A/B room pairs removed — every room currently in the pack
-// has explicit A and B definitions. Re-add a helper here when we expand back
-// to placeholder rooms.)
+// Adventuring Side A — stub. Per the room file: Slot 1 (merit) "Gain a
+// Secret Supporter and 3 Gold"; Slot 2 "Draw a Vault Card OR Gain 2 IP
+// OR Gain 1 INT"; Slot 3 "Draw a Spell Card OR Gain 2 IP OR Gain 1
+// WIS". Not wired yet — sits alongside Side B as content TBD.
+// Adventuring Side A — 1 merit + 2 regular slots.
+//   Slot 1 (merit, 1 MB): Gain a Secret Supporter AND Gain 3 Gold
+//   Slot 2 (regular):     Draw a Vault Card OR Gain 2 IP OR Gain 1 INT
+//   Slot 3 (regular):     Draw a Spell Card OR Gain 2 IP OR Gain 1 WIS
+// "Draw" here means top-of-deck (random, unseen) — different from
+// Library/Council Chamber-style drafts which pull a visible tableau card.
+
+const adventuringAMeritSlot: ActionSpace = {
+  id: 'base.room.adventuring.a.slot-1',
+  roomId: 'base.room.adventuring.a',
+  index: 0,
+  slotType: 'merit',
+  occupant: null,
+  effectId: 'base.room.adventuring-a.slot-1',
+  costToActivate: { meritBadges: 1 },
+  description: 'Gain a Secret Supporter AND Gain 3 Gold.',
+};
+
+function adventuringARegularSlot(
+  index: number,
+  effectId: string,
+  description: string,
+): ActionSpace {
+  return {
+    ...regularSlot({
+      id: `base.room.adventuring.a.slot-${index + 1}`,
+      roomId: 'base.room.adventuring.a',
+      index,
+      effectId,
+    }),
+    description,
+  };
+}
+
+const adventuringA: Room = {
+  id: 'base.room.adventuring.a',
+  name: 'Adventuring',
+  sourcePackId: PACK_ID,
+  isUniversityCentral: false,
+  side: 'A',
+  isInstantRoom: false,
+  cannotBePlacedInDirectly: false,
+  cannotBeLocked: false,
+  description:
+    "Gain a Secret Supporter + 3 Gold (merit), or pick one OR option per regular slot (Vault draw / IP / INT — or Spell draw / IP / WIS).",
+  actionSpaces: [
+    adventuringAMeritSlot,
+    adventuringARegularSlot(
+      1,
+      'base.room.adventuring-a.slot-2',
+      'Draw a Vault Card OR Gain 2 IP OR Gain 1 INT.',
+    ),
+    adventuringARegularSlot(
+      2,
+      'base.room.adventuring-a.slot-3',
+      'Draw a Spell Card (spend 1 INT to learn it) OR Gain 2 IP OR Gain 1 WIS.',
+    ),
+  ],
+};
+
+// Adventuring Side B — 1 merit + 4 regular slots. When a Mage is placed
+// here (including via a shadow placement) the owner picks Spell / Vault
+// / Supporter and the top of that deck is moved into the room's pool,
+// face-up, capped at 3 per type. During resolution, each occupant
+// drafts one card from the pool. Anything left when resolution leaves
+// the room goes to the bottom of its deck.
+//
+// The slot effectId points at the shared draft handler; the placement
+// hook lives in PLACE_WORKER (see `adventuringBPlacedHook` in engine.ts)
+// so it also fires for shadow placements.
+
+const adventuringBMeritSlot: ActionSpace = {
+  id: 'base.room.adventuring.b.slot-1',
+  roomId: 'base.room.adventuring.b',
+  index: 0,
+  slotType: 'merit',
+  occupant: null,
+  effectId: 'base.room.adventuring-b.draft',
+  costToActivate: { meritBadges: 1 },
+  description: 'Draft a card from the Adventuring pool.',
+};
+
+function adventuringBRegularSlot(index: number): ActionSpace {
+  return {
+    ...regularSlot({
+      id: `base.room.adventuring.b.slot-${index + 1}`,
+      roomId: 'base.room.adventuring.b',
+      index,
+      effectId: 'base.room.adventuring-b.draft',
+    }),
+    description: 'Draft a card from the Adventuring pool.',
+  };
+}
+
+const adventuringB: Room = {
+  id: 'base.room.adventuring.b',
+  name: 'Adventuring',
+  sourcePackId: PACK_ID,
+  isUniversityCentral: false,
+  side: 'B',
+  isInstantRoom: false,
+  cannotBePlacedInDirectly: false,
+  cannotBeLocked: false,
+  description:
+    'When you place a Mage here, add a Spell / Vault Card / Supporter (your choice) to this room, face-up. Cap: 3 per type. At resolution each occupant drafts one; leftovers return to the bottom of their deck.',
+  actionSpaces: [
+    adventuringBMeritSlot,
+    adventuringBRegularSlot(1),
+    adventuringBRegularSlot(2),
+    adventuringBRegularSlot(3),
+    adventuringBRegularSlot(4),
+  ],
+};
+
+// Chapel Side A — 1 merit + 2 regular slots. Every slot grants a Mark on
+// top of its primary reward.
+//   Slot 1 (merit, 1 MB): Gain 1 INT, Gain 1 WIS, AND gain a Mark
+//   Slot 2 (regular):     Gain 2 IP AND gain a Mark
+//   Slot 3 (regular):     Gain 2 Gold OR Gain 2 Mana, then gain a Mark
+//
+// Side B is declared as an unwired stub (empty actionSpaces) so the setup
+// sanity check that requires every room to publish both sides is satisfied.
+// Re-wire here when Side B content lands.
+
+const chapelA: Room = {
+  id: 'base.room.chapel.a',
+  name: 'Chapel',
+  sourcePackId: PACK_ID,
+  isUniversityCentral: false,
+  side: 'A',
+  isInstantRoom: false,
+  cannotBePlacedInDirectly: false,
+  cannotBeLocked: false,
+  description:
+    "Every Chapel slot gains a Mark in addition to its primary reward.",
+  actionSpaces: [
+    {
+      id: 'base.room.chapel.a.slot-1',
+      roomId: 'base.room.chapel.a',
+      index: 0,
+      slotType: 'merit',
+      occupant: null,
+      effectId: 'base.room.chapel-a.slot-1',
+      costToActivate: { meritBadges: 1 },
+      description: 'Gain 1 INT, Gain 1 WIS, AND gain a Mark.',
+    },
+    {
+      ...regularSlot({
+        id: 'base.room.chapel.a.slot-2',
+        roomId: 'base.room.chapel.a',
+        index: 1,
+        effectId: 'base.room.chapel-a.slot-2',
+      }),
+      description: 'Gain 2 IP AND gain a Mark.',
+    },
+    {
+      ...regularSlot({
+        id: 'base.room.chapel.a.slot-3',
+        roomId: 'base.room.chapel.a',
+        index: 2,
+        effectId: 'base.room.chapel-a.slot-3',
+      }),
+      description: 'Gain 2 Gold OR Gain 2 Mana, then gain a Mark.',
+    },
+  ],
+};
+
+// Chapel Side B — INSTANT room. Each slot's reward resolves at placement
+// (via the standard resolution-choice → inner effect chain). All three
+// slots are Mark-flavoured:
+//   Slot 1 (merit, 1 MB): Immediately gain 2 Marks (chain of 2 voter prompts)
+//   Slot 2 (regular):     Immediately gain 1 IP AND gain a Mark
+//   Slot 3 (regular):     Immediately gain a Mark
+const chapelB: Room = {
+  id: 'base.room.chapel.b',
+  name: 'Chapel',
+  sourcePackId: PACK_ID,
+  isUniversityCentral: false,
+  side: 'B',
+  isInstantRoom: true,
+  cannotBePlacedInDirectly: false,
+  cannotBeLocked: false,
+  description:
+    'Instant room — slot rewards resolve at placement. Slot 1 grants two Marks; slots 2 and 3 each grant a single Mark (slot 2 also +1 IP).',
+  actionSpaces: [
+    {
+      id: 'base.room.chapel.b.slot-1',
+      roomId: 'base.room.chapel.b',
+      index: 0,
+      slotType: 'merit',
+      occupant: null,
+      effectId: 'base.room.chapel-b.slot-1',
+      costToActivate: { meritBadges: 1 },
+      description: 'Immediately gain 2 Marks.',
+    },
+    {
+      ...regularSlot({
+        id: 'base.room.chapel.b.slot-2',
+        roomId: 'base.room.chapel.b',
+        index: 1,
+        effectId: 'base.room.chapel-b.slot-2',
+      }),
+      description: 'Immediately gain 1 IP AND gain a Mark.',
+    },
+    {
+      ...regularSlot({
+        id: 'base.room.chapel.b.slot-3',
+        roomId: 'base.room.chapel.b',
+        index: 2,
+        effectId: 'base.room.chapel-b.slot-3',
+      }),
+      description: 'Immediately gain a Mark.',
+    },
+  ],
+};
+
+// Dormitory — both sides have 1 merit + 1 regular slot. Every slot lets
+// the player pick a Mage colour from the supply and add it to their
+// office. Subject to the rulebook's 2-of-a-colour cap, except neutral
+// (off-white) which is uncapped per the user spec.
+//   Side A:
+//     Slot 1 (merit, 1 MB):  Swap 2 Gold for a new Mage of any colour
+//     Slot 2 (regular):      Swap 6 Gold for a new Mage of any colour
+//   Side B:
+//     Slot 1 (merit, 1 MB):  Gain a new Mage of any colour (free)
+//     Slot 2 (regular):      Swap 2 IP for a new Mage of any colour
+
+const dormitoryA: Room = {
+  id: 'base.room.dormitory.a',
+  name: 'Dormitory',
+  sourcePackId: PACK_ID,
+  isUniversityCentral: false,
+  side: 'A',
+  isInstantRoom: false,
+  cannotBePlacedInDirectly: false,
+  cannotBeLocked: false,
+  description:
+    'Pick a Mage colour from the supply. 2-per-colour cap (neutral uncapped).',
+  actionSpaces: [
+    {
+      id: 'base.room.dormitory.a.slot-1',
+      roomId: 'base.room.dormitory.a',
+      index: 0,
+      slotType: 'merit',
+      occupant: null,
+      effectId: 'base.room.dormitory-a.slot-1',
+      costToActivate: { meritBadges: 1 },
+      description: 'Swap 2 Gold for a new Mage of any colour.',
+    },
+    {
+      ...regularSlot({
+        id: 'base.room.dormitory.a.slot-2',
+        roomId: 'base.room.dormitory.a',
+        index: 1,
+        effectId: 'base.room.dormitory-a.slot-2',
+      }),
+      description: 'Swap 6 Gold for a new Mage of any colour.',
+    },
+  ],
+};
+
+const dormitoryB: Room = {
+  id: 'base.room.dormitory.b',
+  name: 'Dormitory',
+  sourcePackId: PACK_ID,
+  isUniversityCentral: false,
+  side: 'B',
+  isInstantRoom: false,
+  cannotBePlacedInDirectly: false,
+  cannotBeLocked: false,
+  description:
+    'Pick a Mage colour from the supply. 2-per-colour cap (neutral uncapped).',
+  actionSpaces: [
+    {
+      id: 'base.room.dormitory.b.slot-1',
+      roomId: 'base.room.dormitory.b',
+      index: 0,
+      slotType: 'merit',
+      occupant: null,
+      effectId: 'base.room.dormitory-b.slot-1',
+      costToActivate: { meritBadges: 1 },
+      description: 'Gain a new Mage of any colour (free).',
+    },
+    {
+      ...regularSlot({
+        id: 'base.room.dormitory.b.slot-2',
+        roomId: 'base.room.dormitory.b',
+        index: 1,
+        effectId: 'base.room.dormitory-b.slot-2',
+      }),
+      description: 'Swap 2 IP for a new Mage of any colour.',
+    },
+  ],
+};
+
+// Student Stores — both sides have 1 merit + 2 regular slots. Each slot
+// grants a number of Buys. Per Buy, the player picks how to spend it.
+//   Side A — per-Buy options: Vault Card, INT/4g, WIS/4g, Research/4g, Skip
+//     Slot 1 (merit, 1 MB):  Gain 3 Buys
+//     Slot 2 (regular):      Gain 2 Buys
+//     Slot 3 (regular):      Gain a Buy
+//   Side B — per-Buy options: Vault Card, Skip, (once) Pay 1 Gold to re-deal Vault Tableau
+//     Slot 1 (merit, 1 MB):  Gain 2 Buys (each Vault buy gets a 2-Gold discount)
+//     Slot 2 (regular):      Gain 2 Buys
+//     Slot 3 (regular):      Gain a Buy
+
+const studentStoresA: Room = {
+  id: 'base.room.student-stores.a',
+  name: 'Student Stores',
+  sourcePackId: PACK_ID,
+  isUniversityCentral: false,
+  side: 'A',
+  isInstantRoom: false,
+  cannotBePlacedInDirectly: false,
+  cannotBeLocked: false,
+  description:
+    'Per Buy: Vault Card, 1 INT (4 Gold), 1 WIS (4 Gold), 1 Research (4 Gold), or Skip.',
+  actionSpaces: [
+    {
+      id: 'base.room.student-stores.a.slot-1',
+      roomId: 'base.room.student-stores.a',
+      index: 0,
+      slotType: 'merit',
+      occupant: null,
+      effectId: 'base.room.student-stores-a.slot-1',
+      costToActivate: { meritBadges: 1 },
+      description: 'Gain 3 Buys.',
+    },
+    {
+      ...regularSlot({
+        id: 'base.room.student-stores.a.slot-2',
+        roomId: 'base.room.student-stores.a',
+        index: 1,
+        effectId: 'base.room.student-stores-a.slot-2',
+      }),
+      description: 'Gain 2 Buys.',
+    },
+    {
+      ...regularSlot({
+        id: 'base.room.student-stores.a.slot-3',
+        roomId: 'base.room.student-stores.a',
+        index: 2,
+        effectId: 'base.room.student-stores-a.slot-3',
+      }),
+      description: 'Gain a Buy.',
+    },
+  ],
+};
+
+const studentStoresB: Room = {
+  id: 'base.room.student-stores.b',
+  name: 'Student Stores',
+  sourcePackId: PACK_ID,
+  isUniversityCentral: false,
+  side: 'B',
+  isInstantRoom: false,
+  cannotBePlacedInDirectly: false,
+  cannotBeLocked: false,
+  description:
+    'Per Buy: Vault Card or Skip. Once per resolution: pay 1 Gold to discard and re-deal the Vault Tableau.',
+  actionSpaces: [
+    {
+      id: 'base.room.student-stores.b.slot-1',
+      roomId: 'base.room.student-stores.b',
+      index: 0,
+      slotType: 'merit',
+      occupant: null,
+      effectId: 'base.room.student-stores-b.slot-1',
+      costToActivate: { meritBadges: 1 },
+      description: 'Gain 2 Buys; each Vault buy is 2 Gold cheaper.',
+    },
+    {
+      ...regularSlot({
+        id: 'base.room.student-stores.b.slot-2',
+        roomId: 'base.room.student-stores.b',
+        index: 1,
+        effectId: 'base.room.student-stores-b.slot-2',
+      }),
+      description: 'Gain 2 Buys.',
+    },
+    {
+      ...regularSlot({
+        id: 'base.room.student-stores.b.slot-3',
+        roomId: 'base.room.student-stores.b',
+        index: 2,
+        effectId: 'base.room.student-stores-b.slot-3',
+      }),
+      description: 'Gain a Buy.',
+    },
+  ],
+};
+
+// Great Hall — both sides are INSTANT rooms with a "place up to 3 mages
+// together" chain. Spec from docs/argent_data/rooms.tsv:
+//   Side A: Immediately gain 1 IP
+//   Side B: Immediately gain 2 Gold OR gain 1 Mana
+// Both sides hold ANY number of mages — the engine carries 10
+// pre-allocated slots per side (more than enough for normal play). The
+// UI filters to show occupied slots + the first empty one, so the room
+// reads as "always one open spot, slots appear as you fill them" to the
+// player. The chain placement is wired via `pendingPlaceChain` with
+// `restrictRoomId` + `allowStop`, set by the slot's effect when it's the
+// first placement of this use.
+
+function greatHallSlot(args: {
+  roomId: string;
+  index: number;
+  effectId: string;
+  description: string;
+}): ActionSpace {
+  return {
+    id: `${args.roomId}.slot-${args.index + 1}`,
+    roomId: args.roomId,
+    index: args.index,
+    slotType: 'regular',
+    occupant: null,
+    effectId: args.effectId,
+    description: args.description,
+  };
+}
+
+const GREAT_HALL_SLOT_CAPACITY = 10;
+
+function makeGreatHallSlots(
+  roomId: string,
+  effectId: string,
+  description: string,
+): ActionSpace[] {
+  return Array.from({ length: GREAT_HALL_SLOT_CAPACITY }, (_, i) =>
+    greatHallSlot({ roomId, index: i, effectId, description }),
+  );
+}
+
+const greatHallA: Room = {
+  id: 'base.room.great-hall.a',
+  name: 'Great Hall',
+  sourcePackId: PACK_ID,
+  isUniversityCentral: false,
+  side: 'A',
+  isInstantRoom: true,
+  cannotBePlacedInDirectly: false,
+  cannotBeLocked: false,
+  noShadowSlots: true,
+  description:
+    'Holds any number of mages. Each placement: Immediately gain 1 IP. On a fresh use, may chain up to 2 more placements here together.',
+  actionSpaces: makeGreatHallSlots(
+    'base.room.great-hall.a',
+    'base.room.great-hall-a.slot',
+    'Immediately gain 1 IP. On a fresh use, may chain up to 2 more placements here together.',
+  ),
+};
+
+const greatHallB: Room = {
+  id: 'base.room.great-hall.b',
+  name: 'Great Hall',
+  sourcePackId: PACK_ID,
+  isUniversityCentral: false,
+  side: 'B',
+  isInstantRoom: true,
+  cannotBePlacedInDirectly: false,
+  cannotBeLocked: false,
+  noShadowSlots: true,
+  description:
+    'Holds any number of mages. Each placement: Immediately gain 2 Gold OR gain 1 Mana. On a fresh use, may chain up to 2 more placements here together.',
+  actionSpaces: makeGreatHallSlots(
+    'base.room.great-hall.b',
+    'base.room.great-hall-b.slot',
+    'Immediately gain 2 Gold OR gain 1 Mana. On a fresh use, may chain up to 2 more placements here together.',
+  ),
+};
+
+// ============================================================================
+// Archmage's Study Side A — INSTANT room. Spec from the spreadsheet:
+//   Special: "The Archmage's Apprentice has all Mage Powers."
+//   Slot 1 (merit, 1 MB): Immediately pay 1 Mana to gain the Archmage's
+//                         Apprentice for this round.
+//   Slot 2 (regular):     Immediately gain 1 IP and swap this Mage for
+//                         another from the supply.
+//   Slot 3 (regular):     Immediately swap this Mage for another from
+//                         the supply.
+// The Apprentice is a special "joker" mage tracked via
+// `state.archmagesApprenticeOwner`. It cannot be traded / swapped /
+// banished; the round-end cleanup hook removes it from the owner's
+// office and clears the owner pointer.
+// ============================================================================
+
+const archmagesStudyA: Room = {
+  id: 'base.room.archmages-study.a',
+  name: "Archmage's Study",
+  sourcePackId: PACK_ID,
+  isUniversityCentral: false,
+  side: 'A',
+  isInstantRoom: true,
+  cannotBePlacedInDirectly: false,
+  cannotBeLocked: false,
+  description:
+    "Instant room. The Archmage's Apprentice has all Mage Powers.",
+  actionSpaces: [
+    {
+      id: 'base.room.archmages-study.a.slot-1',
+      roomId: 'base.room.archmages-study.a',
+      index: 0,
+      slotType: 'merit',
+      occupant: null,
+      effectId: 'base.room.archmages-study-a.slot-1',
+      costToActivate: { meritBadges: 1 },
+      description:
+        "Immediately pay 1 Mana to gain the Archmage's Apprentice for this round.",
+    },
+    {
+      ...regularSlot({
+        id: 'base.room.archmages-study.a.slot-2',
+        roomId: 'base.room.archmages-study.a',
+        index: 1,
+        effectId: 'base.room.archmages-study-a.slot-2',
+      }),
+      description:
+        'Immediately gain 1 IP and swap this Mage for another from the supply.',
+    },
+    {
+      ...regularSlot({
+        id: 'base.room.archmages-study.a.slot-3',
+        roomId: 'base.room.archmages-study.a',
+        index: 2,
+        effectId: 'base.room.archmages-study-a.slot-3',
+      }),
+      description:
+        'Immediately swap this Mage for another from the supply.',
+    },
+  ],
+};
+
+// Archmage's Study Side B — unwired stub. The setup sanity check
+// requires every room to publish both sides. Side B content can be
+// wired here when sourced (see docs/argent_data/rooms.tsv).
+const archmagesStudyB: Room = {
+  id: 'base.room.archmages-study.b',
+  name: "Archmage's Study",
+  sourcePackId: PACK_ID,
+  isUniversityCentral: false,
+  side: 'B',
+  isInstantRoom: false,
+  cannotBePlacedInDirectly: false,
+  cannotBeLocked: false,
+  actionSpaces: [],
+};
 
 const rooms: Room[] = [
   // University Central — always present.
@@ -2003,10 +2879,8 @@ const rooms: Room[] = [
   infirmaryA,
   infirmaryB,
 
-  // Variable pool — five physical rooms per the room file. (Chapel,
-  // Student Stores, Adventuring, Astronomy Tower, Great Hall, Archmage's
-  // Study, and Dormitory are not yet specified by content and so are
-  // omitted. Re-add them here when their slots are sourced.)
+  // Variable pool — Astronomy Tower is not yet specified by content and
+  // so is omitted. Re-add it here when its slots are sourced.
   trainingFieldsA,
   trainingFieldsB,
   courtyardA,
@@ -2017,6 +2891,18 @@ const rooms: Room[] = [
   guildsB,
   vaultA,
   vaultB,
+  adventuringA,
+  adventuringB,
+  chapelA,
+  chapelB,
+  dormitoryA,
+  dormitoryB,
+  studentStoresA,
+  studentStoresB,
+  greatHallA,
+  greatHallB,
+  archmagesStudyA,
+  archmagesStudyB,
 ];
 
 // ============================================================================

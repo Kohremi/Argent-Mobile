@@ -1,0 +1,13 @@
+Department	Expansion	Side	Timing	Effect
+Divinity	Base	A	In-Place	Immune to all effects of opponents' Spells.
+Divinity	Base	B	Resolution	You can pay 4 Gold to activate a Merit Slot this Mage occupies, instead of using a Merit Badge.
+Mysticism	Base	A	Place	When you cast an Action spell (after all Reactions), place one Mystic as a free action.
+Mysticism	Base	B	In-Place	While in a University slot other than the Infirmary, your Spells cost 1 less Mana (to a minimum of one).
+Natural Magick	Base	A	In-Place	Immune to Wounding
+Natural Magick	Base	B	Place	When placing, if possible you may move an opponent's Mage to another slot in the same room and take its place.
+Planar Studies	Base	A	Place	Placement is a Fast Action.
+Planar Studies	Base	B	Place	Pay 1 Mana when placing to shado an opponent's Mage instead.
+Sorcery	Base	A	Place	Spend 1 Mana when placing this Mage to Wound an opponent's Mage and take its place.
+Sorcery	Base	B	Place	Gain 1 Mana for each other Mage in the room you place into (maximum of 3).
+Technomancy	Mancers/Technomancy	A	Place	Spend 3 Gold when placing this Mage to gain a Research.
+Technomancy	Mancers/Technomancy	B	Action	When you place into a room with another player's Mage, you may pay 3 Gold to Mark a Voter that player has marked.

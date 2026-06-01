@@ -1,0 +1,31 @@
+Name	Expansion	Side	Merit Slots	Regular Slots	Merit Last	Special Effect	Slot 1	Slot 2	Slot 3	Slot 4	Slot 5	Central Campus
+Adventuring	Base	A	1.0	2.0	No		Gain a Secret Supporter and 3 Gold	Draw a Vault Card OR Gain 2 IP OR Gain 1 INT	Draw a Spell Card OR Gain 2 IP OR Gain 1 WIS			No
+Adventuring	Base	B	1.0	4.0	No	When you place a Mage here, you may draw a card and place it face-up in this room. No more than 3 cards of the same type in this room. Draft this room's contents during resolution. Discard any unclaimed cards.						No
+Archmage's Study	Base	A	1.0	2.0	No	The Archmage's Apprentice has all Mage Powers.	Immediately pay 1 Mana to gain the Archmage's Apprentice for this round.	Immediately gain 1 IP and swap this Mage for another from the supply	Immediately swap this Mage for another from the supply			No
+Archmage's Study	Base	B	1.0	2.0	No	The Archmage's Apprentice has all Mage Powers.	Immediately pay 2 Gold to gain the Archmage's apprentice for this round.	Immediately gain 1 Mana and swap this Mage for another from the supply	Immediately swap this non-Neutral Mage for a Neutral Mage and gain 3 Marks			No
+Astronomy Tower	Base	A	1.0	2.0	No	After moving the marker at least 1 space, claim the reward shown. When the marker would move past the end, return it to the left-most space.\n\nSpaces: 1 WIS + 2 Mana, 2 Research, 8 Gold, 1 INT + 1 Research, 4 Mana, 2 Marks	Move 1 space for free, then pay 1 Gold per space.	Pay 2 Gold per space moved	Pay 4 Gold per space moved			No
+Astronomy Tower	Base	B	1.0	2.0	Yes	After moving the marker at least 1 space, claim the reward it stands on. Return the marker to the far left space at the start of each round.\n\nSpaces: No Reward, 5 Mana, 8 Gold, 2 Marks, 1 INT + 1 WIN + 1 Research, Draft 2 Vault Cards, Gain a Mage from the supply, Choose any previous	Pay 2 Mana per space moved	Pay 2 Mana per space moved	Pay 1 Mana per space moved			No
+Catacombs	Base	A	1.0	2.0	No		Draw a Secret Supporter, then gain a Mark	Gain 2 IP	Gain 1 IP for each player with more IP than you.			No
+Catacombs	Base	B	1.0	2.0	No		Swap 1 IP for 10 Gold	Swap 2 Gold for 1 IP, up to 4 times	Swap 1 Gold for 1 IP, up to 3 times			No
+Chapel	Base	A	1.0	2.0	No		Gain 1 INT, gain 1 WIS, and gain a Mark	Gain 2 IP and gain a Mark	Gain 2 Gold OR gain 2 Mana; gain a Mark			No
+Chapel	Base	B	1.0	2.0	No		Immediately gain 2 Marks	Immediately gain 1 IP AND gain a Mark	Immediately gain a Mark			No
+Council Chamber	Base	A	1.0	4.0	No	No more than 1 Mage per player in this room	Draft a Supporter OR gain a Mark	Draft a Supporter OR gain a Mark	Draft a Supporter OR gain a Mark	Draft a Supporter OR gain a Mark	Draft a Supporter OR gain a Mark	Yes
+Council Chamber	Base	B	1.0	4.0	No	Options: Draft a Supporter, Gain 1 IP, Gain a Mark	Do all three	Choose two	Choose two	Choose one	Choose one	Yes
+Courtyard	Base	A	1.0	2.0	No		Gain Mana equal to your WIS + 2	Gain Mana equal to your WIS	Gain 3 Mana			No
+Courtyard	Base	B	1.0	2.0	No		Gain Mana equal to your WIS; gain 1 Research	Gain Mana equal to your WIS	Gain Mana equal to half your WIS (round up)			No
+Dormitory	Base	A	1.0	1.0	No		Swap 2 Gold for a new Mage of any type from the supply	Swap 6 Gold for a new Mage of any type from the supply.				No
+Dormitory	Base	B	1.0	1.0	No		Gain a new Mage of any type from the supply	Swap 2 IP for a new Mage of any type from the supply.				No
+Great Hall	Base	A	0.0	1.0	No	When you place in this room, you may place up to 3 Mages together. This room holds any number of Mages.	Immediately gain 1 IP					No
+Great Hall	Base	B	0.0	1.0	No	When you place in this room, you may place up to 3 Mages together. This room holds any number of Mages.	Immediately gain 2 Gold or gain 1 Mana					No
+Guilds	Base	A	1.0	2.0	No		Gain 8 Gold OR gain 4 Mana	Gain 6 Gold OR gain 3 Mana	Gain 4 Gold OR gain 2 Mana			No
+Guilds	Base	B	1.0	2.0	No		Immediately gain 6 Gold OR gain 3 Mana	Immediately gain 4 Gold OR gain 2 Mana	Immediately gain 2 Gold OR gain 1 Mana			No
+Infirmary	Base	A	0.0	1.0	No	Wounded Mages move to this room. Gain a reward when one of your Mages moves here. You cannot place here directly.	Immediately gain 2 Gold OR gain 1 Mana OR gain 1 IP					Yes
+Infirmary	Base	B	0.0	3.0	No	Wounded Mages move to this room. Gain a reward when one of your Mages moves here. If there is an empty space above, you may send your wounded mage there first. You cannot place here directly.	Immediately gain 4 Gold	Immediately gain 2 Mana	Immediately gain 2 Gold OR gain 1 Mana OR gain 1 IP			Yes
+Library	Base	A	2.0	2.0	No		Gain 1 WIS AND draft a Vault Card	Gain 1 INT AND gain 1 Research	Gain a Buy AND gain 1 Research	Gain 1 INT OR gain 1 WIS OR gain 1 Research		Yes
+Library	Base	B	2.0	2.0	No		Gain 1 Research AND draft a Vault Card	Gain 1 INT and 1 WIS OR gain 3 Research	Gain 2 Buys OR gain 1 Buy and 1 Research	Gain 1 INT OR gain 1 WIS OR gain 1 Research		Yes
+Student Stores	Base	A	1.0	2.0	No	As a Buy, you may buy 1 INT, 1 WIS, or 1 Research for 4 Gold	Gain 3 Buys	Gain 2 Buys	Gain a Buy			No
+Student Stores	Base	B	1.0	2.0	No	Once when Buying, pay 1 Gold to discard and re-deal the Vault Tableau	Gain 2 Buys, each at a 2 Gold discount	Gain 2 Buys	Gain a Buy			No
+Training Fields	Base	A	1.0	2.0	No		Gain 1 INT AND gain 1 WIS	Gain 1 INT	Gain 1 WIS			No
+Training Fields	Base	B	1.0	2.0	No		Gain 1 INT OR gain 1 WIS; gain 2 Research	Gain 1 INT OR gain 1 WIS	Gain 2 Mana OR gain 2 Research			No
+Vault	Base	A	1.0	2.0	No	When this room resolves, reveal the top 3 cards of the Vault Deck.	Select and gain one of the revealed cards	Select and gain one of the revealed cards	Select and gain one of the revealed cards			No
+Vault	Base	B	1.0	2.0	No		Draft a Vault card AND gain 4 Gold	Draft a Vault Card OR gain 5 Gold	Gain 3 Gold			No

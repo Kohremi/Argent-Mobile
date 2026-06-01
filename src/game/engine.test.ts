@@ -10,7 +10,11 @@ import {
   scorePlayerForCriterion,
 } from './scoring';
 import { baseGamePack } from '../content/packs/base';
+import { mancersPack } from '../content/packs/mancers';
+import { listPacks } from '../content/registry';
 import type {
+  Candidate,
+  ConsortiumVoter,
   GameConfig,
   GamePhase,
   GameState,
@@ -20,6 +24,29 @@ import type {
   Player,
   Room,
 } from './types';
+
+/**
+ * Returns a voter of the given criterion, injecting it into `state.voters`
+ * if it wasn't already in the seeded face-down pool. Used by tests that
+ * exercise voter-specific scoring/tiebreaker logic — the original draw
+ * is RNG-seeded and shouldn't be load-bearing for those tests.
+ */
+function ensureVoter(
+  state: GameState,
+  criterion: ConsortiumVoter['criterion'],
+): { state: GameState; voter: ConsortiumVoter } {
+  const existing = state.voters.find((v) => v.criterion === criterion);
+  if (existing) return { state, voter: existing };
+  const def = baseGamePack.voters.find((v) => v.criterion === criterion);
+  if (!def) {
+    throw new Error(`ensureVoter: no base voter with criterion ${criterion}`);
+  }
+  const voter: ConsortiumVoter = { ...def, revealed: true };
+  return {
+    state: { ...state, voters: [...state.voters, voter] },
+    voter,
+  };
+}
 
 const FOUR_PLAYER_CONFIG: GameConfig = {
   activePackIds: ['base'],
@@ -390,23 +417,51 @@ describe('determinism', () => {
 describe('Room layout', () => {
   it('seats every UC room + non-UC rooms (with placeholders padding to count) at game start', () => {
     const s = initGame(FOUR_PLAYER_CONFIG);
-    // 4-player default = 10 rooms: 8 base + 2 placeholders.
+    // 4-player default = 10 rooms. The base pack now has more wired
+    // non-UC rooms than fit (3 UC + 10 non-UC), so the random selection
+    // picks 7 of the 10 non-UC names. No placeholders needed.
     expect(s.rooms.length).toBe(10);
-    const ids = new Set(s.rooms.map((r) => r.id));
-    // All 3 UC rooms always in play.
-    expect(ids.has('base.room.council-chamber.a')).toBe(true);
-    expect(ids.has('base.room.library.a')).toBe(true);
-    expect(ids.has('base.room.infirmary.a')).toBe(true);
-    // With 5 non-UC rooms in the base pack + needing 7 more, all 5 are
-    // drawn; the remaining 2 are placeholders.
-    expect(ids.has('base.room.training-fields.a')).toBe(true);
-    expect(ids.has('base.room.courtyard.a')).toBe(true);
-    expect(ids.has('base.room.catacombs.a')).toBe(true);
-    expect(ids.has('base.room.guilds.a')).toBe(true);
-    expect(ids.has('base.room.vault.a')).toBe(true);
-    expect(ids.has('base.room.placeholder-1')).toBe(true);
-    expect(ids.has('base.room.placeholder-2')).toBe(true);
-    expect(s.rooms.every((r) => r.side === 'A')).toBe(true);
+    const namesPresent = new Set(
+      s.rooms.filter((r) => !r.id.includes('placeholder')).map((r) => r.name),
+    );
+    // All three UC rooms are always present.
+    expect(namesPresent.has('Council Chamber')).toBe(true);
+    expect(namesPresent.has('Library')).toBe(true);
+    expect(namesPresent.has('Infirmary')).toBe(true);
+    // The remaining 7 names are drawn from the non-UC pool.
+    const nonUcPool = new Set([
+      'Training Fields',
+      'Courtyard',
+      'Catacombs',
+      'Guilds',
+      'Vault',
+      'Adventuring',
+      'Chapel',
+      'Dormitory',
+      'Student Stores',
+      'Great Hall',
+    ]);
+    const presentNonUc = [...namesPresent].filter(
+      (n) =>
+        n !== 'Council Chamber' && n !== 'Library' && n !== 'Infirmary',
+    );
+    expect(presentNonUc).toHaveLength(7);
+    for (const n of presentNonUc) {
+      expect(nonUcPool.has(n)).toBe(true);
+    }
+    // Each named room has exactly one side in play.
+    const counts = new Map<string, number>();
+    for (const r of s.rooms) {
+      if (r.id.includes('placeholder')) continue;
+      counts.set(r.name, (counts.get(r.name) ?? 0) + 1);
+    }
+    for (const [, count] of counts) {
+      expect(count).toBe(1);
+    }
+    // Each present room must be on a valid side (A or B).
+    expect(
+      s.rooms.every((r) => r.side === 'A' || r.side === 'B'),
+    ).toBe(true);
   });
 
   it('orders state.rooms left-to-right, top-to-bottom to match the grid', () => {
@@ -602,7 +657,7 @@ describe('Endgame scoring', () => {
   }
 
   it('most-gold awards to the highest-gold player', () => {
-    const s = stubState({
+    let s = stubState({
       players: [
         {
           ...initGame(FOUR_PLAYER_CONFIG).players[0]!,
@@ -622,9 +677,9 @@ describe('Endgame scoring', () => {
         initGame(FOUR_PLAYER_CONFIG).players[3]!,
       ],
     });
-    const voter = s.voters.find((v) => v.criterion === 'most-gold');
-    if (!voter) throw new Error('most-gold voter not seated this game');
-    expect(computeVoterWinner(s, voter).winner).toBe('p2');
+    const ensured = ensureVoter(s, 'most-gold');
+    s = ensured.state;
+    expect(computeVoterWinner(s, ensured.voter).winner).toBe('p2');
   });
 
   it('most-research counts total researched levels across owned spells', () => {
@@ -815,12 +870,13 @@ describe('Endgame scoring', () => {
     // Three players tied at diversity = 1 each.
     let s = initGame(FOUR_PLAYER_CONFIG);
     s = { ...s, voters: s.voters.map((v) => ({ ...v, revealed: true })) };
+    {
+      const ensured = ensureVoter(s, 'most-diversity');
+      s = ensured.state;
+    }
     const diversityVoter = s.voters.find(
       (v) => v.criterion === 'most-diversity',
-    );
-    if (!diversityVoter) {
-      throw new Error('diversity voter must be in the seeded set for this test');
-    }
+    )!;
     s = mapPlayer(s, 'p1', (p) => ({
       ...p,
       supporters: ['base.supporter.allys-mehrmus'], // sorcery
@@ -875,12 +931,13 @@ describe('Endgame scoring', () => {
   it('per-voter tiebreaker: tied IP falls through to arrival-seq (who reached that IP first wins)', () => {
     let s = initGame(FOUR_PLAYER_CONFIG);
     s = { ...s, voters: s.voters.map((v) => ({ ...v, revealed: true })) };
+    {
+      const ensured = ensureVoter(s, 'most-diversity');
+      s = ensured.state;
+    }
     const diversityVoter = s.voters.find(
       (v) => v.criterion === 'most-diversity',
-    );
-    if (!diversityVoter) {
-      throw new Error('diversity voter must be seeded for this test');
-    }
+    )!;
     // Two players tied on diversity AND on Influence — arrival-seq breaks
     // it. p1 reached 5 IP earlier (lower seq).
     s = mapPlayer(s, 'p1', (p) => ({
@@ -901,12 +958,13 @@ describe('Endgame scoring', () => {
   it('per-voter tiebreaker: tied IP AND tied arrival-seq → voter abstains', () => {
     let s = initGame(FOUR_PLAYER_CONFIG);
     s = { ...s, voters: s.voters.map((v) => ({ ...v, revealed: true })) };
+    {
+      const ensured = ensureVoter(s, 'most-diversity');
+      s = ensured.state;
+    }
     const diversityVoter = s.voters.find(
       (v) => v.criterion === 'most-diversity',
-    );
-    if (!diversityVoter) {
-      throw new Error('diversity voter must be seeded for this test');
-    }
+    )!;
     // Same diversity, same IP, same arrival-seq — nothing can break the
     // tie. Voter abstains.
     s = mapPlayer(s, 'p1', (p) => ({
@@ -1076,8 +1134,13 @@ describe('Endgame scoring', () => {
       ...p,
       resources: { ...p.resources, gold: 10 },
     }));
-    // Reveal all voters so they all participate in scoring.
+    // Reveal all voters so they all participate in scoring; ensure
+    // Most Gold is in the set (the RNG-seeded draw may not include it).
     s = { ...s, voters: s.voters.map((v) => ({ ...v, revealed: true })) };
+    {
+      const ensured = ensureVoter(s, 'most-gold');
+      s = ensured.state;
+    }
     const result = computeFinalScoring(s);
     expect(result.votesPerPlayer.p2).toBeGreaterThan(0);
     // p2 must have at least as many votes as anyone else for the archmage
@@ -1098,6 +1161,10 @@ describe('Endgame scoring', () => {
       resources: { ...p.resources, gold: 10 },
     }));
     s = { ...s, voters: s.voters.map((v) => ({ ...v, revealed: true })) };
+    {
+      const ensured = ensureVoter(s, 'most-gold');
+      s = ensured.state;
+    }
     const result = computeFinalScoring(s);
     const goldVoter = result.voterAwards.find((a) =>
       s.voters.find((v) => v.id === a.voterId && v.criterion === 'most-gold'),
@@ -1423,18 +1490,21 @@ describe('Bell Tower offerings', () => {
       if (!id) throw new Error('no active player');
       return id;
     };
-    // First-player rotation puts p4, p1, p2 as the three claimers in this
-    // config (firstPlayerIndex starts at 3 with the test rng seed). p3 is
-    // the non-claimer we hang Tardy off of so the reaction can fire.
-    s = mapPlayer(s, 'p3', (p) => ({
+    // 3 claims drain the tower, so the non-claimer is firstPlayerIndex + 3
+    // (mod 4). RNG-driven layout changes can shift firstPlayerIndex, so
+    // compute the non-claimer ID rather than baking in 'p3'. The mage IDs
+    // stay literal — they're just unique strings within the test.
+    const nonClaimerId =
+      s.players[(s.firstPlayerIndex + 3) % s.players.length]!.id;
+    s = mapPlayer(s, nonClaimerId, (p) => ({
       ...p,
       resources: { ...p.resources, mana: 1 },
       mages: [
         {
-          id: 'p3-mage',
+          id: 'opp-mage',
           cardId: 'base.mage.divinity',
           color: 'blue',
-          location: { kind: 'office' as const, playerId: 'p3' },
+          location: { kind: 'office' as const, playerId: nonClaimerId },
           isShadowing: false,
           isWounded: false,
         },
@@ -1473,10 +1543,10 @@ describe('Bell Tower offerings', () => {
       resolutionId: topPending(s).id,
       answer: { kind: 'option-chosen', optionId: 'mana', payload: {} },
     });
-    // Now the Tardy reaction window should be open and prompting p2.
+    // Now the Tardy reaction window should be open and prompting the non-claimer.
     expect(s.activeReactionWindows).toHaveLength(1);
     const reactionPrompt = topPending(s);
-    expect(reactionPrompt.responderId).toBe('p3');
+    expect(reactionPrompt.responderId).toBe(nonClaimerId);
     expect(reactionPrompt.prompt.kind).toBe('reaction-window');
     if (reactionPrompt.prompt.kind !== 'reaction-window') return;
     const tardyOption = reactionPrompt.prompt.reactionOptions.find(
@@ -1484,7 +1554,7 @@ describe('Bell Tower offerings', () => {
     );
     expect(tardyOption).toBeDefined();
 
-    // Play Tardy → mage prompt for p2.
+    // Play Tardy → mage prompt for the non-claimer.
     s = applyAction(s, {
       type: 'RESOLVE_PENDING',
       resolutionId: reactionPrompt.id,
@@ -1495,7 +1565,7 @@ describe('Bell Tower offerings', () => {
       },
     });
     const magePrompt = topPending(s);
-    expect(magePrompt.responderId).toBe('p3');
+    expect(magePrompt.responderId).toBe(nonClaimerId);
     expect(magePrompt.prompt.kind).toBe('choose-target-mage');
     if (magePrompt.prompt.kind !== 'choose-target-mage') return;
     const mageToPlace = magePrompt.prompt.eligibleMageIds[0]!;
@@ -1517,13 +1587,13 @@ describe('Bell Tower offerings', () => {
       resolutionId: slotPrompt.id,
       answer: { kind: 'space-chosen', spaceId: slotId },
     });
-    const p3After = s.players.find((p) => p.id === 'p3')!;
-    expect(p3After.resources.mana).toBe(0);
-    const tardyAfter = p3After.ownedSpells.find(
+    const opponentAfter = s.players.find((p) => p.id === nonClaimerId)!;
+    expect(opponentAfter.resources.mana).toBe(0);
+    const tardyAfter = opponentAfter.ownedSpells.find(
       (x) => x.cardId === 'base.spell.tardy',
     );
     expect(tardyAfter?.exhausted).toBe(true);
-    const placedMage = p3After.mages.find((m) => m.id === mageToPlace);
+    const placedMage = opponentAfter.mages.find((m) => m.id === mageToPlace);
     expect(placedMage?.location).toEqual({ kind: 'action-space', spaceId: slotId });
   });
 
@@ -1535,24 +1605,27 @@ describe('Bell Tower offerings', () => {
       if (!id) throw new Error('no active player');
       return id;
     };
-    // p3 is the non-claimer holding Stop Time (claimers in this config: p4, p1, p2).
-    s = mapPlayer(s, 'p3', (p) => ({
+    // The non-claimer in a 4-player config (3 claims) is firstPlayerIndex + 3
+    // mod 4. Compute it so RNG-driven first-player shifts don't break the test.
+    const nonClaimerId =
+      s.players[(s.firstPlayerIndex + 3) % s.players.length]!.id;
+    s = mapPlayer(s, nonClaimerId, (p) => ({
       ...p,
       resources: { ...p.resources, mana: 3 },
       mages: [
         {
-          id: 'p3-mage-a',
+          id: 'opp-mage-a',
           cardId: 'base.mage.divinity',
           color: 'blue',
-          location: { kind: 'office' as const, playerId: 'p3' },
+          location: { kind: 'office' as const, playerId: nonClaimerId },
           isShadowing: false,
           isWounded: false,
         },
         {
-          id: 'p3-mage-b',
+          id: 'opp-mage-b',
           cardId: 'base.mage.divinity',
           color: 'blue',
-          location: { kind: 'office' as const, playerId: 'p3' },
+          location: { kind: 'office' as const, playerId: nonClaimerId },
           isShadowing: false,
           isWounded: false,
         },
@@ -1590,9 +1663,9 @@ describe('Bell Tower offerings', () => {
       resolutionId: topPending(s).id,
       answer: { kind: 'option-chosen', optionId: 'mana', payload: {} },
     });
-    // Reaction window prompts p3 with the Stop Time option.
+    // Reaction window prompts the non-claimer with Stop Time.
     const reactionPrompt = topPending(s);
-    expect(reactionPrompt.responderId).toBe('p3');
+    expect(reactionPrompt.responderId).toBe(nonClaimerId);
     s = applyAction(s, {
       type: 'RESOLVE_PENDING',
       resolutionId: reactionPrompt.id,
@@ -1602,8 +1675,37 @@ describe('Bell Tower offerings', () => {
         reactionContext: {},
       },
     });
-    // Walk through both placements.
+    // Walk through both placements. Each placement may surface a
+    // non-chain side prompt before the next chain step:
+    //   - instant-room forfeit-or-reward (resolution-choice)
+    //   - Adventuring B's on-place "pick a card type" prompt
+    // The random layout makes which rooms end up in play
+    // nondeterministic (esp. after newer rooms — Archmage's Study A,
+    // Great Hall, Chapel B — joined the pool), so the test drains any
+    // such side prompts before each chain mage-pick instead of
+    // depending on a particular layout.
+    const drainSidePromptsIfPresent = (s2: GameState): GameState => {
+      while (s2.pendingResolutionStack.length > 0) {
+        const top =
+          s2.pendingResolutionStack[s2.pendingResolutionStack.length - 1]!;
+        if (top.resume.effectId === 'base.system.resolution-choice') {
+          s2 = forfeitAtResolution(s2);
+          continue;
+        }
+        if (top.resume.effectId === 'base.system.adventuring-b.pick-card-type') {
+          s2 = applyAction(s2, {
+            type: 'RESOLVE_PENDING',
+            resolutionId: top.id,
+            answer: { kind: 'option-chosen', optionId: 'skip', payload: {} },
+          });
+          continue;
+        }
+        break;
+      }
+      return s2;
+    };
     for (let i = 0; i < 2; i++) {
+      s = drainSidePromptsIfPresent(s);
       const mp = topPending(s);
       expect(mp.prompt.kind).toBe('choose-target-mage');
       if (mp.prompt.kind !== 'choose-target-mage') return;
@@ -1623,14 +1725,15 @@ describe('Bell Tower offerings', () => {
         answer: { kind: 'space-chosen', spaceId },
       });
     }
-    const p3After = s.players.find((p) => p.id === 'p3')!;
-    expect(p3After.resources.mana).toBe(0);
-    const stopTimeAfter = p3After.ownedSpells.find(
+    s = drainSidePromptsIfPresent(s);
+    const opponentAfter = s.players.find((p) => p.id === nonClaimerId)!;
+    expect(opponentAfter.resources.mana).toBe(0);
+    const stopTimeAfter = opponentAfter.ownedSpells.find(
       (x) => x.cardId === 'base.spell.temporal-calculus-6th-ed',
     );
     expect(stopTimeAfter?.exhausted).toBe(true);
-    // Two of p3's mages now occupy action spaces.
-    const placedCount = p3After.mages.filter(
+    // Two of the non-claimer's mages now occupy action spaces.
+    const placedCount = opponentAfter.mages.filter(
       (m) => m.location.kind === 'action-space',
     ).length;
     expect(placedCount).toBe(2);
@@ -1638,29 +1741,35 @@ describe('Bell Tower offerings', () => {
 
   it('Stop Time fires instant-room rewards for BOTH placements', () => {
     let s = startErrands();
+    // Random layout might seat Guilds A (non-instant) since both sides
+    // are now wired; this test specifically exercises the instant face.
+    s = forceRoomSide(s, 'Guilds', 'B');
     const activeId = () => {
       if (s.phase.kind !== 'errands') throw new Error('not errands');
       const id = s.players[s.phase.activePlayerIndex]?.id;
       if (!id) throw new Error('no active player');
       return id;
     };
-    s = mapPlayer(s, 'p3', (p) => ({
+    // Non-claimer in this 3-claim 4-player config = (firstPlayerIndex + 3) % 4.
+    const nonClaimerId =
+      s.players[(s.firstPlayerIndex + 3) % s.players.length]!.id;
+    s = mapPlayer(s, nonClaimerId, (p) => ({
       ...p,
       resources: { ...p.resources, mana: 3, gold: 0 },
       mages: [
         {
-          id: 'p3-mage-a',
+          id: 'opp-mage-a',
           cardId: 'base.mage.divinity',
           color: 'blue',
-          location: { kind: 'office' as const, playerId: 'p3' },
+          location: { kind: 'office' as const, playerId: nonClaimerId },
           isShadowing: false,
           isWounded: false,
         },
         {
-          id: 'p3-mage-b',
+          id: 'opp-mage-b',
           cardId: 'base.mage.divinity',
           color: 'blue',
-          location: { kind: 'office' as const, playerId: 'p3' },
+          location: { kind: 'office' as const, playerId: nonClaimerId },
           isShadowing: false,
           isWounded: false,
         },
@@ -1712,7 +1821,7 @@ describe('Bell Tower offerings', () => {
     // Helper: route one placement onto a chosen Guilds slot and accept its
     // gold reward. Returns gold delta for assertion.
     const placeAndTakeGoldReward = (guildsSlotId: string, expectedGold: number) => {
-      const goldBefore = s.players.find((p) => p.id === 'p3')!.resources.gold;
+      const goldBefore = s.players.find((p) => p.id === nonClaimerId)!.resources.gold;
       // mage prompt
       const mp = topPending(s);
       expect(mp.prompt.kind).toBe('choose-target-mage');
@@ -1748,19 +1857,19 @@ describe('Bell Tower offerings', () => {
         resolutionId: goldOrMana.id,
         answer: { kind: 'option-chosen', optionId: 'gold', payload: {} },
       });
-      const goldAfter = s.players.find((p) => p.id === 'p3')!.resources.gold;
+      const goldAfter = s.players.find((p) => p.id === nonClaimerId)!.resources.gold;
       expect(goldAfter - goldBefore).toBe(expectedGold);
     };
 
     // slot-2 grants 4 Gold; slot-3 grants 2 Gold. Both placements collect.
-    placeAndTakeGoldReward('base.room.guilds.a.slot-2', 4);
-    placeAndTakeGoldReward('base.room.guilds.a.slot-3', 2);
+    placeAndTakeGoldReward('base.room.guilds.b.slot-2', 4);
+    placeAndTakeGoldReward('base.room.guilds.b.slot-3', 2);
 
     // Stop Time chain fully drained — no pending placement remains.
     expect(s.pendingPlaceChain).toBeNull();
-    const p3After = s.players.find((p) => p.id === 'p3')!;
-    expect(p3After.resources.gold).toBe(6);
-    expect(p3After.resources.mana).toBe(0);
+    const opponentAfter = s.players.find((p) => p.id === nonClaimerId)!;
+    expect(opponentAfter.resources.gold).toBe(6);
+    expect(opponentAfter.resources.mana).toBe(0);
   });
 
   it('claimer who has Tardy does NOT get a reaction prompt (must be an opponent)', () => {
@@ -1771,9 +1880,22 @@ describe('Bell Tower offerings', () => {
       if (!id) throw new Error('no active player');
       return id;
     };
-    // The third (last-card) claimer in this config is p2 — give them Tardy
-    // and verify no reaction window opens for them on their own claim.
-    s = mapPlayer(s, 'p2', (p) => ({
+    // Drive the first two claims, then identify the third (last-card)
+    // claimer dynamically — RNG-driven layout changes can shift who that
+    // is — and give that player Tardy. The assertion: your OWN last-card
+    // claim doesn't trigger your Tardy reaction (must be an opponent).
+    s = applyAction(s, {
+      type: 'CLAIM_BELL_TOWER',
+      playerId: activeId(),
+      bellTowerCardId: 'base.bell.gain-ip',
+    });
+    s = applyAction(s, {
+      type: 'CLAIM_BELL_TOWER',
+      playerId: activeId(),
+      bellTowerCardId: 'base.bell.first-player',
+    });
+    const lastClaimerId = activeId();
+    s = mapPlayer(s, lastClaimerId, (p) => ({
       ...p,
       resources: { ...p.resources, mana: 1 },
       ownedSpells: [
@@ -1789,17 +1911,7 @@ describe('Bell Tower offerings', () => {
     }));
     s = applyAction(s, {
       type: 'CLAIM_BELL_TOWER',
-      playerId: activeId(),
-      bellTowerCardId: 'base.bell.gain-ip',
-    });
-    s = applyAction(s, {
-      type: 'CLAIM_BELL_TOWER',
-      playerId: activeId(),
-      bellTowerCardId: 'base.bell.first-player',
-    });
-    s = applyAction(s, {
-      type: 'CLAIM_BELL_TOWER',
-      playerId: activeId(),
+      playerId: lastClaimerId,
       bellTowerCardId: 'base.bell.gold-or-mana',
     });
     s = applyAction(s, {
@@ -2543,7 +2655,7 @@ describe('Mage draft', () => {
     return s;
   }
 
-  it('seeds the initial mage draft pool with 4 of each colored mage + 10 off-white neutrals', () => {
+  it('seeds the initial mage draft pool with 4 of each colored mage + 10 off-white neutrals (orange only when Mancers is active; rainbow always 0)', () => {
     const s = initGame(DRAFT_CONFIG_2P);
     expect(s.mageDraftPool).toEqual({
       red: 4,
@@ -2551,6 +2663,8 @@ describe('Mage draft', () => {
       green: 4,
       blue: 4,
       purple: 4,
+      orange: 0,
+      rainbow: 0,
       'off-white': 10,
     });
   });
@@ -2632,6 +2746,8 @@ describe('Mage draft', () => {
       green: 2,
       blue: 2,
       purple: 2,
+      orange: 0,
+      rainbow: 0,
       'off-white': 10,
     });
   });
@@ -2741,27 +2857,28 @@ function forceLibrarySideA(state: GameState): GameState {
 }
 
 /**
- * Ensures Vault side A is in the in-play rooms. If Vault is already there
- * (any side), it's swapped for side A; otherwise the first non-UC room is
- * replaced with Vault A.
+ * Ensures the playable Vault (Side B — the "draft / gain gold" face) is
+ * in the in-play rooms. Rulebook Side A is the unwired reveal-3-pick-1
+ * mechanic and is intentionally a content stub; tests that exercise
+ * Vault slots want the slot-bearing side.
  */
-function forceVaultSideA(state: GameState): GameState {
-  const vaultA = baseGamePack.rooms.find(
-    (r) => r.name === 'Vault' && r.side === 'A',
+function forceVaultPlayableSide(state: GameState): GameState {
+  const vault = baseGamePack.rooms.find(
+    (r) => r.name === 'Vault' && r.side === 'B',
   );
-  if (!vaultA) throw new Error('test helper: Vault A not in base pack');
+  if (!vault) throw new Error('test helper: Vault B not in base pack');
   const existingIdx = state.rooms.findIndex((r) => r.name === 'Vault');
   if (existingIdx !== -1) {
     return {
       ...state,
-      rooms: state.rooms.map((r, i) => (i === existingIdx ? vaultA : r)),
+      rooms: state.rooms.map((r, i) => (i === existingIdx ? vault : r)),
     };
   }
   const replaceIdx = state.rooms.findIndex((r) => !r.isUniversityCentral);
   if (replaceIdx === -1) return state;
   return {
     ...state,
-    rooms: state.rooms.map((r, i) => (i === replaceIdx ? vaultA : r)),
+    rooms: state.rooms.map((r, i) => (i === replaceIdx ? vault : r)),
   };
 }
 
@@ -2792,6 +2909,50 @@ function forceRoomSide(
   return {
     ...state,
     rooms: state.rooms.map((r, i) => (i === replaceIdx ? target : r)),
+  };
+}
+
+/** Injects a Mancers Laboratory room (side A or B) in place of a non-UC slot. */
+function forceLaboratory(state: GameState, side: 'A' | 'B'): GameState {
+  const lab = mancersPack.rooms.find(
+    (r) => r.name === 'Laboratory' && r.side === side,
+  );
+  if (!lab) {
+    throw new Error(`test helper: Laboratory side ${side} not in mancers pack`);
+  }
+  const existingIdx = state.rooms.findIndex((r) => r.name === 'Laboratory');
+  if (existingIdx !== -1) {
+    return {
+      ...state,
+      rooms: state.rooms.map((r, i) => (i === existingIdx ? lab : r)),
+    };
+  }
+  const replaceIdx = state.rooms.findIndex((r) => !r.isUniversityCentral);
+  if (replaceIdx === -1) return state;
+  return {
+    ...state,
+    rooms: state.rooms.map((r, i) => (i === replaceIdx ? lab : r)),
+  };
+}
+
+/** Injects the Mancers Laboratory Side A room in place of a non-UC slot. */
+function forceLaboratoryA(state: GameState): GameState {
+  const labA = mancersPack.rooms.find(
+    (r) => r.name === 'Laboratory' && r.side === 'A',
+  );
+  if (!labA) throw new Error('test helper: Laboratory A not in mancers pack');
+  const existingIdx = state.rooms.findIndex((r) => r.name === 'Laboratory');
+  if (existingIdx !== -1) {
+    return {
+      ...state,
+      rooms: state.rooms.map((r, i) => (i === existingIdx ? labA : r)),
+    };
+  }
+  const replaceIdx = state.rooms.findIndex((r) => !r.isUniversityCentral);
+  if (replaceIdx === -1) return state;
+  return {
+    ...state,
+    rooms: state.rooms.map((r, i) => (i === replaceIdx ? labA : r)),
   };
 }
 
@@ -4210,7 +4371,7 @@ describe('Leader spells (unique single-level)', () => {
   it('Mysticism place opportunity: placing into an instant room surfaces the slot reward prompt', () => {
     let s = setupLeaderTest();
     // Guilds A is an instant room. Force it into play.
-    s = forceRoomSide(s, 'Guilds', 'A');
+    s = forceRoomSide(s, 'Guilds', 'B');
     s = setMeritBadges(s, 'p1', 5);
     s = addMage(s, 'p1', {
       id: 'alice-grey',
@@ -4861,7 +5022,7 @@ describe('Leader spells (unique single-level)', () => {
   it('Paralocation: shadowing into an instant room surfaces the slot reward prompt after the shadow-window closes', () => {
     let s = setupLeaderTest();
     // Force Guilds A and put Bob's mage onto a non-merit slot.
-    s = forceRoomSide(s, 'Guilds', 'A');
+    s = forceRoomSide(s, 'Guilds', 'B');
     s = addMage(s, 'p1', {
       id: 'alice-mage-1',
       cardId: 'base.mage.planar-studies',
@@ -4877,7 +5038,7 @@ describe('Leader spells (unique single-level)', () => {
       cardId: 'base.mage.sorcery',
       color: 'red',
     });
-    s = placeMageOnSpace(s, 'p2', 'bob-mage-1', 'base.room.guilds.a.slot-2');
+    s = placeMageOnSpace(s, 'p2', 'bob-mage-1', 'base.room.guilds.b.slot-2');
     s = setMana(s, 'p1', 1);
     s = addOwnedSpell(s, 'p1', 'base.spell.paralocation');
     s = applyAction(s, {
@@ -4910,7 +5071,7 @@ describe('Leader spells (unique single-level)', () => {
     // surfaces for the shadowing player (Alice).
     const slot = s.rooms
       .flatMap((r) => r.actionSpaces)
-      .find((sp) => sp.id === 'base.room.guilds.a.slot-2');
+      .find((sp) => sp.id === 'base.room.guilds.b.slot-2');
     expect(slot?.shadowOccupant?.mageId).toBe('alice-mage-2');
     const rewardPrompt = topPending(s);
     expect(rewardPrompt.resume.effectId).toBe('base.system.resolution-choice');
@@ -5071,7 +5232,7 @@ describe('PLACE_WORKER', () => {
 
   it('allows placement on a merit slot even without enough Merit Badges (cost is deferred)', () => {
     let s = initGame(TWO_PLAYER_CONFIG);
-    s = forceVaultSideA(s);
+    s = forceVaultPlayableSide(s);
     s = addMage(s, 'p1', {
       id: 'alice-mage-1',
       cardId: 'base.mage.divinity',
@@ -5083,7 +5244,7 @@ describe('PLACE_WORKER', () => {
       type: 'PLACE_WORKER',
       playerId: 'p1',
       mageId: 'alice-mage-1',
-      actionSpaceId: 'base.room.vault.a.slot-1',
+      actionSpaceId: 'base.room.vault.b.slot-1',
     });
     // Mage seated, MB unchanged. Cost is checked at resolution time.
     const alice = s.players.find((p) => p.id === 'p1');
@@ -5095,7 +5256,7 @@ describe('PLACE_WORKER', () => {
 
   it('places on a merit slot without paying the cost up front (deduction happens at resolution)', () => {
     let s = initGame(TWO_PLAYER_CONFIG);
-    s = forceVaultSideA(s);
+    s = forceVaultPlayableSide(s);
     s = addMage(s, 'p1', {
       id: 'alice-mage-1',
       cardId: 'base.mage.divinity',
@@ -5107,7 +5268,7 @@ describe('PLACE_WORKER', () => {
       type: 'PLACE_WORKER',
       playerId: 'p1',
       mageId: 'alice-mage-1',
-      actionSpaceId: 'base.room.vault.a.slot-1',
+      actionSpaceId: 'base.room.vault.b.slot-1',
     });
     // Mage seated; merit cost not yet deducted (still 2/0).
     const alice = s.players.find((p) => p.id === 'p1');
@@ -5167,7 +5328,7 @@ describe('PLACE_WORKER', () => {
 
 function setupVaultSlotTest(slotId: string): GameState {
   let s = initGame(TWO_PLAYER_CONFIG);
-  s = forceVaultSideA(s);
+  s = forceVaultPlayableSide(s);
   s = addMage(s, 'p1', {
     id: 'alice-mage-1',
     cardId: 'base.mage.divinity',
@@ -5197,9 +5358,9 @@ function driveToVaultPrompt(state: GameState): GameState {
   return takeRewardAtResolution(s);
 }
 
-describe('Vault A slot 3 (Gain 3 Gold)', () => {
+describe('Vault B slot 3 (Gain 3 Gold)', () => {
   it('grants 3 gold with no prompt', () => {
-    let s = setupVaultSlotTest('base.room.vault.a.slot-3');
+    let s = setupVaultSlotTest('base.room.vault.b.slot-3');
     s = setGold(s, 'p1', 0);
     s = driveToVaultPrompt(s);
     expect(s.pendingResolutionStack).toHaveLength(0);
@@ -5210,9 +5371,9 @@ describe('Vault A slot 3 (Gain 3 Gold)', () => {
   });
 });
 
-describe('Vault A slot 2 (Draft a Vault Card OR Gain 5 Gold)', () => {
+describe('Vault B slot 2 (Draft a Vault Card OR Gain 5 Gold)', () => {
   it('opens an OR prompt with two options', () => {
-    let s = setupVaultSlotTest('base.room.vault.a.slot-2');
+    let s = setupVaultSlotTest('base.room.vault.b.slot-2');
     s = driveToVaultPrompt(s);
     const top = topPending(s);
     expect(top.prompt.kind).toBe('choose-from-options');
@@ -5222,7 +5383,7 @@ describe('Vault A slot 2 (Draft a Vault Card OR Gain 5 Gold)', () => {
   });
 
   it('picking gold grants 5 gold and resolves', () => {
-    let s = setupVaultSlotTest('base.room.vault.a.slot-2');
+    let s = setupVaultSlotTest('base.room.vault.b.slot-2');
     s = setGold(s, 'p1', 0);
     s = driveToVaultPrompt(s);
     s = applyAction(s, {
@@ -5237,7 +5398,7 @@ describe('Vault A slot 2 (Draft a Vault Card OR Gain 5 Gold)', () => {
   });
 
   it('picking draft chains to choose-vault-card and grants the card with no gold', () => {
-    let s = setupVaultSlotTest('base.room.vault.a.slot-2');
+    let s = setupVaultSlotTest('base.room.vault.b.slot-2');
     s = setGold(s, 'p1', 1);
     s = driveToVaultPrompt(s);
     s = applyAction(s, {
@@ -5265,9 +5426,9 @@ describe('Vault A slot 2 (Draft a Vault Card OR Gain 5 Gold)', () => {
   });
 });
 
-describe('Vault A slot 1 (Draft a Vault Card AND Gain 4 Gold)', () => {
+describe('Vault B slot 1 (Draft a Vault Card AND Gain 4 Gold)', () => {
   it('opens choose-vault-card without affordability filter, then grants card + 4 gold', () => {
-    let s = setupVaultSlotTest('base.room.vault.a.slot-1');
+    let s = setupVaultSlotTest('base.room.vault.b.slot-1');
     s = setGold(s, 'p1', 0);
     s = driveToVaultPrompt(s);
     const draftPrompt = topPending(s);
@@ -5288,13 +5449,941 @@ describe('Vault A slot 1 (Draft a Vault Card AND Gain 4 Gold)', () => {
   });
 
   it('still grants 4 gold when the tableau is empty', () => {
-    let s = setupVaultSlotTest('base.room.vault.a.slot-1');
+    let s = setupVaultSlotTest('base.room.vault.b.slot-1');
     s = setVaultTableau(s, []);
     s = setGold(s, 'p1', 0);
     s = driveToVaultPrompt(s);
     expect(s.pendingResolutionStack).toHaveLength(0);
     const alice = s.players.find((p) => p.id === 'p1');
     expect(alice?.resources.gold).toBe(4);
+  });
+});
+
+// ============================================================================
+// Vault A — reveal-top-3, draft in slot order
+// ============================================================================
+
+describe('Vault A (reveal top 3 of the Vault Deck)', () => {
+  function setupVaultATest(opts: {
+    slotIds: string[];
+    deckTop: string[];
+  }): GameState {
+    let s = initGame(TWO_PLAYER_CONFIG);
+    s = forceRoomSide(s, 'Vault', 'A');
+    s = zeroPlayerResources(s, 'p1');
+    s = zeroPlayerResources(s, 'p2');
+    s = setMeritBadges(s, 'p1', 5);
+    s = setMeritBadges(s, 'p2', 5);
+    // Seat one mage per slot (Alice's first, Bob's takes later slots if any).
+    opts.slotIds.forEach((slotId, i) => {
+      const owner = i === 0 ? 'p1' : 'p2';
+      const mageId = `${owner}-mage-${i + 1}`;
+      s = addMage(s, owner, {
+        id: mageId,
+        cardId: 'base.mage.divinity',
+        color: 'blue',
+      });
+      s = placeMageOnSpace(s, owner, mageId, slotId);
+    });
+    // Replace the top of the vault deck with the chosen cards. Append the
+    // rest of the existing deck after so subsequent draws stay deterministic.
+    s = {
+      ...s,
+      vaultDeck: [
+        ...opts.deckTop,
+        ...s.vaultDeck.filter((c) => !opts.deckTop.includes(c)),
+      ],
+      bellTower: { ...s.bellTower, available: [] },
+    };
+    return s;
+  }
+
+  it('reveals the top 3 of the deck when the first occupied slot resolves', () => {
+    let s = setupVaultATest({
+      slotIds: ['base.room.vault.a.slot-1'],
+      deckTop: [
+        'base.vault.mana-elixir',
+        'base.vault.gilded-chalice',
+        'base.vault.phase-steppers',
+      ],
+    });
+    s = applyAction(s, { type: 'ADVANCE_PHASE' }); // round-setup → errands
+    s = applyAction(s, { type: 'ADVANCE_PHASE' }); // errands → resolution
+    s = applyAction(s, { type: 'ADVANCE_PHASE' }); // pump → forfeit-or-reward
+    s = takeRewardAtResolution(s);
+    // After the merit deduction the slot effect ran: the deck top 3 were
+    // popped into the revealed pool and a draft prompt is open.
+    expect(s.vaultARevealed).toEqual([
+      'base.vault.mana-elixir',
+      'base.vault.gilded-chalice',
+      'base.vault.phase-steppers',
+    ]);
+    const top = topPending(s);
+    expect(top.prompt.kind).toBe('choose-vault-card');
+    if (top.prompt.kind !== 'choose-vault-card') throw new Error('unreachable');
+    expect(top.prompt.eligibleCardIds.sort()).toEqual(
+      [
+        'base.vault.gilded-chalice',
+        'base.vault.mana-elixir',
+        'base.vault.phase-steppers',
+      ].sort(),
+    );
+    // Deck shrank by 3.
+    expect(s.vaultDeck.slice(0, 1)).not.toEqual(['base.vault.mana-elixir']);
+  });
+
+  it('subsequent occupants draft from the same remaining pool in slot order', () => {
+    let s = setupVaultATest({
+      slotIds: [
+        'base.room.vault.a.slot-1',
+        'base.room.vault.a.slot-2',
+        'base.room.vault.a.slot-3',
+      ],
+      deckTop: [
+        'base.vault.mana-elixir',
+        'base.vault.gilded-chalice',
+        'base.vault.phase-steppers',
+      ],
+    });
+    s = applyAction(s, { type: 'ADVANCE_PHASE' });
+    s = applyAction(s, { type: 'ADVANCE_PHASE' });
+    s = applyAction(s, { type: 'ADVANCE_PHASE' });
+    s = takeRewardAtResolution(s);
+
+    // Alice (slot 1) drafts mana-elixir.
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'card-chosen', cardId: 'base.vault.mana-elixir' },
+    });
+    expect(s.vaultARevealed).toEqual([
+      'base.vault.gilded-chalice',
+      'base.vault.phase-steppers',
+    ]);
+    expect(s.players.find((p) => p.id === 'p1')!.vaultCards).toEqual([
+      { cardId: 'base.vault.mana-elixir', exhausted: false },
+    ]);
+
+    // Pump advances to slot 2 (Bob); after his forfeit-or-reward prompt, the
+    // remaining pool is offered.
+    s = takeRewardAtResolution(s);
+    let second = topPending(s);
+    expect(second.responderId).toBe('p2');
+    expect(second.prompt.kind).toBe('choose-vault-card');
+    if (second.prompt.kind !== 'choose-vault-card') throw new Error('unreachable');
+    expect(second.prompt.eligibleCardIds.sort()).toEqual(
+      ['base.vault.gilded-chalice', 'base.vault.phase-steppers'].sort(),
+    );
+    // Bob picks gilded-chalice.
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: second.id,
+      answer: { kind: 'card-chosen', cardId: 'base.vault.gilded-chalice' },
+    });
+
+    // Slot 3 (Bob's second mage): only phase-steppers left.
+    s = takeRewardAtResolution(s);
+    const third = topPending(s);
+    if (third.prompt.kind !== 'choose-vault-card') throw new Error('unreachable');
+    expect(third.prompt.eligibleCardIds).toEqual(['base.vault.phase-steppers']);
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: third.id,
+      answer: { kind: 'card-chosen', cardId: 'base.vault.phase-steppers' },
+    });
+
+    // Pool is now empty; the resolution pump should clear the field once
+    // it leaves Vault A. Drive the pump forward.
+    s = applyAction(s, { type: 'ADVANCE_PHASE' });
+    expect(s.vaultARevealed).toBeNull();
+  });
+
+  it('unclaimed cards return to the top of the deck when resolution leaves Vault A', () => {
+    // Only one occupant — slot 2. After they draft 1 card, the 2 leftover
+    // cards should return to the top of the deck in their original order.
+    let s = setupVaultATest({
+      slotIds: ['base.room.vault.a.slot-2'],
+      deckTop: [
+        'base.vault.mana-elixir',
+        'base.vault.gilded-chalice',
+        'base.vault.phase-steppers',
+      ],
+    });
+    s = applyAction(s, { type: 'ADVANCE_PHASE' });
+    s = applyAction(s, { type: 'ADVANCE_PHASE' });
+    s = applyAction(s, { type: 'ADVANCE_PHASE' });
+    s = takeRewardAtResolution(s);
+    // Note: mage is on slot-2 not slot-1, so the slot-1 resolution is a
+    // no-op (no occupant). The first draft prompt comes from slot 2.
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'card-chosen', cardId: 'base.vault.gilded-chalice' },
+    });
+    // Drive past Vault A — pump should clear the revealed pool and push
+    // the 2 unclaimed cards back to the top of the deck.
+    s = applyAction(s, { type: 'ADVANCE_PHASE' });
+    expect(s.vaultARevealed).toBeNull();
+    expect(s.vaultDeck.slice(0, 2)).toEqual([
+      'base.vault.mana-elixir',
+      'base.vault.phase-steppers',
+    ]);
+  });
+
+  it('reveals fewer than 3 cards when the deck is shallow', () => {
+    let s = setupVaultATest({
+      slotIds: ['base.room.vault.a.slot-1'],
+      deckTop: [],
+    });
+    // Trim the deck to just one card.
+    s = { ...s, vaultDeck: ['base.vault.mana-elixir'] };
+    s = applyAction(s, { type: 'ADVANCE_PHASE' });
+    s = applyAction(s, { type: 'ADVANCE_PHASE' });
+    s = applyAction(s, { type: 'ADVANCE_PHASE' });
+    s = takeRewardAtResolution(s);
+    expect(s.vaultARevealed).toEqual(['base.vault.mana-elixir']);
+    expect(s.vaultDeck).toEqual([]);
+    const top = topPending(s);
+    if (top.prompt.kind !== 'choose-vault-card') throw new Error('unreachable');
+    expect(top.prompt.eligibleCardIds).toEqual(['base.vault.mana-elixir']);
+  });
+});
+
+// ============================================================================
+// Adventuring A — merit secret-supporter+gold; two OR-prompt regular slots
+// ============================================================================
+
+describe('Adventuring A', () => {
+  it('slot 1 (merit) draws a Secret Supporter AND grants 3 Gold', () => {
+    let s = setupRoomSlotTest(
+      'Adventuring',
+      'A',
+      'base.room.adventuring.a.slot-1',
+    );
+    s = {
+      ...s,
+      supporterDeck: ['base.supporter.placeholder.1'],
+      supporterTableau: [],
+    };
+    s = driveToResolution(s);
+    const alice = s.players.find((p) => p.id === 'p1')!;
+    expect(alice.personalDiscard).toEqual([
+      { kind: 'secret-supporter', cardId: 'base.supporter.placeholder.1' },
+    ]);
+    expect(alice.resources.gold).toBe(3);
+    expect(s.supporterDeck).toHaveLength(0);
+  });
+
+  it('slot 2 opens an OR prompt (vault / IP / INT); picking vault draws top of deck', () => {
+    let s = setupRoomSlotTest(
+      'Adventuring',
+      'A',
+      'base.room.adventuring.a.slot-2',
+    );
+    // Force a known top of the vault deck.
+    s = {
+      ...s,
+      vaultDeck: ['base.vault.gilded-chalice', ...s.vaultDeck.filter((id) => id !== 'base.vault.gilded-chalice')],
+    };
+    s = driveToResolution(s);
+    const prompt = topPending(s);
+    expect(prompt.prompt.kind).toBe('choose-from-options');
+    if (prompt.prompt.kind !== 'choose-from-options') throw new Error('unreachable');
+    const ids = prompt.prompt.options.map((o) => o.id);
+    expect(ids).toEqual(['vault', 'ip', 'int']);
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: prompt.id,
+      answer: { kind: 'option-chosen', optionId: 'vault', payload: {} },
+    });
+    const alice = s.players.find((p) => p.id === 'p1')!;
+    expect(
+      alice.vaultCards.some((v) => v.cardId === 'base.vault.gilded-chalice'),
+    ).toBe(true);
+  });
+
+  it('slot 2 → IP grants 2 IP', () => {
+    let s = setupRoomSlotTest(
+      'Adventuring',
+      'A',
+      'base.room.adventuring.a.slot-2',
+    );
+    s = driveToResolution(s);
+    const prompt = topPending(s);
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: prompt.id,
+      answer: { kind: 'option-chosen', optionId: 'ip', payload: {} },
+    });
+    expect(s.players.find((p) => p.id === 'p1')?.resources.influence).toBe(2);
+  });
+
+  it('slot 2 → INT grants 1 INT', () => {
+    let s = setupRoomSlotTest(
+      'Adventuring',
+      'A',
+      'base.room.adventuring.a.slot-2',
+    );
+    s = driveToResolution(s);
+    const prompt = topPending(s);
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: prompt.id,
+      answer: { kind: 'option-chosen', optionId: 'int', payload: {} },
+    });
+    expect(
+      s.players.find((p) => p.id === 'p1')?.resources.intelligence,
+    ).toBe(1);
+  });
+
+  it('slot 3 → spell draws top of spell deck, learns it (intPlaced=true), and spends 1 INT', () => {
+    let s = setupRoomSlotTest(
+      'Adventuring',
+      'A',
+      'base.room.adventuring.a.slot-3',
+    );
+    s = {
+      ...s,
+      spellDeck: ['base.spell.burn', ...s.spellDeck.filter((id) => id !== 'base.spell.burn')],
+    };
+    // Drawing a spell costs 1 INT — grant it.
+    s = mapPlayer(s, 'p1', (p) => ({
+      ...p,
+      resources: { ...p.resources, intelligence: 1 },
+    }));
+    s = driveToResolution(s);
+    const prompt = topPending(s);
+    expect(prompt.prompt.kind).toBe('choose-from-options');
+    if (prompt.prompt.kind !== 'choose-from-options') throw new Error('unreachable');
+    const ids = prompt.prompt.options.map((o) => o.id);
+    expect(ids).toEqual(['spell', 'ip', 'wis']);
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: prompt.id,
+      answer: { kind: 'option-chosen', optionId: 'spell', payload: {} },
+    });
+    const alice = s.players.find((p) => p.id === 'p1')!;
+    const drawn = alice.ownedSpells.find((sp) => sp.cardId === 'base.spell.burn');
+    expect(drawn).toBeDefined();
+    // Learned on the spot — intPlaced true, INT pool decremented.
+    expect(drawn?.intPlaced).toBe(true);
+    expect(alice.resources.intelligence).toBe(0);
+  });
+
+  it('slot 3 marks the spell option unavailable when INT < 1 (other options stay usable)', () => {
+    let s = setupRoomSlotTest(
+      'Adventuring',
+      'A',
+      'base.room.adventuring.a.slot-3',
+    );
+    // setupRoomSlotTest zeroes p1's resources, so intelligence is 0.
+    s = driveToResolution(s);
+    const prompt = topPending(s);
+    if (prompt.prompt.kind !== 'choose-from-options') throw new Error('unreachable');
+    const spellOpt = prompt.prompt.options.find((o) => o.id === 'spell');
+    const ipOpt = prompt.prompt.options.find((o) => o.id === 'ip');
+    const wisOpt = prompt.prompt.options.find((o) => o.id === 'wis');
+    expect(spellOpt?.available).toBe(false);
+    expect(spellOpt?.unavailableReason).toMatch(/INT/);
+    expect(ipOpt?.available).not.toBe(false);
+    expect(wisOpt?.available).not.toBe(false);
+  });
+
+  it('slot 3 → spell throws engine-side when submitted with 0 INT', () => {
+    let s = setupRoomSlotTest(
+      'Adventuring',
+      'A',
+      'base.room.adventuring.a.slot-3',
+    );
+    s = {
+      ...s,
+      spellDeck: ['base.spell.burn', ...s.spellDeck.filter((id) => id !== 'base.spell.burn')],
+    };
+    s = driveToResolution(s);
+    const prompt = topPending(s);
+    expect(() =>
+      applyAction(s, {
+        type: 'RESOLVE_PENDING',
+        resolutionId: prompt.id,
+        answer: { kind: 'option-chosen', optionId: 'spell', payload: {} },
+      }),
+    ).toThrow(/requires 1 INT/);
+  });
+
+  it('slot 3 → WIS grants 1 WIS', () => {
+    let s = setupRoomSlotTest(
+      'Adventuring',
+      'A',
+      'base.room.adventuring.a.slot-3',
+    );
+    s = driveToResolution(s);
+    const prompt = topPending(s);
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: prompt.id,
+      answer: { kind: 'option-chosen', optionId: 'wis', payload: {} },
+    });
+    expect(s.players.find((p) => p.id === 'p1')?.resources.wisdom).toBe(1);
+  });
+});
+
+// ============================================================================
+// Adventuring B — on-place "pick a card type" + resolution draft
+// ============================================================================
+
+describe('Adventuring B', () => {
+  function setupAdventuringBTest(): GameState {
+    let s = initGame(TWO_PLAYER_CONFIG);
+    s = forceRoomSide(s, 'Adventuring', 'B');
+    s = zeroPlayerResources(s, 'p1');
+    s = zeroPlayerResources(s, 'p2');
+    s = addMage(s, 'p1', {
+      id: 'alice-mage-1',
+      cardId: 'base.mage.divinity',
+      color: 'blue',
+    });
+    s = addMage(s, 'p1', {
+      id: 'alice-mage-2',
+      cardId: 'base.mage.divinity',
+      color: 'blue',
+    });
+    s = setMeritBadges(s, 'p1', 5);
+    // Seed deterministic deck tops so the test can verify the popped
+    // cards by id. Use real cards from the base pack.
+    s = {
+      ...s,
+      spellDeck: ['base.spell.burn', ...s.spellDeck.filter((id) => id !== 'base.spell.burn')],
+      vaultDeck: [
+        'base.vault.gilded-chalice',
+        ...s.vaultDeck.filter((id) => id !== 'base.vault.gilded-chalice'),
+      ],
+      supporterDeck: [
+        'base.supporter.alumis',
+        ...s.supporterDeck.filter((id) => id !== 'base.supporter.alumis'),
+      ],
+      firstPlayerIndex: 0,
+      phase: {
+        kind: 'errands',
+        round: 1,
+        activePlayerIndex: 0,
+        actionUsed: false,
+        fastActionUsed: false,
+      },
+    };
+    return s;
+  }
+
+  it('places a Mage at Adventuring B → pick-card-type prompt fires', () => {
+    let s = setupAdventuringBTest();
+    s = applyAction(s, {
+      type: 'PLACE_WORKER',
+      playerId: 'p1',
+      mageId: 'alice-mage-1',
+      actionSpaceId: 'base.room.adventuring.b.slot-2',
+    });
+    const top = topPending(s);
+    expect(top.responderId).toBe('p1');
+    expect(top.source.id).toBe('base.room.adventuring.b');
+    if (top.prompt.kind !== 'choose-from-options') {
+      throw new Error('expected choose-from-options prompt');
+    }
+    const ids = top.prompt.options.map((o) => o.id).sort();
+    // All three card types + Skip.
+    expect(ids).toEqual(['skip', 'spell', 'supporter', 'vault'].sort());
+  });
+
+  it('picking "spell" pops the top of spellDeck into the pool (and not the deck)', () => {
+    let s = setupAdventuringBTest();
+    const spellTop = s.spellDeck[0]!;
+    const spellDeckBefore = s.spellDeck.length;
+    s = applyAction(s, {
+      type: 'PLACE_WORKER',
+      playerId: 'p1',
+      mageId: 'alice-mage-1',
+      actionSpaceId: 'base.room.adventuring.b.slot-2',
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'option-chosen', optionId: 'spell', payload: {} },
+    });
+    expect(s.adventuringBPool).toEqual({
+      spells: [spellTop],
+      vaultCards: [],
+      supporters: [],
+    });
+    expect(s.spellDeck.length).toBe(spellDeckBefore - 1);
+    expect(s.spellDeck.includes(spellTop)).toBe(false);
+  });
+
+  it('picking "skip" leaves all decks and the pool untouched', () => {
+    let s = setupAdventuringBTest();
+    const before = {
+      spellDeck: s.spellDeck.length,
+      vaultDeck: s.vaultDeck.length,
+      supporterDeck: s.supporterDeck.length,
+      pool: s.adventuringBPool,
+    };
+    s = applyAction(s, {
+      type: 'PLACE_WORKER',
+      playerId: 'p1',
+      mageId: 'alice-mage-1',
+      actionSpaceId: 'base.room.adventuring.b.slot-2',
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'option-chosen', optionId: 'skip', payload: {} },
+    });
+    expect(s.spellDeck.length).toBe(before.spellDeck);
+    expect(s.vaultDeck.length).toBe(before.vaultDeck);
+    expect(s.supporterDeck.length).toBe(before.supporterDeck);
+    expect(s.adventuringBPool).toBe(before.pool);
+  });
+
+  it('caps a type at 3 — a 4th pick of that type is excluded from the prompt', () => {
+    let s = setupAdventuringBTest();
+    // Seed pool with 3 supporters already.
+    s = {
+      ...s,
+      adventuringBPool: {
+        spells: [],
+        vaultCards: [],
+        supporters: [
+          'base.supporter.alumis',
+          'base.supporter.borneo',
+          'base.supporter.juto',
+        ],
+      },
+    };
+    s = applyAction(s, {
+      type: 'PLACE_WORKER',
+      playerId: 'p1',
+      mageId: 'alice-mage-1',
+      actionSpaceId: 'base.room.adventuring.b.slot-2',
+    });
+    const top = topPending(s);
+    if (top.prompt.kind !== 'choose-from-options') {
+      throw new Error('expected choose-from-options prompt');
+    }
+    const ids = top.prompt.options.map((o) => o.id);
+    expect(ids).not.toContain('supporter');
+    expect(ids).toContain('spell');
+    expect(ids).toContain('vault');
+    expect(ids).toContain('skip');
+  });
+
+  it('at resolution, an occupant drafts a pool card; leftovers return to deck bottoms', () => {
+    // Build a state with a pre-seeded pool, one occupant, and drive
+    // to the room's resolution-time draft.
+    let s = setupAdventuringBTest();
+    s = placeMageOnSpace(
+      s,
+      'p1',
+      'alice-mage-1',
+      'base.room.adventuring.b.slot-2',
+    );
+    // Drafting a spell costs 1 INT (same as a Library draft).
+    s = mapPlayer(s, 'p1', (p) => ({
+      ...p,
+      resources: { ...p.resources, intelligence: 1 },
+    }));
+    const seededSpell = 'base.spell.burn';
+    const seededVault = 'base.vault.gilded-chalice';
+    const seededSupporter = 'base.supporter.alumis';
+    s = {
+      ...s,
+      adventuringBPool: {
+        spells: [seededSpell],
+        vaultCards: [seededVault],
+        supporters: [seededSupporter],
+      },
+      bellTower: { ...s.bellTower, available: [] },
+    };
+    const spellDeckLen = s.spellDeck.length;
+    const vaultDeckLen = s.vaultDeck.length;
+    const supporterDeckLen = s.supporterDeck.length;
+
+    // errands → resolution → pump → forfeit-or-reward prompt.
+    s = applyAction(s, { type: 'ADVANCE_PHASE' });
+    s = applyAction(s, { type: 'ADVANCE_PHASE' });
+    s = takeRewardAtResolution(s);
+
+    // Draft prompt should be active with 3 options (one per card kind).
+    const draftPrompt = topPending(s);
+    if (draftPrompt.prompt.kind !== 'choose-from-options') {
+      throw new Error('expected draft prompt');
+    }
+    const ids = draftPrompt.prompt.options.map((o) => o.id);
+    expect(ids).toContain(`spell::${seededSpell}`);
+    expect(ids).toContain(`vault::${seededVault}`);
+    expect(ids).toContain(`supporter::${seededSupporter}`);
+
+    // Alice drafts the spell. The pump auto-continues through the
+    // remaining (empty) Adventuring B slots and the cleanup fires once
+    // the pointer leaves the room — returning leftovers to the bottom
+    // of their decks and clearing the pool.
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: draftPrompt.id,
+      answer: {
+        kind: 'option-chosen',
+        optionId: `spell::${seededSpell}`,
+        payload: {},
+      },
+    });
+    const alice = s.players.find((p) => p.id === 'p1')!;
+    const drafted = alice.ownedSpells.find((sp) => sp.cardId === seededSpell);
+    expect(drafted).toBeDefined();
+    // Learned via the 1 INT spend → intPlaced true, INT pool empty.
+    expect(drafted?.intPlaced).toBe(true);
+    expect(alice.resources.intelligence).toBe(0);
+    expect(s.adventuringBPool).toBeNull();
+    // Remaining vault + supporter pushed to the bottom of their decks.
+    expect(s.vaultDeck.length).toBe(vaultDeckLen + 1);
+    expect(s.vaultDeck[s.vaultDeck.length - 1]).toBe(seededVault);
+    expect(s.supporterDeck.length).toBe(supporterDeckLen + 1);
+    expect(s.supporterDeck[s.supporterDeck.length - 1]).toBe(seededSupporter);
+    // The spell didn't go back to the deck — Alice took it.
+    expect(s.spellDeck.length).toBe(spellDeckLen);
+  });
+
+  it('spell draft options are marked unavailable when the drafter has 0 INT', () => {
+    let s = setupAdventuringBTest();
+    s = placeMageOnSpace(
+      s,
+      'p1',
+      'alice-mage-1',
+      'base.room.adventuring.b.slot-2',
+    );
+    // p1 has 0 INT (zeroPlayerResources). Spell options must show but
+    // be flagged unavailable; vault/supporter options stay usable.
+    s = {
+      ...s,
+      adventuringBPool: {
+        spells: ['base.spell.burn'],
+        vaultCards: ['base.vault.gilded-chalice'],
+        supporters: ['base.supporter.alumis'],
+      },
+      bellTower: { ...s.bellTower, available: [] },
+    };
+    s = applyAction(s, { type: 'ADVANCE_PHASE' });
+    s = applyAction(s, { type: 'ADVANCE_PHASE' });
+    s = takeRewardAtResolution(s);
+    const draftPrompt = topPending(s);
+    if (draftPrompt.prompt.kind !== 'choose-from-options') {
+      throw new Error('expected draft prompt');
+    }
+    const spellOpt = draftPrompt.prompt.options.find(
+      (o) => o.id === 'spell::base.spell.burn',
+    );
+    const vaultOpt = draftPrompt.prompt.options.find(
+      (o) => o.id === 'vault::base.vault.gilded-chalice',
+    );
+    expect(spellOpt?.available).toBe(false);
+    expect(spellOpt?.unavailableReason).toMatch(/INT/);
+    // Other card types don't need INT.
+    expect(vaultOpt?.available).not.toBe(false);
+  });
+
+  it('attempting to draft a spell with 0 INT throws engine-side', () => {
+    let s = setupAdventuringBTest();
+    s = placeMageOnSpace(
+      s,
+      'p1',
+      'alice-mage-1',
+      'base.room.adventuring.b.slot-2',
+    );
+    s = {
+      ...s,
+      adventuringBPool: {
+        spells: ['base.spell.burn'],
+        vaultCards: [],
+        supporters: [],
+      },
+      bellTower: { ...s.bellTower, available: [] },
+    };
+    s = applyAction(s, { type: 'ADVANCE_PHASE' });
+    s = applyAction(s, { type: 'ADVANCE_PHASE' });
+    s = takeRewardAtResolution(s);
+    const draftPrompt = topPending(s);
+    expect(() =>
+      applyAction(s, {
+        type: 'RESOLVE_PENDING',
+        resolutionId: draftPrompt.id,
+        answer: {
+          kind: 'option-chosen',
+          optionId: 'spell::base.spell.burn',
+          payload: {},
+        },
+      }),
+    ).toThrow(/requires 1 INT/);
+  });
+
+  it("Pass option always present; lets a player forgo the draft when no affordable pick is available", () => {
+    let s = setupAdventuringBTest();
+    s = placeMageOnSpace(
+      s,
+      'p1',
+      'alice-mage-1',
+      'base.room.adventuring.b.slot-2',
+    );
+    // Spells-only pool + p1 has 0 INT — only the Pass option keeps the
+    // player from getting bricked into an impossible draft.
+    s = {
+      ...s,
+      adventuringBPool: {
+        spells: ['base.spell.burn'],
+        vaultCards: [],
+        supporters: [],
+      },
+      bellTower: { ...s.bellTower, available: [] },
+    };
+    s = applyAction(s, { type: 'ADVANCE_PHASE' });
+    s = applyAction(s, { type: 'ADVANCE_PHASE' });
+    s = takeRewardAtResolution(s);
+    const draftPrompt = topPending(s);
+    expect(draftPrompt.prompt.kind).toBe('choose-from-options');
+    if (draftPrompt.prompt.kind !== 'choose-from-options') throw new Error('unreachable');
+    const passOpt = draftPrompt.prompt.options.find((o) => o.id === 'pass');
+    expect(passOpt).toBeDefined();
+    expect(passOpt?.available).not.toBe(false);
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: draftPrompt.id,
+      answer: { kind: 'option-chosen', optionId: 'pass', payload: {} },
+    });
+    // The player didn't gain the spell and didn't spend INT. The pool
+    // itself is cleaned up by the pump (passed cards return to the
+    // bottom of their respective decks via the standard "leftover
+    // unclaimed cards" path).
+    const alice = s.players.find((p) => p.id === 'p1')!;
+    expect(alice.ownedSpells.some((sp) => sp.cardId === 'base.spell.burn')).toBe(
+      false,
+    );
+    expect(alice.resources.intelligence).toBe(0);
+    expect(s.spellDeck[s.spellDeck.length - 1]).toBe('base.spell.burn');
+  });
+
+  it('shadow placement at Adventuring B also fires the pick-card-type prompt', () => {
+    let s = setupAdventuringBTest();
+    // Seat an opposing mage on Adventuring B slot-2 so Alice can shadow OVER.
+    s = addMage(s, 'p2', {
+      id: 'bob-base',
+      cardId: 'base.mage.sorcery',
+      color: 'red',
+    });
+    s = placeMageOnSpace(
+      s,
+      'p2',
+      'bob-base',
+      'base.room.adventuring.b.slot-2',
+    );
+    // Give Alice a shadow-on-place buff (Inversion mandatory).
+    s = {
+      ...s,
+      activeBuffs: [
+        ...s.activeBuffs,
+        {
+          kind: 'shadow-on-place',
+          casterPlayerId: 'p1',
+          mode: 'mandatory',
+          spellCardId: 'base.spell.infinite-universes-realized',
+          label: 'Inversion',
+          expiresAt: { kind: 'round-end' },
+        },
+      ],
+    };
+    s = applyAction(s, {
+      type: 'PLACE_WORKER',
+      playerId: 'p1',
+      mageId: 'alice-mage-1',
+      actionSpaceId: 'base.room.adventuring.b.slot-2',
+      isShadowing: true,
+    });
+    // The mage-shadowed reaction window is on top; below it is the
+    // Adventuring pick prompt (it gets pushed BEFORE the window opens).
+    const reactionPrompt = topPending(s);
+    expect(reactionPrompt.prompt.kind).toBe('reaction-window');
+    // Bob passes the reaction.
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: reactionPrompt.id,
+      answer: { kind: 'reaction-passed' },
+    });
+    // Adventuring B prompt now on top.
+    const pickPrompt = topPending(s);
+    expect(pickPrompt.source.id).toBe('base.room.adventuring.b');
+    if (pickPrompt.prompt.kind !== 'choose-from-options') {
+      throw new Error('expected pick prompt');
+    }
+    expect(pickPrompt.prompt.options.some((o) => o.id === 'spell')).toBe(
+      true,
+    );
+  });
+
+  it('Mysticism post-cast placement at Adventuring B fires the pick-card-type prompt', () => {
+    // Setup: Alice has a grey mage in office + Burn (action spell);
+    // Adventuring B is in play. After Burn fully resolves the post-cast
+    // Mysticism trigger fires; Alice places the grey mage at an
+    // Adventuring B slot and the pick prompt must follow.
+    let s = setupAdventuringBTest();
+    s = addMage(s, 'p1', {
+      id: 'alice-grey',
+      cardId: 'base.mage.mysticism',
+      color: 'grey',
+    });
+    s = addOwnedSpell(s, 'p1', 'base.spell.burn', { intPlaced: true });
+    s = setMana(s, 'p1', 1);
+    // Bob has a mage at Library so Burn has a target.
+    s = forceLibrarySideA(s);
+    s = addMage(s, 'p2', {
+      id: 'bob-mage',
+      cardId: 'base.mage.sorcery',
+      color: 'red',
+    });
+    s = placeMageOnSpace(s, 'p2', 'bob-mage', 'base.room.library.a.slot-1');
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.burn',
+      level: 1,
+    });
+    // Burn target prompt → wound bob's mage.
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'mage-chosen', mageId: 'bob-mage' },
+    });
+    // Reaction window → Bob passes.
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'reaction-passed' },
+    });
+    // Infirmary bonus prompt → take any.
+    const bonus = topPending(s);
+    if (
+      bonus.responderId === 'p2' &&
+      bonus.prompt.kind === 'choose-from-options'
+    ) {
+      s = applyAction(s, {
+        type: 'RESOLVE_PENDING',
+        resolutionId: bonus.id,
+        answer: {
+          kind: 'option-chosen',
+          optionId: bonus.prompt.options[0]!.id,
+          payload: {},
+        },
+      });
+    }
+    // Mysticism Yes/No → place.
+    const yesNo = topPending(s);
+    expect(yesNo.source.id).toBe('base.mage.mysticism.place-after-cast');
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: yesNo.id,
+      answer: { kind: 'option-chosen', optionId: 'place', payload: {} },
+    });
+    // Single grey mage → skips mage-pick, lands on slot-pick.
+    const slotPrompt = topPending(s);
+    if (slotPrompt.prompt.kind !== 'choose-target-action-space') {
+      throw new Error('expected slot picker');
+    }
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: slotPrompt.id,
+      answer: {
+        kind: 'space-chosen',
+        spaceId: 'base.room.adventuring.b.slot-2',
+      },
+    });
+    // Adventuring B pick-card-type prompt must surface now.
+    const pickPrompt = topPending(s);
+    expect(pickPrompt.responderId).toBe('p1');
+    expect(pickPrompt.source.id).toBe('base.room.adventuring.b');
+    if (pickPrompt.prompt.kind !== 'choose-from-options') {
+      throw new Error('expected adventuring pick prompt');
+    }
+    const ids = pickPrompt.prompt.options.map((o) => o.id);
+    expect(ids).toContain('spell');
+    expect(ids).toContain('vault');
+    expect(ids).toContain('supporter');
+    // Picking "spell" pops the top of the spell deck into the pool.
+    const spellTop = s.spellDeck[0]!;
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: pickPrompt.id,
+      answer: { kind: 'option-chosen', optionId: 'spell', payload: {} },
+    });
+    // Pool may have been cleared already if the pump rolled into the
+    // next room; in that case the spell should be at the bottom of the
+    // spell deck (returned by Adventuring cleanup). Either way, the
+    // card was popped from the deck top.
+    if (s.adventuringBPool !== null) {
+      expect(s.adventuringBPool.spells).toContain(spellTop);
+    } else {
+      expect(s.spellDeck.includes(spellTop)).toBe(true);
+    }
+  });
+
+  it('Paralocation shadow at Adventuring B fires the pick-card-type prompt', () => {
+    // Setup: Alice has Paralocation + a mage in office; Bob has a mage
+    // placed at Adventuring B slot-2. Paralocation lets Alice shadow
+    // her own mage onto Bob's slot — that placement is at Adventuring B
+    // and must trigger the pick-card-type prompt.
+    let s = setupAdventuringBTest();
+    s = addOwnedSpell(s, 'p1', 'base.spell.paralocation', {
+      intPlaced: true,
+    });
+    s = setMana(s, 'p1', 1);
+    s = addMage(s, 'p2', {
+      id: 'bob-target',
+      cardId: 'base.mage.sorcery',
+      color: 'red',
+    });
+    s = placeMageOnSpace(
+      s,
+      'p2',
+      'bob-target',
+      'base.room.adventuring.b.slot-2',
+    );
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.paralocation',
+      level: 1,
+    });
+    // First prompt: choose target mage (the one Alice will shadow on its slot).
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'mage-chosen', mageId: 'bob-target' },
+    });
+    // Second prompt: choose Alice's mage to do the shadowing.
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'mage-chosen', mageId: 'alice-mage-1' },
+    });
+    // Reaction window (mage-shadowed) on top. Bob passes.
+    const reaction = topPending(s);
+    expect(reaction.prompt.kind).toBe('reaction-window');
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: reaction.id,
+      answer: { kind: 'reaction-passed' },
+    });
+    // After-shadow-window step settles; Adventuring pick prompt now on top.
+    const pickPrompt = topPending(s);
+    expect(pickPrompt.responderId).toBe('p1');
+    expect(pickPrompt.source.id).toBe('base.room.adventuring.b');
+    if (pickPrompt.prompt.kind !== 'choose-from-options') {
+      throw new Error('expected adventuring pick prompt');
+    }
+    expect(pickPrompt.prompt.options.some((o) => o.id === 'spell')).toBe(
+      true,
+    );
   });
 });
 
@@ -5914,7 +7003,7 @@ describe('PLAY_VAULT_CARD', () => {
 
   it('Shadow Potion: shadowing into an instant room surfaces the slot reward prompt', () => {
     let s = setupVaultPlay('base.vault.shadow-potion');
-    s = forceRoomSide(s, 'Guilds', 'A');
+    s = forceRoomSide(s, 'Guilds', 'B');
     s = addMage(s, 'p1', {
       id: 'alice-mage-1',
       cardId: 'base.mage.divinity',
@@ -5925,7 +7014,7 @@ describe('PLAY_VAULT_CARD', () => {
       cardId: 'base.mage.sorcery',
       color: 'red',
     });
-    s = placeMageOnSpace(s, 'p2', 'bob-mage-1', 'base.room.guilds.a.slot-2');
+    s = placeMageOnSpace(s, 'p2', 'bob-mage-1', 'base.room.guilds.b.slot-2');
     s = applyAction(s, {
       type: 'PLAY_VAULT_CARD',
       playerId: 'p1',
@@ -5941,13 +7030,13 @@ describe('PLAY_VAULT_CARD', () => {
     s = applyAction(s, {
       type: 'RESOLVE_PENDING',
       resolutionId: topPending(s).id,
-      answer: { kind: 'space-chosen', spaceId: 'base.room.guilds.a.slot-2' },
+      answer: { kind: 'space-chosen', spaceId: 'base.room.guilds.b.slot-2' },
     });
     // Shadow placement is done AND the Guilds A instant reward prompt fires
     // for the shadowing player.
     const slot = s.rooms
       .flatMap((r) => r.actionSpaces)
-      .find((sp) => sp.id === 'base.room.guilds.a.slot-2');
+      .find((sp) => sp.id === 'base.room.guilds.b.slot-2');
     expect(slot?.shadowOccupant?.mageId).toBe('alice-mage-1');
     const rewardPrompt = topPending(s);
     expect(rewardPrompt.resume.effectId).toBe('base.system.resolution-choice');
@@ -6189,9 +7278,9 @@ describe('Ars Magna (Sorcery Mage power)', () => {
     aliceMana?: number;
   } = {}): GameState {
     const bobColor: MageColor = opts.bobColor ?? 'red';
-    const bobSpace = opts.bobOnSpace ?? 'base.room.vault.a.slot-3';
+    const bobSpace = opts.bobOnSpace ?? 'base.room.vault.b.slot-3';
     let s = initGame(TWO_PLAYER_CONFIG);
-    s = forceVaultSideA(s);
+    s = forceVaultPlayableSide(s);
     // Isolate Infirmary-bonus arithmetic from the rulebook starting bundle.
     s = zeroPlayerResources(s, 'p1');
     s = zeroPlayerResources(s, 'p2');
@@ -6309,7 +7398,7 @@ describe('Ars Magna (Sorcery Mage power)', () => {
     const aliceRed = findMageById(s, 'alice-red');
     expect(aliceRed.location).toEqual({
       kind: 'action-space',
-      spaceId: 'base.room.vault.a.slot-3',
+      spaceId: 'base.room.vault.b.slot-3',
     });
     const vault = findRoom(s, (r) => r.name === 'Vault');
     expect(vault.actionSpaces[2]?.occupant?.mageId).toBe('alice-red');
@@ -6351,16 +7440,16 @@ describe('Ars Magna (Sorcery Mage power)', () => {
     expect(bobMage.isShadowing).toBe(true);
     expect(bobMage.location).toEqual({
       kind: 'action-space',
-      spaceId: 'base.room.vault.a.slot-3',
+      spaceId: 'base.room.vault.b.slot-3',
     });
     const aliceRed = findMageById(s, 'alice-red');
     expect(aliceRed.location).toEqual({
       kind: 'action-space',
-      spaceId: 'base.room.vault.a.slot-3',
+      spaceId: 'base.room.vault.b.slot-3',
     });
     const slot = s.rooms
       .flatMap((r) => r.actionSpaces)
-      .find((sp) => sp.id === 'base.room.vault.a.slot-3');
+      .find((sp) => sp.id === 'base.room.vault.b.slot-3');
     expect(slot?.occupant?.ownerId).toBe('p1');
     expect(slot?.shadowOccupant?.ownerId).toBe('p2');
     expect(s.players.find((p) => p.id === 'p1')?.resources.mana).toBe(4);
@@ -6370,7 +7459,7 @@ describe('Ars Magna (Sorcery Mage power)', () => {
 
   it('Ars Magna can target a merit slot and ignores the merit cost', () => {
     let s = initGame(TWO_PLAYER_CONFIG);
-    s = forceVaultSideA(s);
+    s = forceVaultPlayableSide(s);
     s = addMage(s, 'p1', {
       id: 'alice-red',
       cardId: 'base.mage.sorcery',
@@ -6388,7 +7477,7 @@ describe('Ars Magna (Sorcery Mage power)', () => {
     // Place Bob's mage on the merit slot directly (bypass placement cost
     // for setup; the engine doesn't validate placements created via
     // placeMageOnSpace test helper).
-    s = placeMageOnSpace(s, 'p2', 'bob-mage', 'base.room.vault.a.slot-1');
+    s = placeMageOnSpace(s, 'p2', 'bob-mage', 'base.room.vault.b.slot-1');
     s = { ...s, firstPlayerIndex: 0, phase: { kind: 'errands', round: 1, activePlayerIndex: 0, actionUsed: false, fastActionUsed: false } };
 
     s = applyAction(s, {
@@ -6419,7 +7508,7 @@ describe('Ars Magna (Sorcery Mage power)', () => {
     const aliceRed = findMageById(s, 'alice-red');
     expect(aliceRed.location).toEqual({
       kind: 'action-space',
-      spaceId: 'base.room.vault.a.slot-1',
+      spaceId: 'base.room.vault.b.slot-1',
     });
     const alice = s.players.find((p) => p.id === 'p1');
     expect(alice?.resources.meritBadges).toBe(0);
@@ -6442,7 +7531,7 @@ describe('Ars Magna (Sorcery Mage power)', () => {
       type: 'PLACE_WORKER',
       playerId: 'p1',
       mageId: 'alice-red',
-      actionSpaceId: 'base.room.vault.a.slot-3',
+      actionSpaceId: 'base.room.vault.b.slot-3',
     });
     // 1 mana spent up front.
     const aliceMid = s.players.find((p) => p.id === 'p1');
@@ -6470,7 +7559,7 @@ describe('Ars Magna (Sorcery Mage power)', () => {
     const aliceMage = findMageById(s, 'alice-red');
     expect(aliceMage.location).toEqual({
       kind: 'action-space',
-      spaceId: 'base.room.vault.a.slot-3',
+      spaceId: 'base.room.vault.b.slot-3',
     });
     const room = findRoom(s, (r) => r.name === 'Vault');
     expect(room.actionSpaces[2]?.occupant?.mageId).toBe('alice-red');
@@ -6486,7 +7575,7 @@ describe('Ars Magna (Sorcery Mage power)', () => {
         type: 'PLACE_WORKER',
         playerId: 'p1',
         mageId: 'alice-red',
-        actionSpaceId: 'base.room.vault.a.slot-3',
+        actionSpaceId: 'base.room.vault.b.slot-3',
       }),
     ).toThrow(/already occupied/);
   });
@@ -6498,7 +7587,7 @@ describe('Ars Magna (Sorcery Mage power)', () => {
         type: 'PLACE_WORKER',
         playerId: 'p1',
         mageId: 'alice-red',
-        actionSpaceId: 'base.room.vault.a.slot-3',
+        actionSpaceId: 'base.room.vault.b.slot-3',
       }),
     ).toThrow(/already occupied/);
   });
@@ -6510,7 +7599,7 @@ describe('Ars Magna (Sorcery Mage power)', () => {
         type: 'PLACE_WORKER',
         playerId: 'p1',
         mageId: 'alice-red',
-        actionSpaceId: 'base.room.vault.a.slot-3',
+        actionSpaceId: 'base.room.vault.b.slot-3',
       }),
     ).toThrow(/already occupied/);
   });
@@ -6535,7 +7624,7 @@ describe('Ars Magna (Sorcery Mage power)', () => {
         type: 'PLACE_WORKER',
         playerId: 'p1',
         mageId: 'alice-red',
-        actionSpaceId: 'base.room.vault.a.slot-3',
+        actionSpaceId: 'base.room.vault.b.slot-3',
       }),
     ).toThrow(/already occupied/);
   });
@@ -6546,7 +7635,7 @@ describe('Ars Magna (Sorcery Mage power)', () => {
       type: 'PLACE_WORKER',
       playerId: 'p1',
       mageId: 'alice-red',
-      actionSpaceId: 'base.room.vault.a.slot-3',
+      actionSpaceId: 'base.room.vault.b.slot-3',
     });
     const reactionPrompt = topPending(s);
     if (reactionPrompt.prompt.kind !== 'reaction-window') {
@@ -6572,11 +7661,11 @@ describe('Ars Magna (Sorcery Mage power)', () => {
     const aliceMage = findMageById(s, 'alice-red');
     expect(aliceMage.location).toEqual({
       kind: 'action-space',
-      spaceId: 'base.room.vault.a.slot-3',
+      spaceId: 'base.room.vault.b.slot-3',
     });
     const slot = s.rooms
       .flatMap((r) => r.actionSpaces)
-      .find((sp) => sp.id === 'base.room.vault.a.slot-3');
+      .find((sp) => sp.id === 'base.room.vault.b.slot-3');
     expect(slot?.occupant?.ownerId).toBe('p1');
     expect(slot?.shadowOccupant?.ownerId).toBe('p2');
     expect(s.players.find((p) => p.id === 'p1')?.resources.mana).toBe(4);
@@ -6661,9 +7750,9 @@ describe('Ars Magna (Sorcery Mage power)', () => {
   it('Ars Magna placement into an instant room surfaces the slot reward prompt', () => {
     let s = setupArsMagnaTest({
       bobColor: 'red',
-      bobOnSpace: 'base.room.guilds.a.slot-2',
+      bobOnSpace: 'base.room.guilds.b.slot-2',
     });
-    s = forceRoomSide(s, 'Guilds', 'A');
+    s = forceRoomSide(s, 'Guilds', 'B');
     // Re-anchor Bob onto Guilds A slot 2 after the side flip.
     s = mapPlayer(s, 'p2', (p) => ({
       ...p,
@@ -6674,7 +7763,7 @@ describe('Ars Magna (Sorcery Mage power)', () => {
               ...m,
               location: {
                 kind: 'action-space' as const,
-                spaceId: 'base.room.guilds.a.slot-2',
+                spaceId: 'base.room.guilds.b.slot-2',
               },
             },
       ),
@@ -6705,7 +7794,7 @@ describe('Ars Magna (Sorcery Mage power)', () => {
       type: 'PLACE_WORKER',
       playerId: 'p1',
       mageId: 'alice-red',
-      actionSpaceId: 'base.room.guilds.a.slot-2',
+      actionSpaceId: 'base.room.guilds.b.slot-2',
     });
     // Pass Bob's reaction window.
     s = applyAction(s, {
@@ -6724,7 +7813,7 @@ describe('Ars Magna (Sorcery Mage power)', () => {
     const aliceMage = findMageById(s, 'alice-red');
     expect(aliceMage.location).toEqual({
       kind: 'action-space',
-      spaceId: 'base.room.guilds.a.slot-2',
+      spaceId: 'base.room.guilds.b.slot-2',
     });
     const rewardPrompt = topPending(s);
     expect(rewardPrompt.resume.effectId).toBe('base.system.resolution-choice');
@@ -6820,7 +7909,7 @@ describe('Resolution forfeit-or-reward', () => {
   });
 
   it('forfeit grants the player 1 IP and skips the slot effect', () => {
-    let s = setupRoomSlotTest('Vault', 'A', 'base.room.vault.a.slot-3');
+    let s = setupRoomSlotTest('Vault', 'B', 'base.room.vault.b.slot-3');
     // Slot 3 is "Gain 3 Gold" — taking reward would give 3 gold; forfeit gives 1 IP.
     s = applyAction(s, { type: 'ADVANCE_PHASE' });
     s = applyAction(s, { type: 'ADVANCE_PHASE' });
@@ -6835,7 +7924,7 @@ describe('Resolution forfeit-or-reward', () => {
   });
 
   it('reward on a non-merit slot runs the effect with no MB cost', () => {
-    let s = setupRoomSlotTest('Vault', 'A', 'base.room.vault.a.slot-3');
+    let s = setupRoomSlotTest('Vault', 'B', 'base.room.vault.b.slot-3');
     s = setMeritBadges(s, 'p1', 0);
     s = driveToResolution(s); // takeReward auto-applied
     const alice = s.players.find((p) => p.id === 'p1');
@@ -6846,7 +7935,7 @@ describe('Resolution forfeit-or-reward', () => {
   });
 
   it('merit slot: reward option is unavailable if the player cannot afford it', () => {
-    let s = setupRoomSlotTest('Vault', 'A', 'base.room.vault.a.slot-1');
+    let s = setupRoomSlotTest('Vault', 'B', 'base.room.vault.b.slot-1');
     s = setMeritBadges(s, 'p1', 0); // overrides the helper's default
     s = applyAction(s, { type: 'ADVANCE_PHASE' });
     s = applyAction(s, { type: 'ADVANCE_PHASE' });
@@ -6867,7 +7956,7 @@ describe('Resolution forfeit-or-reward', () => {
   });
 
   it('merit slot: reward deducts the cost and runs the effect', () => {
-    let s = setupRoomSlotTest('Vault', 'A', 'base.room.vault.a.slot-1');
+    let s = setupRoomSlotTest('Vault', 'B', 'base.room.vault.b.slot-1');
     s = setMeritBadges(s, 'p1', 1);
     s = setVaultTableau(s, ['base.vault.mana-elixir']);
     s = applyAction(s, { type: 'ADVANCE_PHASE' });
@@ -6891,7 +7980,7 @@ describe('Resolution forfeit-or-reward', () => {
 
   it('placement on a merit slot without MB succeeds; resolution forfeit grants 1 IP', () => {
     let s = initGame(TWO_PLAYER_CONFIG);
-    s = forceVaultSideA(s);
+    s = forceVaultPlayableSide(s);
     s = addMage(s, 'p1', {
       id: 'alice-mage-1',
       cardId: 'base.mage.divinity',
@@ -6915,7 +8004,7 @@ describe('Resolution forfeit-or-reward', () => {
       type: 'PLACE_WORKER',
       playerId: 'p1',
       mageId: 'alice-mage-1',
-      actionSpaceId: 'base.room.vault.a.slot-1',
+      actionSpaceId: 'base.room.vault.b.slot-1',
     });
     s = { ...s, bellTower: { ...s.bellTower, available: [] } };
     s = applyAction(s, { type: 'ADVANCE_PHASE' });
@@ -6930,7 +8019,7 @@ describe('Resolution forfeit-or-reward', () => {
 
   it('instant rooms (Guilds): forfeit at placement gains 1 IP and skips the slot effect', () => {
     let s = initGame(TWO_PLAYER_CONFIG);
-    s = forceRoomSide(s, 'Guilds', 'A');
+    s = forceRoomSide(s, 'Guilds', 'B');
     s = addMage(s, 'p1', {
       id: 'alice-mage-1',
       cardId: 'base.mage.divinity',
@@ -6955,7 +8044,7 @@ describe('Resolution forfeit-or-reward', () => {
       type: 'PLACE_WORKER',
       playerId: 'p1',
       mageId: 'alice-mage-1',
-      actionSpaceId: 'base.room.guilds.a.slot-1',
+      actionSpaceId: 'base.room.guilds.b.slot-1',
     });
     s = forfeitAtResolution(s);
     const alice = s.players.find((p) => p.id === 'p1');
@@ -7778,10 +8867,10 @@ describe('Training Fields A', () => {
 // Guilds A — instant room. Effects resolve at PLACE_WORKER, not in resolution.
 // ============================================================================
 
-describe('Guilds A (instant room)', () => {
+describe('Guilds B (instant room)', () => {
   function setupGuildsPlacement(): GameState {
     let s = initGame(TWO_PLAYER_CONFIG);
-    s = forceRoomSide(s, 'Guilds', 'A');
+    s = forceRoomSide(s, 'Guilds', 'B');
     s = addMage(s, 'p1', {
       id: 'alice-mage-1',
       cardId: 'base.mage.divinity',
@@ -7799,7 +8888,7 @@ describe('Guilds A (instant room)', () => {
       type: 'PLACE_WORKER',
       playerId: 'p1',
       mageId: 'alice-mage-1',
-      actionSpaceId: 'base.room.guilds.a.slot-2',
+      actionSpaceId: 'base.room.guilds.b.slot-2',
     });
     expect(s.phase.kind).toBe('errands');
     const top = topPending(s);
@@ -7824,7 +8913,7 @@ describe('Guilds A (instant room)', () => {
       type: 'PLACE_WORKER',
       playerId: 'p1',
       mageId: 'alice-mage-1',
-      actionSpaceId: 'base.room.guilds.a.slot-2',
+      actionSpaceId: 'base.room.guilds.b.slot-2',
     });
     s = takeRewardAtResolution(s);
     s = applyAction(s, {
@@ -7842,7 +8931,7 @@ describe('Guilds A (instant room)', () => {
       type: 'PLACE_WORKER',
       playerId: 'p1',
       mageId: 'alice-mage-1',
-      actionSpaceId: 'base.room.guilds.a.slot-3',
+      actionSpaceId: 'base.room.guilds.b.slot-3',
     });
     s = takeRewardAtResolution(s);
     s = applyAction(s, {
@@ -7860,7 +8949,7 @@ describe('Guilds A (instant room)', () => {
       type: 'PLACE_WORKER',
       playerId: 'p1',
       mageId: 'alice-mage-1',
-      actionSpaceId: 'base.room.guilds.a.slot-3',
+      actionSpaceId: 'base.room.guilds.b.slot-3',
     });
     s = takeRewardAtResolution(s);
     s = applyAction(s, {
@@ -7882,9 +8971,578 @@ describe('Guilds A (instant room)', () => {
   });
 });
 
+describe('Guilds A (non-instant, bigger payouts)', () => {
+  it('slot 1 (merit) offers 8 Gold OR 4 Mana at resolution', () => {
+    let s = setupRoomSlotTest(
+      'Guilds',
+      'A',
+      'base.room.guilds.a.slot-1',
+    );
+    s = driveToResolution(s);
+    const top = topPending(s);
+    expect(top.prompt.kind).toBe('choose-from-options');
+    if (top.prompt.kind !== 'choose-from-options') throw new Error('unreachable');
+    const labels = top.prompt.options.map((o) => o.label).sort();
+    expect(labels).toEqual(['Gain 4 Mana', 'Gain 8 Gold']);
+  });
+
+  it('slot 1 picking gold grants 8 Gold', () => {
+    let s = setupRoomSlotTest(
+      'Guilds',
+      'A',
+      'base.room.guilds.a.slot-1',
+    );
+    s = driveToResolution(s);
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'option-chosen', optionId: 'gold', payload: {} },
+    });
+    expect(s.players.find((p) => p.id === 'p1')?.resources.gold).toBe(8);
+  });
+
+  it('slot 2 grants 6 Gold or 3 Mana; slot 3 grants 4 Gold or 2 Mana', () => {
+    // Slot 2 → mana
+    let s = setupRoomSlotTest(
+      'Guilds',
+      'A',
+      'base.room.guilds.a.slot-2',
+    );
+    s = driveToResolution(s);
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'option-chosen', optionId: 'mana', payload: {} },
+    });
+    expect(s.players.find((p) => p.id === 'p1')?.resources.mana).toBe(3);
+
+    // Slot 3 → gold
+    let s2 = setupRoomSlotTest(
+      'Guilds',
+      'A',
+      'base.room.guilds.a.slot-3',
+    );
+    s2 = driveToResolution(s2);
+    s2 = applyAction(s2, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s2).id,
+      answer: { kind: 'option-chosen', optionId: 'gold', payload: {} },
+    });
+    expect(s2.players.find((p) => p.id === 'p1')?.resources.gold).toBe(4);
+  });
+
+  it('is NOT an instant room — placement does not fire the slot reward up front', () => {
+    let s = initGame(TWO_PLAYER_CONFIG);
+    s = forceRoomSide(s, 'Guilds', 'A');
+    s = addMage(s, 'p1', {
+      id: 'alice-mage-1',
+      cardId: 'base.mage.divinity',
+      color: 'blue',
+    });
+    s = zeroPlayerResources(s, 'p1');
+    s = { ...s, firstPlayerIndex: 0, phase: { kind: 'errands', round: 1, activePlayerIndex: 0, actionUsed: false, fastActionUsed: false } };
+    s = applyAction(s, {
+      type: 'PLACE_WORKER',
+      playerId: 'p1',
+      mageId: 'alice-mage-1',
+      actionSpaceId: 'base.room.guilds.a.slot-2',
+    });
+    // No prompt should fire at placement — the room is non-instant; the
+    // reward chain only runs during resolution.
+    expect(s.pendingResolutionStack).toHaveLength(0);
+    expect(s.players.find((p) => p.id === 'p1')?.resources.gold).toBe(0);
+    expect(s.players.find((p) => p.id === 'p1')?.resources.mana).toBe(0);
+  });
+});
+
 // ============================================================================
 // Courtyard A — Mana scaling with WIS
 // ============================================================================
+
+// ============================================================================
+// Laboratory A (Mancers) — instant room, reward keyed to placed Mage colour
+// ============================================================================
+
+describe('Laboratory A (Mancers)', () => {
+  function setupLab(): GameState {
+    let s = initGame(TWO_PLAYER_CONFIG);
+    s = forceLaboratoryA(s);
+    s = zeroPlayerResources(s, 'p1');
+    s = setMeritBadges(s, 'p1', 5);
+    s = {
+      ...s,
+      firstPlayerIndex: 0,
+      phase: {
+        kind: 'errands',
+        round: 1,
+        activePlayerIndex: 0,
+        actionUsed: false,
+        fastActionUsed: false,
+      },
+    };
+    return s;
+  }
+
+  function placeAndTakeReward(
+    s: GameState,
+    mageId: string,
+    slotId: string,
+  ): GameState {
+    let next = applyAction(s, {
+      type: 'PLACE_WORKER',
+      playerId: 'p1',
+      mageId,
+      actionSpaceId: slotId,
+    });
+    next = takeRewardAtResolution(next);
+    return next;
+  }
+
+  it('Sorcery (red) mage at slot 2 gains 2 Mana', () => {
+    let s = setupLab();
+    s = addMage(s, 'p1', {
+      id: 'alice-red',
+      cardId: 'base.mage.sorcery',
+      color: 'red',
+    });
+    s = placeAndTakeReward(
+      s,
+      'alice-red',
+      'mancers.room.laboratory.a.slot-2',
+    );
+    expect(s.players.find((p) => p.id === 'p1')?.resources.mana).toBe(2);
+  });
+
+  it('Sorcery (red) mage at slot 1 (merit) gains 4 Mana (doubled)', () => {
+    let s = setupLab();
+    s = addMage(s, 'p1', {
+      id: 'alice-red',
+      cardId: 'base.mage.sorcery',
+      color: 'red',
+    });
+    s = placeAndTakeReward(
+      s,
+      'alice-red',
+      'mancers.room.laboratory.a.slot-1',
+    );
+    expect(s.players.find((p) => p.id === 'p1')?.resources.mana).toBe(4);
+  });
+
+  it('Natural Magick (green) mage at slot 2 gains 4 Gold; slot 1 gains 8', () => {
+    let s = setupLab();
+    s = addMage(s, 'p1', {
+      id: 'alice-green',
+      cardId: 'base.mage.natural-magick',
+      color: 'green',
+    });
+    s = placeAndTakeReward(
+      s,
+      'alice-green',
+      'mancers.room.laboratory.a.slot-2',
+    );
+    expect(s.players.find((p) => p.id === 'p1')?.resources.gold).toBe(4);
+
+    // Reset for a fresh placement on the merit slot.
+    let s2 = setupLab();
+    s2 = addMage(s2, 'p1', {
+      id: 'alice-green-2',
+      cardId: 'base.mage.natural-magick',
+      color: 'green',
+    });
+    s2 = placeAndTakeReward(
+      s2,
+      'alice-green-2',
+      'mancers.room.laboratory.a.slot-1',
+    );
+    expect(s2.players.find((p) => p.id === 'p1')?.resources.gold).toBe(8);
+  });
+
+  it('Planar Studies (purple) mage at slot 2 surfaces 1 Research prompt; slot 1 surfaces 1 and queues 1 more', () => {
+    let s = setupLab();
+    s = addMage(s, 'p1', {
+      id: 'alice-purple',
+      cardId: 'base.mage.planar-studies',
+      color: 'purple',
+    });
+    s = placeAndTakeReward(
+      s,
+      'alice-purple',
+      'mancers.room.laboratory.a.slot-2',
+    );
+    // Single research drained → 1 active prompt, 0 left in queue.
+    expect(s.researchQueue).toHaveLength(0);
+    expect(topPending(s).prompt.kind).toBe('choose-from-options');
+
+    let s2 = setupLab();
+    s2 = addMage(s2, 'p1', {
+      id: 'alice-purple-2',
+      cardId: 'base.mage.planar-studies',
+      color: 'purple',
+    });
+    s2 = placeAndTakeReward(
+      s2,
+      'alice-purple-2',
+      'mancers.room.laboratory.a.slot-1',
+    );
+    // Double research: one drained into a prompt, one still queued.
+    expect(s2.researchQueue).toHaveLength(1);
+    expect(topPending(s2).prompt.kind).toBe('choose-from-options');
+  });
+
+  it('Mysticism (grey) mage at slot 2 opens a Mark voter-pick; applying gives +1 Mark', () => {
+    let s = setupLab();
+    s = addMage(s, 'p1', {
+      id: 'alice-grey',
+      cardId: 'base.mage.mysticism',
+      color: 'grey',
+    });
+    s = applyAction(s, {
+      type: 'PLACE_WORKER',
+      playerId: 'p1',
+      mageId: 'alice-grey',
+      actionSpaceId: 'mancers.room.laboratory.a.slot-2',
+    });
+    s = takeRewardAtResolution(s);
+    const voterPrompt = topPending(s);
+    expect(voterPrompt.prompt.kind).toBe('choose-voter');
+    if (voterPrompt.prompt.kind !== 'choose-voter') throw new Error('unreachable');
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: voterPrompt.id,
+      answer: {
+        kind: 'voter-chosen',
+        voterId: voterPrompt.prompt.eligibleVoterIds[0]!,
+      },
+    });
+    expect(s.players.find((p) => p.id === 'p1')?.resources.marks).toBe(1);
+  });
+
+  it('Mysticism (grey) mage at slot 1 (double) chains TWO Mark prompts', () => {
+    let s = setupLab();
+    s = addMage(s, 'p1', {
+      id: 'alice-grey',
+      cardId: 'base.mage.mysticism',
+      color: 'grey',
+    });
+    s = applyAction(s, {
+      type: 'PLACE_WORKER',
+      playerId: 'p1',
+      mageId: 'alice-grey',
+      actionSpaceId: 'mancers.room.laboratory.a.slot-1',
+    });
+    s = takeRewardAtResolution(s);
+    // First voter pick.
+    let prompt = topPending(s);
+    expect(prompt.prompt.kind).toBe('choose-voter');
+    if (prompt.prompt.kind !== 'choose-voter') throw new Error('unreachable');
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: prompt.id,
+      answer: {
+        kind: 'voter-chosen',
+        voterId: prompt.prompt.eligibleVoterIds[0]!,
+      },
+    });
+    // Second voter pick.
+    prompt = topPending(s);
+    expect(prompt.prompt.kind).toBe('choose-voter');
+    if (prompt.prompt.kind !== 'choose-voter') throw new Error('unreachable');
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: prompt.id,
+      answer: {
+        kind: 'voter-chosen',
+        voterId: prompt.prompt.eligibleVoterIds[0]!,
+      },
+    });
+    expect(s.players.find((p) => p.id === 'p1')?.resources.marks).toBe(2);
+  });
+
+  it('Divinity (blue) mage at slot 2 prompts heal-source then heal-dest with the wounded mage', () => {
+    let s = setupLab();
+    s = addMage(s, 'p1', {
+      id: 'alice-blue',
+      cardId: 'base.mage.divinity',
+      color: 'blue',
+    });
+    // Place a wounded mage in the infirmary so heal-move has a target.
+    s = addMage(s, 'p1', {
+      id: 'alice-wounded',
+      cardId: 'base.mage.divinity',
+      color: 'blue',
+    });
+    s = mapPlayer(s, 'p1', (p) => ({
+      ...p,
+      mages: p.mages.map((m) =>
+        m.id !== 'alice-wounded'
+          ? m
+          : {
+              ...m,
+              isWounded: true,
+              location: { kind: 'infirmary' as const },
+            },
+      ),
+    }));
+    s = applyAction(s, {
+      type: 'PLACE_WORKER',
+      playerId: 'p1',
+      mageId: 'alice-blue',
+      actionSpaceId: 'mancers.room.laboratory.a.slot-2',
+    });
+    s = takeRewardAtResolution(s);
+    // First prompt — pick the wounded mage to heal.
+    const sourcePrompt = topPending(s);
+    expect(sourcePrompt.prompt.kind).toBe('choose-target-mage');
+    if (sourcePrompt.prompt.kind !== 'choose-target-mage') throw new Error('unreachable');
+    expect(sourcePrompt.prompt.eligibleMageIds).toEqual(['alice-wounded']);
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: sourcePrompt.id,
+      answer: { kind: 'mage-chosen', mageId: 'alice-wounded' },
+    });
+    // Second prompt — pick an open slot. Just take the first.
+    const destPrompt = topPending(s);
+    expect(destPrompt.prompt.kind).toBe('choose-target-action-space');
+    if (destPrompt.prompt.kind !== 'choose-target-action-space') throw new Error('unreachable');
+    const targetSlot = destPrompt.prompt.eligibleSpaceIds[0]!;
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: destPrompt.id,
+      answer: { kind: 'space-chosen', spaceId: targetSlot },
+    });
+    // Mage healed and moved.
+    const wounded = s.players
+      .find((p) => p.id === 'p1')!
+      .mages.find((m) => m.id === 'alice-wounded')!;
+    expect(wounded.isWounded).toBe(false);
+    expect(wounded.location).toEqual({
+      kind: 'action-space',
+      spaceId: targetSlot,
+    });
+  });
+
+  it('Divinity (blue) mage at slot 1 (double) heals + moves two mages and both occupy their destination slots', () => {
+    let s = setupLab();
+    s = addMage(s, 'p1', {
+      id: 'alice-blue',
+      cardId: 'base.mage.divinity',
+      color: 'blue',
+    });
+    s = addMage(s, 'p1', {
+      id: 'wounded-1',
+      cardId: 'base.mage.divinity',
+      color: 'blue',
+    });
+    s = addMage(s, 'p1', {
+      id: 'wounded-2',
+      cardId: 'base.mage.divinity',
+      color: 'blue',
+    });
+    s = mapPlayer(s, 'p1', (p) => ({
+      ...p,
+      mages: p.mages.map((m) =>
+        m.id === 'wounded-1' || m.id === 'wounded-2'
+          ? { ...m, isWounded: true, location: { kind: 'infirmary' as const } }
+          : m,
+      ),
+    }));
+    s = applyAction(s, {
+      type: 'PLACE_WORKER',
+      playerId: 'p1',
+      mageId: 'alice-blue',
+      actionSpaceId: 'mancers.room.laboratory.a.slot-1',
+    });
+    s = takeRewardAtResolution(s);
+
+    // First iteration: pick wounded mage, then dest slot.
+    let prompt = topPending(s);
+    if (prompt.prompt.kind !== 'choose-target-mage') throw new Error('expected mage prompt');
+    const firstWounded = prompt.prompt.eligibleMageIds[0]!;
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: prompt.id,
+      answer: { kind: 'mage-chosen', mageId: firstWounded },
+    });
+    prompt = topPending(s);
+    if (prompt.prompt.kind !== 'choose-target-action-space') throw new Error('expected space prompt');
+    const firstDest = prompt.prompt.eligibleSpaceIds[0]!;
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: prompt.id,
+      answer: { kind: 'space-chosen', spaceId: firstDest },
+    });
+
+    // Second iteration: the chain should keep going for the second heal.
+    prompt = topPending(s);
+    if (prompt.prompt.kind !== 'choose-target-mage') throw new Error('expected second mage prompt');
+    const secondWounded = prompt.prompt.eligibleMageIds[0]!;
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: prompt.id,
+      answer: { kind: 'mage-chosen', mageId: secondWounded },
+    });
+    prompt = topPending(s);
+    if (prompt.prompt.kind !== 'choose-target-action-space') throw new Error('expected second space prompt');
+    // The slot just filled by the first heal must NOT be eligible.
+    expect(prompt.prompt.eligibleSpaceIds).not.toContain(firstDest);
+    const secondDest = prompt.prompt.eligibleSpaceIds[0]!;
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: prompt.id,
+      answer: { kind: 'space-chosen', spaceId: secondDest },
+    });
+
+    // Both healed mages must be present BOTH in their player record AND on
+    // the destination slot. The regression: rooms wasn't included in the
+    // chain's cumulative diffPatch, so after the first heal the slot's
+    // `occupant` reverted to null and the mage "disappeared" visually.
+    const p1 = s.players.find((p) => p.id === 'p1')!;
+    const m1 = p1.mages.find((m) => m.id === firstWounded)!;
+    const m2 = p1.mages.find((m) => m.id === secondWounded)!;
+    expect(m1.isWounded).toBe(false);
+    expect(m2.isWounded).toBe(false);
+    expect(m1.location).toEqual({ kind: 'action-space', spaceId: firstDest });
+    expect(m2.location).toEqual({ kind: 'action-space', spaceId: secondDest });
+    const slot1 = s.rooms
+      .flatMap((r) => r.actionSpaces)
+      .find((sp) => sp.id === firstDest)!;
+    const slot2 = s.rooms
+      .flatMap((r) => r.actionSpaces)
+      .find((sp) => sp.id === secondDest)!;
+    expect(slot1.occupant?.mageId).toBe(firstWounded);
+    expect(slot2.occupant?.mageId).toBe(secondWounded);
+  });
+
+  it('off-white (Neutral) mage triggers no reward (silent fizzle)', () => {
+    let s = setupLab();
+    s = addMage(s, 'p1', {
+      id: 'alice-neutral',
+      cardId: 'base.mage.neutral',
+      color: 'off-white',
+    });
+    s = placeAndTakeReward(
+      s,
+      'alice-neutral',
+      'mancers.room.laboratory.a.slot-2',
+    );
+    const alice = s.players.find((p) => p.id === 'p1')!;
+    expect(alice.resources.mana).toBe(0);
+    expect(alice.resources.gold).toBe(0);
+    expect(alice.resources.marks).toBe(0);
+    expect(s.researchQueue).toHaveLength(0);
+    // No follow-up prompts.
+    expect(s.pendingResolutionStack).toHaveLength(0);
+  });
+});
+
+// ============================================================================
+// Laboratory B (Mancers) — non-instant; reward fires at resolution
+// ============================================================================
+
+describe('Laboratory B (Mancers)', () => {
+  function setupLabB(
+    color: MageColor,
+    cardId: string,
+    slotId: string,
+  ): GameState {
+    let s = initGame(TWO_PLAYER_CONFIG);
+    s = forceLaboratory(s, 'B');
+    s = addMage(s, 'p1', { id: 'alice-mage', cardId, color });
+    s = placeMageOnSpace(s, 'p1', 'alice-mage', slotId);
+    s = zeroPlayerResources(s, 'p1');
+    s = setMeritBadges(s, 'p1', 5);
+    s = { ...s, bellTower: { ...s.bellTower, available: [] } };
+    return s;
+  }
+
+  it('Divinity (blue) at slot 2 gains 3 Mana; slot 1 gains 6', () => {
+    let s = setupLabB('blue', 'base.mage.divinity', 'mancers.room.laboratory.b.slot-2');
+    s = driveToResolution(s);
+    expect(s.players.find((p) => p.id === 'p1')?.resources.mana).toBe(3);
+
+    let s2 = setupLabB('blue', 'base.mage.divinity', 'mancers.room.laboratory.b.slot-1');
+    s2 = driveToResolution(s2);
+    expect(s2.players.find((p) => p.id === 'p1')?.resources.mana).toBe(6);
+  });
+
+  it('Natural Magick (green) at slot 2 gains 1 INT; slot 1 gains 2', () => {
+    let s = setupLabB('green', 'base.mage.natural-magick', 'mancers.room.laboratory.b.slot-2');
+    s = driveToResolution(s);
+    expect(s.players.find((p) => p.id === 'p1')?.resources.intelligence).toBe(1);
+
+    let s2 = setupLabB('green', 'base.mage.natural-magick', 'mancers.room.laboratory.b.slot-1');
+    s2 = driveToResolution(s2);
+    expect(s2.players.find((p) => p.id === 'p1')?.resources.intelligence).toBe(2);
+  });
+
+  it('Planar Studies (purple) at slot 2 gains 1 WIS; slot 1 gains 2', () => {
+    let s = setupLabB('purple', 'base.mage.planar-studies', 'mancers.room.laboratory.b.slot-2');
+    s = driveToResolution(s);
+    expect(s.players.find((p) => p.id === 'p1')?.resources.wisdom).toBe(1);
+
+    let s2 = setupLabB('purple', 'base.mage.planar-studies', 'mancers.room.laboratory.b.slot-1');
+    s2 = driveToResolution(s2);
+    expect(s2.players.find((p) => p.id === 'p1')?.resources.wisdom).toBe(2);
+  });
+
+  it('Sorcery (red) at slot 2 surfaces 1 Research prompt; slot 1 surfaces 1 + queues 1', () => {
+    let s = setupLabB('red', 'base.mage.sorcery', 'mancers.room.laboratory.b.slot-2');
+    s = driveToResolution(s);
+    expect(s.researchQueue).toHaveLength(0);
+    expect(topPending(s).prompt.kind).toBe('choose-from-options');
+
+    let s2 = setupLabB('red', 'base.mage.sorcery', 'mancers.room.laboratory.b.slot-1');
+    s2 = driveToResolution(s2);
+    expect(s2.researchQueue).toHaveLength(1);
+    expect(topPending(s2).prompt.kind).toBe('choose-from-options');
+  });
+
+  it('Mysticism (grey) at slot 2 opens a Mark voter-pick; applying gives +1 Mark', () => {
+    let s = setupLabB('grey', 'base.mage.mysticism', 'mancers.room.laboratory.b.slot-2');
+    s = driveToResolution(s);
+    const voterPrompt = topPending(s);
+    expect(voterPrompt.prompt.kind).toBe('choose-voter');
+    if (voterPrompt.prompt.kind !== 'choose-voter') throw new Error('unreachable');
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: voterPrompt.id,
+      answer: { kind: 'voter-chosen', voterId: voterPrompt.prompt.eligibleVoterIds[0]! },
+    });
+    expect(s.players.find((p) => p.id === 'p1')?.resources.marks).toBe(1);
+  });
+
+  it('Mysticism (grey) at slot 1 (double) chains TWO Mark prompts', () => {
+    let s = setupLabB('grey', 'base.mage.mysticism', 'mancers.room.laboratory.b.slot-1');
+    s = driveToResolution(s);
+    let prompt = topPending(s);
+    if (prompt.prompt.kind !== 'choose-voter') throw new Error('expected voter prompt');
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: prompt.id,
+      answer: { kind: 'voter-chosen', voterId: prompt.prompt.eligibleVoterIds[0]! },
+    });
+    prompt = topPending(s);
+    if (prompt.prompt.kind !== 'choose-voter') throw new Error('expected second voter prompt');
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: prompt.id,
+      answer: { kind: 'voter-chosen', voterId: prompt.prompt.eligibleVoterIds[0]! },
+    });
+    expect(s.players.find((p) => p.id === 'p1')?.resources.marks).toBe(2);
+  });
+
+  it('off-white (Neutral) mage triggers no reward (silent fizzle)', () => {
+    let s = setupLabB('off-white', 'base.mage.neutral', 'mancers.room.laboratory.b.slot-2');
+    s = driveToResolution(s);
+    const alice = s.players.find((p) => p.id === 'p1')!;
+    expect(alice.resources.mana).toBe(0);
+    expect(alice.resources.intelligence).toBe(0);
+    expect(alice.resources.wisdom).toBe(0);
+    expect(alice.resources.marks).toBe(0);
+    expect(s.researchQueue).toHaveLength(0);
+    expect(s.pendingResolutionStack).toHaveLength(0);
+  });
+});
 
 // ============================================================================
 // Council Chamber A — Draft a Supporter OR Gain a Mark, capped at 1/round
@@ -7993,6 +9651,187 @@ describe('Council Chamber A', () => {
         actionSpaceId: 'base.room.council-chamber.a.slot-3',
       }),
     ).toThrow(/per-round cap/);
+  });
+});
+
+describe('Council Chamber B', () => {
+  function setSupporterTableau(state: GameState, ids: string[]): GameState {
+    return { ...state, supporterTableau: ids };
+  }
+
+  it('slot 4 (Choose one) opens a 3-option prompt and ends after a single pick', () => {
+    let s = setupRoomSlotTest(
+      'Council Chamber',
+      'B',
+      'base.room.council-chamber.b.slot-4',
+    );
+    s = driveToResolution(s);
+    const top = topPending(s);
+    expect(top.prompt.kind).toBe('choose-from-options');
+    if (top.prompt.kind === 'choose-from-options') {
+      expect(top.prompt.options.map((o) => o.id).sort()).toEqual(
+        ['draft', 'ip', 'mark'].sort(),
+      );
+    }
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: top.id,
+      answer: { kind: 'option-chosen', optionId: 'ip', payload: {} },
+    });
+    // No follow-up — chain ends after the IP gain.
+    expect(s.pendingResolutionStack).toHaveLength(0);
+    expect(s.players.find((p) => p.id === 'p1')?.resources.influence).toBe(1);
+  });
+
+  it('slot 2 (Choose two) prompts a second time after the first pick, with the picked option removed', () => {
+    let s = setupRoomSlotTest(
+      'Council Chamber',
+      'B',
+      'base.room.council-chamber.b.slot-2',
+    );
+    s = driveToResolution(s);
+    // First pick: IP.
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'option-chosen', optionId: 'ip', payload: {} },
+    });
+    const secondPrompt = topPending(s);
+    if (secondPrompt.prompt.kind !== 'choose-from-options') {
+      throw new Error('expected second pick prompt');
+    }
+    expect(secondPrompt.prompt.options.map((o) => o.id).sort()).toEqual(
+      ['draft', 'mark'].sort(),
+    );
+    // Second pick: Mark.
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: secondPrompt.id,
+      answer: { kind: 'option-chosen', optionId: 'mark', payload: {} },
+    });
+    const voterPrompt = topPending(s);
+    expect(voterPrompt.prompt.kind).toBe('choose-voter');
+    if (voterPrompt.prompt.kind !== 'choose-voter') throw new Error('unreachable');
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: voterPrompt.id,
+      answer: {
+        kind: 'voter-chosen',
+        voterId: voterPrompt.prompt.eligibleVoterIds[0]!,
+      },
+    });
+    // Chain ends; player got IP + Mark.
+    expect(s.pendingResolutionStack).toHaveLength(0);
+    const alice = s.players.find((p) => p.id === 'p1')!;
+    expect(alice.resources.influence).toBe(1);
+    expect(alice.resources.marks).toBe(1);
+  });
+
+  it('slot 1 (Do all three) walks all 3 sub-actions in player-picked order', () => {
+    let s = setupRoomSlotTest(
+      'Council Chamber',
+      'B',
+      'base.room.council-chamber.b.slot-1',
+    );
+    s = setSupporterTableau(s, ['base.supporter.placeholder.1']);
+    s = driveToResolution(s);
+    // Pick #1: Draft a Supporter.
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'option-chosen', optionId: 'draft', payload: {} },
+    });
+    const draftPrompt = topPending(s);
+    expect(draftPrompt.prompt.kind).toBe('choose-supporter-card');
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: draftPrompt.id,
+      answer: { kind: 'card-chosen', cardId: 'base.supporter.placeholder.1' },
+    });
+    // Pick #2: choose from { ip, mark }. Pick IP.
+    const secondPrompt = topPending(s);
+    if (secondPrompt.prompt.kind !== 'choose-from-options') {
+      throw new Error('expected option prompt for second pick');
+    }
+    expect(secondPrompt.prompt.options.map((o) => o.id).sort()).toEqual(
+      ['ip', 'mark'].sort(),
+    );
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: secondPrompt.id,
+      answer: { kind: 'option-chosen', optionId: 'ip', payload: {} },
+    });
+    // Pick #3: forced to Mark (auto-executes without another choose-option
+    // prompt — only one option left).
+    const markPrompt = topPending(s);
+    expect(markPrompt.prompt.kind).toBe('choose-voter');
+    if (markPrompt.prompt.kind !== 'choose-voter') throw new Error('unreachable');
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: markPrompt.id,
+      answer: {
+        kind: 'voter-chosen',
+        voterId: markPrompt.prompt.eligibleVoterIds[0]!,
+      },
+    });
+    expect(s.pendingResolutionStack).toHaveLength(0);
+    const alice = s.players.find((p) => p.id === 'p1')!;
+    expect(alice.supporters).toEqual(['base.supporter.placeholder.1']);
+    expect(alice.resources.influence).toBe(1);
+    expect(alice.resources.marks).toBe(1);
+  });
+
+  it('drafting silently counts when the supporter tableau is empty', () => {
+    let s = setupRoomSlotTest(
+      'Council Chamber',
+      'B',
+      'base.room.council-chamber.b.slot-4',
+    );
+    s = setSupporterTableau(s, []);
+    s = driveToResolution(s);
+    // Choose 'draft' even though tableau is empty — chain ends, no prompt.
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'option-chosen', optionId: 'draft', payload: {} },
+    });
+    expect(s.pendingResolutionStack).toHaveLength(0);
+    const alice = s.players.find((p) => p.id === 'p1')!;
+    expect(alice.supporters).toEqual([]);
+    expect(alice.resources.influence).toBe(0);
+    expect(alice.resources.marks).toBe(0);
+  });
+
+  it('Side B drops the "1 mage per player per round" cap (any-stack)', () => {
+    let s = initGame(TWO_PLAYER_CONFIG);
+    s = forceRoomSide(s, 'Council Chamber', 'B');
+    s = addMage(s, 'p1', {
+      id: 'alice-mage-1',
+      cardId: 'base.mage.divinity',
+      color: 'blue',
+    });
+    s = addMage(s, 'p1', {
+      id: 'alice-mage-2',
+      cardId: 'base.mage.divinity',
+      color: 'blue',
+    });
+    s = { ...s, firstPlayerIndex: 0, phase: { kind: 'errands', round: 1, activePlayerIndex: 0, actionUsed: false, fastActionUsed: false } };
+    s = applyAction(s, {
+      type: 'PLACE_WORKER',
+      playerId: 'p1',
+      mageId: 'alice-mage-1',
+      actionSpaceId: 'base.room.council-chamber.b.slot-2',
+    });
+    s = applyAction(s, { type: 'PASS_TURN', playerId: 'p2' });
+    // Alice can place a second mage in Council Chamber B — no per-round cap.
+    expect(() =>
+      applyAction(s, {
+        type: 'PLACE_WORKER',
+        playerId: 'p1',
+        mageId: 'alice-mage-2',
+        actionSpaceId: 'base.room.council-chamber.b.slot-3',
+      }),
+    ).not.toThrow();
   });
 });
 
@@ -8284,6 +10123,401 @@ describe('Infirmary on-wound bonus', () => {
     expect(bob?.resources.influence).toBe(1);
     expect(bob?.influenceArrivalSeq).toBeGreaterThan(0);
   });
+
+  describe('Infirmary Side B — buffed bonus slots', () => {
+    function setupInfirmaryBTest(): GameState {
+      let s = setupBurnTargetTest();
+      // Swap Side A → Side B for the in-play Infirmary.
+      s = forceRoomSide(s, 'Infirmary', 'B');
+      return s;
+    }
+
+    it('offers the buffed 4-Gold / 2-Mana options when both unique slots are empty', () => {
+      let s = setupInfirmaryBTest();
+      s = applyAction(s, {
+        type: 'CAST_SPELL',
+        playerId: 'p1',
+        spellCardId: 'base.spell.burn',
+        level: 1,
+      });
+      s = applyAction(s, {
+        type: 'RESOLVE_PENDING',
+        resolutionId: topPending(s).id,
+        answer: { kind: 'mage-chosen', mageId: 'bob-mage-1' },
+      });
+      // Reaction window — Bob has no defensive reactions.
+      const reactionPrompt = topPending(s);
+      s = applyAction(s, {
+        type: 'RESOLVE_PENDING',
+        resolutionId: reactionPrompt.id,
+        answer: { kind: 'reaction-passed' },
+      });
+      const bonusPrompt = topPending(s);
+      if (bonusPrompt.prompt.kind !== 'choose-from-options') {
+        throw new Error('expected bonus prompt');
+      }
+      const opts = bonusPrompt.prompt.options;
+      expect(opts.find((o) => o.id === 'gold')?.label).toBe('Gain 4 Gold');
+      expect(opts.find((o) => o.id === 'mana')?.label).toBe('Gain 2 Mana');
+      expect(opts.find((o) => o.id === 'ip')?.label).toBe('Gain 1 IP');
+    });
+
+    it('picking the buffed gold option grants 4 Gold and occupies slot 1', () => {
+      let s = setupInfirmaryBTest();
+      s = applyAction(s, {
+        type: 'CAST_SPELL',
+        playerId: 'p1',
+        spellCardId: 'base.spell.burn',
+        level: 1,
+      });
+      s = applyAction(s, {
+        type: 'RESOLVE_PENDING',
+        resolutionId: topPending(s).id,
+        answer: { kind: 'mage-chosen', mageId: 'bob-mage-1' },
+      });
+      s = applyAction(s, {
+        type: 'RESOLVE_PENDING',
+        resolutionId: topPending(s).id,
+        answer: { kind: 'reaction-passed' },
+      });
+      const bonusPrompt = topPending(s);
+      if (bonusPrompt.prompt.kind !== 'choose-from-options') {
+        throw new Error('expected bonus prompt');
+      }
+      const goldOpt = bonusPrompt.prompt.options.find((o) => o.id === 'gold')!;
+      s = applyAction(s, {
+        type: 'RESOLVE_PENDING',
+        resolutionId: bonusPrompt.id,
+        answer: { kind: 'option-chosen', optionId: 'gold', payload: goldOpt.payload },
+      });
+      expect(s.players.find((p) => p.id === 'p2')?.resources.gold).toBe(4);
+      const infirmary = s.rooms.find((r) => r.id === 'base.room.infirmary.b')!;
+      const slot1 = infirmary.actionSpaces.find(
+        (sp) => sp.id === 'base.room.infirmary.b.slot-1',
+      )!;
+      expect(slot1.occupant?.mageId).toBe('bob-mage-1');
+      expect(slot1.occupant?.ownerId).toBe('p2');
+      // The mana slot is still empty.
+      const slot2 = infirmary.actionSpaces.find(
+        (sp) => sp.id === 'base.room.infirmary.b.slot-2',
+      )!;
+      expect(slot2.occupant).toBeNull();
+    });
+
+    it('a second wound this round sees the 4-Gold slot taken and falls back to "Gain 2 Gold"', () => {
+      let s = setupInfirmaryBTest();
+      // Give p2 a second mage so they can be wounded twice.
+      s = addMage(s, 'p2', {
+        id: 'bob-mage-2',
+        cardId: 'base.mage.sorcery',
+        color: 'red',
+      });
+      s = placeMageOnSpace(s, 'p2', 'bob-mage-2', 'base.room.library.a.slot-3');
+      // Stock Alice with enough mana for two casts.
+      s = mapPlayer(s, 'p1', (p) => ({
+        ...p,
+        resources: { ...p.resources, mana: 5 },
+      }));
+      // Refresh Burn between casts via direct state edit since we're
+      // not exercising round-setup.
+      const refreshBurn = (state: GameState): GameState =>
+        mapPlayer(state, 'p1', (p) => ({
+          ...p,
+          ownedSpells: p.ownedSpells.map((sp) =>
+            sp.cardId === 'base.spell.burn' ? { ...sp, exhausted: false } : sp,
+          ),
+        }));
+
+      // --- First wound: pick buffed gold (slot 1 occupied).
+      s = applyAction(s, {
+        type: 'CAST_SPELL',
+        playerId: 'p1',
+        spellCardId: 'base.spell.burn',
+        level: 1,
+      });
+      s = applyAction(s, {
+        type: 'RESOLVE_PENDING',
+        resolutionId: topPending(s).id,
+        answer: { kind: 'mage-chosen', mageId: 'bob-mage-1' },
+      });
+      s = applyAction(s, {
+        type: 'RESOLVE_PENDING',
+        resolutionId: topPending(s).id,
+        answer: { kind: 'reaction-passed' },
+      });
+      const firstBonus = topPending(s);
+      if (firstBonus.prompt.kind !== 'choose-from-options') {
+        throw new Error('expected bonus prompt');
+      }
+      const buffedGold = firstBonus.prompt.options.find((o) => o.id === 'gold')!;
+      s = applyAction(s, {
+        type: 'RESOLVE_PENDING',
+        resolutionId: firstBonus.id,
+        answer: {
+          kind: 'option-chosen',
+          optionId: 'gold',
+          payload: buffedGold.payload,
+        },
+      });
+      s = refreshBurn(s);
+      // Reset action budget for the second cast.
+      s = {
+        ...s,
+        phase: {
+          kind: 'errands',
+          round: 1,
+          activePlayerIndex: 0,
+          actionUsed: false,
+          fastActionUsed: false,
+        },
+      };
+
+      // --- Second wound: gold option should now be plain "Gain 2 Gold".
+      s = applyAction(s, {
+        type: 'CAST_SPELL',
+        playerId: 'p1',
+        spellCardId: 'base.spell.burn',
+        level: 1,
+      });
+      s = applyAction(s, {
+        type: 'RESOLVE_PENDING',
+        resolutionId: topPending(s).id,
+        answer: { kind: 'mage-chosen', mageId: 'bob-mage-2' },
+      });
+      s = applyAction(s, {
+        type: 'RESOLVE_PENDING',
+        resolutionId: topPending(s).id,
+        answer: { kind: 'reaction-passed' },
+      });
+      const secondBonus = topPending(s);
+      if (secondBonus.prompt.kind !== 'choose-from-options') {
+        throw new Error('expected bonus prompt');
+      }
+      const goldOpt = secondBonus.prompt.options.find((o) => o.id === 'gold')!;
+      const manaOpt = secondBonus.prompt.options.find((o) => o.id === 'mana')!;
+      // Gold is no longer buffed; mana still is (slot 2 still free).
+      expect(goldOpt.label).toBe('Gain 2 Gold');
+      expect(manaOpt.label).toBe('Gain 2 Mana');
+    });
+
+    /**
+     * Drives Alice's Burn against `targetMageId` through the wound + reaction
+     * window + bonus prompt, picking `bonusOptionId` (with `buffed` payload
+     * if available). Returns the post-bonus state. Reused by the
+     * release-slot tests below to set up "this mage now occupies the
+     * buffed Infirmary B slot" without copy-pasting the whole chain.
+     */
+    function woundAndTakeBuffedBonus(
+      s: GameState,
+      targetMageId: string,
+      bonusOptionId: 'gold' | 'mana',
+    ): GameState {
+      s = applyAction(s, {
+        type: 'CAST_SPELL',
+        playerId: 'p1',
+        spellCardId: 'base.spell.burn',
+        level: 1,
+      });
+      s = applyAction(s, {
+        type: 'RESOLVE_PENDING',
+        resolutionId: topPending(s).id,
+        answer: { kind: 'mage-chosen', mageId: targetMageId },
+      });
+      s = applyAction(s, {
+        type: 'RESOLVE_PENDING',
+        resolutionId: topPending(s).id,
+        answer: { kind: 'reaction-passed' },
+      });
+      const bonus = topPending(s);
+      if (bonus.prompt.kind !== 'choose-from-options') {
+        throw new Error('expected bonus prompt');
+      }
+      const opt = bonus.prompt.options.find((o) => o.id === bonusOptionId)!;
+      return applyAction(s, {
+        type: 'RESOLVE_PENDING',
+        resolutionId: bonus.id,
+        answer: {
+          kind: 'option-chosen',
+          optionId: bonusOptionId,
+          payload: opt.payload,
+        },
+      });
+    }
+
+    it('healing the slot-1 occupant back to office reopens the 4-Gold slot for the next wound', async () => {
+      const { returnMageToOfficePatch } = await import('./effects/helpers');
+      let s = setupInfirmaryBTest();
+      // Give p2 a second mage so a follow-up wound has a target.
+      s = addMage(s, 'p2', {
+        id: 'bob-mage-2',
+        cardId: 'base.mage.sorcery',
+        color: 'red',
+      });
+      s = placeMageOnSpace(s, 'p2', 'bob-mage-2', 'base.room.library.a.slot-3');
+      s = mapPlayer(s, 'p1', (p) => ({
+        ...p,
+        resources: { ...p.resources, mana: 6 },
+      }));
+
+      // bob-mage-1 takes the buffed 4-Gold and occupies slot 1.
+      s = woundAndTakeBuffedBonus(s, 'bob-mage-1', 'gold');
+      const slot1Id = 'base.room.infirmary.b.slot-1';
+      const infirmaryBeforeHeal = s.rooms.find(
+        (r) => r.id === 'base.room.infirmary.b',
+      )!;
+      expect(
+        infirmaryBeforeHeal.actionSpaces.find((sp) => sp.id === slot1Id)
+          ?.occupant?.mageId,
+      ).toBe('bob-mage-1');
+
+      // Heal bob-mage-1 back to office — slot 1 must reopen.
+      const patch = returnMageToOfficePatch(s, 'bob-mage-1');
+      s = { ...s, ...patch };
+      const infirmaryAfterHeal = s.rooms.find(
+        (r) => r.id === 'base.room.infirmary.b',
+      )!;
+      expect(
+        infirmaryAfterHeal.actionSpaces.find((sp) => sp.id === slot1Id)
+          ?.occupant,
+      ).toBeNull();
+
+      // Reset action budget + refresh Burn for the second cast.
+      s = mapPlayer(s, 'p1', (p) => ({
+        ...p,
+        ownedSpells: p.ownedSpells.map((sp) =>
+          sp.cardId === 'base.spell.burn' ? { ...sp, exhausted: false } : sp,
+        ),
+      }));
+      s = {
+        ...s,
+        phase: {
+          kind: 'errands',
+          round: 1,
+          activePlayerIndex: 0,
+          actionUsed: false,
+          fastActionUsed: false,
+        },
+      };
+
+      // bob-mage-2 gets wounded — the gold option should be buffed again.
+      s = applyAction(s, {
+        type: 'CAST_SPELL',
+        playerId: 'p1',
+        spellCardId: 'base.spell.burn',
+        level: 1,
+      });
+      s = applyAction(s, {
+        type: 'RESOLVE_PENDING',
+        resolutionId: topPending(s).id,
+        answer: { kind: 'mage-chosen', mageId: 'bob-mage-2' },
+      });
+      s = applyAction(s, {
+        type: 'RESOLVE_PENDING',
+        resolutionId: topPending(s).id,
+        answer: { kind: 'reaction-passed' },
+      });
+      const reBonus = topPending(s);
+      if (reBonus.prompt.kind !== 'choose-from-options') {
+        throw new Error('expected bonus prompt');
+      }
+      expect(reBonus.prompt.options.find((o) => o.id === 'gold')?.label).toBe(
+        'Gain 4 Gold',
+      );
+    });
+
+    it('heal-to-space pulling the slot-2 occupant out reopens the 2-Mana slot', async () => {
+      const { healMageToSpace } = await import('./effects/helpers');
+      let s = setupInfirmaryBTest();
+      s = addMage(s, 'p2', {
+        id: 'bob-mage-2',
+        cardId: 'base.mage.sorcery',
+        color: 'red',
+      });
+      s = placeMageOnSpace(s, 'p2', 'bob-mage-2', 'base.room.library.a.slot-3');
+      s = mapPlayer(s, 'p1', (p) => ({
+        ...p,
+        resources: { ...p.resources, mana: 6 },
+      }));
+
+      s = woundAndTakeBuffedBonus(s, 'bob-mage-1', 'mana');
+      const slot2Id = 'base.room.infirmary.b.slot-2';
+      expect(
+        s.rooms
+          .find((r) => r.id === 'base.room.infirmary.b')!
+          .actionSpaces.find((sp) => sp.id === slot2Id)?.occupant?.mageId,
+      ).toBe('bob-mage-1');
+
+      // Move bob-mage-1 from infirmary to an empty Library slot.
+      const patch = healMageToSpace(
+        s,
+        'bob-mage-1',
+        'base.room.library.a.slot-1' as never,
+      );
+      s = { ...s, ...patch };
+      expect(
+        s.rooms
+          .find((r) => r.id === 'base.room.infirmary.b')!
+          .actionSpaces.find((sp) => sp.id === slot2Id)?.occupant,
+      ).toBeNull();
+    });
+
+    it('banishing the slot-1 occupant reopens the 4-Gold slot', async () => {
+      const { banishMage } = await import('./effects/helpers');
+      let s = setupInfirmaryBTest();
+      s = mapPlayer(s, 'p1', (p) => ({
+        ...p,
+        resources: { ...p.resources, mana: 6 },
+      }));
+      s = woundAndTakeBuffedBonus(s, 'bob-mage-1', 'gold');
+      const slot1Id = 'base.room.infirmary.b.slot-1';
+      expect(
+        s.rooms
+          .find((r) => r.id === 'base.room.infirmary.b')!
+          .actionSpaces.find((sp) => sp.id === slot1Id)?.occupant?.mageId,
+      ).toBe('bob-mage-1');
+
+      const { patch } = banishMage(s, 'bob-mage-1', 'p1');
+      s = { ...s, ...patch };
+      expect(
+        s.rooms
+          .find((r) => r.id === 'base.room.infirmary.b')!
+          .actionSpaces.find((sp) => sp.id === slot1Id)?.occupant,
+      ).toBeNull();
+    });
+
+    it('Side A is unaffected — gold option stays at 2', () => {
+      // Random layout might seat Infirmary B; force Side A so the
+      // buffed-option logic stays off.
+      let s = setupBurnTargetTest();
+      s = forceRoomSide(s, 'Infirmary', 'A');
+      s = applyAction(s, {
+        type: 'CAST_SPELL',
+        playerId: 'p1',
+        spellCardId: 'base.spell.burn',
+        level: 1,
+      });
+      s = applyAction(s, {
+        type: 'RESOLVE_PENDING',
+        resolutionId: topPending(s).id,
+        answer: { kind: 'mage-chosen', mageId: 'bob-mage-1' },
+      });
+      s = applyAction(s, {
+        type: 'RESOLVE_PENDING',
+        resolutionId: topPending(s).id,
+        answer: { kind: 'reaction-passed' },
+      });
+      const bonusPrompt = topPending(s);
+      if (bonusPrompt.prompt.kind !== 'choose-from-options') {
+        throw new Error('expected bonus prompt');
+      }
+      expect(
+        bonusPrompt.prompt.options.find((o) => o.id === 'gold')?.label,
+      ).toBe('Gain 2 Gold');
+      expect(
+        bonusPrompt.prompt.options.find((o) => o.id === 'mana')?.label,
+      ).toBe('Gain 1 Mana');
+    });
+  });
 });
 
 describe('Catacombs A', () => {
@@ -8349,6 +10583,2031 @@ describe('Catacombs A', () => {
     // Mark prompt now active.
     const top = topPending(s);
     expect(top.prompt.kind).toBe('choose-voter');
+  });
+});
+
+describe('Chapel A', () => {
+  /**
+   * Resolves the top voter prompt by picking the first eligible voter.
+   * Used by every Chapel A test since each slot tails off into a mark
+   * prompt. Asserts the prompt is a `choose-voter` first so test failures
+   * point at the wrong issue.
+   */
+  function applyMarkVoter(s: GameState): GameState {
+    const prompt = topPending(s);
+    if (prompt.prompt.kind !== 'choose-voter') {
+      throw new Error(
+        `expected choose-voter prompt, got ${prompt.prompt.kind}`,
+      );
+    }
+    return applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: prompt.id,
+      answer: {
+        kind: 'voter-chosen',
+        voterId: prompt.prompt.eligibleVoterIds[0]!,
+      },
+    });
+  }
+
+  it('slot 1 (merit) grants 1 INT + 1 WIS, then opens a voter prompt; resolving adds 1 Mark', () => {
+    let s = setupRoomSlotTest('Chapel', 'A', 'base.room.chapel.a.slot-1');
+    s = driveToResolution(s);
+    let alice = s.players.find((p) => p.id === 'p1')!;
+    expect(alice.resources.intelligence).toBe(1);
+    expect(alice.resources.wisdom).toBe(1);
+    // Mark not yet gained — pending voter prompt.
+    expect(topPending(s).prompt.kind).toBe('choose-voter');
+    s = applyMarkVoter(s);
+    alice = s.players.find((p) => p.id === 'p1')!;
+    expect(alice.resources.marks).toBe(1);
+    expect(s.pendingResolutionStack).toHaveLength(0);
+  });
+
+  it('slot 2 grants 2 IP, then opens a voter prompt; resolving adds 1 Mark', () => {
+    let s = setupRoomSlotTest('Chapel', 'A', 'base.room.chapel.a.slot-2');
+    s = driveToResolution(s);
+    let alice = s.players.find((p) => p.id === 'p1')!;
+    expect(alice.resources.influence).toBe(2);
+    expect(alice.influenceArrivalSeq).toBeGreaterThan(0);
+    s = applyMarkVoter(s);
+    alice = s.players.find((p) => p.id === 'p1')!;
+    expect(alice.resources.marks).toBe(1);
+  });
+
+  it('slot 3 opens a gold/mana OR prompt; gold path grants 2 Gold then prompts for a Mark', () => {
+    let s = setupRoomSlotTest('Chapel', 'A', 'base.room.chapel.a.slot-3');
+    s = driveToResolution(s);
+    const orPrompt = topPending(s);
+    expect(orPrompt.prompt.kind).toBe('choose-from-options');
+    if (orPrompt.prompt.kind !== 'choose-from-options') throw new Error('unreachable');
+    expect(orPrompt.prompt.options.map((o) => o.id)).toEqual(['gold', 'mana']);
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: orPrompt.id,
+      answer: { kind: 'option-chosen', optionId: 'gold', payload: {} },
+    });
+    expect(s.players.find((p) => p.id === 'p1')?.resources.gold).toBe(2);
+    s = applyMarkVoter(s);
+    expect(s.players.find((p) => p.id === 'p1')?.resources.marks).toBe(1);
+  });
+
+  it('slot 3 mana path grants 2 Mana then prompts for a Mark', () => {
+    let s = setupRoomSlotTest('Chapel', 'A', 'base.room.chapel.a.slot-3');
+    s = driveToResolution(s);
+    const orPrompt = topPending(s);
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: orPrompt.id,
+      answer: { kind: 'option-chosen', optionId: 'mana', payload: {} },
+    });
+    expect(s.players.find((p) => p.id === 'p1')?.resources.mana).toBe(2);
+    s = applyMarkVoter(s);
+    expect(s.players.find((p) => p.id === 'p1')?.resources.marks).toBe(1);
+  });
+});
+
+describe('Chapel B (instant)', () => {
+  /**
+   * Sets up a state where Chapel B is in play, p1 has a placeable mage,
+   * resources are zeroed, and the bell tower is drained so we can drive
+   * directly through PLACE_WORKER → takeRewardAtResolution. Mirrors the
+   * Mancers Laboratory A pattern.
+   */
+  function setupChapelBTest(): GameState {
+    let s = initGame(TWO_PLAYER_CONFIG);
+    s = forceRoomSide(s, 'Chapel', 'B');
+    s = zeroPlayerResources(s, 'p1');
+    s = setMeritBadges(s, 'p1', 5);
+    s = addMage(s, 'p1', {
+      id: 'alice-mage',
+      cardId: 'base.mage.divinity',
+      color: 'blue',
+    });
+    s = {
+      ...s,
+      firstPlayerIndex: 0,
+      phase: {
+        kind: 'errands',
+        round: 1,
+        activePlayerIndex: 0,
+        actionUsed: false,
+        fastActionUsed: false,
+      },
+      bellTower: { ...s.bellTower, available: [] },
+    };
+    return s;
+  }
+
+  /** Resolves the top `choose-voter` prompt with the first eligible voter. */
+  function applyMarkVoter(s: GameState): GameState {
+    const prompt = topPending(s);
+    if (prompt.prompt.kind !== 'choose-voter') {
+      throw new Error(
+        `expected choose-voter prompt, got ${prompt.prompt.kind}`,
+      );
+    }
+    return applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: prompt.id,
+      answer: {
+        kind: 'voter-chosen',
+        voterId: prompt.prompt.eligibleVoterIds[0]!,
+      },
+    });
+  }
+
+  it('slot 1 (merit) fires at placement and chains 2 mark prompts → +2 Marks total', () => {
+    let s = setupChapelBTest();
+    s = applyAction(s, {
+      type: 'PLACE_WORKER',
+      playerId: 'p1',
+      mageId: 'alice-mage',
+      actionSpaceId: 'base.room.chapel.b.slot-1',
+    });
+    s = takeRewardAtResolution(s);
+    s = applyMarkVoter(s);
+    // Second mark prompt is queued — the chain self-resumes.
+    s = applyMarkVoter(s);
+    expect(s.players.find((p) => p.id === 'p1')?.resources.marks).toBe(2);
+    expect(s.pendingResolutionStack).toHaveLength(0);
+  });
+
+  it('slot 2 grants 1 IP at placement, then prompts for a Mark', () => {
+    let s = setupChapelBTest();
+    s = applyAction(s, {
+      type: 'PLACE_WORKER',
+      playerId: 'p1',
+      mageId: 'alice-mage',
+      actionSpaceId: 'base.room.chapel.b.slot-2',
+    });
+    s = takeRewardAtResolution(s);
+    let alice = s.players.find((p) => p.id === 'p1')!;
+    expect(alice.resources.influence).toBe(1);
+    expect(alice.influenceArrivalSeq).toBeGreaterThan(0);
+    s = applyMarkVoter(s);
+    alice = s.players.find((p) => p.id === 'p1')!;
+    expect(alice.resources.marks).toBe(1);
+  });
+
+  it('slot 3 only prompts for a Mark (no resource patch)', () => {
+    let s = setupChapelBTest();
+    s = applyAction(s, {
+      type: 'PLACE_WORKER',
+      playerId: 'p1',
+      mageId: 'alice-mage',
+      actionSpaceId: 'base.room.chapel.b.slot-3',
+    });
+    s = takeRewardAtResolution(s);
+    const alice = s.players.find((p) => p.id === 'p1')!;
+    // No resources gained — just the mark prompt.
+    expect(alice.resources.gold).toBe(0);
+    expect(alice.resources.influence).toBe(0);
+    s = applyMarkVoter(s);
+    expect(s.players.find((p) => p.id === 'p1')?.resources.marks).toBe(1);
+  });
+
+  it('slot 1 forfeit path skips the mark chain and grants +1 IP', () => {
+    let s = setupChapelBTest();
+    s = applyAction(s, {
+      type: 'PLACE_WORKER',
+      playerId: 'p1',
+      mageId: 'alice-mage',
+      actionSpaceId: 'base.room.chapel.b.slot-1',
+    });
+    // Forfeit instead of taking the reward.
+    s = forfeitAtResolution(s);
+    const alice = s.players.find((p) => p.id === 'p1')!;
+    expect(alice.resources.marks).toBe(0);
+    // Forfeit grants 1 IP per the resolution-choice contract.
+    expect(alice.resources.influence).toBe(1);
+    expect(s.pendingResolutionStack).toHaveLength(0);
+  });
+});
+
+describe("Archmage's Study Side A (instant)", () => {
+  /**
+   * Sets up a Mancers-disabled 2P game with Archmage's Study Side A
+   * forced into the layout, p1 with a placeable mage, resources zeroed
+   * and bell tower drained — mirrors the Chapel B / Mancers Lab A
+   * pattern.
+   */
+  function setupStudyTest(): GameState {
+    let s = initGame(TWO_PLAYER_CONFIG);
+    s = forceRoomSide(s, "Archmage's Study", 'A');
+    s = zeroPlayerResources(s, 'p1');
+    s = setMeritBadges(s, 'p1', 5);
+    s = addMage(s, 'p1', {
+      id: 'alice-mage',
+      cardId: 'base.mage.divinity',
+      color: 'blue',
+    });
+    s = {
+      ...s,
+      firstPlayerIndex: 0,
+      phase: {
+        kind: 'errands',
+        round: 1,
+        activePlayerIndex: 0,
+        actionUsed: false,
+        fastActionUsed: false,
+      },
+      bellTower: { ...s.bellTower, available: [] },
+    };
+    return s;
+  }
+
+  it('slot 1 (merit): pay 1 Mana → gain the Archmage\'s Apprentice + set ownership', () => {
+    let s = setupStudyTest();
+    s = mapPlayer(s, 'p1', (p) => ({
+      ...p,
+      resources: { ...p.resources, mana: 2 },
+    }));
+    expect(s.archmagesApprenticeOwner).toBeNull();
+    s = applyAction(s, {
+      type: 'PLACE_WORKER',
+      playerId: 'p1',
+      mageId: 'alice-mage',
+      actionSpaceId: 'base.room.archmages-study.a.slot-1',
+    });
+    s = takeRewardAtResolution(s);
+    expect(s.archmagesApprenticeOwner).toBe('p1');
+    const alice = s.players.find((p) => p.id === 'p1')!;
+    expect(alice.resources.mana).toBe(1); // 2 - 1
+    const apprentice = alice.mages.find(
+      (m) => m.cardId === 'base.mage.archmages-apprentice',
+    );
+    expect(apprentice).toBeDefined();
+    expect(apprentice?.color).toBe('rainbow');
+    expect(apprentice?.location).toEqual({
+      kind: 'office',
+      playerId: 'p1',
+    });
+    // Player kept their placement on the slot.
+    const slot = s.rooms
+      .find((r) => r.id === 'base.room.archmages-study.a')!
+      .actionSpaces.find((sp) => sp.id === 'base.room.archmages-study.a.slot-1')!;
+    expect(slot.occupant?.mageId).toBe('alice-mage');
+  });
+
+  it('slot 1 fizzles silently when the player has 0 Mana', () => {
+    let s = setupStudyTest();
+    // resources are already zeroed by setupStudyTest.
+    s = applyAction(s, {
+      type: 'PLACE_WORKER',
+      playerId: 'p1',
+      mageId: 'alice-mage',
+      actionSpaceId: 'base.room.archmages-study.a.slot-1',
+    });
+    s = takeRewardAtResolution(s);
+    expect(s.archmagesApprenticeOwner).toBeNull();
+    const alice = s.players.find((p) => p.id === 'p1')!;
+    expect(
+      alice.mages.some((m) => m.cardId === 'base.mage.archmages-apprentice'),
+    ).toBe(false);
+  });
+
+  it('slot 1 fizzles silently when the apprentice is already claimed', () => {
+    let s = setupStudyTest();
+    s = mapPlayer(s, 'p1', (p) => ({
+      ...p,
+      resources: { ...p.resources, mana: 5 },
+    }));
+    s = { ...s, archmagesApprenticeOwner: 'p2' };
+    s = applyAction(s, {
+      type: 'PLACE_WORKER',
+      playerId: 'p1',
+      mageId: 'alice-mage',
+      actionSpaceId: 'base.room.archmages-study.a.slot-1',
+    });
+    s = takeRewardAtResolution(s);
+    expect(s.archmagesApprenticeOwner).toBe('p2'); // unchanged
+    const alice = s.players.find((p) => p.id === 'p1')!;
+    expect(alice.resources.mana).toBe(5); // no mana spent
+  });
+
+  it('slot 2: gain 1 IP then open a swap-colour prompt; picking grey swaps the mage', () => {
+    let s = setupStudyTest();
+    s = applyAction(s, {
+      type: 'PLACE_WORKER',
+      playerId: 'p1',
+      mageId: 'alice-mage',
+      actionSpaceId: 'base.room.archmages-study.a.slot-2',
+    });
+    s = takeRewardAtResolution(s);
+    // IP was applied up-front and the swap prompt is up.
+    expect(s.players.find((p) => p.id === 'p1')?.resources.influence).toBe(1);
+    const prompt = topPending(s);
+    expect(prompt.prompt.kind).toBe('choose-from-options');
+    if (prompt.prompt.kind !== 'choose-from-options') throw new Error('unreachable');
+    // Blue is excluded (the placed mage's own colour); rainbow + own-colour
+    // are not offered as swap targets.
+    const ids = prompt.prompt.options.map((o) => o.id);
+    expect(ids).not.toContain('blue');
+    expect(ids).not.toContain('rainbow');
+    expect(ids).toContain('grey');
+    const greyPoolBefore = s.mageDraftPool.grey;
+    const bluePoolBefore = s.mageDraftPool.blue;
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: prompt.id,
+      answer: { kind: 'option-chosen', optionId: 'grey', payload: {} },
+    });
+    // The mage stays in the slot but its colour and card id change.
+    const alice = s.players.find((p) => p.id === 'p1')!;
+    const swapped = alice.mages.find((m) => m.id === 'alice-mage')!;
+    expect(swapped.color).toBe('grey');
+    expect(swapped.cardId).toBe('base.mage.mysticism');
+    // Pool: blue +1 (returned), grey -1 (taken).
+    expect(s.mageDraftPool.blue).toBe(bluePoolBefore + 1);
+    expect(s.mageDraftPool.grey).toBe(greyPoolBefore - 1);
+  });
+
+  it('slot 3: opens swap prompt only; no IP bonus', () => {
+    let s = setupStudyTest();
+    s = applyAction(s, {
+      type: 'PLACE_WORKER',
+      playerId: 'p1',
+      mageId: 'alice-mage',
+      actionSpaceId: 'base.room.archmages-study.a.slot-3',
+    });
+    s = takeRewardAtResolution(s);
+    expect(s.players.find((p) => p.id === 'p1')?.resources.influence).toBe(0);
+    const prompt = topPending(s);
+    expect(prompt.prompt.kind).toBe('choose-from-options');
+    if (prompt.prompt.kind !== 'choose-from-options') throw new Error('unreachable');
+    expect(prompt.prompt.options.map((o) => o.id)).toContain('red');
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: prompt.id,
+      answer: { kind: 'option-chosen', optionId: 'red', payload: {} },
+    });
+    const swapped = s.players
+      .find((p) => p.id === 'p1')!
+      .mages.find((m) => m.id === 'alice-mage')!;
+    expect(swapped.color).toBe('red');
+  });
+
+  it('slot 3 (or 2) cannot swap the Apprentice — fizzles after the bonus', () => {
+    let s = setupStudyTest();
+    // Give p1 the apprentice already + a placeable mage.
+    s = {
+      ...s,
+      archmagesApprenticeOwner: 'p1',
+    };
+    s = mapPlayer(s, 'p1', (p) => ({
+      ...p,
+      mages: [
+        // Replace alice-mage with a rainbow apprentice piece.
+        {
+          id: 'alice-mage',
+          cardId: 'base.mage.archmages-apprentice',
+          color: 'rainbow' as const,
+          location: { kind: 'office' as const, playerId: 'p1' },
+          isShadowing: false,
+          isWounded: false,
+        },
+      ],
+    }));
+    s = applyAction(s, {
+      type: 'PLACE_WORKER',
+      playerId: 'p1',
+      mageId: 'alice-mage',
+      actionSpaceId: 'base.room.archmages-study.a.slot-2',
+    });
+    s = takeRewardAtResolution(s);
+    // IP bonus still applied …
+    expect(s.players.find((p) => p.id === 'p1')?.resources.influence).toBe(1);
+    // … but no swap prompt opened; the apprentice can't be traded.
+    expect(s.pendingResolutionStack).toHaveLength(0);
+    const stillApprentice = s.players
+      .find((p) => p.id === 'p1')!
+      .mages.find((m) => m.id === 'alice-mage')!;
+    expect(stillApprentice.cardId).toBe('base.mage.archmages-apprentice');
+  });
+
+  it('round-end clears the Apprentice (owner + mage entity) at round-setup', () => {
+    let s = setupStudyTest();
+    s = {
+      ...s,
+      archmagesApprenticeOwner: 'p1',
+    };
+    s = mapPlayer(s, 'p1', (p) => ({
+      ...p,
+      mages: [
+        ...p.mages,
+        {
+          id: 'apprentice-1',
+          cardId: 'base.mage.archmages-apprentice',
+          color: 'rainbow' as const,
+          location: { kind: 'office' as const, playerId: 'p1' },
+          isShadowing: false,
+          isWounded: false,
+        },
+      ],
+    }));
+    // Drive into round 2 — the round-setup hook runs.
+    s = {
+      ...s,
+      phase: { kind: 'round-setup', round: 2 },
+    };
+    s = applyAction(s, { type: 'ADVANCE_PHASE' });
+    expect(s.archmagesApprenticeOwner).toBeNull();
+    const alice = s.players.find((p) => p.id === 'p1')!;
+    expect(
+      alice.mages.some((m) => m.cardId === 'base.mage.archmages-apprentice'),
+    ).toBe(false);
+  });
+});
+
+describe("Archmage's Apprentice — all mage powers", () => {
+  /** Builds an apprentice OwnedMage placed in the given location. */
+  function apprenticeInOffice(playerId: string, id = 'apprentice'): OwnedMage {
+    return {
+      id,
+      cardId: 'base.mage.archmages-apprentice',
+      color: 'rainbow' as const,
+      location: { kind: 'office' as const, playerId },
+      isShadowing: false,
+      isWounded: false,
+    };
+  }
+
+  it('Apprentice acts as red — eligible to Ars Magna an opposing slot', async () => {
+    const { buildArsMagnaTargets, canArsMagnaTakeSpace } = await import(
+      './effects/helpers'
+    );
+    let s = initGame(TWO_PLAYER_CONFIG);
+    s = forceLibrarySideA(s);
+    s = zeroPlayerResources(s, 'p1');
+    s = zeroPlayerResources(s, 'p2');
+    s = setMana(s, 'p1', 1);
+    // p1 holds only the apprentice (no actual red mage).
+    s = mapPlayer(s, 'p1', (p) => ({
+      ...p,
+      mages: [apprenticeInOffice('p1')],
+    }));
+    // Park an opposing grey mage on a Library slot — valid Ars Magna target.
+    s = addMage(s, 'p2', {
+      id: 'bob-grey',
+      cardId: 'base.mage.mysticism',
+      color: 'grey',
+    });
+    s = placeMageOnSpace(s, 'p2', 'bob-grey', 'base.room.library.a.slot-1');
+    const targets = buildArsMagnaTargets(s, 'p1');
+    expect(targets).toContain('bob-grey');
+    const space = s.rooms
+      .flatMap((r) => r.actionSpaces)
+      .find((sp) => sp.id === 'base.room.library.a.slot-1')!;
+    expect(canArsMagnaTakeSpace(s, 'p1', space)).toBe(true);
+  });
+
+  it('Apprentice acts as green — wound-immune (excluded from buildBurnTargets)', async () => {
+    const { buildBurnTargets } = await import('./effects/helpers');
+    let s = initGame(TWO_PLAYER_CONFIG);
+    s = forceLibrarySideA(s);
+    // p2 has the apprentice on a slot. p1 (caster) trying to wound.
+    s = mapPlayer(s, 'p2', (p) => ({
+      ...p,
+      mages: [
+        {
+          id: 'apprentice',
+          cardId: 'base.mage.archmages-apprentice',
+          color: 'rainbow' as const,
+          location: {
+            kind: 'action-space' as const,
+            spaceId: 'base.room.library.a.slot-1',
+          },
+          isShadowing: false,
+          isWounded: false,
+        },
+      ],
+    }));
+    s = {
+      ...s,
+      rooms: s.rooms.map((r) =>
+        r.id !== 'base.room.library.a'
+          ? r
+          : {
+              ...r,
+              actionSpaces: r.actionSpaces.map((sp) =>
+                sp.id !== 'base.room.library.a.slot-1'
+                  ? sp
+                  : {
+                      ...sp,
+                      occupant: {
+                        mageId: 'apprentice',
+                        ownerId: 'p2',
+                        isShadowing: false,
+                      },
+                    },
+              ),
+            },
+      ),
+    };
+    const targets = buildBurnTargets(s, 'p1');
+    expect(targets).not.toContain('apprentice');
+  });
+
+  it('Apprentice acts as blue — immune to opposing spell-targeting (banish)', async () => {
+    const { buildBanishTargets } = await import('./effects/helpers');
+    let s = initGame(TWO_PLAYER_CONFIG);
+    s = forceLibrarySideA(s);
+    s = mapPlayer(s, 'p2', (p) => ({
+      ...p,
+      mages: [
+        {
+          id: 'apprentice',
+          cardId: 'base.mage.archmages-apprentice',
+          color: 'rainbow' as const,
+          location: {
+            kind: 'action-space' as const,
+            spaceId: 'base.room.library.a.slot-1',
+          },
+          isShadowing: false,
+          isWounded: false,
+        },
+      ],
+    }));
+    s = {
+      ...s,
+      rooms: s.rooms.map((r) =>
+        r.id !== 'base.room.library.a'
+          ? r
+          : {
+              ...r,
+              actionSpaces: r.actionSpaces.map((sp) =>
+                sp.id !== 'base.room.library.a.slot-1'
+                  ? sp
+                  : {
+                      ...sp,
+                      occupant: {
+                        mageId: 'apprentice',
+                        ownerId: 'p2',
+                        isShadowing: false,
+                      },
+                    },
+              ),
+            },
+      ),
+    };
+    const targets = buildBanishTargets(s, 'p1');
+    expect(targets).not.toContain('apprentice');
+  });
+
+  it('Apprentice acts as purple — placing consumes the Fast Action budget', () => {
+    let s = initGame(TWO_PLAYER_CONFIG);
+    s = forceLibrarySideA(s);
+    s = mapPlayer(s, 'p1', (p) => ({
+      ...p,
+      mages: [apprenticeInOffice('p1', 'app-1')],
+    }));
+    s = {
+      ...s,
+      firstPlayerIndex: 0,
+      phase: {
+        kind: 'errands',
+        round: 1,
+        activePlayerIndex: 0,
+        actionUsed: false,
+        fastActionUsed: false,
+      },
+      bellTower: { ...s.bellTower, available: [] },
+    };
+    s = applyAction(s, {
+      type: 'PLACE_WORKER',
+      playerId: 'p1',
+      mageId: 'app-1',
+      actionSpaceId: 'base.room.library.a.slot-1',
+    });
+    if (s.phase.kind !== 'errands') throw new Error('phase changed');
+    expect(s.phase.fastActionUsed).toBe(true);
+    expect(s.phase.actionUsed).toBe(false);
+  });
+
+  it('Apprentice acts as grey — caster qualifies for the Mysticism post-cast trigger', () => {
+    // Drive a CAST_SPELL with an action-timed spell and verify the
+    // post-cast Yes/No prompt opens with the apprentice as the
+    // candidate grey-equivalent mage.
+    let s = initGame(TWO_PLAYER_CONFIG);
+    s = forceLibrarySideA(s);
+    s = zeroPlayerResources(s, 'p1');
+    s = mapPlayer(s, 'p1', (p) => ({
+      ...p,
+      resources: { ...p.resources, mana: 5 },
+      mages: [apprenticeInOffice('p1', 'app-1')],
+      ownedSpells: [
+        {
+          cardId: 'base.spell.burn',
+          intPlaced: true,
+          wisPlacedLevel2: false,
+          wisPlacedLevel3: false,
+          exhausted: false,
+        },
+      ],
+    }));
+    s = addMage(s, 'p2', {
+      id: 'bob-mage',
+      cardId: 'base.mage.sorcery',
+      color: 'red',
+    });
+    s = placeMageOnSpace(s, 'p2', 'bob-mage', 'base.room.library.a.slot-1');
+    s = {
+      ...s,
+      firstPlayerIndex: 0,
+      phase: {
+        kind: 'errands',
+        round: 1,
+        activePlayerIndex: 0,
+        actionUsed: false,
+        fastActionUsed: false,
+      },
+      bellTower: { ...s.bellTower, available: [] },
+    };
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.burn',
+      level: 1,
+    });
+    // Resolve the Burn target prompt.
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'mage-chosen', mageId: 'bob-mage' },
+    });
+    // Pass the reaction window.
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'reaction-passed' },
+    });
+    // Bob picks an infirmary bonus.
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'option-chosen', optionId: 'gold', payload: {} },
+    });
+    // Mysticism post-cast Yes/No prompt should now be up; apprentice
+    // counts as a grey-eligible candidate.
+    const prompt = topPending(s);
+    expect(prompt.resume.effectId).toBe(
+      'base.system.mysticism-place-after-cast',
+    );
+  });
+
+  it('Apprentice acts as orange — placing queues the Technomancy trigger when Mancers is active', () => {
+    let s = initGame({
+      ...TWO_PLAYER_CONFIG,
+      activePackIds: ['base', 'mancers'],
+    });
+    s = forceLibrarySideA(s);
+    s = zeroPlayerResources(s, 'p1');
+    s = setGold(s, 'p1', 5);
+    s = mapPlayer(s, 'p1', (p) => ({
+      ...p,
+      mages: [apprenticeInOffice('p1', 'app-1')],
+    }));
+    s = {
+      ...s,
+      firstPlayerIndex: 0,
+      phase: {
+        kind: 'errands',
+        round: 1,
+        activePlayerIndex: 0,
+        actionUsed: false,
+        fastActionUsed: false,
+      },
+      bellTower: { ...s.bellTower, available: [] },
+    };
+    s = applyAction(s, {
+      type: 'PLACE_WORKER',
+      playerId: 'p1',
+      mageId: 'app-1',
+      actionSpaceId: 'base.room.library.a.slot-1',
+    });
+    // Queue was drained immediately into the Technomancy "Pay 3 Gold"
+    // prompt — exactly the path a real orange Technomancer would take.
+    const prompt = topPending(s);
+    expect(prompt.resume.effectId).toBe(
+      'mancers.mage.technomancy.place-after',
+    );
+  });
+
+  it('Apprentice acts as orange — but does NOT trigger Technomancy when Mancers is NOT active', () => {
+    let s = initGame(TWO_PLAYER_CONFIG); // base only
+    s = forceLibrarySideA(s);
+    s = zeroPlayerResources(s, 'p1');
+    s = setGold(s, 'p1', 5);
+    s = mapPlayer(s, 'p1', (p) => ({
+      ...p,
+      mages: [apprenticeInOffice('p1', 'app-1')],
+    }));
+    s = {
+      ...s,
+      firstPlayerIndex: 0,
+      phase: {
+        kind: 'errands',
+        round: 1,
+        activePlayerIndex: 0,
+        actionUsed: false,
+        fastActionUsed: false,
+      },
+      bellTower: { ...s.bellTower, available: [] },
+    };
+    s = applyAction(s, {
+      type: 'PLACE_WORKER',
+      playerId: 'p1',
+      mageId: 'app-1',
+      actionSpaceId: 'base.room.library.a.slot-1',
+    });
+    expect(s.pendingTechnomancyTrigger).toEqual([]);
+    expect(s.pendingResolutionStack).toHaveLength(0);
+  });
+});
+
+describe('Dormitory', () => {
+  /**
+   * Resolves the slot's colour prompt by picking `color` and returns the
+   * post-resume state. Asserts the colour is among the available options
+   * first so wrong-cap / wrong-pool setups surface at the prompt rather
+   * than later in the apply step.
+   */
+  function pickColor(s: GameState, color: MageColor): GameState {
+    const prompt = topPending(s);
+    if (prompt.prompt.kind !== 'choose-from-options') {
+      throw new Error(
+        `expected choose-from-options prompt, got ${prompt.prompt.kind}`,
+      );
+    }
+    const opt = prompt.prompt.options.find((o) => o.id === color);
+    expect(opt).toBeDefined();
+    expect(opt?.available).not.toBe(false);
+    return applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: prompt.id,
+      answer: { kind: 'option-chosen', optionId: color, payload: {} },
+    });
+  }
+
+  it('A slot 1 (merit, 2 Gold): pays 2 Gold + adds a red mage from the supply', () => {
+    let s = setupRoomSlotTest(
+      'Dormitory',
+      'A',
+      'base.room.dormitory.a.slot-1',
+    );
+    s = setGold(s, 'p1', 5);
+    const redPoolBefore = s.mageDraftPool.red;
+    s = driveToResolution(s);
+    s = pickColor(s, 'red');
+    const alice = s.players.find((p) => p.id === 'p1')!;
+    expect(alice.resources.gold).toBe(3); // 5 - 2
+    expect(alice.mages.filter((m) => m.color === 'red')).toHaveLength(1);
+    expect(s.mageDraftPool.red).toBe(redPoolBefore - 1);
+  });
+
+  it('A slot 2 (regular, 6 Gold): pays 6 Gold + adds a grey mage', () => {
+    let s = setupRoomSlotTest(
+      'Dormitory',
+      'A',
+      'base.room.dormitory.a.slot-2',
+    );
+    s = setGold(s, 'p1', 8);
+    s = driveToResolution(s);
+    s = pickColor(s, 'grey');
+    const alice = s.players.find((p) => p.id === 'p1')!;
+    expect(alice.resources.gold).toBe(2); // 8 - 6
+    expect(alice.mages.filter((m) => m.color === 'grey')).toHaveLength(1);
+  });
+
+  it('B slot 1 (merit, free): adds a green mage without spending anything', () => {
+    let s = setupRoomSlotTest(
+      'Dormitory',
+      'B',
+      'base.room.dormitory.b.slot-1',
+    );
+    // Resources stay zero — confirms there's no cost.
+    s = driveToResolution(s);
+    s = pickColor(s, 'green');
+    const alice = s.players.find((p) => p.id === 'p1')!;
+    expect(alice.resources.gold).toBe(0);
+    expect(alice.resources.influence).toBe(0);
+    expect(alice.mages.filter((m) => m.color === 'green')).toHaveLength(1);
+  });
+
+  it('B slot 2 (regular, 2 IP): spends 2 IP + adds a purple mage', () => {
+    let s = setupRoomSlotTest(
+      'Dormitory',
+      'B',
+      'base.room.dormitory.b.slot-2',
+    );
+    s = mapPlayer(s, 'p1', (p) => ({
+      ...p,
+      resources: { ...p.resources, influence: 5 },
+    }));
+    s = driveToResolution(s);
+    s = pickColor(s, 'purple');
+    const alice = s.players.find((p) => p.id === 'p1')!;
+    expect(alice.resources.influence).toBe(3); // 5 - 2
+    expect(alice.mages.filter((m) => m.color === 'purple')).toHaveLength(1);
+  });
+
+  it('marks a colour unavailable when the player already owns 2 of that colour', () => {
+    let s = setupRoomSlotTest(
+      'Dormitory',
+      'B',
+      'base.room.dormitory.b.slot-1',
+    );
+    // Give alice 2 reds before placement so the cap triggers.
+    s = addMage(s, 'p1', {
+      id: 'red-1',
+      cardId: 'base.mage.sorcery',
+      color: 'red',
+    });
+    s = addMage(s, 'p1', {
+      id: 'red-2',
+      cardId: 'base.mage.sorcery',
+      color: 'red',
+    });
+    s = driveToResolution(s);
+    const prompt = topPending(s);
+    if (prompt.prompt.kind !== 'choose-from-options') throw new Error('unreachable');
+    const redOpt = prompt.prompt.options.find((o) => o.id === 'red');
+    expect(redOpt?.available).toBe(false);
+    expect(redOpt?.unavailableReason).toMatch(/already have 2/);
+    // Other colours stay available.
+    const blueOpt = prompt.prompt.options.find((o) => o.id === 'blue');
+    expect(blueOpt?.available).not.toBe(false);
+  });
+
+  it('neutral (off-white) stays available even when the player already owns many', () => {
+    let s = setupRoomSlotTest(
+      'Dormitory',
+      'B',
+      'base.room.dormitory.b.slot-1',
+    );
+    // 5 neutrals — far above the 2-cap that applies to coloured mages.
+    for (let i = 0; i < 5; i++) {
+      s = addMage(s, 'p1', {
+        id: `n-${i}`,
+        cardId: 'base.mage.neutral',
+        color: 'off-white',
+      });
+    }
+    s = driveToResolution(s);
+    const prompt = topPending(s);
+    if (prompt.prompt.kind !== 'choose-from-options') throw new Error('unreachable');
+    const neutralOpt = prompt.prompt.options.find((o) => o.id === 'off-white');
+    expect(neutralOpt?.available).not.toBe(false);
+    // Picking it works.
+    s = pickColor(s, 'off-white');
+    expect(
+      s.players
+        .find((p) => p.id === 'p1')!
+        .mages.filter((m) => m.color === 'off-white'),
+    ).toHaveLength(6);
+  });
+
+  it('marks a colour unavailable when its supply pool is empty', () => {
+    let s = setupRoomSlotTest(
+      'Dormitory',
+      'B',
+      'base.room.dormitory.b.slot-1',
+    );
+    s = { ...s, mageDraftPool: { ...s.mageDraftPool, purple: 0 } };
+    s = driveToResolution(s);
+    const prompt = topPending(s);
+    if (prompt.prompt.kind !== 'choose-from-options') throw new Error('unreachable');
+    const purpleOpt = prompt.prompt.options.find((o) => o.id === 'purple');
+    expect(purpleOpt?.available).toBe(false);
+    expect(purpleOpt?.unavailableReason).toMatch(/supply empty/);
+  });
+
+  it('A slot 1 fizzles silently when the player cannot afford the 2 Gold cost', () => {
+    let s = setupRoomSlotTest(
+      'Dormitory',
+      'A',
+      'base.room.dormitory.a.slot-1',
+    );
+    // setupRoomSlotTest zeros resources — gold = 0 < 2.
+    s = driveToResolution(s);
+    // No colour-picker prompt was pushed; resolution-choice popped clean.
+    expect(s.pendingResolutionStack).toHaveLength(0);
+    const alice = s.players.find((p) => p.id === 'p1')!;
+    // No mage gained, no cost deducted.
+    expect(alice.resources.gold).toBe(0);
+    expect(alice.mages.filter((m) => m.color !== 'blue' || m.id !== 'alice-mage-1')).toHaveLength(0);
+  });
+
+  it('B slot 1 fizzles silently when every colour is at the cap and supply is empty', () => {
+    let s = setupRoomSlotTest(
+      'Dormitory',
+      'B',
+      'base.room.dormitory.b.slot-1',
+    );
+    // Give alice 2 of every coloured mage, and drain the neutral pool.
+    const colors: MageColor[] = ['red', 'blue', 'grey', 'green', 'purple'];
+    let seq = 0;
+    for (const c of colors) {
+      s = addMage(s, 'p1', {
+        id: `dorm-${c}-1-${seq++}`,
+        cardId: 'base.mage.sorcery',
+        color: c,
+      });
+      s = addMage(s, 'p1', {
+        id: `dorm-${c}-2-${seq++}`,
+        cardId: 'base.mage.sorcery',
+        color: c,
+      });
+    }
+    s = { ...s, mageDraftPool: { ...s.mageDraftPool, 'off-white': 0 } };
+    s = driveToResolution(s);
+    // No colour-picker prompt opened.
+    expect(s.pendingResolutionStack).toHaveLength(0);
+  });
+
+  it('Technomancy (orange) option is hidden when the Mancers pack is not active', () => {
+    let s = setupRoomSlotTest(
+      'Dormitory',
+      'B',
+      'base.room.dormitory.b.slot-1',
+    );
+    s = driveToResolution(s);
+    const prompt = topPending(s);
+    if (prompt.prompt.kind !== 'choose-from-options') throw new Error('unreachable');
+    expect(prompt.prompt.options.find((o) => o.id === 'orange')).toBeUndefined();
+  });
+});
+
+describe('Technomancy (Mancers expansion)', () => {
+  it('initGame seeds 0 orange mages when Mancers is NOT active', () => {
+    const s = initGame(TWO_PLAYER_CONFIG);
+    expect(s.mageDraftPool.orange).toBe(0);
+  });
+
+  it('initGame seeds 4 orange mages when Mancers IS active', () => {
+    const s = initGame({ ...TWO_PLAYER_CONFIG, activePackIds: ['base', 'mancers'] });
+    expect(s.mageDraftPool.orange).toBe(4);
+  });
+
+  it('mancers pack exposes the Technomancer Mage entity', () => {
+    const tech = mancersPack.mages.find(
+      (m) => m.id === 'mancers.mage.technomancy',
+    );
+    expect(tech).toBeDefined();
+    expect(tech?.color).toBe('orange');
+    expect(tech?.department).toBe('technomancy');
+  });
+
+  it('mancers pack exposes EXACTLY the two Technomancy candidate leaders (no extras)', () => {
+    expect(mancersPack.candidates).toHaveLength(2);
+    const ids = mancersPack.candidates.map((c) => c.id).sort();
+    expect(ids).toEqual([
+      'mancers.candidate.riflam-lenshear',
+      'mancers.candidate.sophica-sentavra',
+    ]);
+    const sophica = mancersPack.candidates.find(
+      (c) => c.id === 'mancers.candidate.sophica-sentavra',
+    );
+    const riflam = mancersPack.candidates.find(
+      (c) => c.id === 'mancers.candidate.riflam-lenshear',
+    );
+    expect(sophica?.department).toBe('technomancy');
+    expect(sophica?.startingMageColor).toBe('orange');
+    expect(sophica?.starterSpellId).toBe('mancers.spell.arcane-surge');
+    expect(riflam?.department).toBe('technomancy');
+    expect(riflam?.startingMageColor).toBe('orange');
+    expect(riflam?.starterSpellId).toBe(
+      'mancers.spell.arcane-investigation',
+    );
+  });
+
+  it('mancers pack exposes both leader starter spells (unique, single-level)', () => {
+    const surge = mancersPack.spells.find(
+      (s) => s.id === 'mancers.spell.arcane-surge',
+    );
+    const investigation = mancersPack.spells.find(
+      (s) => s.id === 'mancers.spell.arcane-investigation',
+    );
+    expect(surge?.unique).toBe(true);
+    expect(surge?.department).toBe('technomancy');
+    expect(surge?.levels).toHaveLength(1);
+    expect(surge?.levels[0]?.manaCost).toBe(0);
+    expect(surge?.levels[0]?.timing).toBe('fast-action');
+    expect(investigation?.unique).toBe(true);
+    expect(investigation?.department).toBe('technomancy');
+    expect(investigation?.levels).toHaveLength(1);
+    expect(investigation?.levels[0]?.manaCost).toBe(1);
+    expect(investigation?.levels[0]?.timing).toBe('action');
+  });
+
+  it('initGame with Mancers + useCandidateDraft exposes both Technomancy candidates as selectable', () => {
+    const s = initGame({
+      ...TWO_PLAYER_CONFIG,
+      activePackIds: ['base', 'mancers'],
+      useCandidateDraft: true,
+    });
+    expect(s.phase.kind).toBe('candidate-draft');
+    // Walk the same lookup path the UI uses (listPacks + filter by
+    // activePackIds + collect candidates).
+    const available: Candidate[] = [];
+    for (const packId of s.activePackIds) {
+      const pack = listPacks().find((p) => p.id === packId);
+      if (!pack) continue;
+      available.push(...pack.candidates);
+    }
+    const ids = available.map((c) => c.id);
+    expect(ids).toContain('mancers.candidate.sophica-sentavra');
+    expect(ids).toContain('mancers.candidate.riflam-lenshear');
+    // Every Mancers candidate is the Technomancy department — so the
+    // draft UI's department-grouped render must include 'technomancy'
+    // or these leaders will be invisible. (Regression: before this fix
+    // the UI's `departmentOrder` array omitted 'technomancy'.)
+    const mancersDepartments = new Set(
+      available
+        .filter((c) => c.sourcePackId === 'mancers')
+        .map((c) => c.department),
+    );
+    expect(mancersDepartments).toEqual(new Set(['technomancy']));
+  });
+
+  it('Dormitory B offers the Technomancy option when Mancers is active', () => {
+    let s = initGame({
+      ...TWO_PLAYER_CONFIG,
+      activePackIds: ['base', 'mancers'],
+    });
+    s = forceRoomSide(s, 'Dormitory', 'B');
+    s = addMage(s, 'p1', {
+      id: 'alice-mage-1',
+      cardId: 'base.mage.divinity',
+      color: 'blue',
+    });
+    s = placeMageOnSpace(s, 'p1', 'alice-mage-1', 'base.room.dormitory.b.slot-1');
+    s = zeroPlayerResources(s, 'p1');
+    s = setMeritBadges(s, 'p1', 5);
+    s = { ...s, bellTower: { ...s.bellTower, available: [] } };
+    s = driveToResolution(s);
+    const prompt = topPending(s);
+    if (prompt.prompt.kind !== 'choose-from-options') throw new Error('unreachable');
+    const orangeOpt = prompt.prompt.options.find((o) => o.id === 'orange');
+    expect(orangeOpt).toBeDefined();
+    expect(orangeOpt?.available).not.toBe(false);
+  });
+
+  /**
+   * Sets up a Mancers-enabled 2P game with a non-instant target room
+   * (Library A) forced into the layout, a single orange Technomancer
+   * mage in p1's office, and the errands phase active for p1. Bell
+   * tower drained so PLACE_WORKER doesn't trip on bell-tower events.
+   */
+  function setupTechnomancyPlaceTest(opts: { gold: number }): GameState {
+    let s = initGame({
+      ...TWO_PLAYER_CONFIG,
+      activePackIds: ['base', 'mancers'],
+    });
+    s = forceLibrarySideA(s);
+    s = zeroPlayerResources(s, 'p1');
+    s = setGold(s, 'p1', opts.gold);
+    s = addMage(s, 'p1', {
+      id: 'alice-orange',
+      cardId: 'mancers.mage.technomancy',
+      color: 'orange',
+    });
+    s = {
+      ...s,
+      firstPlayerIndex: 0,
+      phase: {
+        kind: 'errands',
+        round: 1,
+        activePlayerIndex: 0,
+        actionUsed: false,
+        fastActionUsed: false,
+      },
+      bellTower: { ...s.bellTower, available: [] },
+    };
+    return s;
+  }
+
+  it('placing an orange mage queues a Technomancy trigger', () => {
+    let s = setupTechnomancyPlaceTest({ gold: 3 });
+    expect(s.pendingTechnomancyTrigger).toEqual([]);
+    s = applyAction(s, {
+      type: 'PLACE_WORKER',
+      playerId: 'p1',
+      mageId: 'alice-orange',
+      actionSpaceId: 'base.room.library.a.slot-3',
+    });
+    // Queue was appended at PLACE_WORKER time; the drain pump then
+    // shifted it back off and pushed a prompt. So the queue is empty
+    // again but the prompt is up.
+    expect(s.pendingTechnomancyTrigger).toEqual([]);
+    const prompt = topPending(s);
+    expect(prompt.resume.effectId).toBe(
+      'mancers.mage.technomancy.place-after',
+    );
+    expect(prompt.responderId).toBe('p1');
+    if (prompt.prompt.kind !== 'choose-from-options') throw new Error('unreachable');
+    expect(prompt.prompt.options.map((o) => o.id).sort()).toEqual([
+      'pay',
+      'skip',
+    ]);
+  });
+
+  it('Pay path: spends 3 Gold and surfaces a Research prompt', () => {
+    let s = setupTechnomancyPlaceTest({ gold: 5 });
+    s = applyAction(s, {
+      type: 'PLACE_WORKER',
+      playerId: 'p1',
+      mageId: 'alice-orange',
+      actionSpaceId: 'base.room.library.a.slot-3',
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'option-chosen', optionId: 'pay', payload: {} },
+    });
+    const alice = s.players.find((p) => p.id === 'p1')!;
+    expect(alice.resources.gold).toBe(2); // 5 - 3
+    // Research entry was queued and drained immediately into a prompt.
+    expect(topPending(s).resume.effectId).toBe(
+      'base.system.spend-research',
+    );
+  });
+
+  it('Skip path: no Gold spent, no Research surfaced', () => {
+    let s = setupTechnomancyPlaceTest({ gold: 3 });
+    s = applyAction(s, {
+      type: 'PLACE_WORKER',
+      playerId: 'p1',
+      mageId: 'alice-orange',
+      actionSpaceId: 'base.room.library.a.slot-3',
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'option-chosen', optionId: 'skip', payload: {} },
+    });
+    const alice = s.players.find((p) => p.id === 'p1')!;
+    expect(alice.resources.gold).toBe(3);
+    expect(s.pendingResolutionStack).toHaveLength(0);
+    expect(s.researchQueue).toHaveLength(0);
+  });
+
+  it('Trigger fizzles silently when the player has under 3 Gold', () => {
+    let s = setupTechnomancyPlaceTest({ gold: 2 });
+    s = applyAction(s, {
+      type: 'PLACE_WORKER',
+      playerId: 'p1',
+      mageId: 'alice-orange',
+      actionSpaceId: 'base.room.library.a.slot-3',
+    });
+    // No prompt pushed — gating in drainTechnomancyTriggerIfIdle.
+    expect(s.pendingResolutionStack).toHaveLength(0);
+    expect(s.pendingTechnomancyTrigger).toEqual([]);
+    expect(s.players.find((p) => p.id === 'p1')?.resources.gold).toBe(2);
+  });
+
+  it('Non-orange mages do NOT enqueue a Technomancy trigger', () => {
+    let s = initGame({
+      ...TWO_PLAYER_CONFIG,
+      activePackIds: ['base', 'mancers'],
+    });
+    s = forceLibrarySideA(s);
+    s = zeroPlayerResources(s, 'p1');
+    s = setGold(s, 'p1', 10);
+    s = addMage(s, 'p1', {
+      id: 'alice-blue',
+      cardId: 'base.mage.divinity',
+      color: 'blue',
+    });
+    s = {
+      ...s,
+      firstPlayerIndex: 0,
+      phase: {
+        kind: 'errands',
+        round: 1,
+        activePlayerIndex: 0,
+        actionUsed: false,
+        fastActionUsed: false,
+      },
+      bellTower: { ...s.bellTower, available: [] },
+    };
+    s = applyAction(s, {
+      type: 'PLACE_WORKER',
+      playerId: 'p1',
+      mageId: 'alice-blue',
+      actionSpaceId: 'base.room.library.a.slot-3',
+    });
+    expect(s.pendingTechnomancyTrigger).toEqual([]);
+    expect(s.pendingResolutionStack).toHaveLength(0);
+  });
+
+  it('Trigger queue resets between turns (defensive)', () => {
+    let s = setupTechnomancyPlaceTest({ gold: 2 });
+    // Force a stale entry to confirm it gets cleared on errands advance.
+    s = {
+      ...s,
+      pendingTechnomancyTrigger: [
+        { playerId: 'p1', roomId: 'base.room.library.a' },
+      ],
+    };
+    // p1 takes a no-op action: place a non-orange mage and then end
+    // turn. We'll just bypass via direct phase mutation since the test
+    // is about the reset hook, not action flow.
+    s = mapPlayer(s, 'p1', (p) => ({
+      ...p,
+      resources: { ...p.resources, gold: 10 },
+    }));
+    s = {
+      ...s,
+      phase: {
+        kind: 'errands',
+        round: 1,
+        activePlayerIndex: 0,
+        actionUsed: true,
+        fastActionUsed: false,
+        extraActions: 0,
+      },
+    };
+    // Trigger autoAdvanceIfTurnDone by applying any action (or just
+    // advance phase). Easiest: re-apply a fastAction-cleanup via DISCARD_BONUS_ACTIONS
+    // is overkill — instead, simulate the action-used end-of-turn via
+    // applyAction on something tiny. For this defensive test the simplest
+    // path is to verify the drain itself empties the queue at idle:
+    // gold=10 means the drain WILL push a prompt.
+    s = applyAction(s, { type: 'ADVANCE_PHASE' });
+    // After turn advance, queue is cleared either by the drain (gold>=3
+    // surfaces prompt + clears) OR by the round-end reset hook.
+    expect(s.pendingTechnomancyTrigger).toEqual([]);
+  });
+});
+
+describe('Student Stores', () => {
+  /**
+   * Resolves the topmost `choose-from-options` prompt by picking
+   * `optionId`. Asserts the option exists and isn't unavailable first so
+   * setup mistakes surface at the prompt level instead of later in the
+   * apply step.
+   */
+  function pickBuyOption(s: GameState, optionId: string): GameState {
+    const prompt = topPending(s);
+    if (prompt.prompt.kind !== 'choose-from-options') {
+      throw new Error(
+        `expected choose-from-options, got ${prompt.prompt.kind}`,
+      );
+    }
+    const opt = prompt.prompt.options.find((o) => o.id === optionId);
+    expect(opt).toBeDefined();
+    expect(opt?.available).not.toBe(false);
+    return applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: prompt.id,
+      answer: { kind: 'option-chosen', optionId, payload: {} },
+    });
+  }
+
+  /** Seeds the vault tableau with a known set of card ids. */
+  function setVaultTableau(s: GameState, ids: string[]): GameState {
+    return { ...s, vaultTableau: ids };
+  }
+
+  it('A slot 3 (1 Buy): Skip drops the chain with no resource changes', () => {
+    let s = setupRoomSlotTest(
+      'Student Stores',
+      'A',
+      'base.room.student-stores.a.slot-3',
+    );
+    s = driveToResolution(s);
+    const prompt = topPending(s);
+    expect(prompt.prompt.kind).toBe('choose-from-options');
+    if (prompt.prompt.kind !== 'choose-from-options') throw new Error('unreachable');
+    // All four Side-A options + Skip should be present.
+    expect(prompt.prompt.options.map((o) => o.id)).toEqual([
+      'vault',
+      'int',
+      'wis',
+      'research',
+      'skip',
+    ]);
+    s = pickBuyOption(s, 'skip');
+    expect(s.pendingResolutionStack).toHaveLength(0);
+    const alice = s.players.find((p) => p.id === 'p1')!;
+    expect(alice.resources.gold).toBe(0);
+    expect(alice.resources.intelligence).toBe(0);
+    expect(alice.resources.wisdom).toBe(0);
+  });
+
+  it('A slot 3 buy-INT: deducts 4 Gold, grants 1 INT', () => {
+    let s = setupRoomSlotTest(
+      'Student Stores',
+      'A',
+      'base.room.student-stores.a.slot-3',
+    );
+    s = setGold(s, 'p1', 5);
+    s = driveToResolution(s);
+    s = pickBuyOption(s, 'int');
+    const alice = s.players.find((p) => p.id === 'p1')!;
+    expect(alice.resources.gold).toBe(1); // 5 - 4
+    expect(alice.resources.intelligence).toBe(1);
+  });
+
+  it('A slot 3 buy-WIS: deducts 4 Gold, grants 1 WIS', () => {
+    let s = setupRoomSlotTest(
+      'Student Stores',
+      'A',
+      'base.room.student-stores.a.slot-3',
+    );
+    s = setGold(s, 'p1', 6);
+    s = driveToResolution(s);
+    s = pickBuyOption(s, 'wis');
+    const alice = s.players.find((p) => p.id === 'p1')!;
+    expect(alice.resources.gold).toBe(2);
+    expect(alice.resources.wisdom).toBe(1);
+  });
+
+  it('A slot 3 buy-Research: deducts 4 Gold and queues a Research prompt', () => {
+    let s = setupRoomSlotTest(
+      'Student Stores',
+      'A',
+      'base.room.student-stores.a.slot-3',
+    );
+    s = setGold(s, 'p1', 5);
+    s = driveToResolution(s);
+    s = pickBuyOption(s, 'research');
+    const alice = s.players.find((p) => p.id === 'p1')!;
+    expect(alice.resources.gold).toBe(1);
+    // Research entry got drained into a research prompt immediately.
+    expect(topPending(s).prompt.kind).toBe('choose-from-options');
+    expect(s.researchQueue).toHaveLength(0);
+  });
+
+  it('A slot 3 buy-Vault: deducts the card cost and the card lands in the office', () => {
+    let s = setupRoomSlotTest(
+      'Student Stores',
+      'A',
+      'base.room.student-stores.a.slot-3',
+    );
+    s = setGold(s, 'p1', 10);
+    // Pin a known affordable card to the top of the tableau.
+    s = setVaultTableau(s, ['base.vault.gilded-chalice']);
+    s = driveToResolution(s);
+    s = pickBuyOption(s, 'vault');
+    // Vault-card prompt → pick the chalice.
+    const cardPrompt = topPending(s);
+    expect(cardPrompt.prompt.kind).toBe('choose-vault-card');
+    if (cardPrompt.prompt.kind !== 'choose-vault-card') throw new Error('unreachable');
+    expect(cardPrompt.prompt.eligibleCardIds).toContain('base.vault.gilded-chalice');
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: cardPrompt.id,
+      answer: { kind: 'card-chosen', cardId: 'base.vault.gilded-chalice' },
+    });
+    const alice = s.players.find((p) => p.id === 'p1')!;
+    expect(
+      alice.vaultCards.some((v) => v.cardId === 'base.vault.gilded-chalice'),
+    ).toBe(true);
+  });
+
+  it('A slot 2 (2 Buys): chains two prompts; can mix Buy types', () => {
+    let s = setupRoomSlotTest(
+      'Student Stores',
+      'A',
+      'base.room.student-stores.a.slot-2',
+    );
+    s = setGold(s, 'p1', 9);
+    s = driveToResolution(s);
+    // Buy INT (4 gold).
+    s = pickBuyOption(s, 'int');
+    // A second prompt fires.
+    s = pickBuyOption(s, 'wis');
+    expect(s.pendingResolutionStack).toHaveLength(0);
+    const alice = s.players.find((p) => p.id === 'p1')!;
+    expect(alice.resources.gold).toBe(1); // 9 - 4 - 4
+    expect(alice.resources.intelligence).toBe(1);
+    expect(alice.resources.wisdom).toBe(1);
+  });
+
+  it('A slot 1 (3 Buys, merit): chains three prompts', () => {
+    let s = setupRoomSlotTest(
+      'Student Stores',
+      'A',
+      'base.room.student-stores.a.slot-1',
+    );
+    s = setGold(s, 'p1', 12);
+    s = driveToResolution(s);
+    s = pickBuyOption(s, 'int');
+    s = pickBuyOption(s, 'wis');
+    s = pickBuyOption(s, 'skip');
+    expect(s.pendingResolutionStack).toHaveLength(0);
+    const alice = s.players.find((p) => p.id === 'p1')!;
+    expect(alice.resources.gold).toBe(4); // 12 - 4 - 4 (skip free)
+    expect(alice.resources.intelligence).toBe(1);
+    expect(alice.resources.wisdom).toBe(1);
+  });
+
+  it('A slot 3 marks INT/WIS/Research unavailable when gold < 4', () => {
+    let s = setupRoomSlotTest(
+      'Student Stores',
+      'A',
+      'base.room.student-stores.a.slot-3',
+    );
+    s = setGold(s, 'p1', 3);
+    s = driveToResolution(s);
+    const prompt = topPending(s);
+    if (prompt.prompt.kind !== 'choose-from-options') throw new Error('unreachable');
+    expect(prompt.prompt.options.find((o) => o.id === 'int')?.available).toBe(false);
+    expect(prompt.prompt.options.find((o) => o.id === 'wis')?.available).toBe(false);
+    expect(prompt.prompt.options.find((o) => o.id === 'research')?.available).toBe(false);
+    expect(prompt.prompt.options.find((o) => o.id === 'skip')?.available).not.toBe(false);
+  });
+
+  it('B slot 3 (1 Buy) offers Vault + Skip + the once-per-resolution Redeal option', () => {
+    let s = setupRoomSlotTest(
+      'Student Stores',
+      'B',
+      'base.room.student-stores.b.slot-3',
+    );
+    s = setGold(s, 'p1', 2);
+    s = driveToResolution(s);
+    const prompt = topPending(s);
+    if (prompt.prompt.kind !== 'choose-from-options') throw new Error('unreachable');
+    expect(prompt.prompt.options.map((o) => o.id)).toEqual([
+      'vault',
+      'redeal',
+      'skip',
+    ]);
+    // No Side A options on Side B.
+    expect(prompt.prompt.options.find((o) => o.id === 'int')).toBeUndefined();
+  });
+
+  it('B slot 3 Redeal: replaces the tableau with the deck top, then the Redeal option disappears', () => {
+    let s = setupRoomSlotTest(
+      'Student Stores',
+      'B',
+      'base.room.student-stores.b.slot-3',
+    );
+    s = setGold(s, 'p1', 5);
+    s = setVaultTableau(s, ['old-1', 'old-2', 'old-3']);
+    s = { ...s, vaultDeck: ['new-1', 'new-2', 'new-3', 'rest-1'] };
+    s = driveToResolution(s);
+    s = pickBuyOption(s, 'redeal');
+    // Tableau swapped; old cards now at the bottom of the deck.
+    expect(s.vaultTableau).toEqual(['new-1', 'new-2', 'new-3']);
+    expect(s.vaultDeck).toEqual(['rest-1', 'old-1', 'old-2', 'old-3']);
+    // 1 gold spent on the redeal.
+    expect(s.players.find((p) => p.id === 'p1')?.resources.gold).toBe(4);
+    // The same Buy is still up — but the Redeal option is gone.
+    const prompt = topPending(s);
+    if (prompt.prompt.kind !== 'choose-from-options') throw new Error('unreachable');
+    expect(prompt.prompt.options.find((o) => o.id === 'redeal')).toBeUndefined();
+  });
+
+  it('B slot 1 (2 Buys, 2-Gold discount): Vault purchases pay goldCost − 2', () => {
+    let s = setupRoomSlotTest(
+      'Student Stores',
+      'B',
+      'base.room.student-stores.b.slot-1',
+    );
+    s = setGold(s, 'p1', 4);
+    // Seed a card with a known cost. Gilded Chalice costs 4 in the base pack;
+    // with a 2-gold discount its net cost is 2.
+    s = setVaultTableau(s, ['base.vault.gilded-chalice', 'base.vault.runestone']);
+    s = driveToResolution(s);
+    // Vault option is available; label calls out the discount.
+    const buyPrompt = topPending(s);
+    if (buyPrompt.prompt.kind !== 'choose-from-options') throw new Error('unreachable');
+    const vaultOpt = buyPrompt.prompt.options.find((o) => o.id === 'vault');
+    expect(vaultOpt?.available).not.toBe(false);
+    expect(vaultOpt?.label).toMatch(/2 Gold off/);
+    s = pickBuyOption(s, 'vault');
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'card-chosen', cardId: 'base.vault.gilded-chalice' },
+    });
+    const alice = s.players.find((p) => p.id === 'p1')!;
+    expect(alice.resources.gold).toBe(2); // 4 - (4 - 2)
+    expect(
+      alice.vaultCards.some((v) => v.cardId === 'base.vault.gilded-chalice'),
+    ).toBe(true);
+    // Second Buy prompt still up for slot 1's second Buy.
+    expect(topPending(s).prompt.kind).toBe('choose-from-options');
+  });
+
+  it('B slot 3 redeal hidden when player has 0 Gold', () => {
+    let s = setupRoomSlotTest(
+      'Student Stores',
+      'B',
+      'base.room.student-stores.b.slot-3',
+    );
+    // Already zeroed via setupRoomSlotTest. setGold to 0 just to be explicit.
+    s = setGold(s, 'p1', 0);
+    s = driveToResolution(s);
+    const prompt = topPending(s);
+    if (prompt.prompt.kind !== 'choose-from-options') throw new Error('unreachable');
+    const redealOpt = prompt.prompt.options.find((o) => o.id === 'redeal');
+    expect(redealOpt?.available).toBe(false);
+    expect(redealOpt?.unavailableReason).toMatch(/Gold/);
+  });
+
+  it('multi-mage: three mages across all three Side A slots all fire (6 Buys total)', () => {
+    let s = setupRoomSlotTest(
+      'Student Stores',
+      'A',
+      'base.room.student-stores.a.slot-1',
+    );
+    s = addMage(s, 'p1', {
+      id: 'alice-mage-2',
+      cardId: 'base.mage.divinity',
+      color: 'blue',
+    });
+    s = addMage(s, 'p1', {
+      id: 'alice-mage-3',
+      cardId: 'base.mage.divinity',
+      color: 'blue',
+    });
+    s = placeMageOnSpace(
+      s,
+      'p1',
+      'alice-mage-2',
+      'base.room.student-stores.a.slot-2',
+    );
+    s = placeMageOnSpace(
+      s,
+      'p1',
+      'alice-mage-3',
+      'base.room.student-stores.a.slot-3',
+    );
+    s = setGold(s, 'p1', 24);
+    // setMeritBadges already sets 5 via setupRoomSlotTest.
+    s = driveToResolution(s);
+    // Slot 1: 3 Buys (skip all 3 just to see the chain count out).
+    s = pickBuyOption(s, 'skip');
+    s = pickBuyOption(s, 'skip');
+    s = pickBuyOption(s, 'skip');
+    // Slot 2: 2 Buys.
+    s = takeRewardAtResolution(s);
+    s = pickBuyOption(s, 'int');
+    s = pickBuyOption(s, 'int');
+    // Slot 3: 1 Buy.
+    s = takeRewardAtResolution(s);
+    s = pickBuyOption(s, 'wis');
+    const alice = s.players.find((p) => p.id === 'p1')!;
+    expect(alice.resources.intelligence).toBe(2);
+    expect(alice.resources.wisdom).toBe(1);
+    expect(alice.resources.gold).toBe(12); // 24 - 4*3
+    // Merit badge was spent for slot 1.
+    expect(alice.resources.meritBadges).toBe(4);
+  });
+
+  it('multi-mage with Research buy on slot 1 does NOT skip slot 2 or slot 3', () => {
+    let s = setupRoomSlotTest(
+      'Student Stores',
+      'A',
+      'base.room.student-stores.a.slot-1',
+    );
+    s = addMage(s, 'p1', {
+      id: 'alice-mage-2',
+      cardId: 'base.mage.divinity',
+      color: 'blue',
+    });
+    s = addMage(s, 'p1', {
+      id: 'alice-mage-3',
+      cardId: 'base.mage.divinity',
+      color: 'blue',
+    });
+    s = placeMageOnSpace(
+      s,
+      'p1',
+      'alice-mage-2',
+      'base.room.student-stores.a.slot-2',
+    );
+    s = placeMageOnSpace(
+      s,
+      'p1',
+      'alice-mage-3',
+      'base.room.student-stores.a.slot-3',
+    );
+    s = setGold(s, 'p1', 20);
+    s = driveToResolution(s);
+    // Slot 1's three Buys: pick Research, skip, skip. The Research entry
+    // gets queued and only drains AFTER the chain finishes (the engine
+    // drains the queue when the stack is idle, not mid-chain).
+    s = pickBuyOption(s, 'research');
+    s = pickBuyOption(s, 'skip');
+    s = pickBuyOption(s, 'skip');
+    // Chain done → engine drains the queued Research entry → research prompt up.
+    const researchPrompt = topPending(s);
+    expect(researchPrompt.resume.effectId).toBe(
+      'base.system.spend-research',
+    );
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: researchPrompt.id,
+      answer: { kind: 'option-chosen', optionId: 'discard', payload: {} },
+    });
+    // Slot 2's resolution-choice should be up next (used to be skipped
+    // — completeCurrentSpaceResolution was firing twice, once after the
+    // chain ended and once after the queue-drained Research prompt
+    // resolved, advancing past slot 2 without firing it).
+    const slot2Reward = topPending(s);
+    expect(slot2Reward.resume.effectId).toBe(
+      'base.system.resolution-choice',
+    );
+    expect(slot2Reward.source.id).toBe('base.room.student-stores.a.slot-2');
+    s = takeRewardAtResolution(s);
+    s = pickBuyOption(s, 'int');
+    s = pickBuyOption(s, 'wis');
+    // Slot 3 fires.
+    const slot3Reward = topPending(s);
+    expect(slot3Reward.source.id).toBe('base.room.student-stores.a.slot-3');
+    s = takeRewardAtResolution(s);
+    s = pickBuyOption(s, 'int');
+    const alice = s.players.find((p) => p.id === 'p1')!;
+    // 3 Buys executed at 4 Gold each, plus 4 Gold for the slot-1 Research.
+    // Started with 20 Gold → 20 - 4*4 = 4.
+    expect(alice.resources.gold).toBe(4);
+    // Two INTs from slot 2's first buy + slot 3, one WIS from slot 2.
+    expect(alice.resources.intelligence).toBe(2);
+    expect(alice.resources.wisdom).toBe(1);
+    // Merit badge spent on slot 1.
+    expect(alice.resources.meritBadges).toBe(4);
+  });
+
+  it('shadow + base on the same Student Stores slot: both fire (base first, then shadow)', () => {
+    let s = setupRoomSlotTest(
+      'Student Stores',
+      'A',
+      'base.room.student-stores.a.slot-3',
+    );
+    // Add a second mage and shadow-place it on the same slot.
+    s = addMage(s, 'p1', {
+      id: 'alice-shadow',
+      cardId: 'base.mage.divinity',
+      color: 'blue',
+    });
+    s = mapPlayer(s, 'p1', (p) => ({
+      ...p,
+      mages: p.mages.map((m) =>
+        m.id !== 'alice-shadow'
+          ? m
+          : {
+              ...m,
+              isShadowing: true,
+              location: {
+                kind: 'action-space' as const,
+                spaceId: 'base.room.student-stores.a.slot-3',
+              },
+            },
+      ),
+    }));
+    s = {
+      ...s,
+      rooms: s.rooms.map((r) =>
+        r.id !== 'base.room.student-stores.a'
+          ? r
+          : {
+              ...r,
+              actionSpaces: r.actionSpaces.map((sp) =>
+                sp.id !== 'base.room.student-stores.a.slot-3'
+                  ? sp
+                  : {
+                      ...sp,
+                      shadowOccupant: {
+                        mageId: 'alice-shadow',
+                        ownerId: 'p1',
+                        isShadowing: true,
+                      },
+                    },
+              ),
+            },
+      ),
+    };
+    s = setGold(s, 'p1', 12);
+    s = driveToResolution(s); // takes reward for base occupant
+    // Base mage's 1 Buy.
+    s = pickBuyOption(s, 'int');
+    // Shadow occupant's resolution-choice prompt now up.
+    const shadowReward = topPending(s);
+    expect(shadowReward.resume.effectId).toBe(
+      'base.system.resolution-choice',
+    );
+    s = takeRewardAtResolution(s);
+    s = pickBuyOption(s, 'wis');
+    const alice = s.players.find((p) => p.id === 'p1')!;
+    expect(alice.resources.intelligence).toBe(1);
+    expect(alice.resources.wisdom).toBe(1);
+  });
+
+  it('multi-mage: each placed mage fires its own buy chain', () => {
+    // p1 places two mages — one at slot 2 (2 Buys) and one at slot 3
+    // (1 Buy). Both should resolve independently during the resolution
+    // phase, granting 3 Buys total.
+    let s = setupRoomSlotTest(
+      'Student Stores',
+      'A',
+      'base.room.student-stores.a.slot-2',
+    );
+    s = addMage(s, 'p1', {
+      id: 'alice-mage-2',
+      cardId: 'base.mage.divinity',
+      color: 'blue',
+    });
+    s = placeMageOnSpace(
+      s,
+      'p1',
+      'alice-mage-2',
+      'base.room.student-stores.a.slot-3',
+    );
+    s = setGold(s, 'p1', 12);
+    s = driveToResolution(s);
+    // Slot 2's first Buy prompt is up. Resolve all 2 Buys for slot 2.
+    s = pickBuyOption(s, 'int');
+    s = pickBuyOption(s, 'wis');
+    // Slot 3's resolution-choice prompt should be next.
+    const slot3Reward = topPending(s);
+    expect(slot3Reward.resume.effectId).toBe(
+      'base.system.resolution-choice',
+    );
+    s = takeRewardAtResolution(s);
+    s = pickBuyOption(s, 'int');
+    // Three Buys total: 2 from slot 2 (1 INT + 1 WIS) + 1 from slot 3 (1 INT).
+    const alice = s.players.find((p) => p.id === 'p1')!;
+    expect(alice.resources.intelligence).toBe(2);
+    expect(alice.resources.wisdom).toBe(1);
+    expect(alice.resources.gold).toBe(0); // 12 - 4*3
+  });
+});
+
+describe('Great Hall (instant; chain place up to 3)', () => {
+  /**
+   * Sets up p1 with `mageCount` blue mages in office, Great Hall as the
+   * forced side, zero resources, drained bell tower, and the errands
+   * phase active. Mirrors the Mancers / Chapel B instant-room setup.
+   */
+  function setupGreatHallTest(
+    side: 'A' | 'B',
+    mageCount: number,
+  ): GameState {
+    let s = initGame(TWO_PLAYER_CONFIG);
+    s = forceRoomSide(s, 'Great Hall', side);
+    s = zeroPlayerResources(s, 'p1');
+    s = setMeritBadges(s, 'p1', 5);
+    for (let i = 0; i < mageCount; i++) {
+      s = addMage(s, 'p1', {
+        id: `alice-mage-${i + 1}`,
+        cardId: 'base.mage.divinity',
+        color: 'blue',
+      });
+    }
+    s = {
+      ...s,
+      firstPlayerIndex: 0,
+      phase: {
+        kind: 'errands',
+        round: 1,
+        activePlayerIndex: 0,
+        actionUsed: false,
+        fastActionUsed: false,
+      },
+      bellTower: { ...s.bellTower, available: [] },
+    };
+    return s;
+  }
+
+  /** Drives one chain-placement step: pick mage by id, pick slot by id. */
+  function chainPlace(
+    s: GameState,
+    mageId: string,
+    slotId: string,
+  ): GameState {
+    // mage prompt
+    let prompt = topPending(s);
+    if (prompt.prompt.kind !== 'choose-from-options') {
+      throw new Error(`expected choose-from-options, got ${prompt.prompt.kind}`);
+    }
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: prompt.id,
+      answer: { kind: 'option-chosen', optionId: mageId, payload: {} },
+    });
+    // slot prompt
+    prompt = topPending(s);
+    if (prompt.prompt.kind !== 'choose-target-action-space') {
+      throw new Error(
+        `expected choose-target-action-space, got ${prompt.prompt.kind}`,
+      );
+    }
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: prompt.id,
+      answer: { kind: 'space-chosen', spaceId: slotId },
+    });
+    return s;
+  }
+
+  /** Stops the current chain-placement step. */
+  function chainStop(s: GameState): GameState {
+    const prompt = topPending(s);
+    if (prompt.prompt.kind !== 'choose-from-options') {
+      throw new Error(`expected choose-from-options, got ${prompt.prompt.kind}`);
+    }
+    return applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: prompt.id,
+      answer: { kind: 'option-chosen', optionId: 'stop', payload: {} },
+    });
+  }
+
+  it('Side A: first placement gains 1 IP and starts a chain restricted to Great Hall A', () => {
+    let s = setupGreatHallTest('A', 3);
+    s = applyAction(s, {
+      type: 'PLACE_WORKER',
+      playerId: 'p1',
+      mageId: 'alice-mage-1',
+      actionSpaceId: 'base.room.great-hall.a.slot-1',
+    });
+    s = takeRewardAtResolution(s);
+    // Reward applied + chain set.
+    expect(s.players.find((p) => p.id === 'p1')?.resources.influence).toBe(1);
+    expect(s.pendingPlaceChain).not.toBeNull();
+    expect(s.pendingPlaceChain?.restrictRoomId).toBe('base.room.great-hall.a');
+    expect(s.pendingPlaceChain?.allowStop).toBe(true);
+  });
+
+  it('Side A: chain places all 3 mages, each gains 1 IP, chain clears at the end', () => {
+    let s = setupGreatHallTest('A', 3);
+    s = applyAction(s, {
+      type: 'PLACE_WORKER',
+      playerId: 'p1',
+      mageId: 'alice-mage-1',
+      actionSpaceId: 'base.room.great-hall.a.slot-1',
+    });
+    s = takeRewardAtResolution(s);
+    // Engine drains chain → place-mage prompt. Place mage 2 on slot 2.
+    s = chainPlace(s, 'alice-mage-2', 'base.room.great-hall.a.slot-2');
+    s = takeRewardAtResolution(s);
+    // Drain again → place mage 3 on slot 3.
+    s = chainPlace(s, 'alice-mage-3', 'base.room.great-hall.a.slot-3');
+    s = takeRewardAtResolution(s);
+    // Chain should clear; pendingResolutionStack idle.
+    expect(s.pendingPlaceChain).toBeNull();
+    expect(s.pendingResolutionStack).toHaveLength(0);
+    // Three placements × 1 IP = 3 IP.
+    expect(s.players.find((p) => p.id === 'p1')?.resources.influence).toBe(3);
+    // All three slots occupied.
+    const greatHall = s.rooms.find((r) => r.id === 'base.room.great-hall.a')!;
+    expect(greatHall.actionSpaces[0]?.occupant?.mageId).toBe('alice-mage-1');
+    expect(greatHall.actionSpaces[1]?.occupant?.mageId).toBe('alice-mage-2');
+    expect(greatHall.actionSpaces[2]?.occupant?.mageId).toBe('alice-mage-3');
+  });
+
+  it('Side A: stopping after the first chain prompt halts the chain — only 1 IP gained, 1 mage placed', () => {
+    let s = setupGreatHallTest('A', 3);
+    s = applyAction(s, {
+      type: 'PLACE_WORKER',
+      playerId: 'p1',
+      mageId: 'alice-mage-1',
+      actionSpaceId: 'base.room.great-hall.a.slot-1',
+    });
+    s = takeRewardAtResolution(s);
+    // The chain's first drained prompt offers "Stop" because allowStop=true.
+    s = chainStop(s);
+    expect(s.pendingPlaceChain).toBeNull();
+    expect(s.pendingResolutionStack).toHaveLength(0);
+    expect(s.players.find((p) => p.id === 'p1')?.resources.influence).toBe(1);
+    const greatHall = s.rooms.find((r) => r.id === 'base.room.great-hall.a')!;
+    expect(greatHall.actionSpaces[0]?.occupant?.mageId).toBe('alice-mage-1');
+    // No subsequent slots occupied.
+    expect(greatHall.actionSpaces[1]?.occupant).toBeNull();
+  });
+
+  it('Side B: prompts Gold/Mana on each placement; chained placements each get their own pick', () => {
+    let s = setupGreatHallTest('B', 3);
+    s = applyAction(s, {
+      type: 'PLACE_WORKER',
+      playerId: 'p1',
+      mageId: 'alice-mage-1',
+      actionSpaceId: 'base.room.great-hall.b.slot-1',
+    });
+    s = takeRewardAtResolution(s);
+    // Side B's gold/mana prompt is up.
+    let pick = topPending(s);
+    expect(pick.prompt.kind).toBe('choose-from-options');
+    if (pick.prompt.kind !== 'choose-from-options') throw new Error('unreachable');
+    expect(pick.prompt.options.map((o) => o.id)).toEqual(['gold', 'mana']);
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: pick.id,
+      answer: { kind: 'option-chosen', optionId: 'gold', payload: {} },
+    });
+    // Chain drains → place-mage prompt. Place mage 2.
+    s = chainPlace(s, 'alice-mage-2', 'base.room.great-hall.b.slot-2');
+    s = takeRewardAtResolution(s);
+    // Second placement's gold/mana prompt — pick mana this time.
+    pick = topPending(s);
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: pick.id,
+      answer: { kind: 'option-chosen', optionId: 'mana', payload: {} },
+    });
+    // Stop the chain instead of placing a third.
+    s = chainStop(s);
+    expect(s.pendingPlaceChain).toBeNull();
+    const alice = s.players.find((p) => p.id === 'p1')!;
+    expect(alice.resources.gold).toBe(2);
+    expect(alice.resources.mana).toBe(1);
+  });
+
+  it('Side A: chain-restricted to Great Hall — other rooms not offered as slot targets', () => {
+    let s = setupGreatHallTest('A', 2);
+    s = applyAction(s, {
+      type: 'PLACE_WORKER',
+      playerId: 'p1',
+      mageId: 'alice-mage-1',
+      actionSpaceId: 'base.room.great-hall.a.slot-1',
+    });
+    s = takeRewardAtResolution(s);
+    // Pick mage in the chain prompt.
+    let prompt = topPending(s);
+    if (prompt.prompt.kind !== 'choose-from-options') throw new Error('unreachable');
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: prompt.id,
+      answer: {
+        kind: 'option-chosen',
+        optionId: 'alice-mage-2',
+        payload: {},
+      },
+    });
+    // Slot prompt must only offer Great Hall slots.
+    prompt = topPending(s);
+    if (prompt.prompt.kind !== 'choose-target-action-space') throw new Error('unreachable');
+    expect(
+      prompt.prompt.eligibleSpaceIds.every((id) =>
+        id.startsWith('base.room.great-hall.a.'),
+      ),
+    ).toBe(true);
+  });
+
+  it('Inversion (mandatory shadow-on-place) is bypassed for Great Hall — placement lands on the base position', () => {
+    let s = setupGreatHallTest('A', 1);
+    s = {
+      ...s,
+      activeBuffs: [
+        ...s.activeBuffs,
+        {
+          kind: 'shadow-on-place',
+          casterPlayerId: 'p1',
+          mode: 'mandatory',
+          spellCardId: 'base.spell.infinite-universes-realized',
+          label: 'Inversion',
+          expiresAt: { kind: 'round-end' },
+        },
+      ],
+    };
+    // Base placement on Great Hall would normally be rejected under
+    // Inversion's mandatory-shadow rule. The noShadowSlots flag exempts
+    // Great Hall, so this PLACE_WORKER should succeed and the mage
+    // lands at the base position.
+    s = applyAction(s, {
+      type: 'PLACE_WORKER',
+      playerId: 'p1',
+      mageId: 'alice-mage-1',
+      actionSpaceId: 'base.room.great-hall.a.slot-1',
+    });
+    const slot = s.rooms
+      .find((r) => r.id === 'base.room.great-hall.a')!
+      .actionSpaces.find((sp) => sp.id === 'base.room.great-hall.a.slot-1')!;
+    expect(slot.occupant?.mageId).toBe('alice-mage-1');
+    expect(slot.shadowOccupant ?? null).toBeNull();
+  });
+
+  it('Explicit shadow placement on Great Hall is rejected — the room has no shadow positions', () => {
+    let s = setupGreatHallTest('A', 1);
+    s = {
+      ...s,
+      activeBuffs: [
+        ...s.activeBuffs,
+        {
+          kind: 'shadow-on-place',
+          casterPlayerId: 'p1',
+          mode: 'mandatory',
+          spellCardId: 'base.spell.infinite-universes-realized',
+          label: 'Inversion',
+          expiresAt: { kind: 'round-end' },
+        },
+      ],
+    };
+    expect(() =>
+      applyAction(s, {
+        type: 'PLACE_WORKER',
+        playerId: 'p1',
+        mageId: 'alice-mage-1',
+        actionSpaceId: 'base.room.great-hall.a.slot-1',
+        isShadowing: true,
+      }),
+    ).toThrow(/no shadow position/);
   });
 });
 
@@ -9721,6 +13980,87 @@ describe('Spell wiring — Wave 5a (place / move)', () => {
     expect(findMageById(s, 'bob-w').isWounded).toBe(false);
     const ipAfter = s.players.find((p) => p.id === 'p1')!.resources.influence;
     expect(ipAfter).toBe(ipBefore + 2);
+  });
+
+  it('Circle of Healing (L2): releases the Infirmary B buffed slot occupied by a healed mage', () => {
+    let s = initGame(TWO_PLAYER_CONFIG);
+    s = forceLibrarySideA(s);
+    s = forceRoomSide(s, 'Infirmary', 'B');
+    s = zeroPlayerResources(s, 'p1');
+    s = addOwnedSpell(s, 'p1', 'base.spell.rites-of-renewal', {
+      intPlaced: true,
+      wisPlacedLevel2: true,
+    });
+    s = setMana(s, 'p1', 2);
+    s = addMage(s, 'p1', {
+      id: 'alice-w1',
+      cardId: 'base.mage.divinity',
+      color: 'blue',
+    });
+    // Park alice-w1 in the infirmary AND mark slot 1 of Infirmary B as
+    // occupied by her (mirrors the state after a previous wound where she
+    // took the buffed 4-Gold bonus).
+    s = mapPlayer(s, 'p1', (p) => ({
+      ...p,
+      mages: p.mages.map((m) =>
+        m.id !== 'alice-w1'
+          ? m
+          : {
+              ...m,
+              isWounded: true,
+              location: { kind: 'infirmary' as const },
+            },
+      ),
+    }));
+    s = {
+      ...s,
+      rooms: s.rooms.map((r) =>
+        r.id !== 'base.room.infirmary.b'
+          ? r
+          : {
+              ...r,
+              actionSpaces: r.actionSpaces.map((sp) =>
+                sp.id !== 'base.room.infirmary.b.slot-1'
+                  ? sp
+                  : {
+                      ...sp,
+                      occupant: {
+                        mageId: 'alice-w1',
+                        ownerId: 'p1',
+                        isShadowing: false,
+                      },
+                    },
+              ),
+            },
+      ),
+      firstPlayerIndex: 0,
+      phase: {
+        kind: 'errands',
+        round: 1,
+        activePlayerIndex: 0,
+        actionUsed: false,
+        fastActionUsed: false,
+      },
+    };
+    // Sanity check the manual setup.
+    const slotBefore = s.rooms
+      .find((r) => r.id === 'base.room.infirmary.b')!
+      .actionSpaces.find((sp) => sp.id === 'base.room.infirmary.b.slot-1');
+    expect(slotBefore?.occupant?.mageId).toBe('alice-w1');
+
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.rites-of-renewal',
+      level: 2,
+    });
+    expect(findMageById(s, 'alice-w1').isWounded).toBe(false);
+    // The buff slot must reopen so the next wound this round sees the
+    // upgraded reward again.
+    const slotAfter = s.rooms
+      .find((r) => r.id === 'base.room.infirmary.b')!
+      .actionSpaces.find((sp) => sp.id === 'base.room.infirmary.b.slot-1');
+    expect(slotAfter?.occupant).toBeNull();
   });
 
   it('Flicker: shadows an opponent\'s placed mage with caster\'s office mage', () => {
@@ -11357,6 +15697,421 @@ describe('Ice Comet (Master Book of Starcalling L1)', () => {
     // Mana was still spent + spell exhausted.
     expect(s.players.find((p) => p.id === 'p1')!.resources.mana).toBe(0);
   });
+
+  it('the wound, banish, and move-source prompts all expose canPass: true', () => {
+    let s = setupIceComet();
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.master-book-of-starcalling',
+      level: 1,
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: {
+        kind: 'option-chosen',
+        optionId: 'base.room.library.a',
+        payload: {},
+      },
+    });
+    // Wound prompt is passable.
+    const wound = topPending(s);
+    if (wound.prompt.kind !== 'choose-target-mage') throw new Error('unreachable');
+    expect(wound.prompt.canPass).toBe(true);
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: wound.id,
+      answer: { kind: 'pass' },
+    });
+    // Banish prompt is passable.
+    const banish = topPending(s);
+    if (banish.prompt.kind !== 'choose-target-mage') throw new Error('unreachable');
+    expect(banish.prompt.canPass).toBe(true);
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: banish.id,
+      answer: { kind: 'pass' },
+    });
+    // Move-source prompt is passable.
+    const moveSrc = topPending(s);
+    if (moveSrc.prompt.kind !== 'choose-target-mage') throw new Error('unreachable');
+    expect(moveSrc.prompt.canPass).toBe(true);
+  });
+
+  it('passing all three legs fizzles the spell — no reaction window, no state change beyond cost', () => {
+    let s = setupIceComet();
+    const cost = s.players.find((p) => p.id === 'p1')!.resources.mana;
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.master-book-of-starcalling',
+      level: 1,
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: {
+        kind: 'option-chosen',
+        optionId: 'base.room.library.a',
+        payload: {},
+      },
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'pass' },
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'pass' },
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'pass' },
+    });
+    expect(s.pendingResolutionStack).toHaveLength(0);
+    expect(s.activeReactionWindows).toHaveLength(0);
+    // Mana was still spent.
+    expect(s.players.find((p) => p.id === 'p1')!.resources.mana).toBe(cost - 3);
+    // No mage state changed.
+    const bobMages = s.players.find((p) => p.id === 'p2')!.mages;
+    expect(bobMages.every((m) => !m.isWounded)).toBe(true);
+    expect(bobMages.every((m) => m.location.kind === 'action-space')).toBe(true);
+  });
+
+  it('passes wound + banish, picks move → spell ends with a single mage-moved reaction', () => {
+    let s = setupIceComet();
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.master-book-of-starcalling',
+      level: 1,
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: {
+        kind: 'option-chosen',
+        optionId: 'base.room.library.a',
+        payload: {},
+      },
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'pass' }, // skip wound
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'pass' }, // skip banish
+    });
+    // Move-source prompt — pick bob-grey-1.
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'mage-chosen', mageId: 'bob-grey-1' },
+    });
+    // Move-dest prompt is mandatory.
+    const dest = topPending(s);
+    expect(dest.prompt.kind).toBe('choose-target-action-space');
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: dest.id,
+      answer: {
+        kind: 'space-chosen',
+        spaceId: 'base.room.library.a.slot-4',
+      },
+    });
+    // Single reaction window with only the move event.
+    expect(s.activeReactionWindows).toHaveLength(1);
+    const win = s.activeReactionWindows[0]!;
+    expect(win.triggerEvents.map((e) => e.kind)).toEqual(['mage-moved']);
+    // bob-grey-1 moved; the others unchanged.
+    const p2 = s.players.find((p) => p.id === 'p2')!;
+    expect(p2.mages.find((m) => m.id === 'bob-grey-1')!.location).toEqual({
+      kind: 'action-space',
+      spaceId: 'base.room.library.a.slot-4',
+    });
+    expect(p2.mages.find((m) => m.id === 'bob-grey-2')!.isWounded).toBe(false);
+    expect(p2.mages.find((m) => m.id === 'bob-grey-3')!.location.kind).toBe(
+      'action-space',
+    );
+  });
+
+  it('each pick prompt carries a step-specific label (wound / banish / move / dest)', () => {
+    let s = setupIceComet();
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.master-book-of-starcalling',
+      level: 1,
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: {
+        kind: 'option-chosen',
+        optionId: 'base.room.library.a',
+        payload: {},
+      },
+    });
+    const wound = topPending(s);
+    if (wound.prompt.kind !== 'choose-target-mage') throw new Error('unreachable');
+    expect(wound.prompt.label).toMatch(/wound/i);
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: wound.id,
+      answer: { kind: 'mage-chosen', mageId: 'bob-grey-1' },
+    });
+    const banish = topPending(s);
+    if (banish.prompt.kind !== 'choose-target-mage') throw new Error('unreachable');
+    expect(banish.prompt.label).toMatch(/banish/i);
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: banish.id,
+      answer: { kind: 'mage-chosen', mageId: 'bob-grey-2' },
+    });
+    const moveSrc = topPending(s);
+    if (moveSrc.prompt.kind !== 'choose-target-mage') throw new Error('unreachable');
+    expect(moveSrc.prompt.label).toMatch(/move/i);
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: moveSrc.id,
+      answer: { kind: 'mage-chosen', mageId: 'bob-grey-3' },
+    });
+    const dest = topPending(s);
+    if (dest.prompt.kind !== 'choose-target-action-space') throw new Error('unreachable');
+    expect(dest.prompt.label).toMatch(/destination/i);
+  });
+
+  it('wound is applied BEFORE the banish prompt — wounded mage is in infirmary', () => {
+    let s = setupIceComet();
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.master-book-of-starcalling',
+      level: 1,
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: {
+        kind: 'option-chosen',
+        optionId: 'base.room.library.a',
+        payload: {},
+      },
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'mage-chosen', mageId: 'bob-grey-1' },
+    });
+    // The wound has applied: bob-grey-1 is in the infirmary, slot-1 empty.
+    const grey1 = findMageById(s, 'bob-grey-1');
+    expect(grey1.isWounded).toBe(true);
+    expect(grey1.location.kind).toBe('infirmary');
+    const slot1 = s.rooms
+      .find((r) => r.id === 'base.room.library.a')!
+      .actionSpaces.find((sp) => sp.id === 'base.room.library.a.slot-1')!;
+    expect(slot1.occupant).toBeNull();
+    // The banish prompt now only offers grey-2 and grey-3 (the wounded
+    // grey-1 is no longer in the room).
+    const banish = topPending(s);
+    if (banish.prompt.kind !== 'choose-target-mage') throw new Error('unreachable');
+    expect(banish.prompt.eligibleMageIds.sort()).toEqual(
+      ['bob-grey-2', 'bob-grey-3'].sort(),
+    );
+  });
+
+  it('banish is applied BEFORE the move prompt — banished mage is in office, slot freed', () => {
+    let s = setupIceComet();
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.master-book-of-starcalling',
+      level: 1,
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: {
+        kind: 'option-chosen',
+        optionId: 'base.room.library.a',
+        payload: {},
+      },
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'mage-chosen', mageId: 'bob-grey-1' },
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'mage-chosen', mageId: 'bob-grey-2' },
+    });
+    // The banish has applied: bob-grey-2 is in office, slot-2 empty.
+    const grey2 = findMageById(s, 'bob-grey-2');
+    expect(grey2.location.kind).toBe('office');
+    const slot2 = s.rooms
+      .find((r) => r.id === 'base.room.library.a')!
+      .actionSpaces.find((sp) => sp.id === 'base.room.library.a.slot-2')!;
+    expect(slot2.occupant).toBeNull();
+    // Move source prompt now only offers grey-3 (the other two are off
+    // the board).
+    const moveSrc = topPending(s);
+    if (moveSrc.prompt.kind !== 'choose-target-mage') throw new Error('unreachable');
+    expect(moveSrc.prompt.eligibleMageIds).toEqual(['bob-grey-3']);
+  });
+
+  it('move dest can land in slots vacated by wound + banish', () => {
+    let s = setupIceComet();
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.master-book-of-starcalling',
+      level: 1,
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: {
+        kind: 'option-chosen',
+        optionId: 'base.room.library.a',
+        payload: {},
+      },
+    });
+    // Wound bob-grey-1 (vacates slot-1), banish bob-grey-2 (vacates slot-2),
+    // move bob-grey-3 (originally on slot-3) — should be able to pick
+    // slot-1 OR slot-2 OR slot-4 as dest.
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'mage-chosen', mageId: 'bob-grey-1' },
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'mage-chosen', mageId: 'bob-grey-2' },
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'mage-chosen', mageId: 'bob-grey-3' },
+    });
+    const dest = topPending(s);
+    if (dest.prompt.kind !== 'choose-target-action-space') throw new Error('unreachable');
+    expect(dest.prompt.eligibleSpaceIds.sort()).toEqual(
+      [
+        'base.room.library.a.slot-1',
+        'base.room.library.a.slot-2',
+        'base.room.library.a.slot-4',
+      ].sort(),
+    );
+    // Move bob-grey-3 to the slot vacated by the wound.
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: dest.id,
+      answer: {
+        kind: 'space-chosen',
+        spaceId: 'base.room.library.a.slot-1',
+      },
+    });
+    expect(findMageById(s, 'bob-grey-3').location).toEqual({
+      kind: 'action-space',
+      spaceId: 'base.room.library.a.slot-1',
+    });
+    // Single combined reaction window fires at the end.
+    expect(s.activeReactionWindows).toHaveLength(1);
+    expect(
+      s.activeReactionWindows[0]!.triggerEvents.map((e) => e.kind).sort(),
+    ).toEqual(['mage-banished', 'mage-moved', 'mage-wounded']);
+  });
+
+  it('Mysticism trigger fires after Ice Comet resolves (resolution → reaction window → Mysticism)', () => {
+    let s = setupIceComet();
+    // Give Alice a grey office mage so the post-cast trigger arms.
+    s = addMage(s, 'p1', {
+      id: 'alice-grey',
+      cardId: 'base.mage.mysticism',
+      color: 'grey',
+    });
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.master-book-of-starcalling',
+      level: 1,
+    });
+    // Mysticism trigger is queued, NOT yet on the stack.
+    expect(s.pendingMysticismPostCast).toEqual(['p1']);
+    // Room → wound → banish → move source → move dest.
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: {
+        kind: 'option-chosen',
+        optionId: 'base.room.library.a',
+        payload: {},
+      },
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'mage-chosen', mageId: 'bob-grey-1' },
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'mage-chosen', mageId: 'bob-grey-2' },
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'mage-chosen', mageId: 'bob-grey-3' },
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: {
+        kind: 'space-chosen',
+        spaceId: 'base.room.library.a.slot-4',
+      },
+    });
+    // Top of stack: p2's reaction window. Pass.
+    const reaction = topPending(s);
+    expect(reaction.prompt.kind).toBe('reaction-window');
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: reaction.id,
+      answer: { kind: 'reaction-passed' },
+    });
+    // The batch-post-wound-bonus afterResume pushes an infirmary bonus
+    // prompt for p2 (bob-grey-1 was wounded by p1). Resolve it.
+    const bonus = topPending(s);
+    if (
+      bonus.responderId === 'p2' &&
+      bonus.prompt.kind === 'choose-from-options'
+    ) {
+      s = applyAction(s, {
+        type: 'RESOLVE_PENDING',
+        resolutionId: bonus.id,
+        answer: {
+          kind: 'option-chosen',
+          optionId: bonus.prompt.options[0]!.id,
+          payload: {},
+        },
+      });
+    }
+    // Mysticism trigger drains and surfaces the Yes/No prompt for p1.
+    expect(s.pendingMysticismPostCast).toEqual([]);
+    const top = topPending(s);
+    expect(top.source.id).toBe('base.mage.mysticism.place-after-cast');
+    expect(top.responderId).toBe('p1');
+  });
 });
 
 // ============================================================================
@@ -11869,6 +16624,157 @@ describe('Shadow-on-place buffs (Zero Hour L2 / Inversion L3)', () => {
       );
     });
 
+    it('shadow-placing into an instant room surfaces the slot reward prompt (no opposing base)', () => {
+      let s = setupInfinite(3, 3);
+      // Both Guilds sides are wired now; force the instant face for this
+      // test since it specifically asserts the instant-reward chain.
+      s = forceRoomSide(s, 'Guilds', 'B');
+      s = applyAction(s, {
+        type: 'CAST_SPELL',
+        playerId: 'p1',
+        spellCardId: 'base.spell.infinite-universes-realized',
+        level: 3,
+      });
+      s = { ...s, phase: { kind: 'errands' as const, round: 1, activePlayerIndex: 0, actionUsed: false, fastActionUsed: false } };
+      // Shadow-place into Guilds slot-2 (regular instant slot, empty base).
+      s = applyAction(s, {
+        type: 'PLACE_WORKER',
+        playerId: 'p1',
+        mageId: 'alice-red-1',
+        actionSpaceId: 'base.room.guilds.b.slot-2',
+        isShadowing: true,
+      });
+      // The reward prompt is the top of the pending stack and belongs to
+      // the caster (no opposing-base reaction in the way).
+      const top = s.pendingResolutionStack[s.pendingResolutionStack.length - 1]!;
+      expect(top.responderId).toBe('p1');
+      if (top.prompt.kind !== 'choose-from-options') {
+        throw new Error('expected choose-from-options');
+      }
+      const ids = top.prompt.options.map((o) => o.id).sort();
+      expect(ids).toEqual(['forfeit', 'reward']);
+      // Take the reward — Guilds slot-2 grants either 4 Gold or 2 Mana.
+      s = applyAction(s, {
+        type: 'RESOLVE_PENDING',
+        resolutionId: top.id,
+        answer: { kind: 'option-chosen', optionId: 'reward', payload: {} },
+      });
+      // Some Guilds slots present a Gold/Mana sub-prompt; take whichever
+      // option fires first to confirm the reward chain ran.
+      const sub = s.pendingResolutionStack[s.pendingResolutionStack.length - 1];
+      if (sub && sub.prompt.kind === 'choose-from-options') {
+        s = applyAction(s, {
+          type: 'RESOLVE_PENDING',
+          resolutionId: sub.id,
+          answer: {
+            kind: 'option-chosen',
+            optionId: sub.prompt.options[0]!.id,
+            payload: {},
+          },
+        });
+      }
+      const p1 = s.players.find((p) => p.id === 'p1')!;
+      // Alice started zeroed; either gold or mana increased.
+      const gainedSomething =
+        p1.resources.gold > 0 || p1.resources.mana > 0;
+      expect(gainedSomething).toBe(true);
+    });
+
+    it('shadow-placing into an instant room over an opposing base opens the reaction window first, reward fires after', () => {
+      let s = setupInfinite(3, 3);
+      // Force Guilds B (instant face) since both sides are now wired
+      // and the test specifically exercises an instant-room reaction.
+      s = forceRoomSide(s, 'Guilds', 'B');
+      // Move bob's mage to Guilds slot-2 base so Alice can shadow OVER him.
+      s = {
+        ...s,
+        rooms: s.rooms.map((r) =>
+          r.id !== 'base.room.library.a' && r.id !== 'base.room.guilds.b'
+            ? r
+            : r.id === 'base.room.library.a'
+              ? {
+                  ...r,
+                  actionSpaces: r.actionSpaces.map((sp) =>
+                    sp.id === 'base.room.library.a.slot-1'
+                      ? { ...sp, occupant: null }
+                      : sp,
+                  ),
+                }
+              : {
+                  ...r,
+                  actionSpaces: r.actionSpaces.map((sp) =>
+                    sp.id === 'base.room.guilds.b.slot-2'
+                      ? {
+                          ...sp,
+                          occupant: {
+                            mageId: 'bob-grey-1',
+                            ownerId: 'p2',
+                            isShadowing: false,
+                          },
+                        }
+                      : sp,
+                  ),
+                },
+        ),
+        players: s.players.map((p) =>
+          p.id !== 'p2'
+            ? p
+            : {
+                ...p,
+                mages: p.mages.map((m) =>
+                  m.id !== 'bob-grey-1'
+                    ? m
+                    : {
+                        ...m,
+                        location: {
+                          kind: 'action-space',
+                          spaceId: 'base.room.guilds.b.slot-2',
+                        },
+                      },
+                ),
+              },
+        ),
+      };
+      s = applyAction(s, {
+        type: 'CAST_SPELL',
+        playerId: 'p1',
+        spellCardId: 'base.spell.infinite-universes-realized',
+        level: 3,
+      });
+      s = { ...s, phase: { kind: 'errands' as const, round: 1, activePlayerIndex: 0, actionUsed: false, fastActionUsed: false } };
+      s = applyAction(s, {
+        type: 'PLACE_WORKER',
+        playerId: 'p1',
+        mageId: 'alice-red-1',
+        actionSpaceId: 'base.room.guilds.b.slot-2',
+        isShadowing: true,
+      });
+      // The reaction window is open; the top of the stack is the
+      // responder's reaction prompt (bob's), not the reward prompt.
+      expect(s.activeReactionWindows).toHaveLength(1);
+      expect(s.activeReactionWindows[0]!.triggerEvents[0]!.kind).toBe(
+        'mage-shadowed',
+      );
+      const top = s.pendingResolutionStack[s.pendingResolutionStack.length - 1]!;
+      expect(top.responderId).toBe('p2');
+      expect(top.prompt.kind).toBe('reaction-window');
+      // Bob passes on the reaction.
+      s = applyAction(s, {
+        type: 'RESOLVE_PENDING',
+        resolutionId: top.id,
+        answer: { kind: 'reaction-passed' },
+      });
+      // Window closes; the reward prompt for alice is now on top.
+      expect(s.activeReactionWindows).toHaveLength(0);
+      const after = s.pendingResolutionStack[s.pendingResolutionStack.length - 1]!;
+      expect(after.responderId).toBe('p1');
+      if (after.prompt.kind !== 'choose-from-options') {
+        throw new Error('expected reward prompt');
+      }
+      const ids = after.prompt.options.map((o) => o.id).sort();
+      expect(ids).toEqual(['forfeit', 'reward']);
+    });
+
     it('mass-move skips a mage whose shadow position is already occupied', () => {
       let s = setupInfinite(3, 3);
       // Place alice-red-1 at slot-2 base, and another mage at slot-2 shadow.
@@ -11909,10 +16815,8 @@ describe('Shadow-on-place buffs (Zero Hour L2 / Inversion L3)', () => {
       expect(slot2.shadowOccupant?.mageId).toBe('bob-grey-1');
     });
 
-    it('suppresses the grey Mysticism post-cast prompt (mandatory shadow forbids base placement)', () => {
+    it('fires the grey Mysticism post-cast prompt and offers shadow slots under Inversion', () => {
       let s = setupInfinite(3, 3);
-      // Give p1 a grey mage in office so the post-cast trigger would
-      // normally fire.
       s = addMage(s, 'p1', {
         id: 'alice-grey',
         cardId: 'base.mage.mysticism',
@@ -11924,15 +16828,126 @@ describe('Shadow-on-place buffs (Zero Hour L2 / Inversion L3)', () => {
         spellCardId: 'base.spell.infinite-universes-realized',
         level: 3,
       });
-      // No Mysticism prompt — Inversion suppresses it because the post-cast
-      // placement can only target base slots and Inversion forces shadow.
-      expect(
-        s.pendingResolutionStack.some(
-          (e) =>
-            e.source.kind === 'mage-power' &&
-            e.source.id === 'base.mage.mysticism.place-after-cast',
-        ),
-      ).toBe(false);
+      // The Yes/No prompt is on the stack.
+      const yesNo = s.pendingResolutionStack.find(
+        (e) =>
+          e.source.kind === 'mage-power' &&
+          e.source.id === 'base.mage.mysticism.place-after-cast',
+      );
+      expect(yesNo).toBeDefined();
+      s = applyAction(s, {
+        type: 'RESOLVE_PENDING',
+        resolutionId: yesNo!.id,
+        answer: { kind: 'option-chosen', optionId: 'place', payload: {} },
+      });
+      // Single grey mage → skips pick-mage, goes straight to slot picker.
+      // Eligible slots = slots whose shadowOccupant is empty; bob occupies
+      // slot-1's BASE so slot-1 should be eligible (shadow is empty).
+      const slotPrompt = s.pendingResolutionStack[s.pendingResolutionStack.length - 1]!;
+      if (slotPrompt.prompt.kind !== 'choose-target-action-space') {
+        throw new Error('expected choose-target-action-space');
+      }
+      expect(slotPrompt.prompt.eligibleSpaceIds).toContain(
+        'base.room.library.a.slot-1',
+      );
+      // And the empty-base slot-4 should also be eligible (mandatory mode
+      // permits shadow placement over an empty base).
+      expect(slotPrompt.prompt.eligibleSpaceIds).toContain(
+        'base.room.library.a.slot-4',
+      );
+    });
+
+    it('Mysticism post-cast lands the grey mage at the slot SHADOW under Inversion', () => {
+      let s = setupInfinite(3, 3);
+      s = addMage(s, 'p1', {
+        id: 'alice-grey',
+        cardId: 'base.mage.mysticism',
+        color: 'grey',
+      });
+      s = applyAction(s, {
+        type: 'CAST_SPELL',
+        playerId: 'p1',
+        spellCardId: 'base.spell.infinite-universes-realized',
+        level: 3,
+      });
+      const yesNo = s.pendingResolutionStack.find(
+        (e) =>
+          e.source.kind === 'mage-power' &&
+          e.source.id === 'base.mage.mysticism.place-after-cast',
+      )!;
+      s = applyAction(s, {
+        type: 'RESOLVE_PENDING',
+        resolutionId: yesNo.id,
+        answer: { kind: 'option-chosen', optionId: 'place', payload: {} },
+      });
+      // Pick slot-4 (empty base) — shadow placement over an empty base
+      // does NOT open a reaction window.
+      const slotPrompt = s.pendingResolutionStack[s.pendingResolutionStack.length - 1]!;
+      s = applyAction(s, {
+        type: 'RESOLVE_PENDING',
+        resolutionId: slotPrompt.id,
+        answer: {
+          kind: 'space-chosen',
+          spaceId: 'base.room.library.a.slot-4',
+        },
+      });
+      const slot4 = s.rooms
+        .find((r) => r.id === 'base.room.library.a')!
+        .actionSpaces.find((sp) => sp.id === 'base.room.library.a.slot-4')!;
+      expect(slot4.occupant).toBeNull();
+      expect(slot4.shadowOccupant?.mageId).toBe('alice-grey');
+      const aliceGrey = s.players
+        .find((p) => p.id === 'p1')!
+        .mages.find((m) => m.id === 'alice-grey')!;
+      expect(aliceGrey.isShadowing).toBe(true);
+      expect(aliceGrey.location).toEqual({
+        kind: 'action-space',
+        spaceId: 'base.room.library.a.slot-4',
+      });
+      expect(s.activeReactionWindows).toHaveLength(0);
+    });
+
+    it('Mysticism post-cast over an opposing base opens a mage-shadowed reaction under Inversion', () => {
+      let s = setupInfinite(3, 3);
+      s = addMage(s, 'p1', {
+        id: 'alice-grey',
+        cardId: 'base.mage.mysticism',
+        color: 'grey',
+      });
+      s = applyAction(s, {
+        type: 'CAST_SPELL',
+        playerId: 'p1',
+        spellCardId: 'base.spell.infinite-universes-realized',
+        level: 3,
+      });
+      const yesNo = s.pendingResolutionStack.find(
+        (e) =>
+          e.source.kind === 'mage-power' &&
+          e.source.id === 'base.mage.mysticism.place-after-cast',
+      )!;
+      s = applyAction(s, {
+        type: 'RESOLVE_PENDING',
+        resolutionId: yesNo.id,
+        answer: { kind: 'option-chosen', optionId: 'place', payload: {} },
+      });
+      const slotPrompt = s.pendingResolutionStack[s.pendingResolutionStack.length - 1]!;
+      s = applyAction(s, {
+        type: 'RESOLVE_PENDING',
+        resolutionId: slotPrompt.id,
+        answer: {
+          kind: 'space-chosen',
+          spaceId: 'base.room.library.a.slot-1',
+        },
+      });
+      const slot1 = s.rooms
+        .find((r) => r.id === 'base.room.library.a')!
+        .actionSpaces.find((sp) => sp.id === 'base.room.library.a.slot-1')!;
+      expect(slot1.occupant?.mageId).toBe('bob-grey-1');
+      expect(slot1.shadowOccupant?.mageId).toBe('alice-grey');
+      expect(s.activeReactionWindows).toHaveLength(1);
+      expect(s.activeReactionWindows[0]!.triggerEvents[0]!.kind).toBe(
+        'mage-shadowed',
+      );
     });
   });
 });
@@ -12891,7 +17906,7 @@ describe('Spell wiring — Wave 8b (two adjacent rooms)', () => {
   }): GameState {
     let s = initGame(TWO_PLAYER_CONFIG);
     s = forceLibrarySideA(s);
-    s = forceVaultSideA(s);
+    s = forceVaultPlayableSide(s);
     s = forceLibraryVaultAdjacent(s);
     s = zeroPlayerResources(s, 'p1');
     s = zeroPlayerResources(s, 'p2');
@@ -12937,7 +17952,7 @@ describe('Spell wiring — Wave 8b (two adjacent rooms)', () => {
       casterMana: 1,
     });
     s = addPlacedRedMage(s, 'p2', 'bob-lib', 'base.room.library.a.slot-1');
-    s = addPlacedRedMage(s, 'p2', 'bob-vault', 'base.room.vault.a.slot-1');
+    s = addPlacedRedMage(s, 'p2', 'bob-vault', 'base.room.vault.b.slot-1');
     s = applyAction(s, {
       type: 'CAST_SPELL',
       playerId: 'p1',
@@ -12961,7 +17976,7 @@ describe('Spell wiring — Wave 8b (two adjacent rooms)', () => {
     const roomBPrompt = topPending(s);
     if (roomBPrompt.prompt.kind === 'choose-from-options') {
       expect(roomBPrompt.prompt.options.map((o) => o.id)).toContain(
-        'base.room.vault.a',
+        'base.room.vault.b',
       );
     }
     s = applyAction(s, {
@@ -12969,7 +17984,7 @@ describe('Spell wiring — Wave 8b (two adjacent rooms)', () => {
       resolutionId: roomBPrompt.id,
       answer: {
         kind: 'option-chosen',
-        optionId: 'base.room.vault.a',
+        optionId: 'base.room.vault.b',
         payload: {},
       },
     });
@@ -13038,7 +18053,7 @@ describe('Spell wiring — Wave 8b (two adjacent rooms)', () => {
       casterMana: 3,
     });
     s = addPlacedRedMage(s, 'p2', 'bob-lib', 'base.room.library.a.slot-1');
-    s = addPlacedRedMage(s, 'p2', 'bob-vault', 'base.room.vault.a.slot-1');
+    s = addPlacedRedMage(s, 'p2', 'bob-vault', 'base.room.vault.b.slot-1');
     s = applyAction(s, {
       type: 'CAST_SPELL',
       playerId: 'p1',
@@ -13064,7 +18079,7 @@ describe('Spell wiring — Wave 8b (two adjacent rooms)', () => {
       resolutionId: topPending(s).id,
       answer: {
         kind: 'option-chosen',
-        optionId: 'base.room.vault.a',
+        optionId: 'base.room.vault.b',
         payload: {},
       },
     });
@@ -13085,7 +18100,7 @@ describe('Spell wiring — Wave 8b (two adjacent rooms)', () => {
     });
     s = addPlacedRedMage(s, 'p2', 'bob-lib-1', 'base.room.library.a.slot-1');
     s = addPlacedRedMage(s, 'p2', 'bob-lib-2', 'base.room.library.a.slot-2');
-    s = addPlacedRedMage(s, 'p2', 'bob-vault-1', 'base.room.vault.a.slot-1');
+    s = addPlacedRedMage(s, 'p2', 'bob-vault-1', 'base.room.vault.b.slot-1');
     s = applyAction(s, {
       type: 'CAST_SPELL',
       playerId: 'p1',
@@ -13106,7 +18121,7 @@ describe('Spell wiring — Wave 8b (two adjacent rooms)', () => {
       resolutionId: topPending(s).id,
       answer: {
         kind: 'option-chosen',
-        optionId: 'base.room.vault.a',
+        optionId: 'base.room.vault.b',
         payload: {},
       },
     });
@@ -13171,9 +18186,48 @@ describe('Spell wiring — Wave 8c (Pestilence)', () => {
   } = {}): GameState {
     let s = initGame(TWO_PLAYER_CONFIG);
     s = forceLibrarySideA(s);
-    s = forceVaultSideA(s);
-    s = forceRoomSide(s, 'Courtyard', 'A');
-    s = forceRoomSide(s, 'Catacombs', 'A');
+    // Inject the three non-UC rooms needed for `forceFourRoomBlock`. Each
+    // helper has a "first non-UC" eviction fallback that can clobber a
+    // previously-injected room when the natural layout doesn't include
+    // them (which became likely once Student Stores added another two
+    // non-UC names). Eviction is guarded against any of the target names
+    // here so the injection order is stable.
+    const needed: { name: string; side: 'A' | 'B' }[] = [
+      { name: 'Vault', side: 'B' },
+      { name: 'Courtyard', side: 'A' },
+      { name: 'Catacombs', side: 'A' },
+    ];
+    const preserveNames = new Set(['Library', ...needed.map((n) => n.name)]);
+    for (const spec of needed) {
+      const replacement = baseGamePack.rooms.find(
+        (r) => r.name === spec.name && r.side === spec.side,
+      );
+      if (!replacement) {
+        throw new Error(
+          `setupPestilence: ${spec.name} ${spec.side} not in base pack`,
+        );
+      }
+      const existsIdx = s.rooms.findIndex((r) => r.name === spec.name);
+      if (existsIdx !== -1) {
+        s = {
+          ...s,
+          rooms: s.rooms.map((r, i) => (i === existsIdx ? replacement : r)),
+        };
+        continue;
+      }
+      const evictIdx = s.rooms.findIndex(
+        (r) => !r.isUniversityCentral && !preserveNames.has(r.name),
+      );
+      if (evictIdx === -1) {
+        throw new Error(
+          `setupPestilence: no non-UC slot available to inject ${spec.name}`,
+        );
+      }
+      s = {
+        ...s,
+        rooms: s.rooms.map((r, i) => (i === evictIdx ? replacement : r)),
+      };
+    }
     s = forceFourRoomBlock(s);
     s = zeroPlayerResources(s, 'p1');
     s = zeroPlayerResources(s, 'p2');
@@ -13215,7 +18269,7 @@ describe('Spell wiring — Wave 8c (Pestilence)', () => {
   it('Pestilence: chains 3 adjacent rooms then stops; all 3 wounds applied atomically', () => {
     let s = setupPestilence();
     s = addPlacedRedMage(s, 'p2', 'b-lib', 'base.room.library.a.slot-1');
-    s = addPlacedRedMage(s, 'p2', 'b-vault', 'base.room.vault.a.slot-1');
+    s = addPlacedRedMage(s, 'p2', 'b-vault', 'base.room.vault.b.slot-1');
     s = addPlacedRedMage(s, 'p2', 'b-court', 'base.room.courtyard.a.slot-1');
     s = applyAction(s, {
       type: 'CAST_SPELL',
@@ -13251,7 +18305,7 @@ describe('Spell wiring — Wave 8c (Pestilence)', () => {
     const roomPicker = topPending(s);
     if (roomPicker.prompt.kind === 'choose-from-options') {
       const optionIds = roomPicker.prompt.options.map((o) => o.id);
-      expect(optionIds).toContain('base.room.vault.a');
+      expect(optionIds).toContain('base.room.vault.b');
       expect(optionIds).toContain('base.room.courtyard.a');
     }
     s = applyAction(s, {
@@ -13259,7 +18313,7 @@ describe('Spell wiring — Wave 8c (Pestilence)', () => {
       resolutionId: roomPicker.id,
       answer: {
         kind: 'option-chosen',
-        optionId: 'base.room.vault.a',
+        optionId: 'base.room.vault.b',
         payload: {},
       },
     });
@@ -13313,7 +18367,7 @@ describe('Spell wiring — Wave 8c (Pestilence)', () => {
   it('Pestilence: stop after 1 room — only that wound is applied', () => {
     let s = setupPestilence({ casterMana: 4 });
     s = addPlacedRedMage(s, 'p2', 'b-lib', 'base.room.library.a.slot-1');
-    s = addPlacedRedMage(s, 'p2', 'b-vault', 'base.room.vault.a.slot-1');
+    s = addPlacedRedMage(s, 'p2', 'b-vault', 'base.room.vault.b.slot-1');
     s = applyAction(s, {
       type: 'CAST_SPELL',
       playerId: 'p1',
@@ -13356,7 +18410,7 @@ describe('Spell wiring — Wave 8c (Pestilence)', () => {
     // the final pick or stop.
     let s = setupPestilence();
     s = addPlacedRedMage(s, 'p2', 'b-lib', 'base.room.library.a.slot-1');
-    s = addPlacedRedMage(s, 'p2', 'b-vault', 'base.room.vault.a.slot-1');
+    s = addPlacedRedMage(s, 'p2', 'b-vault', 'base.room.vault.b.slot-1');
     s = applyAction(s, {
       type: 'CAST_SPELL',
       playerId: 'p1',
@@ -14270,10 +19324,11 @@ describe('Most-INT voter — bug repro', () => {
       resources: { ...p.resources, intelligence: 3 },
     }));
     s = { ...s, voters: s.voters.map((v) => ({ ...v, revealed: true })) };
-    const intVoter = s.voters.find((v) => v.criterion === 'most-intelligence');
-    if (!intVoter) {
-      throw new Error('most-intelligence voter must be seeded for this test');
+    {
+      const ensured = ensureVoter(s, 'most-intelligence');
+      s = ensured.state;
     }
+    const intVoter = s.voters.find((v) => v.criterion === 'most-intelligence')!;
     // Both should now score 3 (total Intelligence Tokens).
     const p1 = s.players.find((p) => p.id === 'p1')!;
     const p2 = s.players.find((p) => p.id === 'p2')!;
@@ -14341,10 +19396,11 @@ describe('Most-INT voter — bug repro', () => {
     }));
     // Force every voter face-up so they all participate in scoring.
     s = { ...s, voters: s.voters.map((v) => ({ ...v, revealed: true })) };
-    const intVoter = s.voters.find((v) => v.criterion === 'most-intelligence');
-    if (!intVoter) {
-      throw new Error('most-intelligence voter must be seeded for this test');
+    {
+      const ensured = ensureVoter(s, 'most-intelligence');
+      s = ensured.state;
     }
+    const intVoter = s.voters.find((v) => v.criterion === 'most-intelligence')!;
     // p1 has the mark.
     s = {
       ...s,
@@ -14484,6 +19540,140 @@ describe('Alt-leader spells', () => {
     expect(findMageById(s, 'bob-mage').isWounded).toBe(true);
   });
 
+  it('Dark Pact: Mysticism trigger fires when the banish RETURNS a grey mage to office', () => {
+    // Bug scenario: caster's only grey mage is on a slot (not in office).
+    // Dark Pact banishes the grey mage → it returns to office. After the
+    // spell fully resolves, the Mysticism post-cast trigger must still fire.
+    let s = setupLeaderSpellTest('base.spell.dark-pact', 1);
+    s = addMage(s, 'p1', {
+      id: 'alice-grey',
+      cardId: 'base.mage.mysticism',
+      color: 'grey',
+    });
+    // Place the grey mage on a slot — at cast time, it is NOT in office.
+    s = placeMageOnSpace(s, 'p1', 'alice-grey', 'base.room.library.a.slot-2');
+    s = addMage(s, 'p2', {
+      id: 'bob-mage',
+      cardId: 'base.mage.sorcery',
+      color: 'red',
+    });
+    s = placeMageOnSpace(s, 'p2', 'bob-mage', 'base.room.library.a.slot-1');
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.dark-pact',
+      level: 1,
+    });
+    // Mysticism trigger is queued, NOT yet on the stack.
+    expect(s.pendingMysticismPostCast).toEqual(['p1']);
+    // Step 1: banish the grey mage — it returns to office.
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'mage-chosen', mageId: 'alice-grey' },
+    });
+    expect(findMageById(s, 'alice-grey').location.kind).toBe('office');
+    // Step 2: wound bob's mage.
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'mage-chosen', mageId: 'bob-mage' },
+    });
+    // Step 3: pass the post-wound reaction window.
+    const reactionPrompt = topPending(s);
+    if (reactionPrompt.prompt.kind === 'reaction-window') {
+      s = applyAction(s, {
+        type: 'RESOLVE_PENDING',
+        resolutionId: reactionPrompt.id,
+        answer: { kind: 'reaction-passed' },
+      });
+    }
+    // Step 4: the infirmary bonus prompt fires for the wounded mage's
+    // owner (p2). Pick any option to clear it.
+    const bonusPrompt = topPending(s);
+    if (
+      bonusPrompt.responderId === 'p2' &&
+      bonusPrompt.prompt.kind === 'choose-from-options'
+    ) {
+      s = applyAction(s, {
+        type: 'RESOLVE_PENDING',
+        resolutionId: bonusPrompt.id,
+        answer: {
+          kind: 'option-chosen',
+          optionId: bonusPrompt.prompt.options[0]!.id,
+          payload: {},
+        },
+      });
+    }
+    // After the spell's full chain settles, the Mysticism prompt surfaces.
+    expect(s.pendingMysticismPostCast).toEqual([]);
+    const top = topPending(s);
+    expect(top.source.id).toBe('base.mage.mysticism.place-after-cast');
+    expect(top.responderId).toBe('p1');
+  });
+
+  it('Dark Pact: Mysticism trigger does NOT fire when caster has no grey mage in office after resolution', () => {
+    // Caster has only non-grey mages — Mysticism prompt must not appear.
+    let s = setupLeaderSpellTest('base.spell.dark-pact', 1);
+    s = addMage(s, 'p1', {
+      id: 'alice-sac',
+      cardId: 'base.mage.divinity',
+      color: 'blue',
+    });
+    s = addMage(s, 'p2', {
+      id: 'bob-mage',
+      cardId: 'base.mage.sorcery',
+      color: 'red',
+    });
+    s = placeMageOnSpace(s, 'p2', 'bob-mage', 'base.room.library.a.slot-1');
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.dark-pact',
+      level: 1,
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'mage-chosen', mageId: 'alice-sac' },
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'mage-chosen', mageId: 'bob-mage' },
+    });
+    const reactionPrompt = topPending(s);
+    if (reactionPrompt.prompt.kind === 'reaction-window') {
+      s = applyAction(s, {
+        type: 'RESOLVE_PENDING',
+        resolutionId: reactionPrompt.id,
+        answer: { kind: 'reaction-passed' },
+      });
+    }
+    const bonusPrompt = topPending(s);
+    if (
+      bonusPrompt.responderId === 'p2' &&
+      bonusPrompt.prompt.kind === 'choose-from-options'
+    ) {
+      s = applyAction(s, {
+        type: 'RESOLVE_PENDING',
+        resolutionId: bonusPrompt.id,
+        answer: {
+          kind: 'option-chosen',
+          optionId: bonusPrompt.prompt.options[0]!.id,
+          payload: {},
+        },
+      });
+    }
+    // Trigger cleared, no Mysticism prompt on stack.
+    expect(s.pendingMysticismPostCast).toEqual([]);
+    expect(
+      s.pendingResolutionStack.some(
+        (e) => e.source.id === 'base.mage.mysticism.place-after-cast',
+      ),
+    ).toBe(false);
+  });
+
   it('Shadow Bolt: opponent mage transitions to the shadow position of its own slot; mage-moved event fires', () => {
     let s = setupLeaderSpellTest('base.spell.shadow-bolt', 1);
     s = addMage(s, 'p2', {
@@ -14530,7 +19720,7 @@ describe('Alt-leader spells', () => {
   it('Gust of Wind: moves a mage to an open slot in an adjacent room', () => {
     let s = setupLeaderSpellTest('base.spell.gust-of-wind', 1);
     // Force a 2-room adjacency: put Library at (0,0) and Vault at (0,1).
-    s = forceVaultSideA(s);
+    s = forceVaultPlayableSide(s);
     const libraryId = s.rooms.find((r) => r.name === 'Library')!.id;
     const vaultId = s.rooms.find((r) => r.name === 'Vault')!.id;
     const otherIds = s.rooms
@@ -14568,7 +19758,7 @@ describe('Alt-leader spells', () => {
     expect(slotPrompt.prompt.kind).toBe('choose-target-action-space');
     if (slotPrompt.prompt.kind === 'choose-target-action-space') {
       expect(slotPrompt.prompt.eligibleSpaceIds).toContain(
-        'base.room.vault.a.slot-1',
+        'base.room.vault.b.slot-1',
       );
     }
     s = applyAction(s, {
@@ -14576,7 +19766,7 @@ describe('Alt-leader spells', () => {
       resolutionId: slotPrompt.id,
       answer: {
         kind: 'space-chosen',
-        spaceId: 'base.room.vault.a.slot-1',
+        spaceId: 'base.room.vault.b.slot-1',
       },
     });
     // Pass the reaction window.
@@ -14587,13 +19777,13 @@ describe('Alt-leader spells', () => {
     });
     expect(findMageById(s, 'bob-mage').location).toEqual({
       kind: 'action-space',
-      spaceId: 'base.room.vault.a.slot-1',
+      spaceId: 'base.room.vault.b.slot-1',
     });
   });
 
   it('Gust of Wind: green mage IS a valid target (green is only wound-immune)', () => {
     let s = setupLeaderSpellTest('base.spell.gust-of-wind', 1);
-    s = forceVaultSideA(s);
+    s = forceVaultPlayableSide(s);
     const libraryId = s.rooms.find((r) => r.name === 'Library')!.id;
     const vaultId = s.rooms.find((r) => r.name === 'Vault')!.id;
     const otherIds = s.rooms
@@ -14946,8 +20136,10 @@ describe('Hurricane (Taming of the Storm L3)', () => {
 });
 
 // ============================================================================
-// Bend Time (Temporal Calculus L3) — grants 3 extra actions this turn.
-// (The "different type per action" constraint is a soft rule.)
+// Bend Time (Temporal Calculus L3) — grants 3 bonus actions this turn, each
+// of which must be a different action kind (place / spell / supporter /
+// vault). Tracker lives in `bendTimeUsedKinds` on the errands phase and is
+// validated by `consumeActionBudget`.
 // ============================================================================
 
 describe('Bend Time (Temporal Calculus L3)', () => {
@@ -14975,7 +20167,7 @@ describe('Bend Time (Temporal Calculus L3)', () => {
     };
   }
 
-  it('cast grants +3 extraActions on the errands phase', () => {
+  it('cast grants +3 extraActions and seeds bendTimeUsedKinds: []', () => {
     let s = setupBendTime();
     s = applyAction(s, {
       type: 'CAST_SPELL',
@@ -14985,13 +20177,14 @@ describe('Bend Time (Temporal Calculus L3)', () => {
     });
     if (s.phase.kind !== 'errands') throw new Error('expected errands');
     expect(s.phase.extraActions).toBe(3);
+    expect(s.phase.bendTimeUsedKinds).toEqual([]);
     // Base Action was spent by Bend Time itself.
     expect(s.phase.actionUsed).toBe(true);
     // Turn doesn't auto-advance while bonus actions remain.
     expect(s.players[s.phase.activePlayerIndex]!.id).toBe('p1');
   });
 
-  it('extraActions counter clears on turn change', () => {
+  it('extraActions and tracker clear on turn change', () => {
     let s = setupBendTime();
     s = applyAction(s, {
       type: 'CAST_SPELL',
@@ -15002,6 +20195,131 @@ describe('Bend Time (Temporal Calculus L3)', () => {
     s = applyAction(s, { type: 'PASS_TURN', playerId: 'p1' });
     if (s.phase.kind !== 'errands') throw new Error('expected errands');
     expect(s.phase.extraActions ?? 0).toBe(0);
+    expect(s.phase.bendTimeUsedKinds).toBeUndefined();
+  });
+
+  it('place + cast as bonus actions records both kinds in the tracker', () => {
+    let s = setupBendTime();
+    // Give Alice a mage to place and a 2nd action spell to cast as a bonus.
+    s = addMage(s, 'p1', {
+      id: 'alice-mage-1',
+      cardId: 'base.mage.divinity',
+      color: 'blue',
+    });
+    s = addOwnedSpell(s, 'p1', 'base.spell.burn', { intPlaced: true });
+    s = setMana(s, 'p1', 5); // 4 for Bend Time + 1 for Burn
+
+    // Cast Bend Time (base Action, seeds tracker).
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.temporal-calculus-6th-ed',
+      level: 3,
+    });
+    // Bonus action #1: place a mage (kind=place).
+    s = applyAction(s, {
+      type: 'PLACE_WORKER',
+      playerId: 'p1',
+      mageId: 'alice-mage-1',
+      actionSpaceId: 'base.room.library.a.slot-4',
+    });
+    if (s.phase.kind !== 'errands') throw new Error('expected errands');
+    expect(s.phase.extraActions).toBe(2);
+    expect(s.phase.bendTimeUsedKinds).toEqual(['place']);
+
+    // Bonus action #2: cast Burn on Alice's own mage (kind=spell).
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.burn',
+      level: 1,
+    });
+    // Burn wounds a mage; pick Alice's own placed mage to keep the test
+    // self-contained (the choice doesn't matter for the tracker check).
+    const pending = s.pendingResolutionStack[s.pendingResolutionStack.length - 1];
+    if (pending && pending.prompt.kind === 'choose-from-options') {
+      const opt = pending.prompt.options[0];
+      if (opt) {
+        s = applyAction(s, {
+          type: 'RESOLVE_PENDING',
+          resolutionId: pending.id,
+          answer: { kind: 'option-chosen', optionId: opt.id, payload: {} },
+        });
+      }
+    }
+    if (s.phase.kind !== 'errands') throw new Error('expected errands');
+    expect(s.phase.bendTimeUsedKinds).toEqual(['place', 'spell']);
+    expect(s.phase.extraActions).toBe(1);
+  });
+
+  it('repeating the same kind as a bonus action throws', () => {
+    let s = setupBendTime();
+    // Give Alice two spell casts: she already has Bend Time; add Burn.
+    s = addOwnedSpell(s, 'p1', 'base.spell.burn', { intPlaced: true });
+    s = setMana(s, 'p1', 6); // 4 for Bend Time + 1 + 1 for two Burns
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.temporal-calculus-6th-ed',
+      level: 3,
+    });
+    // First bonus spell cast: OK (kind=spell first time).
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.burn',
+      level: 1,
+    });
+    // Resolve any wound-choice prompt — Burn requires a target, but for the
+    // tracker check we only care that the spend completed. Cancel-ish:
+    // resolve with the first option if a prompt is open.
+    const pending = s.pendingResolutionStack[s.pendingResolutionStack.length - 1];
+    if (pending && pending.prompt.kind === 'choose-from-options') {
+      const opt = pending.prompt.options[0];
+      if (opt) {
+        s = applyAction(s, {
+          type: 'RESOLVE_PENDING',
+          resolutionId: pending.id,
+          answer: { kind: 'option-chosen', optionId: opt.id, payload: {} },
+        });
+      }
+    }
+    // Refresh Burn so the second cast wouldn't fail for being exhausted.
+    s = {
+      ...s,
+      players: s.players.map((p) =>
+        p.id !== 'p1'
+          ? p
+          : {
+              ...p,
+              ownedSpells: p.ownedSpells.map((sp) =>
+                sp.cardId === 'base.spell.burn' ? { ...sp, exhausted: false } : sp,
+              ),
+            },
+      ),
+    };
+    expect(() =>
+      applyAction(s, {
+        type: 'CAST_SPELL',
+        playerId: 'p1',
+        spellCardId: 'base.spell.burn',
+        level: 1,
+      }),
+    ).toThrow(/Bend Time — already used a spell action/);
+  });
+
+  it('DISCARD_BONUS_ACTIONS clears extraActions and bendTimeUsedKinds', () => {
+    let s = setupBendTime();
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.temporal-calculus-6th-ed',
+      level: 3,
+    });
+    s = applyAction(s, { type: 'DISCARD_BONUS_ACTIONS', playerId: 'p1' });
+    if (s.phase.kind !== 'errands') throw new Error('expected errands');
+    expect(s.phase.extraActions).toBe(0);
+    expect(s.phase.bendTimeUsedKinds).toBeUndefined();
   });
 });
 
@@ -15840,6 +21158,109 @@ describe('Mystic Link (Tenets of Dominance L2)', () => {
     const alice = s.players.find((p) => p.id === 'p1')!;
     const placed = alice.mages.find((m) => m.id === 'alice-red')!;
     expect(placed.location.kind).toBe('action-space');
+  });
+
+  it('borrowed action cast queues a SECOND Mysticism post-cast trigger', () => {
+    // Setup: Alice has a grey mage in office so the Mysticism trigger
+    // arms for both the outer Mystic Link cast AND the borrowed Burn
+    // cast (both action-timed). The drain should fire two prompts
+    // back-to-back at the end.
+    let s = setupMysticLink();
+    s = addMage(s, 'p1', {
+      id: 'alice-grey',
+      cardId: 'base.mage.mysticism',
+      color: 'grey',
+    });
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.tenets-of-dominance',
+      level: 2,
+    });
+    // One Mysticism entry queued so far (for Mystic Link itself).
+    expect(s.pendingMysticismPostCast).toEqual(['p1']);
+    // Pick Burn as the borrowed cast.
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: {
+        kind: 'option-chosen',
+        optionId: 'base.spell.burn::1',
+        payload: {},
+      },
+    });
+    // The Burn cast (action-timed) appends a second entry.
+    expect(s.pendingMysticismPostCast).toEqual(['p1', 'p1']);
+    // Drive Burn's wound + infirmary + Mystic Link's place chain.
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'mage-chosen', mageId: 'bob-grey' },
+    });
+    // Walk all remaining prompts, deferring Mysticism prompts (so the
+    // chain settles first), placing Alice's red mage when prompted.
+    const mysticismPrompts: string[] = [];
+    const walkUntilMysticism = (state: GameState): GameState => {
+      let curr = state;
+      for (let i = 0; i < 30; i++) {
+        if (curr.pendingResolutionStack.length === 0) return curr;
+        const top = topPending(curr);
+        // A Mysticism prompt — record it and skip so we can count them.
+        if (
+          top.source.kind === 'mage-power' &&
+          top.source.id === 'base.mage.mysticism.place-after-cast'
+        ) {
+          mysticismPrompts.push(top.id);
+          curr = applyAction(curr, {
+            type: 'RESOLVE_PENDING',
+            resolutionId: top.id,
+            answer: { kind: 'option-chosen', optionId: 'skip', payload: {} },
+          });
+          continue;
+        }
+        if (top.prompt.kind === 'reaction-window') {
+          curr = applyAction(curr, {
+            type: 'RESOLVE_PENDING',
+            resolutionId: top.id,
+            answer: { kind: 'reaction-passed' },
+          });
+        } else if (top.prompt.kind === 'choose-target-mage') {
+          // Mystic Link's place-mage step: pick the red mage in office.
+          curr = applyAction(curr, {
+            type: 'RESOLVE_PENDING',
+            resolutionId: top.id,
+            answer: { kind: 'mage-chosen', mageId: 'alice-red' },
+          });
+        } else if (top.prompt.kind === 'choose-target-action-space') {
+          curr = applyAction(curr, {
+            type: 'RESOLVE_PENDING',
+            resolutionId: top.id,
+            answer: {
+              kind: 'space-chosen',
+              spaceId: 'base.room.library.a.slot-2',
+            },
+          });
+        } else if (top.prompt.kind === 'choose-from-options') {
+          curr = applyAction(curr, {
+            type: 'RESOLVE_PENDING',
+            resolutionId: top.id,
+            answer: {
+              kind: 'option-chosen',
+              optionId: top.prompt.options[0]!.id,
+              payload: {},
+            },
+          });
+        } else {
+          break;
+        }
+      }
+      return curr;
+    };
+    s = walkUntilMysticism(s);
+    // Two Mysticism prompts must have surfaced — one per action cast.
+    expect(mysticismPrompts).toHaveLength(2);
+    // Queue is drained.
+    expect(s.pendingMysticismPostCast).toEqual([]);
   });
 });
 
@@ -18270,6 +23691,124 @@ describe('Slow Time (Temporal Calculus L1)', () => {
     if (top.prompt.kind !== 'choose-from-options') throw new Error('unreachable');
     expect(top.prompt.options.some((o) => o.id === 'base.room.library.a')).toBe(false);
   });
+
+  it('Mysticism post-cast trigger fires AFTER both Slow Time placements, not between them', () => {
+    let s = setupSlowTime();
+    // Add a grey mage in office so the Mysticism post-cast trigger arms.
+    s = addMage(s, 'p1', {
+      id: 'alice-grey',
+      cardId: 'base.mage.mysticism',
+      color: 'grey',
+    });
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.temporal-calculus-6th-ed',
+      level: 1,
+    });
+    // The Mysticism prompt is queued at the bottom of the stack; the top
+    // is the room-choose prompt.
+    expect(topPending(s).source.kind).not.toBe('mage-power');
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: {
+        kind: 'option-chosen',
+        optionId: 'base.room.library.a',
+        payload: {},
+      },
+    });
+    // First placement: pick a mage, then a slot.
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'option-chosen', optionId: 'alice-red-1', payload: {} },
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: {
+        kind: 'space-chosen',
+        spaceId: 'base.room.library.a.slot-3',
+      },
+    });
+    // Bug check: after the first placement settles, the NEXT prompt must
+    // be the second placement (the chain drain), NOT the Mysticism post-
+    // cast prompt. The chain is still pending with remaining=1.
+    expect(s.pendingPlaceChain).not.toBeNull();
+    const afterFirst = topPending(s);
+    expect(afterFirst.source.id).not.toBe(
+      'base.mage.mysticism.place-after-cast',
+    );
+    if (afterFirst.prompt.kind !== 'choose-from-options') {
+      throw new Error('expected mage-pick prompt for second placement');
+    }
+    // Second placement.
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: afterFirst.id,
+      answer: { kind: 'option-chosen', optionId: 'alice-red-2', payload: {} },
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: {
+        kind: 'space-chosen',
+        spaceId: 'base.room.library.a.slot-4',
+      },
+    });
+    // Chain has fully drained; now the Mysticism prompt surfaces.
+    expect(s.pendingPlaceChain).toBeNull();
+    const mysticism = topPending(s);
+    expect(mysticism.source.kind).toBe('mage-power');
+    expect(mysticism.source.id).toBe('base.mage.mysticism.place-after-cast');
+  });
+
+  it('Mysticism trigger fires after a Stop-shortened chain (only one placement)', () => {
+    let s = setupSlowTime();
+    s = addMage(s, 'p1', {
+      id: 'alice-grey',
+      cardId: 'base.mage.mysticism',
+      color: 'grey',
+    });
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.temporal-calculus-6th-ed',
+      level: 1,
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: {
+        kind: 'option-chosen',
+        optionId: 'base.room.library.a',
+        payload: {},
+      },
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'option-chosen', optionId: 'alice-red-1', payload: {} },
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: {
+        kind: 'space-chosen',
+        spaceId: 'base.room.library.a.slot-3',
+      },
+    });
+    // Choose Stop on the second mage prompt.
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'option-chosen', optionId: 'stop', payload: {} },
+    });
+    expect(s.pendingPlaceChain).toBeNull();
+    const top = topPending(s);
+    expect(top.source.id).toBe('base.mage.mysticism.place-after-cast');
+  });
 });
 
 // ============================================================================
@@ -18329,7 +23868,7 @@ describe('Gold→Mage swap supporters (off-white fallback)', () => {
     expect(patch).toBeNull();
   });
 
-  it('fizzles when player has 2 of the requested color (even if off-white would be available)', async () => {
+  it('fallback: player capped at 2 of the requested color → receives an off-white mage', async () => {
     let s = baseSwapState();
     s = addMage(s, 'p1', {
       id: 'alice-grey-1',
@@ -18340,6 +23879,68 @@ describe('Gold→Mage swap supporters (off-white fallback)', () => {
       id: 'alice-grey-2',
       cardId: 'base.mage.mysticism',
       color: 'grey',
+    });
+    const greyPoolBefore = s.mageDraftPool.grey;
+    const neutralBefore = s.mageDraftPool['off-white'];
+    const patch = await callSwap(s, 'grey');
+    expect(patch).not.toBeNull();
+    if (!patch) throw new Error('unreachable');
+    const after: GameState = { ...s, ...patch };
+    const p1 = after.players.find((p) => p.id === 'p1')!;
+    expect(p1.resources.gold).toBe(2);
+    expect(p1.mages.some((m) => m.color === 'off-white')).toBe(true);
+    expect(p1.mages.filter((m) => m.color === 'grey')).toHaveLength(2);
+    expect(after.mageDraftPool.grey).toBe(greyPoolBefore);
+    expect(after.mageDraftPool['off-white']).toBe(neutralBefore - 1);
+  });
+
+  it('Wilhelm Barts: player at 2 purple receives an off-white mage from the supporter', async () => {
+    let s = baseSwapState();
+    s = addMage(s, 'p1', {
+      id: 'alice-purple-1',
+      cardId: 'base.mage.planar-studies',
+      color: 'purple',
+    });
+    s = addMage(s, 'p1', {
+      id: 'alice-purple-2',
+      cardId: 'base.mage.planar-studies',
+      color: 'purple',
+    });
+    const purplePoolBefore = s.mageDraftPool.purple;
+    const neutralBefore = s.mageDraftPool['off-white'];
+    const patch = await callSwap(s, 'purple');
+    expect(patch).not.toBeNull();
+    if (!patch) throw new Error('unreachable');
+    const after: GameState = { ...s, ...patch };
+    const p1 = after.players.find((p) => p.id === 'p1')!;
+    expect(p1.resources.gold).toBe(2);
+    expect(p1.mages.some((m) => m.color === 'off-white')).toBe(true);
+    expect(p1.mages.filter((m) => m.color === 'purple')).toHaveLength(2);
+    expect(after.mageDraftPool.purple).toBe(purplePoolBefore);
+    expect(after.mageDraftPool['off-white']).toBe(neutralBefore - 1);
+  });
+
+  it('fizzles when capped at both the requested color AND off-white', async () => {
+    let s = baseSwapState();
+    s = addMage(s, 'p1', {
+      id: 'alice-grey-1',
+      cardId: 'base.mage.mysticism',
+      color: 'grey',
+    });
+    s = addMage(s, 'p1', {
+      id: 'alice-grey-2',
+      cardId: 'base.mage.mysticism',
+      color: 'grey',
+    });
+    s = addMage(s, 'p1', {
+      id: 'alice-neutral-1',
+      cardId: 'base.mage.neutral',
+      color: 'off-white',
+    });
+    s = addMage(s, 'p1', {
+      id: 'alice-neutral-2',
+      cardId: 'base.mage.neutral',
+      color: 'off-white',
     });
     const patch = await callSwap(s, 'grey');
     expect(patch).toBeNull();
