@@ -11473,6 +11473,298 @@ describe("Archmage's Apprentice — all mage powers", () => {
     expect(s.pendingTechnomancyTrigger).toEqual([]);
     expect(s.pendingResolutionStack).toHaveLength(0);
   });
+
+  it('Apprentice via PLACE_WORKER: fast-action placement + Ars Magna both fire (purple + red simultaneously)', () => {
+    let s = initGame(TWO_PLAYER_CONFIG);
+    s = forceLibrarySideA(s);
+    s = zeroPlayerResources(s, 'p1');
+    s = zeroPlayerResources(s, 'p2');
+    s = mapPlayer(s, 'p1', (p) => ({
+      ...p,
+      resources: { ...p.resources, mana: 2 },
+      mages: [
+        {
+          id: 'app-1',
+          cardId: 'base.mage.archmages-apprentice',
+          color: 'rainbow' as const,
+          location: { kind: 'office' as const, playerId: 'p1' },
+          isShadowing: false,
+          isWounded: false,
+        },
+      ],
+    }));
+    s = addMage(s, 'p2', {
+      id: 'bob-red',
+      cardId: 'base.mage.sorcery',
+      color: 'red',
+    });
+    s = placeMageOnSpace(s, 'p2', 'bob-red', 'base.room.library.a.slot-3');
+    s = {
+      ...s,
+      firstPlayerIndex: 0,
+      phase: {
+        kind: 'errands',
+        round: 1,
+        activePlayerIndex: 0,
+        actionUsed: false,
+        fastActionUsed: false,
+      },
+      bellTower: { ...s.bellTower, available: [] },
+    };
+    s = applyAction(s, {
+      type: 'PLACE_WORKER',
+      playerId: 'p1',
+      mageId: 'app-1',
+      actionSpaceId: 'base.room.library.a.slot-3',
+    });
+    // Resolve the wound reaction window — pass.
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'reaction-passed' },
+    });
+    // Bob's infirmary bonus.
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'option-chosen', optionId: 'gold', payload: {} },
+    });
+    // Apprentice took bob-red's slot via Ars Magna, AND consumed the
+    // Fast Action budget (not the Action budget) per its purple power.
+    if (s.phase.kind !== 'errands') throw new Error('phase changed');
+    expect(s.phase.fastActionUsed).toBe(true);
+    expect(s.phase.actionUsed).toBe(false);
+    const alice = s.players.find((p) => p.id === 'p1')!;
+    expect(alice.resources.mana).toBe(1); // 2 - 1 (Ars Magna)
+    const apprentice = alice.mages.find((m) => m.id === 'app-1')!;
+    expect(apprentice.location).toEqual({
+      kind: 'action-space',
+      spaceId: 'base.room.library.a.slot-3',
+    });
+    const bobRed = s.players
+      .find((p) => p.id === 'p2')!
+      .mages.find((m) => m.id === 'bob-red')!;
+    expect(bobRed.isWounded).toBe(true);
+  });
+
+  it('Apprentice via Mysticism post-cast: the slot picker also offers Ars Magna eligible occupied slots', () => {
+    // p1 casts Burn (action-timed) — the Mysticism post-cast trigger
+    // fires. p1's only "grey-eligible" mage is the Apprentice, which
+    // also acts as red. The slot prompt should include both empty slots
+    // AND the opposing red mage's slot (Ars Magna target).
+    let s = initGame(TWO_PLAYER_CONFIG);
+    s = forceLibrarySideA(s);
+    s = zeroPlayerResources(s, 'p1');
+    s = zeroPlayerResources(s, 'p2');
+    // 5 Mana: 1 for Burn, 1 reserved for Ars Magna.
+    s = mapPlayer(s, 'p1', (p) => ({
+      ...p,
+      resources: { ...p.resources, mana: 5 },
+      mages: [
+        {
+          id: 'app-1',
+          cardId: 'base.mage.archmages-apprentice',
+          color: 'rainbow' as const,
+          location: { kind: 'office' as const, playerId: 'p1' },
+          isShadowing: false,
+          isWounded: false,
+        },
+      ],
+      ownedSpells: [
+        {
+          cardId: 'base.spell.burn',
+          intPlaced: true,
+          wisPlacedLevel2: false,
+          wisPlacedLevel3: false,
+          exhausted: false,
+        },
+      ],
+    }));
+    s = addMage(s, 'p2', {
+      id: 'bob-red',
+      cardId: 'base.mage.sorcery',
+      color: 'red',
+    });
+    s = placeMageOnSpace(s, 'p2', 'bob-red', 'base.room.library.a.slot-3');
+    // Add a second opposing mage so the Burn target prompt doesn't have
+    // to be the same mage as the Ars Magna target.
+    s = addMage(s, 'p2', {
+      id: 'bob-mage-2',
+      cardId: 'base.mage.sorcery',
+      color: 'red',
+    });
+    s = placeMageOnSpace(s, 'p2', 'bob-mage-2', 'base.room.library.a.slot-4');
+    s = {
+      ...s,
+      firstPlayerIndex: 0,
+      phase: {
+        kind: 'errands',
+        round: 1,
+        activePlayerIndex: 0,
+        actionUsed: false,
+        fastActionUsed: false,
+      },
+      bellTower: { ...s.bellTower, available: [] },
+    };
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.burn',
+      level: 1,
+    });
+    // Resolve the Burn target prompt — wound bob-mage-2 (leaves bob-red
+    // un-wounded so Ars Magna still has a valid target).
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'mage-chosen', mageId: 'bob-mage-2' },
+    });
+    // Pass the reaction window.
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'reaction-passed' },
+    });
+    // Bob picks an infirmary bonus.
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'option-chosen', optionId: 'gold', payload: {} },
+    });
+    // Mysticism post-cast prompt: pick "place" with the apprentice.
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'option-chosen', optionId: 'place', payload: {} },
+    });
+    // The slot picker is now up. Since the apprentice acts as red, the
+    // eligible set should include slot-3 (bob-red's slot, valid Ars
+    // Magna target) alongside the open slots.
+    const slotPrompt = topPending(s);
+    expect(slotPrompt.prompt.kind).toBe('choose-target-action-space');
+    if (slotPrompt.prompt.kind !== 'choose-target-action-space') return;
+    expect(slotPrompt.prompt.eligibleSpaceIds).toContain(
+      'base.room.library.a.slot-3',
+    );
+  });
+
+  it('Apprentice via Mysticism post-cast: Ars Magna onto an occupied slot wounds + opens reaction + places', () => {
+    let s = initGame(TWO_PLAYER_CONFIG);
+    s = forceLibrarySideA(s);
+    s = zeroPlayerResources(s, 'p1');
+    s = zeroPlayerResources(s, 'p2');
+    s = mapPlayer(s, 'p1', (p) => ({
+      ...p,
+      resources: { ...p.resources, mana: 5 },
+      mages: [
+        {
+          id: 'app-1',
+          cardId: 'base.mage.archmages-apprentice',
+          color: 'rainbow' as const,
+          location: { kind: 'office' as const, playerId: 'p1' },
+          isShadowing: false,
+          isWounded: false,
+        },
+      ],
+      ownedSpells: [
+        {
+          cardId: 'base.spell.burn',
+          intPlaced: true,
+          wisPlacedLevel2: false,
+          wisPlacedLevel3: false,
+          exhausted: false,
+        },
+      ],
+    }));
+    s = addMage(s, 'p2', {
+      id: 'bob-red',
+      cardId: 'base.mage.sorcery',
+      color: 'red',
+    });
+    s = placeMageOnSpace(s, 'p2', 'bob-red', 'base.room.library.a.slot-3');
+    s = addMage(s, 'p2', {
+      id: 'bob-mage-2',
+      cardId: 'base.mage.sorcery',
+      color: 'red',
+    });
+    s = placeMageOnSpace(s, 'p2', 'bob-mage-2', 'base.room.library.a.slot-4');
+    s = {
+      ...s,
+      firstPlayerIndex: 0,
+      phase: {
+        kind: 'errands',
+        round: 1,
+        activePlayerIndex: 0,
+        actionUsed: false,
+        fastActionUsed: false,
+      },
+      bellTower: { ...s.bellTower, available: [] },
+    };
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.burn',
+      level: 1,
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'mage-chosen', mageId: 'bob-mage-2' },
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'reaction-passed' },
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'option-chosen', optionId: 'gold', payload: {} },
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'option-chosen', optionId: 'place', payload: {} },
+    });
+    const slotPrompt = topPending(s);
+    if (slotPrompt.prompt.kind !== 'choose-target-action-space') return;
+    // Pick bob-red's slot — Ars Magna target.
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: slotPrompt.id,
+      answer: {
+        kind: 'space-chosen',
+        spaceId: 'base.room.library.a.slot-3',
+      },
+    });
+    // Reaction window opens for the wound — pass.
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'reaction-passed' },
+    });
+    // Bob's infirmary bonus (he's now down 2 mages: bob-mage-2 from
+    // the original Burn, and bob-red from Ars Magna).
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'option-chosen', optionId: 'gold', payload: {} },
+    });
+    // Final state: apprentice took bob-red's slot, bob-red is wounded
+    // in the infirmary, p1 spent 2 mana total (1 Burn + 1 Ars Magna).
+    const alice = s.players.find((p) => p.id === 'p1')!;
+    expect(alice.resources.mana).toBe(3); // 5 - 1 (Burn) - 1 (Ars Magna)
+    const apprentice = alice.mages.find((m) => m.id === 'app-1')!;
+    expect(apprentice.location).toEqual({
+      kind: 'action-space',
+      spaceId: 'base.room.library.a.slot-3',
+    });
+    const bobRed = s.players
+      .find((p) => p.id === 'p2')!
+      .mages.find((m) => m.id === 'bob-red')!;
+    expect(bobRed.isWounded).toBe(true);
+    expect(bobRed.location).toEqual({ kind: 'infirmary' });
+  });
 });
 
 describe('Dormitory', () => {

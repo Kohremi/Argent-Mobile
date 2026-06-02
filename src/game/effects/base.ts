@@ -44,6 +44,7 @@ import {
   applyRoomLockPatch,
   buildSpellMoveTargets,
   buildSpellShadowTargets,
+  canArsMagnaTakeSpace,
   findMageSlotPosition,
   isLegendarySpell,
   isRoomAtPlayerCap,
@@ -6217,6 +6218,70 @@ registerEffect(
           mandatoryShadow,
         );
       }
+      // Ars Magna branch: when the placer acts as red AND the chosen
+      // slot is occupied by a valid Ars Magna target, run the standard
+      // wound + reaction-window + Ars-Magna-complete chain. This makes
+      // the Apprentice's red power available even when placing via the
+      // Mysticism post-cast trigger (it acts as both grey and red).
+      const targetSpace = ctx.state.rooms
+        .flatMap((r) => r.actionSpaces)
+        .find((sp) => sp.id === spaceId);
+      const placer = ctx.state.players
+        .find((p) => p.id === ctx.triggeringPlayerId)
+        ?.mages.find((m) => m.id === placerMageId);
+      if (
+        targetSpace &&
+        targetSpace.occupant &&
+        placer &&
+        actsAsColor(placer, 'red') &&
+        canArsMagnaTakeSpace(ctx.state, ctx.triggeringPlayerId, targetSpace)
+      ) {
+        const targetMageId = targetSpace.occupant.mageId;
+        const afterMana: GameState = {
+          ...ctx.state,
+          players: ctx.state.players.map((p) =>
+            p.id !== ctx.triggeringPlayerId
+              ? p
+              : {
+                  ...p,
+                  resources: { ...p.resources, mana: p.resources.mana - 1 },
+                },
+          ),
+        };
+        const wounded = woundMage(
+          afterMana,
+          targetMageId,
+          ctx.triggeringPlayerId,
+        );
+        const source: ResolutionSource = {
+          kind: 'mage-power',
+          id: placerMageId,
+          triggeringPlayerId: ctx.triggeringPlayerId,
+          description: 'Ars Magna (Mysticism placement)',
+        };
+        return {
+          kind: 'open-reaction',
+          patch: { players: afterMana.players, ...wounded.patch },
+          window: {
+            triggerEvents: [wounded.triggerEvent],
+            pendingResponderIds: buildReactionQueue(
+              afterMana,
+              ctx.triggeringPlayerId,
+            ),
+            reactedPlayerIds: [],
+            afterResume: {
+              effectId: 'base.mage.sorcery.ars-magna.complete',
+              context: {
+                sourceMageId: placerMageId,
+                targetSpaceId: spaceId,
+                triggerEvent:
+                  wounded.triggerEvent as unknown as SerializableContext,
+              },
+            },
+            source,
+          },
+        };
+      }
       const placePatch = placeOfficeMageOnSpace(
         ctx.state,
         ctx.triggeringPlayerId,
@@ -6491,17 +6556,40 @@ function openSlotPrompt(
     ctx.state,
     ctx.triggeringPlayerId,
   );
-  const openSlots = mandatoryShadow
-    ? listEligibleShadowSlots(ctx.state, ctx.triggeringPlayerId)
-    : listEligiblePlacementSlots(ctx.state, ctx.triggeringPlayerId);
-  if (openSlots.length === 0) return { kind: 'done', patch: {} };
+  let eligible: string[];
+  if (mandatoryShadow) {
+    eligible = listEligibleShadowSlots(ctx.state, ctx.triggeringPlayerId);
+  } else {
+    eligible = listEligiblePlacementSlots(
+      ctx.state,
+      ctx.triggeringPlayerId,
+    );
+    // Mages that ALSO act as red (i.e. the Archmage's Apprentice) can
+    // Ars Magna an occupied slot via the Mysticism placement just like
+    // they can via a normal PLACE_WORKER. Augment the eligible set
+    // with any slot whose occupant is a valid Ars Magna target.
+    const placer = ctx.state.players
+      .find((p) => p.id === ctx.triggeringPlayerId)
+      ?.mages.find((m) => m.id === placerMageId);
+    if (placer && actsAsColor(placer, 'red')) {
+      for (const r of ctx.state.rooms) {
+        for (const s of r.actionSpaces) {
+          if (!s.occupant) continue;
+          if (canArsMagnaTakeSpace(ctx.state, ctx.triggeringPlayerId, s)) {
+            eligible.push(s.id);
+          }
+        }
+      }
+    }
+  }
+  if (eligible.length === 0) return { kind: 'done', patch: {} };
   return {
     kind: 'pause',
     pending: {
       responderId: ctx.triggeringPlayerId,
       prompt: {
         kind: 'choose-target-action-space',
-        eligibleSpaceIds: openSlots,
+        eligibleSpaceIds: eligible,
       },
       resume: {
         effectId: 'base.system.mysticism-place-after-cast',
