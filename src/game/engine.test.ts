@@ -11018,6 +11018,155 @@ describe("Archmage's Study Side A (instant)", () => {
       alice.mages.some((m) => m.cardId === 'base.mage.archmages-apprentice'),
     ).toBe(false);
   });
+
+  it('reclaim in round 2: after the round-end cleanup, slot 1 grants a fresh Apprentice', () => {
+    let s = setupStudyTest();
+    // Simulate a prior round: alice already had the apprentice, round 1
+    // ended, the round-2 round-setup cleanup ran. Owner null, mage
+    // entity gone — that's the post-cleanup baseline.
+    s = mapPlayer(s, 'p1', (p) => ({
+      ...p,
+      resources: { ...p.resources, mana: 3 },
+    }));
+    // Place + take reward on slot 1 in round 2 should grant the
+    // apprentice again (the round-end cleanup makes the slot eligible
+    // again, just like a fresh game).
+    s = applyAction(s, {
+      type: 'PLACE_WORKER',
+      playerId: 'p1',
+      mageId: 'alice-mage',
+      actionSpaceId: 'base.room.archmages-study.a.slot-1',
+    });
+    s = takeRewardAtResolution(s);
+    expect(s.archmagesApprenticeOwner).toBe('p1');
+    const alice = s.players.find((p) => p.id === 'p1')!;
+    const apprentice = alice.mages.find(
+      (m) => m.cardId === 'base.mage.archmages-apprentice',
+    );
+    expect(apprentice).toBeDefined();
+    expect(apprentice?.color).toBe('rainbow');
+    expect(alice.resources.mana).toBe(2); // 3 - 1
+  });
+
+  it('end-to-end: claim Apprentice in round 1, drive through to round 2 errands, re-claim works', () => {
+    let s = setupStudyTest();
+    // Give alice mana + a second mage to use in round 2 (the first
+    // gets placed in round 1 and returned to office at resolution; the
+    // second isn't strictly necessary but makes the test resilient).
+    s = mapPlayer(s, 'p1', (p) => ({
+      ...p,
+      resources: { ...p.resources, mana: 4 },
+    }));
+    s = addMage(s, 'p1', {
+      id: 'alice-mage-2',
+      cardId: 'base.mage.divinity',
+      color: 'blue',
+    });
+    // p2 needs a placeable mage too so it can be made non-active.
+    s = addMage(s, 'p2', {
+      id: 'bob-mage',
+      cardId: 'base.mage.sorcery',
+      color: 'red',
+    });
+
+    // --- Round 1: claim slot 1 ---
+    s = applyAction(s, {
+      type: 'PLACE_WORKER',
+      playerId: 'p1',
+      mageId: 'alice-mage',
+      actionSpaceId: 'base.room.archmages-study.a.slot-1',
+    });
+    s = takeRewardAtResolution(s);
+    expect(s.archmagesApprenticeOwner).toBe('p1');
+    const round1Apprentice = s.players
+      .find((p) => p.id === 'p1')!
+      .mages.find((m) => m.cardId === 'base.mage.archmages-apprentice')!;
+    expect(round1Apprentice).toBeDefined();
+
+    // --- Drive through resolution + mid-game-scoring + round-setup ---
+    // p1 already used their action this turn. Skip p2's turn by also
+    // marking it actionUsed, then ADVANCE_PHASE walks errands -> resolution
+    // (pump auto-completes) -> mid-game-scoring -> round-setup -> errands.
+    s = {
+      ...s,
+      phase: {
+        kind: 'errands',
+        round: 1,
+        activePlayerIndex: 1,
+        actionUsed: true,
+        fastActionUsed: false,
+      },
+      // Drain bell tower so resolution starts.
+      bellTower: { ...s.bellTower, available: [] },
+    };
+    // Errands -> resolution.
+    s = applyAction(s, { type: 'ADVANCE_PHASE' });
+    // Resolution pump should auto-walk to mid-game-scoring (only Study
+    // slot 1 is occupied, and it's instant so the pump just returns the
+    // mage to office and advances).
+    while (s.phase.kind === 'resolution') {
+      s = applyAction(s, { type: 'ADVANCE_PHASE' });
+    }
+    // mid-game-scoring -> round-setup of round 2.
+    if (s.phase.kind === 'mid-game-scoring') {
+      s = applyAction(s, { type: 'ADVANCE_PHASE' });
+    }
+    expect(s.phase.kind).toBe('round-setup');
+    expect(s.phase.kind === 'round-setup' && s.phase.round).toBe(2);
+    // round-setup -> errands of round 2 (cleanup runs here).
+    s = applyAction(s, { type: 'ADVANCE_PHASE' });
+    expect(s.phase.kind).toBe('errands');
+    // Cleanup: owner null, apprentice gone.
+    expect(s.archmagesApprenticeOwner).toBeNull();
+    const aliceAfterCleanup = s.players.find((p) => p.id === 'p1')!;
+    expect(
+      aliceAfterCleanup.mages.some(
+        (m) => m.cardId === 'base.mage.archmages-apprentice',
+      ),
+    ).toBe(false);
+
+    // --- Round 2: claim slot 1 again ---
+    // Alice's first mage returned to office at round 1's resolution;
+    // refresh mana since the round-setup hook resets it to the rulebook
+    // bundle (start of round mana isn't deterministic in this test
+    // setup, so set it directly).
+    s = mapPlayer(s, 'p1', (p) => ({
+      ...p,
+      resources: { ...p.resources, mana: 4 },
+      meritBadges: 5,
+    }));
+    s = setMeritBadges(s, 'p1', 5);
+    // Ensure first-player is alice for round 2 (so PLACE_WORKER is
+    // valid without juggling turn order).
+    if (s.phase.kind === 'errands') {
+      s = {
+        ...s,
+        phase: {
+          kind: 'errands',
+          round: s.phase.round,
+          activePlayerIndex: 0,
+          actionUsed: false,
+          fastActionUsed: false,
+        },
+      };
+    }
+    s = applyAction(s, {
+      type: 'PLACE_WORKER',
+      playerId: 'p1',
+      mageId: 'alice-mage',
+      actionSpaceId: 'base.room.archmages-study.a.slot-1',
+    });
+    s = takeRewardAtResolution(s);
+    // Re-claim succeeded: owner is back to p1, a fresh apprentice piece
+    // is in alice's office (different id than the round-1 instance).
+    expect(s.archmagesApprenticeOwner).toBe('p1');
+    const aliceRound2 = s.players.find((p) => p.id === 'p1')!;
+    const round2Apprentice = aliceRound2.mages.find(
+      (m) => m.cardId === 'base.mage.archmages-apprentice',
+    );
+    expect(round2Apprentice).toBeDefined();
+    expect(round2Apprentice?.id).not.toBe(round1Apprentice.id);
+  });
 });
 
 describe("Archmage's Apprentice — all mage powers", () => {
