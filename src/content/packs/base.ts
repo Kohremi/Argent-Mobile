@@ -2908,6 +2908,78 @@ const archmagesStudyB: Room = {
   ],
 };
 
+// ============================================================================
+// Astronomy Tower Side A — a marker tracks a position on a 6-space reward
+// track. Each slot lets the player pay (per the slot's per-space cost) to
+// move the marker; after moving at least 1 space they claim the reward
+// the marker lands on. The marker wraps from the last space back to the
+// first, and (unlike Side B) PERSISTS between rounds — it only moves when
+// a player pays to move it. Slot effects fire during resolution.
+//   Slot 1 (merit, 1 MB): move 1 space free, then 1 Gold per space.
+//   Slot 2 (regular):     2 Gold per space.
+//   Slot 3 (regular):     4 Gold per space.
+//   Track: 1 WIS + 2 Mana / 2 Research / 8 Gold / 1 INT + 1 Research /
+//          4 Mana / 2 Marks.
+// ============================================================================
+
+const astronomyTowerA: Room = {
+  id: 'base.room.astronomy-tower.a',
+  name: 'Astronomy Tower',
+  sourcePackId: PACK_ID,
+  isUniversityCentral: false,
+  side: 'A',
+  isInstantRoom: false,
+  cannotBePlacedInDirectly: false,
+  cannotBeLocked: false,
+  description:
+    'Pay to move the marker along the reward track, then claim the reward it lands on (move at least 1 space; wraps around). The marker persists between rounds.',
+  actionSpaces: [
+    {
+      id: 'base.room.astronomy-tower.a.slot-1',
+      roomId: 'base.room.astronomy-tower.a',
+      index: 0,
+      slotType: 'merit',
+      occupant: null,
+      effectId: 'base.room.astronomy-tower-a.slot-1',
+      costToActivate: { meritBadges: 1 },
+      description: 'Move 1 space free, then pay 1 Gold per space.',
+    },
+    {
+      ...regularSlot({
+        id: 'base.room.astronomy-tower.a.slot-2',
+        roomId: 'base.room.astronomy-tower.a',
+        index: 1,
+        effectId: 'base.room.astronomy-tower-a.slot-2',
+      }),
+      description: 'Pay 2 Gold per space moved.',
+    },
+    {
+      ...regularSlot({
+        id: 'base.room.astronomy-tower.a.slot-3',
+        roomId: 'base.room.astronomy-tower.a',
+        index: 2,
+        effectId: 'base.room.astronomy-tower-a.slot-3',
+      }),
+      description: 'Pay 4 Gold per space moved.',
+    },
+  ],
+};
+
+// Astronomy Tower Side B — unwired stub (Side B's marker resets each
+// round + has its own reward track / mana costs; wired later). The
+// setup sanity check requires every room to declare both sides.
+const astronomyTowerB: Room = {
+  id: 'base.room.astronomy-tower.b',
+  name: 'Astronomy Tower',
+  sourcePackId: PACK_ID,
+  isUniversityCentral: false,
+  side: 'B',
+  isInstantRoom: false,
+  cannotBePlacedInDirectly: false,
+  cannotBeLocked: false,
+  actionSpaces: [],
+};
+
 const rooms: Room[] = [
   // University Central — always present.
   councilChamberA,
@@ -2917,8 +2989,6 @@ const rooms: Room[] = [
   infirmaryA,
   infirmaryB,
 
-  // Variable pool — Astronomy Tower is not yet specified by content and
-  // so is omitted. Re-add it here when its slots are sourced.
   trainingFieldsA,
   trainingFieldsB,
   courtyardA,
@@ -2941,6 +3011,8 @@ const rooms: Room[] = [
   greatHallB,
   archmagesStudyA,
   archmagesStudyB,
+  astronomyTowerA,
+  astronomyTowerB,
 ];
 
 // ============================================================================

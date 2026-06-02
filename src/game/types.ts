@@ -1250,6 +1250,17 @@ export interface GameState {
   roomLocks: { roomId: RoomId }[];
 
   /**
+   * Astronomy Tower marker position — an index into the room's reward
+   * track. Players pay (per the slot they place on) to move the marker
+   * along the track, then claim the reward it lands on. Side A's marker
+   * PERSISTS between rounds (it only moves when a player pays to move
+   * it); Side B's resets to 0 at round-setup. Only one Astronomy Tower
+   * side is ever in play, so a single field serves both. Defaults to 0
+   * (the left-most space) and is harmless when the room isn't in play.
+   */
+  astronomyTowerMarker: number;
+
+  /**
    * Shared Mage pool used during the candidate / mage-draft setup phases.
    * Initialized to 4 of each color (Sorcery red, Mysticism grey, Natural
    * Magick green, Divinity blue, Planar Studies purple, Neutral off-white).

@@ -4839,6 +4839,271 @@ registerEffect(
 );
 
 // ============================================================================
+// Astronomy Tower Side A — pay-to-move-the-marker reward track.
+//
+// A shared marker (`state.astronomyTowerMarker`) sits on a 6-space track.
+// Placing a Mage on a slot lets the player pay (per the slot's per-space
+// cost) to move the marker forward; after moving at least one space they
+// claim the reward the marker lands on. The marker wraps from the last
+// space back to the first and PERSISTS between rounds.
+//
+// Gold isn't deducted until the player stops moving — `pos` (the working
+// marker index) and `spent` (gold pledged so far) ride in resumeContext,
+// and only on "stop" is the gold deducted, the marker committed, and the
+// reward applied. The "2 Marks" space uses the shared mark chain.
+// ============================================================================
+
+type AstronomyReward = {
+  label: string;
+  gold?: number;
+  mana?: number;
+  intelligence?: number;
+  wisdom?: number;
+  research?: number;
+  marks?: number;
+};
+
+const ASTRONOMY_A_TRACK: AstronomyReward[] = [
+  { label: '1 WIS + 2 Mana', wisdom: 1, mana: 2 },
+  { label: '2 Research', research: 2 },
+  { label: '8 Gold', gold: 8 },
+  { label: '1 INT + 1 Research', intelligence: 1, research: 1 },
+  { label: '4 Mana', mana: 4 },
+  { label: '2 Marks', marks: 2 },
+];
+
+/** Builds the "Stop & claim / Move 1 more" prompt for the move loop. */
+function astronomyMovePrompt(
+  ctx: EffectContext,
+  selfEffectId: string,
+  perSpace: number,
+  pos: number,
+  spent: number,
+): EffectResult {
+  const player = ctx.state.players.find(
+    (p) => p.id === ctx.triggeringPlayerId,
+  );
+  const goldLeft = (player?.resources.gold ?? 0) - spent;
+  const reward = ASTRONOMY_A_TRACK[pos]!;
+  const options: ChoiceOption[] = [
+    {
+      id: 'stop',
+      label: `Stop & claim: ${reward.label}`,
+      payload: {},
+    },
+  ];
+  if (goldLeft >= perSpace) {
+    const nextPos = (pos + 1) % ASTRONOMY_A_TRACK.length;
+    options.push({
+      id: 'move',
+      label: `Move 1 more → ${ASTRONOMY_A_TRACK[nextPos]!.label} (pay ${perSpace} Gold)`,
+      payload: {},
+    });
+  }
+  return {
+    kind: 'pause',
+    pending: {
+      responderId: ctx.triggeringPlayerId,
+      prompt: { kind: 'choose-from-options', options },
+      resume: {
+        effectId: selfEffectId,
+        context: { step: 'choose', pos, spent },
+      },
+      source: ctx.source,
+    },
+  };
+}
+
+/**
+ * Applies the reward at `pos`, deducting the pledged `spent` gold and
+ * committing the marker move. Resource / research rewards resolve in one
+ * patch; the "2 Marks" space hands off to the shared mark chain.
+ */
+function astronomyApplyReward(
+  ctx: EffectContext,
+  selfEffectId: string,
+  pos: number,
+  spent: number,
+): EffectResult {
+  const reward = ASTRONOMY_A_TRACK[pos]!;
+  // 1. Deduct pledged gold + commit the marker position.
+  let working: GameState = {
+    ...ctx.state,
+    astronomyTowerMarker: pos,
+    players: ctx.state.players.map((p) =>
+      p.id !== ctx.triggeringPlayerId
+        ? p
+        : {
+            ...p,
+            resources: { ...p.resources, gold: p.resources.gold - spent },
+          },
+    ),
+  };
+  // 2. Resource gains.
+  if (
+    reward.gold !== undefined ||
+    reward.mana !== undefined ||
+    reward.intelligence !== undefined ||
+    reward.wisdom !== undefined
+  ) {
+    working = {
+      ...working,
+      ...gainResourcesPatch(working, ctx.triggeringPlayerId, {
+        ...(reward.gold !== undefined ? { gold: reward.gold } : {}),
+        ...(reward.mana !== undefined ? { mana: reward.mana } : {}),
+        ...(reward.intelligence !== undefined
+          ? { intelligence: reward.intelligence }
+          : {}),
+        ...(reward.wisdom !== undefined ? { wisdom: reward.wisdom } : {}),
+      }),
+    };
+  }
+  // 3. Research opportunities (drained by the engine pump).
+  if (reward.research !== undefined && reward.research > 0) {
+    working = {
+      ...working,
+      ...appendResearchQueue(
+        working,
+        ctx.triggeringPlayerId,
+        ctx.source,
+        reward.research,
+      ),
+    };
+  }
+  const basePatch: GameStatePatch = {
+    players: working.players,
+    astronomyTowerMarker: working.astronomyTowerMarker,
+    ...(working.researchQueue !== ctx.state.researchQueue
+      ? { researchQueue: working.researchQueue }
+      : {}),
+  };
+  // 4. Marks (voter-pick chain).
+  if (reward.marks !== undefined && reward.marks > 0) {
+    return chapelBMarkChain(
+      { ...ctx, state: working },
+      selfEffectId,
+      reward.marks,
+      basePatch,
+    );
+  }
+  return { kind: 'done', patch: basePatch };
+}
+
+/**
+ * Shared resolver for all three Astronomy Tower A slots. `cfg` carries
+ * the per-slot cost: slot 1 moves the first space free then 1 Gold each;
+ * slots 2 / 3 charge 2 / 4 Gold per space.
+ */
+function astronomyTowerSlot(
+  ctx: EffectContext,
+  selfEffectId: string,
+  cfg: { firstFree: boolean; perSpace: number },
+): EffectResult {
+  const step = ctx.resumeContext?.['step'];
+
+  // Mark-chain continuation (the "2 Marks" reward).
+  if (step === 'after-mark') {
+    if (ctx.resumeAnswer?.kind !== 'voter-chosen') {
+      throw new Error(
+        `${selfEffectId} after-mark expected voter-chosen, got ${ctx.resumeAnswer?.kind}`,
+      );
+    }
+    const markPatch = applyGainMark(
+      ctx.state,
+      ctx.triggeringPlayerId,
+      ctx.resumeAnswer.voterId,
+    );
+    const working: GameState = { ...ctx.state, ...markPatch };
+    const remaining = Number(ctx.resumeContext?.['remaining'] ?? 0);
+    if (remaining <= 0) {
+      return { kind: 'done', patch: markPatch };
+    }
+    return chapelBMarkChain(
+      { ...ctx, state: working },
+      selfEffectId,
+      remaining,
+      { players: working.players, voterMarks: working.voterMarks },
+    );
+  }
+
+  // Move-loop continuation.
+  if (step === 'choose') {
+    if (ctx.resumeAnswer?.kind !== 'option-chosen') {
+      throw new Error(
+        `${selfEffectId} choose expected option-chosen, got ${ctx.resumeAnswer?.kind}`,
+      );
+    }
+    const pos = Number(ctx.resumeContext?.['pos'] ?? 0);
+    const spent = Number(ctx.resumeContext?.['spent'] ?? 0);
+    if (ctx.resumeAnswer.optionId === 'stop') {
+      return astronomyApplyReward(ctx, selfEffectId, pos, spent);
+    }
+    if (ctx.resumeAnswer.optionId !== 'move') {
+      throw new Error(
+        `${selfEffectId}: unknown option ${ctx.resumeAnswer.optionId}`,
+      );
+    }
+    // Move one more space (re-validate affordability defensively).
+    const player = ctx.state.players.find(
+      (p) => p.id === ctx.triggeringPlayerId,
+    );
+    const newSpent = spent + cfg.perSpace;
+    if (!player || player.resources.gold < newSpent) {
+      // Can't afford — claim at the current position instead.
+      return astronomyApplyReward(ctx, selfEffectId, pos, spent);
+    }
+    const newPos = (pos + 1) % ASTRONOMY_A_TRACK.length;
+    return astronomyMovePrompt(ctx, selfEffectId, cfg.perSpace, newPos, newSpent);
+  }
+
+  // First entry — the mandatory first move.
+  const player = ctx.state.players.find(
+    (p) => p.id === ctx.triggeringPlayerId,
+  );
+  if (!player) return { kind: 'done', patch: {} };
+  const firstCost = cfg.firstFree ? 0 : cfg.perSpace;
+  // Can't make even the mandatory first move → fizzle.
+  if (player.resources.gold < firstCost) {
+    return { kind: 'done', patch: {} };
+  }
+  const startPos = (ctx.state.astronomyTowerMarker + 1) % ASTRONOMY_A_TRACK.length;
+  return astronomyMovePrompt(
+    ctx,
+    selfEffectId,
+    cfg.perSpace,
+    startPos,
+    firstCost,
+  );
+}
+
+registerEffect(
+  'base.room.astronomy-tower-a.slot-1',
+  (ctx: EffectContext): EffectResult =>
+    astronomyTowerSlot(ctx, 'base.room.astronomy-tower-a.slot-1', {
+      firstFree: true,
+      perSpace: 1,
+    }),
+);
+
+registerEffect(
+  'base.room.astronomy-tower-a.slot-2',
+  (ctx: EffectContext): EffectResult =>
+    astronomyTowerSlot(ctx, 'base.room.astronomy-tower-a.slot-2', {
+      firstFree: false,
+      perSpace: 2,
+    }),
+);
+
+registerEffect(
+  'base.room.astronomy-tower-a.slot-3',
+  (ctx: EffectContext): EffectResult =>
+    astronomyTowerSlot(ctx, 'base.room.astronomy-tower-a.slot-3', {
+      firstFree: false,
+      perSpace: 4,
+    }),
+);
+
+// ============================================================================
 // Sorcery Mage — Ars Magna (fast action: spend 1 Mana, wound a Mage, take its slot)
 // ============================================================================
 

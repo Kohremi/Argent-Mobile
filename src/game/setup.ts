@@ -515,6 +515,7 @@ export function buildInitialState(config: GameConfig): GameState {
     bellTower: { available: bellAvailable, taken: [] },
     archmagesApprenticeOwner: null,
     roomLocks: [],
+    astronomyTowerMarker: 0,
     mageDraftPool: makeInitialMageDraftPool(config.activePackIds),
     phase: initialPhase(config, firstPlayerIndex),
     pendingResolutionStack: [],

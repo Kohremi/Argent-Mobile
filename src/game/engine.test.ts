@@ -441,6 +441,7 @@ describe('Room layout', () => {
       'Student Stores',
       'Great Hall',
       "Archmage's Study",
+      'Astronomy Tower',
     ]);
     const presentNonUc = [...namesPresent].filter(
       (n) =>
@@ -12999,6 +13000,180 @@ describe('Student Stores', () => {
     expect(alice.resources.intelligence).toBe(2);
     expect(alice.resources.wisdom).toBe(1);
     expect(alice.resources.gold).toBe(0); // 12 - 4*3
+  });
+});
+
+describe('Astronomy Tower Side A (move-the-marker track)', () => {
+  // Track (for reference):
+  //   0: 1 WIS + 2 Mana
+  //   1: 2 Research
+  //   2: 8 Gold
+  //   3: 1 INT + 1 Research
+  //   4: 4 Mana
+  //   5: 2 Marks
+
+  it('slot 1 (merit): first space is free; one move lands on the next reward', () => {
+    let s = setupRoomSlotTest(
+      'Astronomy Tower',
+      'A',
+      'base.room.astronomy-tower.a.slot-1',
+    );
+    // Marker starts at 0; zero gold (first move is free).
+    expect(s.astronomyTowerMarker).toBe(0);
+    s = driveToResolution(s); // takes the reward → first (free) move applied, move prompt up
+    const prompt = topPending(s);
+    expect(prompt.prompt.kind).toBe('choose-from-options');
+    if (prompt.prompt.kind !== 'choose-from-options') throw new Error('unreachable');
+    // Stop is always offered; "move" requires affordable gold (we have 0,
+    // so per-space 1 Gold isn't affordable → only stop).
+    expect(prompt.prompt.options.map((o) => o.id)).toEqual(['stop']);
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: prompt.id,
+      answer: { kind: 'option-chosen', optionId: 'stop', payload: {} },
+    });
+    // Landed on index 1 = 2 Research → research queue surfaced one prompt
+    // immediately and queued the second.
+    expect(s.astronomyTowerMarker).toBe(1);
+    expect(topPending(s).resume.effectId).toBe('base.system.spend-research');
+    expect(s.researchQueue).toHaveLength(1);
+  });
+
+  it('slot 1: free first move + paid extra moves; gold deducted only for paid spaces', () => {
+    let s = setupRoomSlotTest(
+      'Astronomy Tower',
+      'A',
+      'base.room.astronomy-tower.a.slot-1',
+    );
+    s = setGold(s, 'p1', 10);
+    s = driveToResolution(s);
+    // First (free) move → index 1. Move once more (pay 1) → index 2 = 8 Gold.
+    let prompt = topPending(s);
+    if (prompt.prompt.kind !== 'choose-from-options') throw new Error('unreachable');
+    expect(prompt.prompt.options.map((o) => o.id)).toContain('move');
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: prompt.id,
+      answer: { kind: 'option-chosen', optionId: 'move', payload: {} },
+    });
+    // Now at index 2 (8 Gold). Stop & claim.
+    prompt = topPending(s);
+    if (prompt.prompt.kind !== 'choose-from-options') throw new Error('unreachable');
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: prompt.id,
+      answer: { kind: 'option-chosen', optionId: 'stop', payload: {} },
+    });
+    expect(s.astronomyTowerMarker).toBe(2);
+    // Gold: 10 - 1 (one paid move) + 8 (reward) = 17.
+    expect(s.players.find((p) => p.id === 'p1')?.resources.gold).toBe(17);
+  });
+
+  it('slot 2 (2 Gold/space): the first move is paid; landing on 1 WIS + 2 Mana wraps from the end', () => {
+    let s = setupRoomSlotTest(
+      'Astronomy Tower',
+      'A',
+      'base.room.astronomy-tower.a.slot-2',
+    );
+    // Put the marker on the last space (index 5) so one move wraps to 0.
+    s = { ...s, astronomyTowerMarker: 5 };
+    s = setGold(s, 'p1', 10);
+    s = driveToResolution(s);
+    // First (paid) move from 5 wraps to 0 = 1 WIS + 2 Mana. Stop.
+    const prompt = topPending(s);
+    if (prompt.prompt.kind !== 'choose-from-options') throw new Error('unreachable');
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: prompt.id,
+      answer: { kind: 'option-chosen', optionId: 'stop', payload: {} },
+    });
+    expect(s.astronomyTowerMarker).toBe(0); // wrapped
+    const alice = s.players.find((p) => p.id === 'p1')!;
+    expect(alice.resources.wisdom).toBe(1);
+    expect(alice.resources.mana).toBe(2);
+    expect(alice.resources.gold).toBe(8); // 10 - 2 (one paid move)
+  });
+
+  it('slot 2 fizzles when the player cannot afford even the first paid move', () => {
+    let s = setupRoomSlotTest(
+      'Astronomy Tower',
+      'A',
+      'base.room.astronomy-tower.a.slot-2',
+    );
+    s = setGold(s, 'p1', 1); // < 2 Gold per space
+    s = driveToResolution(s);
+    // No move prompt — fizzle. Marker unchanged, no gold spent.
+    expect(s.pendingResolutionStack).toHaveLength(0);
+    expect(s.astronomyTowerMarker).toBe(0);
+    expect(s.players.find((p) => p.id === 'p1')?.resources.gold).toBe(1);
+  });
+
+  it('landing on the 2 Marks space opens the voter-pick chain (2 marks)', () => {
+    let s = setupRoomSlotTest(
+      'Astronomy Tower',
+      'A',
+      'base.room.astronomy-tower.a.slot-1',
+    );
+    // Marker at index 4 → one free move lands on index 5 = 2 Marks.
+    s = { ...s, astronomyTowerMarker: 4 };
+    s = driveToResolution(s);
+    const movePrompt = topPending(s);
+    if (movePrompt.prompt.kind !== 'choose-from-options') throw new Error('unreachable');
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: movePrompt.id,
+      answer: { kind: 'option-chosen', optionId: 'stop', payload: {} },
+    });
+    expect(s.astronomyTowerMarker).toBe(5);
+    // Two chained voter prompts.
+    for (let i = 0; i < 2; i++) {
+      const prompt = topPending(s);
+      expect(prompt.prompt.kind).toBe('choose-voter');
+      if (prompt.prompt.kind !== 'choose-voter') throw new Error('unreachable');
+      s = applyAction(s, {
+        type: 'RESOLVE_PENDING',
+        resolutionId: prompt.id,
+        answer: {
+          kind: 'voter-chosen',
+          voterId: prompt.prompt.eligibleVoterIds[0]!,
+        },
+      });
+    }
+    expect(s.players.find((p) => p.id === 'p1')?.resources.marks).toBe(2);
+    expect(s.pendingResolutionStack).toHaveLength(0);
+  });
+
+  it('the marker PERSISTS where the previous player left it (no per-round reset on Side A)', () => {
+    let s = setupRoomSlotTest(
+      'Astronomy Tower',
+      'A',
+      'base.room.astronomy-tower.a.slot-1',
+    );
+    s = driveToResolution(s);
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'option-chosen', optionId: 'stop', payload: {} },
+    });
+    // First player moved 0 → 1. Drive through to round 2 and confirm the
+    // marker is still at 1 (Side A doesn't reset between rounds).
+    const markerAfterRound1 = s.astronomyTowerMarker;
+    expect(markerAfterRound1).toBe(1);
+    // Drain any queued research so the turn can wrap up.
+    while (
+      s.pendingResolutionStack.length > 0 &&
+      topPending(s).resume.effectId === 'base.system.spend-research'
+    ) {
+      s = applyAction(s, {
+        type: 'RESOLVE_PENDING',
+        resolutionId: topPending(s).id,
+        answer: { kind: 'option-chosen', optionId: 'discard', payload: {} },
+      });
+    }
+    // Force into round-setup of round 2 and advance.
+    s = { ...s, phase: { kind: 'round-setup', round: 2 } };
+    s = applyAction(s, { type: 'ADVANCE_PHASE' });
+    expect(s.astronomyTowerMarker).toBe(markerAfterRound1);
   });
 });
 
