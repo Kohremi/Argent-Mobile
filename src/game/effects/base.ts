@@ -3520,7 +3520,7 @@ registerEffect(
 function chapelBMarkChain(
   ctx: EffectContext,
   selfEffectId: string,
-  total: 1 | 2,
+  total: number,
   carryPatch: GameStatePatch = {},
 ): EffectResult {
   const eligible = eligibleVotersForMark(ctx.state, ctx.triggeringPlayerId);
@@ -4569,52 +4569,73 @@ function applyArchmagesSwap(
   };
 }
 
-/** Slot 1 (merit, 1 MB): pay 1 Mana → gain the Archmage's Apprentice. */
+/**
+ * Shared "claim the Archmage's Apprentice" slot resolver. Both Study
+ * sides have a merit slot 1 that grants the joker mage for a single
+ * round, differing only in the cost: Side A pays 1 Mana, Side B pays 2
+ * Gold. Fizzles silently if the apprentice is already claimed (it's a
+ * one-of-one) or the player can't pay.
+ */
+function archmagesStudyClaimApprentice(
+  ctx: EffectContext,
+  cost: { resource: 'mana' | 'gold'; amount: number },
+): EffectResult {
+  if (ctx.state.archmagesApprenticeOwner !== null) {
+    return { kind: 'done', patch: {} };
+  }
+  const player = ctx.state.players.find(
+    (p) => p.id === ctx.triggeringPlayerId,
+  );
+  if (!player || player.resources[cost.resource] < cost.amount) {
+    return { kind: 'done', patch: {} };
+  }
+  const seq = ctx.state.nextSequenceId;
+  return {
+    kind: 'done',
+    patch: {
+      nextSequenceId: seq + 1,
+      archmagesApprenticeOwner: ctx.triggeringPlayerId,
+      players: ctx.state.players.map((p) =>
+        p.id !== ctx.triggeringPlayerId
+          ? p
+          : {
+              ...p,
+              resources: {
+                ...p.resources,
+                [cost.resource]: p.resources[cost.resource] - cost.amount,
+              },
+              mages: [
+                ...p.mages,
+                {
+                  id: `m-${seq}`,
+                  cardId: ARCHMAGES_APPRENTICE_CARD_ID,
+                  color: 'rainbow' as const,
+                  location: {
+                    kind: 'office' as const,
+                    playerId: ctx.triggeringPlayerId,
+                  },
+                  isShadowing: false,
+                  isWounded: false,
+                },
+              ],
+            },
+      ),
+    },
+  };
+}
+
+/** Side A slot 1 (merit, 1 MB): pay 1 Mana → gain the Archmage's Apprentice. */
 registerEffect(
   'base.room.archmages-study-a.slot-1',
-  (ctx: EffectContext): EffectResult => {
-    // Already claimed by someone else (including the caller): the
-    // Apprentice is a one-of-one. Fizzle silently.
-    if (ctx.state.archmagesApprenticeOwner !== null) {
-      return { kind: 'done', patch: {} };
-    }
-    const player = ctx.state.players.find(
-      (p) => p.id === ctx.triggeringPlayerId,
-    );
-    if (!player || player.resources.mana < 1) {
-      return { kind: 'done', patch: {} };
-    }
-    const seq = ctx.state.nextSequenceId;
-    return {
-      kind: 'done',
-      patch: {
-        nextSequenceId: seq + 1,
-        archmagesApprenticeOwner: ctx.triggeringPlayerId,
-        players: ctx.state.players.map((p) =>
-          p.id !== ctx.triggeringPlayerId
-            ? p
-            : {
-                ...p,
-                resources: { ...p.resources, mana: p.resources.mana - 1 },
-                mages: [
-                  ...p.mages,
-                  {
-                    id: `m-${seq}`,
-                    cardId: ARCHMAGES_APPRENTICE_CARD_ID,
-                    color: 'rainbow' as const,
-                    location: {
-                      kind: 'office' as const,
-                      playerId: ctx.triggeringPlayerId,
-                    },
-                    isShadowing: false,
-                    isWounded: false,
-                  },
-                ],
-              },
-        ),
-      },
-    };
-  },
+  (ctx: EffectContext): EffectResult =>
+    archmagesStudyClaimApprentice(ctx, { resource: 'mana', amount: 1 }),
+);
+
+/** Side B slot 1 (merit, 1 MB): pay 2 Gold → gain the Archmage's Apprentice. */
+registerEffect(
+  'base.room.archmages-study-b.slot-1',
+  (ctx: EffectContext): EffectResult =>
+    archmagesStudyClaimApprentice(ctx, { resource: 'gold', amount: 2 }),
 );
 
 /**
@@ -4721,6 +4742,100 @@ registerEffect(
       'base.room.archmages-study-a.slot-3',
       {},
     ),
+);
+
+/** Side B slot 2 (regular): gain 1 Mana, then swap the placed Mage. */
+registerEffect(
+  'base.room.archmages-study-b.slot-2',
+  (ctx: EffectContext): EffectResult =>
+    archmagesStudySwapSlot(
+      ctx,
+      'base.room.archmages-study-b.slot-2',
+      gainResourcePatch(ctx.state, ctx.triggeringPlayerId, 'mana', 1),
+    ),
+);
+
+/**
+ * Side B slot 3 (regular): swap this non-Neutral Mage for a Neutral
+ * Mage AND gain 3 Marks. The swap is automatic (no colour picker — the
+ * target is always neutral) and only fires when the placed mage is a
+ * non-neutral, non-apprentice piece with neutral supply available.
+ * The 3 Marks are granted regardless (an unconditional "gain"), via a
+ * self-resuming voter-pick chain.
+ */
+registerEffect(
+  'base.room.archmages-study-b.slot-3',
+  (ctx: EffectContext): EffectResult => {
+    const selfEffectId = 'base.room.archmages-study-b.slot-3';
+    const step = ctx.resumeContext?.['step'];
+
+    // First entry — perform the forced neutral swap (if eligible), then
+    // start the 3-mark chain against the post-swap state.
+    if (step === undefined) {
+      if (ctx.source.kind !== 'room-action') {
+        return { kind: 'done', patch: {} };
+      }
+      const mage = findPlacedMageOnSpace(
+        ctx.state,
+        ctx.source.id,
+        ctx.triggeringPlayerId,
+      );
+      let working: GameState = ctx.state;
+      let swapPatch: GameStatePatch = {};
+      // Swap only a non-neutral, non-apprentice mage, and only when the
+      // neutral supply isn't empty.
+      if (
+        mage &&
+        !isArchmagesApprentice(mage) &&
+        mage.color !== 'off-white' &&
+        (ctx.state.mageDraftPool['off-white'] ?? 0) > 0
+      ) {
+        swapPatch = applyArchmagesSwap(
+          ctx.state,
+          ctx.triggeringPlayerId,
+          mage,
+          'off-white',
+        );
+        working = { ...ctx.state, ...swapPatch };
+      }
+      // Begin the 3-mark chain carrying the swap patch forward.
+      return chapelBMarkChain(
+        { ...ctx, state: working },
+        selfEffectId,
+        3,
+        swapPatch,
+      );
+    }
+
+    if (step === 'after-mark') {
+      if (ctx.resumeAnswer?.kind !== 'voter-chosen') {
+        throw new Error(
+          `${selfEffectId} after-mark expected voter-chosen, got ${ctx.resumeAnswer?.kind}`,
+        );
+      }
+      const markPatch = applyGainMark(
+        ctx.state,
+        ctx.triggeringPlayerId,
+        ctx.resumeAnswer.voterId,
+      );
+      const working: GameState = { ...ctx.state, ...markPatch };
+      const remaining = Number(ctx.resumeContext?.['remaining'] ?? 0);
+      if (remaining <= 0) {
+        return { kind: 'done', patch: markPatch };
+      }
+      // `chapelBMarkChain(total)` stores `remaining = total - 1`, so pass
+      // the current `remaining` as the next `total` to decrement once
+      // more for the following mark.
+      return chapelBMarkChain(
+        { ...ctx, state: working },
+        selfEffectId,
+        remaining,
+        { players: working.players, voterMarks: working.voterMarks },
+      );
+    }
+
+    throw new Error(`${selfEffectId} unexpected step ${String(step)}`);
+  },
 );
 
 // ============================================================================

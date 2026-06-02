@@ -440,6 +440,7 @@ describe('Room layout', () => {
       'Dormitory',
       'Student Stores',
       'Great Hall',
+      "Archmage's Study",
     ]);
     const presentNonUc = [...namesPresent].filter(
       (n) =>
@@ -11166,6 +11167,228 @@ describe("Archmage's Study Side A (instant)", () => {
     );
     expect(round2Apprentice).toBeDefined();
     expect(round2Apprentice?.id).not.toBe(round1Apprentice.id);
+  });
+});
+
+describe("Archmage's Study Side B (instant)", () => {
+  /** Mirror of the Side A setup but forcing Side B into the layout. */
+  function setupStudyBTest(): GameState {
+    let s = initGame(TWO_PLAYER_CONFIG);
+    s = forceRoomSide(s, "Archmage's Study", 'B');
+    s = zeroPlayerResources(s, 'p1');
+    s = setMeritBadges(s, 'p1', 5);
+    s = addMage(s, 'p1', {
+      id: 'alice-mage',
+      cardId: 'base.mage.divinity',
+      color: 'blue',
+    });
+    s = {
+      ...s,
+      firstPlayerIndex: 0,
+      phase: {
+        kind: 'errands',
+        round: 1,
+        activePlayerIndex: 0,
+        actionUsed: false,
+        fastActionUsed: false,
+      },
+      bellTower: { ...s.bellTower, available: [] },
+    };
+    return s;
+  }
+
+  it('slot 1 (merit): pay 2 Gold → gain the Apprentice + set ownership', () => {
+    let s = setupStudyBTest();
+    s = mapPlayer(s, 'p1', (p) => ({
+      ...p,
+      resources: { ...p.resources, gold: 5 },
+    }));
+    expect(s.archmagesApprenticeOwner).toBeNull();
+    s = applyAction(s, {
+      type: 'PLACE_WORKER',
+      playerId: 'p1',
+      mageId: 'alice-mage',
+      actionSpaceId: 'base.room.archmages-study.b.slot-1',
+    });
+    s = takeRewardAtResolution(s);
+    expect(s.archmagesApprenticeOwner).toBe('p1');
+    const alice = s.players.find((p) => p.id === 'p1')!;
+    expect(alice.resources.gold).toBe(3); // 5 - 2
+    expect(
+      alice.mages.some((m) => m.cardId === 'base.mage.archmages-apprentice'),
+    ).toBe(true);
+  });
+
+  it('slot 1 fizzles silently when the player has under 2 Gold', () => {
+    let s = setupStudyBTest();
+    s = mapPlayer(s, 'p1', (p) => ({
+      ...p,
+      resources: { ...p.resources, gold: 1 },
+    }));
+    s = applyAction(s, {
+      type: 'PLACE_WORKER',
+      playerId: 'p1',
+      mageId: 'alice-mage',
+      actionSpaceId: 'base.room.archmages-study.b.slot-1',
+    });
+    s = takeRewardAtResolution(s);
+    expect(s.archmagesApprenticeOwner).toBeNull();
+    expect(s.players.find((p) => p.id === 'p1')?.resources.gold).toBe(1);
+  });
+
+  it('slot 2: gain 1 Mana then open a swap-colour prompt; picking grey swaps', () => {
+    let s = setupStudyBTest();
+    s = applyAction(s, {
+      type: 'PLACE_WORKER',
+      playerId: 'p1',
+      mageId: 'alice-mage',
+      actionSpaceId: 'base.room.archmages-study.b.slot-2',
+    });
+    s = takeRewardAtResolution(s);
+    expect(s.players.find((p) => p.id === 'p1')?.resources.mana).toBe(1);
+    const prompt = topPending(s);
+    expect(prompt.prompt.kind).toBe('choose-from-options');
+    if (prompt.prompt.kind !== 'choose-from-options') throw new Error('unreachable');
+    expect(prompt.prompt.options.map((o) => o.id)).not.toContain('blue');
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: prompt.id,
+      answer: { kind: 'option-chosen', optionId: 'grey', payload: {} },
+    });
+    const swapped = s.players
+      .find((p) => p.id === 'p1')!
+      .mages.find((m) => m.id === 'alice-mage')!;
+    expect(swapped.color).toBe('grey');
+    expect(swapped.cardId).toBe('base.mage.mysticism');
+  });
+
+  it('slot 3: swaps a non-Neutral Mage to Neutral and grants 3 Marks', () => {
+    let s = setupStudyBTest();
+    const blueBefore = s.mageDraftPool.blue;
+    const neutralBefore = s.mageDraftPool['off-white'];
+    s = applyAction(s, {
+      type: 'PLACE_WORKER',
+      playerId: 'p1',
+      mageId: 'alice-mage',
+      actionSpaceId: 'base.room.archmages-study.b.slot-3',
+    });
+    s = takeRewardAtResolution(s);
+    // Forced neutral swap happened immediately (no colour picker).
+    const swapped = s.players
+      .find((p) => p.id === 'p1')!
+      .mages.find((m) => m.id === 'alice-mage')!;
+    expect(swapped.color).toBe('off-white');
+    expect(swapped.cardId).toBe('base.mage.neutral');
+    expect(s.mageDraftPool.blue).toBe(blueBefore + 1); // blue returned
+    expect(s.mageDraftPool['off-white']).toBe(neutralBefore - 1); // neutral taken
+    // Now resolve the 3 chained mark prompts.
+    for (let i = 0; i < 3; i++) {
+      const prompt = topPending(s);
+      expect(prompt.prompt.kind).toBe('choose-voter');
+      if (prompt.prompt.kind !== 'choose-voter') throw new Error('unreachable');
+      s = applyAction(s, {
+        type: 'RESOLVE_PENDING',
+        resolutionId: prompt.id,
+        answer: {
+          kind: 'voter-chosen',
+          voterId: prompt.prompt.eligibleVoterIds[0]!,
+        },
+      });
+    }
+    expect(s.players.find((p) => p.id === 'p1')?.resources.marks).toBe(3);
+    expect(s.pendingResolutionStack).toHaveLength(0);
+  });
+
+  it('slot 3: a neutral mage is NOT swapped but still gains 3 Marks', () => {
+    let s = setupStudyBTest();
+    // Replace alice's blue mage with a neutral one.
+    s = mapPlayer(s, 'p1', (p) => ({
+      ...p,
+      mages: [
+        {
+          id: 'alice-neutral',
+          cardId: 'base.mage.neutral',
+          color: 'off-white' as const,
+          location: { kind: 'office' as const, playerId: 'p1' },
+          isShadowing: false,
+          isWounded: false,
+        },
+      ],
+    }));
+    const neutralBefore = s.mageDraftPool['off-white'];
+    s = applyAction(s, {
+      type: 'PLACE_WORKER',
+      playerId: 'p1',
+      mageId: 'alice-neutral',
+      actionSpaceId: 'base.room.archmages-study.b.slot-3',
+    });
+    s = takeRewardAtResolution(s);
+    // No swap (already neutral) — pool unchanged.
+    expect(s.mageDraftPool['off-white']).toBe(neutralBefore);
+    const stillNeutral = s.players
+      .find((p) => p.id === 'p1')!
+      .mages.find((m) => m.id === 'alice-neutral')!;
+    expect(stillNeutral.color).toBe('off-white');
+    // But 3 marks still granted.
+    for (let i = 0; i < 3; i++) {
+      const prompt = topPending(s);
+      if (prompt.prompt.kind !== 'choose-voter') throw new Error('unreachable');
+      s = applyAction(s, {
+        type: 'RESOLVE_PENDING',
+        resolutionId: prompt.id,
+        answer: {
+          kind: 'voter-chosen',
+          voterId: prompt.prompt.eligibleVoterIds[0]!,
+        },
+      });
+    }
+    expect(s.players.find((p) => p.id === 'p1')?.resources.marks).toBe(3);
+  });
+
+  it('slot 3: the Apprentice is never swapped (untradeable) but still gains 3 Marks', () => {
+    let s = setupStudyBTest();
+    s = {
+      ...s,
+      archmagesApprenticeOwner: 'p1',
+    };
+    s = mapPlayer(s, 'p1', (p) => ({
+      ...p,
+      mages: [
+        {
+          id: 'alice-app',
+          cardId: 'base.mage.archmages-apprentice',
+          color: 'rainbow' as const,
+          location: { kind: 'office' as const, playerId: 'p1' },
+          isShadowing: false,
+          isWounded: false,
+        },
+      ],
+    }));
+    s = applyAction(s, {
+      type: 'PLACE_WORKER',
+      playerId: 'p1',
+      mageId: 'alice-app',
+      actionSpaceId: 'base.room.archmages-study.b.slot-3',
+    });
+    s = takeRewardAtResolution(s);
+    const stillApprentice = s.players
+      .find((p) => p.id === 'p1')!
+      .mages.find((m) => m.id === 'alice-app')!;
+    expect(stillApprentice.cardId).toBe('base.mage.archmages-apprentice');
+    expect(stillApprentice.color).toBe('rainbow');
+    for (let i = 0; i < 3; i++) {
+      const prompt = topPending(s);
+      if (prompt.prompt.kind !== 'choose-voter') throw new Error('unreachable');
+      s = applyAction(s, {
+        type: 'RESOLVE_PENDING',
+        resolutionId: prompt.id,
+        answer: {
+          kind: 'voter-chosen',
+          voterId: prompt.prompt.eligibleVoterIds[0]!,
+        },
+      });
+    }
+    expect(s.players.find((p) => p.id === 'p1')?.resources.marks).toBe(3);
   });
 });
 

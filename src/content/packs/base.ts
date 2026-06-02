@@ -2855,19 +2855,57 @@ const archmagesStudyA: Room = {
   ],
 };
 
-// Archmage's Study Side B — unwired stub. The setup sanity check
-// requires every room to publish both sides. Side B content can be
-// wired here when sourced (see docs/argent_data/rooms.tsv).
+// Archmage's Study Side B — INSTANT room, mirrors Side A's shape.
+//   Slot 1 (merit, 1 MB): Immediately pay 2 Gold to gain the
+//                         Archmage's Apprentice for this round.
+//   Slot 2 (regular):     Immediately gain 1 Mana and swap this Mage
+//                         for another from the supply.
+//   Slot 3 (regular):     Immediately swap this non-Neutral Mage for a
+//                         Neutral Mage and gain 3 Marks.
 const archmagesStudyB: Room = {
   id: 'base.room.archmages-study.b',
   name: "Archmage's Study",
   sourcePackId: PACK_ID,
   isUniversityCentral: false,
   side: 'B',
-  isInstantRoom: false,
+  isInstantRoom: true,
   cannotBePlacedInDirectly: false,
   cannotBeLocked: false,
-  actionSpaces: [],
+  description:
+    "Instant room. The Archmage's Apprentice has all Mage Powers.",
+  actionSpaces: [
+    {
+      id: 'base.room.archmages-study.b.slot-1',
+      roomId: 'base.room.archmages-study.b',
+      index: 0,
+      slotType: 'merit',
+      occupant: null,
+      effectId: 'base.room.archmages-study-b.slot-1',
+      costToActivate: { meritBadges: 1 },
+      description:
+        "Immediately pay 2 Gold to gain the Archmage's Apprentice for this round.",
+    },
+    {
+      ...regularSlot({
+        id: 'base.room.archmages-study.b.slot-2',
+        roomId: 'base.room.archmages-study.b',
+        index: 1,
+        effectId: 'base.room.archmages-study-b.slot-2',
+      }),
+      description:
+        'Immediately gain 1 Mana and swap this Mage for another from the supply.',
+    },
+    {
+      ...regularSlot({
+        id: 'base.room.archmages-study.b.slot-3',
+        roomId: 'base.room.archmages-study.b',
+        index: 2,
+        effectId: 'base.room.archmages-study-b.slot-3',
+      }),
+      description:
+        'Immediately swap this non-Neutral Mage for a Neutral Mage and gain 3 Marks.',
+    },
+  ],
 };
 
 const rooms: Room[] = [
