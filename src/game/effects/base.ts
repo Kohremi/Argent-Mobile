@@ -4757,11 +4757,12 @@ registerEffect(
 
 /**
  * Side B slot 3 (regular): swap this non-Neutral Mage for a Neutral
- * Mage AND gain 3 Marks. The swap is automatic (no colour picker — the
- * target is always neutral) and only fires when the placed mage is a
- * non-neutral, non-apprentice piece with neutral supply available.
- * The 3 Marks are granted regardless (an unconditional "gain"), via a
- * self-resuming voter-pick chain.
+ * Mage AND gain 3 Marks. The swap is the gate for the whole reward —
+ * if it can't happen (a Neutral mage or the untradeable Apprentice was
+ * placed, or the Neutral supply is empty), the slot fizzles entirely
+ * and NO Marks are gained. When the swap is valid it's automatic (no
+ * colour picker — the target is always Neutral), then a self-resuming
+ * voter-pick chain grants the 3 Marks.
  */
 registerEffect(
   'base.room.archmages-study-b.slot-3',
@@ -4769,8 +4770,8 @@ registerEffect(
     const selfEffectId = 'base.room.archmages-study-b.slot-3';
     const step = ctx.resumeContext?.['step'];
 
-    // First entry — perform the forced neutral swap (if eligible), then
-    // start the 3-mark chain against the post-swap state.
+    // First entry — the swap must be possible for the slot to do
+    // anything. Fizzle (no swap, no Marks) otherwise.
     if (step === undefined) {
       if (ctx.source.kind !== 'room-action') {
         return { kind: 'done', patch: {} };
@@ -4780,24 +4781,23 @@ registerEffect(
         ctx.source.id,
         ctx.triggeringPlayerId,
       );
-      let working: GameState = ctx.state;
-      let swapPatch: GameStatePatch = {};
-      // Swap only a non-neutral, non-apprentice mage, and only when the
-      // neutral supply isn't empty.
+      // Swap requires a non-neutral, non-apprentice mage and available
+      // Neutral supply. Any failure fizzles the entire slot.
       if (
-        mage &&
-        !isArchmagesApprentice(mage) &&
-        mage.color !== 'off-white' &&
-        (ctx.state.mageDraftPool['off-white'] ?? 0) > 0
+        !mage ||
+        isArchmagesApprentice(mage) ||
+        mage.color === 'off-white' ||
+        (ctx.state.mageDraftPool['off-white'] ?? 0) <= 0
       ) {
-        swapPatch = applyArchmagesSwap(
-          ctx.state,
-          ctx.triggeringPlayerId,
-          mage,
-          'off-white',
-        );
-        working = { ...ctx.state, ...swapPatch };
+        return { kind: 'done', patch: {} };
       }
+      const swapPatch = applyArchmagesSwap(
+        ctx.state,
+        ctx.triggeringPlayerId,
+        mage,
+        'off-white',
+      );
+      const working: GameState = { ...ctx.state, ...swapPatch };
       // Begin the 3-mark chain carrying the swap patch forward.
       return chapelBMarkChain(
         { ...ctx, state: working },

@@ -11299,7 +11299,7 @@ describe("Archmage's Study Side B (instant)", () => {
     expect(s.pendingResolutionStack).toHaveLength(0);
   });
 
-  it('slot 3: a neutral mage is NOT swapped but still gains 3 Marks', () => {
+  it('slot 3: a neutral mage CANNOT swap, so the slot fizzles — no swap, no Marks', () => {
     let s = setupStudyBTest();
     // Replace alice's blue mage with a neutral one.
     s = mapPlayer(s, 'p1', (p) => ({
@@ -11329,23 +11329,13 @@ describe("Archmage's Study Side B (instant)", () => {
       .find((p) => p.id === 'p1')!
       .mages.find((m) => m.id === 'alice-neutral')!;
     expect(stillNeutral.color).toBe('off-white');
-    // But 3 marks still granted.
-    for (let i = 0; i < 3; i++) {
-      const prompt = topPending(s);
-      if (prompt.prompt.kind !== 'choose-voter') throw new Error('unreachable');
-      s = applyAction(s, {
-        type: 'RESOLVE_PENDING',
-        resolutionId: prompt.id,
-        answer: {
-          kind: 'voter-chosen',
-          voterId: prompt.prompt.eligibleVoterIds[0]!,
-        },
-      });
-    }
-    expect(s.players.find((p) => p.id === 'p1')?.resources.marks).toBe(3);
+    // The swap is the gate — without it the slot fizzles: no Marks, no
+    // pending voter prompt.
+    expect(s.players.find((p) => p.id === 'p1')?.resources.marks).toBe(0);
+    expect(s.pendingResolutionStack).toHaveLength(0);
   });
 
-  it('slot 3: the Apprentice is never swapped (untradeable) but still gains 3 Marks', () => {
+  it('slot 3: the Apprentice cannot swap (untradeable), so the slot fizzles — no Marks', () => {
     let s = setupStudyBTest();
     s = {
       ...s,
@@ -11376,19 +11366,28 @@ describe("Archmage's Study Side B (instant)", () => {
       .mages.find((m) => m.id === 'alice-app')!;
     expect(stillApprentice.cardId).toBe('base.mage.archmages-apprentice');
     expect(stillApprentice.color).toBe('rainbow');
-    for (let i = 0; i < 3; i++) {
-      const prompt = topPending(s);
-      if (prompt.prompt.kind !== 'choose-voter') throw new Error('unreachable');
-      s = applyAction(s, {
-        type: 'RESOLVE_PENDING',
-        resolutionId: prompt.id,
-        answer: {
-          kind: 'voter-chosen',
-          voterId: prompt.prompt.eligibleVoterIds[0]!,
-        },
-      });
-    }
-    expect(s.players.find((p) => p.id === 'p1')?.resources.marks).toBe(3);
+    // Fizzle — no Marks gained, no pending prompt.
+    expect(s.players.find((p) => p.id === 'p1')?.resources.marks).toBe(0);
+    expect(s.pendingResolutionStack).toHaveLength(0);
+  });
+
+  it('slot 3: fizzles when the Neutral supply is empty (cannot complete the swap)', () => {
+    let s = setupStudyBTest();
+    s = { ...s, mageDraftPool: { ...s.mageDraftPool, 'off-white': 0 } };
+    s = applyAction(s, {
+      type: 'PLACE_WORKER',
+      playerId: 'p1',
+      mageId: 'alice-mage',
+      actionSpaceId: 'base.room.archmages-study.b.slot-3',
+    });
+    s = takeRewardAtResolution(s);
+    // Blue mage unchanged, no Marks, no prompt.
+    const stillBlue = s.players
+      .find((p) => p.id === 'p1')!
+      .mages.find((m) => m.id === 'alice-mage')!;
+    expect(stillBlue.color).toBe('blue');
+    expect(s.players.find((p) => p.id === 'p1')?.resources.marks).toBe(0);
+    expect(s.pendingResolutionStack).toHaveLength(0);
   });
 });
 

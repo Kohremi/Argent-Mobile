@@ -2903,7 +2903,7 @@ const archmagesStudyB: Room = {
         effectId: 'base.room.archmages-study-b.slot-3',
       }),
       description:
-        'Immediately swap this non-Neutral Mage for a Neutral Mage and gain 3 Marks.',
+        'Immediately swap this non-Neutral Mage for a Neutral Mage and gain 3 Marks. (No effect if a Neutral Mage or the Apprentice is placed here.)',
     },
   ],
 };
