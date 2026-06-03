@@ -78,6 +78,10 @@ interface ResearchInputMode {
    *  are valid drafts / WIS-upgrade targets — the UI uses this to
    *  highlight ONLY the eligible cards. */
   restrictDepartment: string | null;
+  /** Move-only Research opportunity (Mancers Research Archive): the menu
+   *  offers only the move-WIS action, so the UI relabels the banner / stop
+   *  button ("Done moving" instead of "Discard Research"). */
+  moveOnly: boolean;
   onClickTableauSpell: (cardId: string) => void;
   onClickIntToken: (cardId: string) => void;
   onClickWisToken: (cardId: string) => void;
@@ -710,6 +714,7 @@ export function DebugControls() {
     const restrictRaw = top.resume.context?.['restrictDepartment'];
     const restrictDepartment =
       typeof restrictRaw === 'string' ? restrictRaw : null;
+    const moveOnly = top.resume.context?.['moveOnly'] === true;
     // Chains a sequence of option-chosen RESOLVE_PENDING dispatches.
     // Reads fresh state between dispatches so we always target the
     // current top-of-stack prompt id.
@@ -737,6 +742,7 @@ export function DebugControls() {
       availableOptions,
       responderLabel,
       restrictDepartment,
+      moveOnly,
       source: researchMoveSource,
       onClickTableauSpell: (cardId: string) => {
         // Department-restricted research: bail early if the picked card
@@ -1026,9 +1032,9 @@ function PendingPanel({
         <div className="space-y-2">
           {researchMode.source === null ? (
             <p className="text-xs text-amber-200/90 italic">
-              Click a spell in the tableau to learn it, an empty WIS slot
-              to upgrade an owned spell, or an INT / WIS token to start a
-              move.
+              {researchMode.moveOnly
+                ? 'Move Research: click a placed WIS token, then click an empty WIS slot on another owned spell.'
+                : 'Click a spell in the tableau to learn it, an empty WIS slot to upgrade an owned spell, or an INT / WIS token to start a move.'}
             </p>
           ) : researchMode.source.kind === 'int' ? (
             <p className="text-xs text-amber-200/90 italic">
@@ -1056,7 +1062,7 @@ function PendingPanel({
               onClick={researchMode.onDiscard}
               className="px-3 py-1.5 rounded bg-slate-700 hover:bg-slate-600 text-sm"
             >
-              Discard Research
+              {researchMode.moveOnly ? 'Done moving' : 'Discard Research'}
             </button>
           </div>
         </div>

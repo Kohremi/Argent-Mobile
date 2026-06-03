@@ -412,6 +412,64 @@ function spawnResearchPrompt(
   };
 }
 
+/**
+ * True when the player can legally move a WIS token between two of their own
+ * learned Spells — some Spell holds a movable WIS (L2 or L3) and a DIFFERENT
+ * learned Spell still has room (not yet at L3). Gates the Research Archive's
+ * "move Research" opportunities so an impossible move never surfaces a dead
+ * prompt.
+ */
+function hasLegalWisMove(state: GameState, playerId: string): boolean {
+  const player = state.players.find((p) => p.id === playerId);
+  if (!player) return false;
+  return player.ownedSpells.some(
+    (src) =>
+      (src.wisPlacedLevel2 || src.wisPlacedLevel3) &&
+      player.ownedSpells.some(
+        (dst) =>
+          dst.cardId !== src.cardId &&
+          dst.intPlaced &&
+          !(dst.wisPlacedLevel2 && dst.wisPlacedLevel3),
+      ),
+  );
+}
+
+/**
+ * Builds a "move Research" prompt — a restricted research menu offering only
+ * the move-WIS action plus a "Done" stop. Routes through
+ * `base.system.spend-research` so the existing board UI (click a placed W
+ * box, then click an empty box on another Spell) drives it. `moveBudget` is
+ * the number of moves remaining in this opportunity. Used by the Mancers
+ * Research Archive room.
+ */
+function spawnMoveResearchPrompt(
+  state: GameState,
+  playerId: string,
+  source: ResolutionSource,
+  moveBudget: number,
+): PendingResolutionInput {
+  void state;
+  return {
+    responderId: playerId,
+    prompt: {
+      kind: 'choose-from-options',
+      options: [
+        {
+          id: 'move-wis',
+          label: 'Move a WIS token to another Spell',
+          payload: {},
+        },
+        { id: 'discard', label: 'Done moving Research', payload: {} },
+      ],
+    },
+    resume: {
+      effectId: 'base.system.spend-research',
+      context: { moveOnly: true, moveBudget },
+    },
+    source,
+  };
+}
+
 function departmentLabel(d: Department): string {
   switch (d) {
     case 'sorcery':
@@ -443,6 +501,23 @@ function departmentLabel(d: Department): string {
  * the previous research was spent).
  */
 registerEffect('base.system.spawn-research-prompt', (ctx): EffectResult => {
+  // Research Archive "move Research" opportunity: surface a move-only menu,
+  // or silently consume the entry when no legal move remains / budget is spent.
+  if (ctx.resumeContext?.['moveOnly'] === true) {
+    const budget = Number(ctx.resumeContext?.['moveBudget'] ?? 1);
+    if (budget <= 0 || !hasLegalWisMove(ctx.state, ctx.triggeringPlayerId)) {
+      return { kind: 'done', patch: {} };
+    }
+    return {
+      kind: 'pause',
+      pending: spawnMoveResearchPrompt(
+        ctx.state,
+        ctx.triggeringPlayerId,
+        ctx.source,
+        budget,
+      ),
+    };
+  }
   const restrictRaw = ctx.resumeContext?.['restrictDepartment'];
   const restrict =
     typeof restrictRaw === 'string' ? (restrictRaw as Department) : undefined;
@@ -589,6 +664,10 @@ registerEffect('base.system.spend-research', (ctx): EffectResult => {
     if (withWis.length === 0 || destCandidates.length === 0) {
       return { kind: 'done', patch: {} };
     }
+    // Carry the Research Archive move budget into the move chain so the apply
+    // step can re-surface the prompt for the next move.
+    const moveOnly = ctx.resumeContext?.['moveOnly'] === true;
+    const moveBudget = Number(ctx.resumeContext?.['moveBudget'] ?? 1);
     return {
       kind: 'pause',
       pending: {
@@ -603,7 +682,10 @@ registerEffect('base.system.spend-research', (ctx): EffectResult => {
         },
         resume: {
           effectId: 'base.system.research-move-wis',
-          context: { step: 'pick-dest' },
+          context: {
+            step: 'pick-dest',
+            ...(moveOnly ? { moveOnly: true, moveBudget } : {}),
+          },
         },
         source: ctx.source,
       },
@@ -799,6 +881,8 @@ registerEffect('base.system.research-move-wis', (ctx): EffectResult => {
         !(s.wisPlacedLevel2 && s.wisPlacedLevel3),
     );
     if (candidates.length === 0) return { kind: 'done', patch: {} };
+    const moveOnly = ctx.resumeContext?.['moveOnly'] === true;
+    const moveBudget = Number(ctx.resumeContext?.['moveBudget'] ?? 1);
     return {
       kind: 'pause',
       pending: {
@@ -815,7 +899,11 @@ registerEffect('base.system.research-move-wis', (ctx): EffectResult => {
         },
         resume: {
           effectId: 'base.system.research-move-wis',
-          context: { step: 'apply', sourceCardId },
+          context: {
+            step: 'apply',
+            sourceCardId,
+            ...(moveOnly ? { moveOnly: true, moveBudget } : {}),
+          },
         },
         source: ctx.source,
       },
@@ -830,15 +918,32 @@ registerEffect('base.system.research-move-wis', (ctx): EffectResult => {
     if (typeof sourceCardId !== 'string') {
       throw new Error('research-move-wis apply: missing sourceCardId');
     }
-    return {
-      kind: 'done',
-      patch: applyMoveWisBetweenSpells(
-        ctx.state,
-        ctx.triggeringPlayerId,
-        sourceCardId,
-        destCardId,
-      ),
-    };
+    const movePatch = applyMoveWisBetweenSpells(
+      ctx.state,
+      ctx.triggeringPlayerId,
+      sourceCardId,
+      destCardId,
+    );
+    // Research Archive: a move-only opportunity loops — after applying, spend
+    // one from the budget and re-surface the move menu if any budget and a
+    // legal move remain. Otherwise the opportunity ends.
+    if (ctx.resumeContext?.['moveOnly'] === true) {
+      const next = Number(ctx.resumeContext?.['moveBudget'] ?? 1) - 1;
+      const working: GameState = { ...ctx.state, ...movePatch };
+      if (next > 0 && hasLegalWisMove(working, ctx.triggeringPlayerId)) {
+        return {
+          kind: 'pause',
+          patch: movePatch,
+          pending: spawnMoveResearchPrompt(
+            working,
+            ctx.triggeringPlayerId,
+            ctx.source,
+            next,
+          ),
+        };
+      }
+    }
+    return { kind: 'done', patch: movePatch };
   }
   throw new Error(`research-move-wis unexpected step ${String(step)}`);
 });

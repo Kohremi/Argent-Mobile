@@ -9673,35 +9673,42 @@ describe('Research Archive A (Mancers)', () => {
       .ownedSpells.find((s) => s.cardId === cardId)!;
   }
 
-  it('slot 1 gains 1 INT + 1 WIS, then offers an unlimited move loop', () => {
+  function isMoveMenu(state: GameState): boolean {
+    return topPending(state).resume.context?.['moveOnly'] === true;
+  }
+
+  it('slot 1 gains 1 INT + 1 WIS immediately, then offers a move-only menu', () => {
     let s = setup('mancers.room.research-archive.a.slot-1');
     s = driveToResolution(s);
     const alice = s.players.find((p) => p.id === 'p1')!;
     expect(alice.resources.intelligence).toBe(1);
     expect(alice.resources.wisdom).toBe(1);
-    // A move prompt is offered (Burn carries a movable token, Bless has room).
-    const prompt = topPending(s);
-    expect(prompt.prompt.kind).toBe('choose-from-options');
+    // No Research gained on this slot, so the move-only opportunity surfaces
+    // directly — routed through spend-research so the box-click UI drives it.
+    const top = topPending(s);
+    expect(top.resume.effectId).toBe('base.system.spend-research');
+    expect(isMoveMenu(s)).toBe(true);
   });
 
-  it('slot 1: moving a token lowers the source and raises the destination', () => {
+  it('slot 1: a move (click W, then empty box) lowers source / raises dest', () => {
     let s = setup('mancers.room.research-archive.a.slot-1');
     s = driveToResolution(s);
+    s = chooseOption(s, 'move-wis'); // begin a move
     s = chooseOption(s, 'base.spell.burn'); // take WIS from Burn
     s = chooseOption(s, 'base.spell.bless'); // place on Bless
     expect(ownedSpell(s, 'base.spell.burn').wisPlacedLevel2).toBe(false);
     expect(ownedSpell(s, 'base.spell.bless').wisPlacedLevel2).toBe(true);
-    // Bless now carries a movable token (Burn has room), so the unlimited
-    // loop offers another move; Stop ends it.
-    expect(topPending(s).prompt.kind).toBe('choose-from-options');
-    s = chooseOption(s, 'stop');
+    // Budget remains and a legal move still exists (Bless ↔ Burn), so the
+    // menu re-surfaces; "Done moving" ends it.
+    expect(isMoveMenu(s)).toBe(true);
+    s = chooseOption(s, 'discard');
     expect(s.pendingResolutionStack).toHaveLength(0);
   });
 
-  it('slot 1: choosing Stop ends the loop without moving', () => {
+  it('slot 1: "Done moving" ends the opportunity without moving', () => {
     let s = setup('mancers.room.research-archive.a.slot-1');
     s = driveToResolution(s);
-    s = chooseOption(s, 'stop');
+    s = chooseOption(s, 'discard');
     expect(ownedSpell(s, 'base.spell.burn').wisPlacedLevel2).toBe(true);
     expect(ownedSpell(s, 'base.spell.bless').wisPlacedLevel2).toBe(false);
     expect(s.pendingResolutionStack).toHaveLength(0);
@@ -9713,33 +9720,45 @@ describe('Research Archive A (Mancers)', () => {
     const alice = s.players.find((p) => p.id === 'p1')!;
     expect(alice.resources.intelligence).toBe(1);
     expect(alice.resources.wisdom).toBe(1);
-    // Burn's token has nowhere to go (no other learned Spell), so no prompt.
+    // Burn's token has nowhere to go, so the move-only entry is consumed
+    // silently — no prompt, queue drained.
     expect(s.pendingResolutionStack).toHaveLength(0);
+    expect(s.researchQueue).toHaveLength(0);
   });
 
-  it('slot 2 queues 2 Research and offers a move loop before draining', () => {
+  it('slot 2 resolves the 2 gained Research BEFORE the move opportunity', () => {
     let s = setup('mancers.room.research-archive.a.slot-2');
     s = driveToResolution(s);
-    // The move loop is active, so the queued Research has not drained yet.
+    // First prompt is a normal Research menu (gain), not the move menu.
+    expect(isMoveMenu(s)).toBe(false);
+    // The 2nd Research + the move-only entry are still queued.
     expect(s.researchQueue.length).toBe(2);
-    expect(topPending(s).prompt.kind).toBe('choose-from-options');
+    // Resolve both gained Research (discard them), then the move surfaces.
+    s = chooseOption(s, 'discard');
+    expect(isMoveMenu(s)).toBe(false);
+    s = chooseOption(s, 'discard');
+    expect(isMoveMenu(s)).toBe(true);
+    expect(s.researchQueue.length).toBe(0);
+  });
+
+  it('slot 3 gains 1 Research then allows up to 2 moves (budget cap)', () => {
+    let s = setup('mancers.room.research-archive.a.slot-3');
+    s = driveToResolution(s);
+    expect(isMoveMenu(s)).toBe(false); // the gained Research first
+    s = chooseOption(s, 'discard'); // resolve the 1 Research
+    expect(isMoveMenu(s)).toBe(true);
+    // Move 1: Burn → Bless.
+    s = chooseOption(s, 'move-wis');
     s = chooseOption(s, 'base.spell.burn');
     s = chooseOption(s, 'base.spell.bless');
     expect(ownedSpell(s, 'base.spell.bless').wisPlacedLevel2).toBe(true);
-  });
-
-  it('slot 3 caps the move loop at 2 moves, then drains the Research', () => {
-    let s = setup('mancers.room.research-archive.a.slot-3');
-    s = driveToResolution(s);
-    expect(s.researchQueue.length).toBe(1);
-    // Move 1: Burn → Bless.
-    s = chooseOption(s, 'base.spell.burn');
-    s = chooseOption(s, 'base.spell.bless');
-    // Move 2: Bless → Burn (ping-pong); this exhausts the 2-move budget.
+    // Budget 1 remains → menu re-surfaces. Move 2: Bless → Burn (ping-pong).
+    expect(isMoveMenu(s)).toBe(true);
+    s = chooseOption(s, 'move-wis');
     s = chooseOption(s, 'base.spell.bless');
     s = chooseOption(s, 'base.spell.burn');
-    // Budget spent → loop ends → the 1 queued Research drains into a prompt.
-    expect(s.researchQueue.length).toBe(0);
+    // Budget spent → opportunity ends even though a legal move still exists.
+    expect(s.pendingResolutionStack).toHaveLength(0);
     expect(ownedSpell(s, 'base.spell.burn').wisPlacedLevel2).toBe(true);
   });
 });

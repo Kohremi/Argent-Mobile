@@ -1107,6 +1107,18 @@ export interface GameState {
      * restriction (unrestricted research).
      */
     restrictDepartment?: Department;
+    /**
+     * "Move Research" opportunity (Mancers Research Archive). When set, the
+     * drained entry surfaces a restricted research menu offering ONLY the
+     * move-WIS action (relocate a placed WIS token to raise another Spell),
+     * driven by the same board UI as normal research. `moveBudget` is the
+     * number of moves allowed in this opportunity; the prompt re-surfaces
+     * after each move until the budget is spent, no legal move remains, or
+     * the player chooses "Done". Queued AFTER any normal Research entries so
+     * the gained Research resolves first.
+     */
+    moveOnly?: boolean;
+    moveBudget?: number;
   }[];
   /**
    * Set when a `bell-tower-last-claimed` reaction window needs to open

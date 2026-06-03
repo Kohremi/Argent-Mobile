@@ -243,14 +243,20 @@ function drainResearchQueueIfIdle(state: GameState): GameState {
   const withoutEntry: GameState = { ...state, researchQueue: rest };
   // Invoke the spawn-research-prompt effect; it returns a pause carrying
   // a fresh prompt scoped to the queued player.
+  const resumeContext = {
+    ...(next.restrictDepartment !== undefined
+      ? { restrictDepartment: next.restrictDepartment }
+      : {}),
+    ...(next.moveOnly
+      ? { moveOnly: true, moveBudget: next.moveBudget ?? 1 }
+      : {}),
+  };
   const ctx: EffectContext = {
     state: withoutEntry,
     source: next.source,
     triggeringPlayerId: next.playerId,
     allowReactions: false,
-    ...(next.restrictDepartment !== undefined
-      ? { resumeContext: { restrictDepartment: next.restrictDepartment } }
-      : {}),
+    ...(Object.keys(resumeContext).length > 0 ? { resumeContext } : {}),
   };
   const result = getEffect('base.system.spawn-research-prompt')(ctx);
   return applyEffectResult(withoutEntry, result, ctx);
