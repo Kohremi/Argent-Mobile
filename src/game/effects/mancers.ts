@@ -5,9 +5,12 @@ import {
   affordableVaultCards,
   applyGainMark,
   applyVaultPurchaseMaybeWaived,
+  buildBurnTargets,
+  buildReactionQueue,
   eligibleVotersForMark,
   gainResourcePatch,
   healMageToSpace,
+  woundMage,
 } from './helpers';
 import type {
   ActionSpaceId,
@@ -654,6 +657,171 @@ registerEffect(
         ...researchPatch,
       },
     };
+  },
+);
+
+// ============================================================================
+// Technomancy leader (unique) spells.
+//
+// Arcane Surge (Sophica Sentavra) — Free / Fast Action: "Give an
+// opponent 1 Mana and wound one of their Mages." Pick an opponent's
+// mage; that opponent gains 1 Mana, then the chosen mage is wounded
+// (standard wound → reaction window → infirmary-bonus chain).
+//
+// Arcane Investigation (Riflam Lenshear) — 1 Mana / Action: "Gain a
+// Research OR gain a Mark."
+// ============================================================================
+
+registerEffect(
+  'mancers.spell.arcane-surge.l1',
+  (ctx: EffectContext): EffectResult => {
+    const self = 'mancers.spell.arcane-surge.l1';
+    const step = ctx.resumeContext?.['step'];
+
+    if (!ctx.resumeAnswer) {
+      // Only an OPPONENT's mage is a valid target ("one of THEIR Mages").
+      const targets = buildBurnTargets(ctx.state, ctx.triggeringPlayerId).filter(
+        (mid) => {
+          const owner = ctx.state.players.find((p) =>
+            p.mages.some((m) => m.id === mid),
+          );
+          return owner !== undefined && owner.id !== ctx.triggeringPlayerId;
+        },
+      );
+      if (targets.length === 0) return { kind: 'done', patch: {} };
+      return {
+        kind: 'pause',
+        pending: {
+          responderId: ctx.triggeringPlayerId,
+          prompt: { kind: 'choose-target-mage', eligibleMageIds: targets },
+          resume: { effectId: self, context: { step: 'apply' } },
+          source: ctx.source,
+        },
+      };
+    }
+
+    if (step !== 'apply') {
+      throw new Error(`${self}: unexpected resume step ${String(step)}`);
+    }
+    if (ctx.resumeAnswer.kind !== 'mage-chosen') {
+      throw new Error(
+        `${self} apply expected mage-chosen, got ${ctx.resumeAnswer.kind}`,
+      );
+    }
+    const mageId = ctx.resumeAnswer.mageId;
+    const owner = ctx.state.players.find((p) =>
+      p.mages.some((m) => m.id === mageId),
+    );
+    if (!owner) return { kind: 'done', patch: {} };
+    // Give the opponent 1 Mana first, then wound their mage against the
+    // post-grant state so both updates land in `players`.
+    const manaPatch = gainResourcePatch(ctx.state, owner.id, 'mana', 1);
+    const afterMana: GameState = { ...ctx.state, ...manaPatch };
+    const wounded = woundMage(afterMana, mageId, ctx.triggeringPlayerId);
+    return {
+      kind: 'open-reaction',
+      patch: wounded.patch,
+      window: {
+        triggerEvents: [wounded.triggerEvent],
+        pendingResponderIds: buildReactionQueue(
+          afterMana,
+          ctx.triggeringPlayerId,
+        ),
+        reactedPlayerIds: [],
+        afterResume: {
+          effectId: 'base.system.post-wound-bonus',
+          context: {
+            triggerEvent:
+              wounded.triggerEvent as unknown as SerializableContext,
+          },
+        },
+        source: ctx.source,
+      },
+    };
+  },
+);
+
+registerEffect(
+  'mancers.spell.arcane-investigation.l1',
+  (ctx: EffectContext): EffectResult => {
+    const self = 'mancers.spell.arcane-investigation.l1';
+    const step = ctx.resumeContext?.['step'];
+
+    if (!ctx.resumeAnswer) {
+      return {
+        kind: 'pause',
+        pending: {
+          responderId: ctx.triggeringPlayerId,
+          prompt: {
+            kind: 'choose-from-options',
+            options: [
+              { id: 'research', label: 'Gain a Research', payload: {} },
+              { id: 'mark', label: 'Gain a Mark', payload: {} },
+            ],
+          },
+          resume: { effectId: self, context: { step: 'choose' } },
+          source: ctx.source,
+        },
+      };
+    }
+
+    if (step === 'choose') {
+      if (ctx.resumeAnswer.kind !== 'option-chosen') {
+        throw new Error(
+          `${self} choose expected option-chosen, got ${ctx.resumeAnswer.kind}`,
+        );
+      }
+      if (ctx.resumeAnswer.optionId === 'research') {
+        return {
+          kind: 'done',
+          patch: appendResearchQueueInline(
+            ctx.state,
+            ctx.triggeringPlayerId,
+            ctx.source,
+            1,
+          ),
+        };
+      }
+      if (ctx.resumeAnswer.optionId !== 'mark') {
+        throw new Error(
+          `${self}: unknown option ${ctx.resumeAnswer.optionId}`,
+        );
+      }
+      // Gain a Mark — open the voter pick (fizzles if every voter is
+      // already marked by this player).
+      const eligible = eligibleVotersForMark(ctx.state, ctx.triggeringPlayerId);
+      if (eligible.length === 0) return { kind: 'done', patch: {} };
+      return {
+        kind: 'pause',
+        pending: {
+          responderId: ctx.triggeringPlayerId,
+          prompt: {
+            kind: 'choose-voter',
+            eligibleVoterIds: eligible.map((v) => v.id),
+          },
+          resume: { effectId: self, context: { step: 'after-voter' } },
+          source: ctx.source,
+        },
+      };
+    }
+
+    if (step === 'after-voter') {
+      if (ctx.resumeAnswer.kind !== 'voter-chosen') {
+        throw new Error(
+          `${self} after-voter expected voter-chosen, got ${ctx.resumeAnswer.kind}`,
+        );
+      }
+      return {
+        kind: 'done',
+        patch: applyGainMark(
+          ctx.state,
+          ctx.triggeringPlayerId,
+          ctx.resumeAnswer.voterId,
+        ),
+      };
+    }
+
+    throw new Error(`${self}: unexpected step ${String(step)}`);
   },
 );
 

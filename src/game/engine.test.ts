@@ -12504,6 +12504,152 @@ describe('Technomancy (Mancers expansion)', () => {
     // surfaces prompt + clears) OR by the round-end reset hook.
     expect(s.pendingTechnomancyTrigger).toEqual([]);
   });
+
+  // --- Leader spells ------------------------------------------------------
+
+  /** Mancers-active 2P errands turn with p1 ready to cast. */
+  function setupLeaderSpellTest(spellCardId: string): GameState {
+    let s = initGame({
+      ...TWO_PLAYER_CONFIG,
+      activePackIds: ['base', 'mancers'],
+    });
+    s = forceLibrarySideA(s);
+    s = zeroPlayerResources(s, 'p1');
+    s = zeroPlayerResources(s, 'p2');
+    s = addOwnedSpell(s, 'p1', spellCardId, { intPlaced: true });
+    s = {
+      ...s,
+      firstPlayerIndex: 0,
+      phase: {
+        kind: 'errands',
+        round: 1,
+        activePlayerIndex: 0,
+        actionUsed: false,
+        fastActionUsed: false,
+      },
+      bellTower: { ...s.bellTower, available: [] },
+    };
+    return s;
+  }
+
+  it('Arcane Surge (Sophica): gives an opponent 1 Mana and wounds one of their Mages', () => {
+    let s = setupLeaderSpellTest('mancers.spell.arcane-surge');
+    s = addMage(s, 'p2', {
+      id: 'bob-mage',
+      cardId: 'base.mage.sorcery',
+      color: 'red',
+    });
+    s = placeMageOnSpace(s, 'p2', 'bob-mage', 'base.room.library.a.slot-1');
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'mancers.spell.arcane-surge',
+      level: 1,
+    });
+    // Target prompt — only p2's mage is eligible (opponent's mage).
+    const target = topPending(s);
+    expect(target.prompt.kind).toBe('choose-target-mage');
+    if (target.prompt.kind !== 'choose-target-mage') throw new Error('unreachable');
+    expect(target.prompt.eligibleMageIds).toEqual(['bob-mage']);
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: target.id,
+      answer: { kind: 'mage-chosen', mageId: 'bob-mage' },
+    });
+    // Reaction window — pass.
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'reaction-passed' },
+    });
+    // p2's infirmary bonus — pick gold.
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'option-chosen', optionId: 'gold', payload: {} },
+    });
+    const bob = s.players.find((p) => p.id === 'p2')!;
+    // +1 Mana from the spell.
+    expect(bob.resources.mana).toBe(1);
+    // Mage wounded + in the infirmary.
+    const woundedMage = bob.mages.find((m) => m.id === 'bob-mage')!;
+    expect(woundedMage.isWounded).toBe(true);
+    expect(woundedMage.location).toEqual({ kind: 'infirmary' });
+  });
+
+  it('Arcane Surge: fizzles when the opponent has no valid wound target', () => {
+    let s = setupLeaderSpellTest('mancers.spell.arcane-surge');
+    // p2 has only a green (wound-immune) mage on a slot.
+    s = addMage(s, 'p2', {
+      id: 'bob-green',
+      cardId: 'base.mage.natural-magick',
+      color: 'green',
+    });
+    s = placeMageOnSpace(s, 'p2', 'bob-green', 'base.room.library.a.slot-1');
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'mancers.spell.arcane-surge',
+      level: 1,
+    });
+    // No target prompt — spell fizzled (green is wound-immune).
+    expect(s.pendingResolutionStack).toHaveLength(0);
+    expect(s.players.find((p) => p.id === 'p2')?.resources.mana).toBe(0);
+  });
+
+  it('Arcane Investigation (Riflam): the Research option queues a Research prompt', () => {
+    let s = setupLeaderSpellTest('mancers.spell.arcane-investigation');
+    s = setMana(s, 'p1', 2); // 1 Mana to cast
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'mancers.spell.arcane-investigation',
+      level: 1,
+    });
+    const orPrompt = topPending(s);
+    expect(orPrompt.prompt.kind).toBe('choose-from-options');
+    if (orPrompt.prompt.kind !== 'choose-from-options') throw new Error('unreachable');
+    expect(orPrompt.prompt.options.map((o) => o.id)).toEqual([
+      'research',
+      'mark',
+    ]);
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: orPrompt.id,
+      answer: { kind: 'option-chosen', optionId: 'research', payload: {} },
+    });
+    // Research drained into a spend-research prompt.
+    expect(topPending(s).resume.effectId).toBe('base.system.spend-research');
+    expect(s.researchQueue).toHaveLength(0);
+  });
+
+  it('Arcane Investigation: the Mark option opens a voter pick → +1 Mark', () => {
+    let s = setupLeaderSpellTest('mancers.spell.arcane-investigation');
+    s = setMana(s, 'p1', 2);
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'mancers.spell.arcane-investigation',
+      level: 1,
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'option-chosen', optionId: 'mark', payload: {} },
+    });
+    const voter = topPending(s);
+    expect(voter.prompt.kind).toBe('choose-voter');
+    if (voter.prompt.kind !== 'choose-voter') throw new Error('unreachable');
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: voter.id,
+      answer: {
+        kind: 'voter-chosen',
+        voterId: voter.prompt.eligibleVoterIds[0]!,
+      },
+    });
+    expect(s.players.find((p) => p.id === 'p1')?.resources.marks).toBe(1);
+  });
 });
 
 describe('Student Stores', () => {

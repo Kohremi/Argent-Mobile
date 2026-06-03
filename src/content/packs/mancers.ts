@@ -38,10 +38,7 @@ const mages: Mage[] = [
 
 // ============================================================================
 // Leader spells — unique single-level starter spells bound to the two
-// Technomancy leaders. They reference `base.system.noop` for their
-// effect since their full mechanics aren't wired yet; the spell can be
-// cast (mana is spent, the spell exhausts) but no engine effect fires.
-// Replace the effectId once the real mechanic is wired.
+// Technomancy leaders. Effects are registered in game/effects/mancers.ts.
 // ============================================================================
 
 const arcaneSurge: SpellCard = {
@@ -56,7 +53,7 @@ const arcaneSurge: SpellCard = {
       title: 'Arcane Surge',
       manaCost: 0,
       timing: 'fast-action',
-      effectId: 'base.system.noop',
+      effectId: 'mancers.spell.arcane-surge.l1',
       description: 'Give an opponent 1 Mana and wound one of their Mages.',
     },
   ],
@@ -74,7 +71,7 @@ const arcaneInvestigation: SpellCard = {
       title: 'Arcane Investigation',
       manaCost: 1,
       timing: 'action',
-      effectId: 'base.system.noop',
+      effectId: 'mancers.spell.arcane-investigation.l1',
       description: 'Gain a Research OR gain a Mark.',
     },
   ],
