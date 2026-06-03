@@ -9581,6 +9581,170 @@ describe('Laboratory B (Mancers)', () => {
 });
 
 // ============================================================================
+// Research Archive A (Mancers) — Gain Research + "move Research": relocate a
+// WIS token off one learned Spell onto another to raise its level.
+// ============================================================================
+
+describe('Research Archive A (Mancers)', () => {
+  function forceResearchArchiveA(state: GameState): GameState {
+    const room = mancersPack.rooms.find(
+      (r) => r.name === 'Research Archive' && r.side === 'A',
+    );
+    if (!room) throw new Error('test helper: Research Archive A not in pack');
+    const replaceIdx = state.rooms.findIndex((r) => !r.isUniversityCentral);
+    if (replaceIdx === -1) return state;
+    return {
+      ...state,
+      rooms: state.rooms.map((r, i) => (i === replaceIdx ? room : r)),
+    };
+  }
+
+  // p1 owns Burn at L2 (movable token) and Bless at L1 (room for one more).
+  function withMovableSpells(state: GameState): GameState {
+    return mapPlayer(state, 'p1', (p) => ({
+      ...p,
+      ownedSpells: [
+        {
+          cardId: 'base.spell.burn',
+          intPlaced: true,
+          wisPlacedLevel2: true,
+          wisPlacedLevel3: false,
+          exhausted: false,
+        },
+        {
+          cardId: 'base.spell.bless',
+          intPlaced: true,
+          wisPlacedLevel2: false,
+          wisPlacedLevel3: false,
+          exhausted: false,
+        },
+      ],
+    }));
+  }
+
+  // p1 owns only Burn at L2 — a movable token but no legal destination, so
+  // the move loop can never prompt.
+  function withStrandedToken(state: GameState): GameState {
+    return mapPlayer(state, 'p1', (p) => ({
+      ...p,
+      ownedSpells: [
+        {
+          cardId: 'base.spell.burn',
+          intPlaced: true,
+          wisPlacedLevel2: true,
+          wisPlacedLevel3: false,
+          exhausted: false,
+        },
+      ],
+    }));
+  }
+
+  function setup(slotId: string, spells: 'movable' | 'stranded' = 'movable'): GameState {
+    let s = initGame(TWO_PLAYER_CONFIG);
+    s = forceResearchArchiveA(s);
+    s = addMage(s, 'p1', {
+      id: 'alice-mage',
+      cardId: 'base.mage.neutral',
+      color: 'off-white',
+    });
+    s = placeMageOnSpace(s, 'p1', 'alice-mage', slotId);
+    s = zeroPlayerResources(s, 'p1');
+    s = setMeritBadges(s, 'p1', 5);
+    s = { ...s, bellTower: { ...s.bellTower, available: [] } };
+    s = spells === 'movable' ? withMovableSpells(s) : withStrandedToken(s);
+    return s;
+  }
+
+  function chooseOption(state: GameState, optionId: string): GameState {
+    const p = topPending(state);
+    if (p.prompt.kind !== 'choose-from-options') {
+      throw new Error(`expected choose-from-options, got ${p.prompt.kind}`);
+    }
+    return applyAction(state, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: p.id,
+      answer: { kind: 'option-chosen', optionId, payload: {} },
+    });
+  }
+
+  function ownedSpell(state: GameState, cardId: string) {
+    return state.players
+      .find((p) => p.id === 'p1')!
+      .ownedSpells.find((s) => s.cardId === cardId)!;
+  }
+
+  it('slot 1 gains 1 INT + 1 WIS, then offers an unlimited move loop', () => {
+    let s = setup('mancers.room.research-archive.a.slot-1');
+    s = driveToResolution(s);
+    const alice = s.players.find((p) => p.id === 'p1')!;
+    expect(alice.resources.intelligence).toBe(1);
+    expect(alice.resources.wisdom).toBe(1);
+    // A move prompt is offered (Burn carries a movable token, Bless has room).
+    const prompt = topPending(s);
+    expect(prompt.prompt.kind).toBe('choose-from-options');
+  });
+
+  it('slot 1: moving a token lowers the source and raises the destination', () => {
+    let s = setup('mancers.room.research-archive.a.slot-1');
+    s = driveToResolution(s);
+    s = chooseOption(s, 'base.spell.burn'); // take WIS from Burn
+    s = chooseOption(s, 'base.spell.bless'); // place on Bless
+    expect(ownedSpell(s, 'base.spell.burn').wisPlacedLevel2).toBe(false);
+    expect(ownedSpell(s, 'base.spell.bless').wisPlacedLevel2).toBe(true);
+    // Bless now carries a movable token (Burn has room), so the unlimited
+    // loop offers another move; Stop ends it.
+    expect(topPending(s).prompt.kind).toBe('choose-from-options');
+    s = chooseOption(s, 'stop');
+    expect(s.pendingResolutionStack).toHaveLength(0);
+  });
+
+  it('slot 1: choosing Stop ends the loop without moving', () => {
+    let s = setup('mancers.room.research-archive.a.slot-1');
+    s = driveToResolution(s);
+    s = chooseOption(s, 'stop');
+    expect(ownedSpell(s, 'base.spell.burn').wisPlacedLevel2).toBe(true);
+    expect(ownedSpell(s, 'base.spell.bless').wisPlacedLevel2).toBe(false);
+    expect(s.pendingResolutionStack).toHaveLength(0);
+  });
+
+  it('slot 1 with no legal move finishes after gains, no prompt', () => {
+    let s = setup('mancers.room.research-archive.a.slot-1', 'stranded');
+    s = driveToResolution(s);
+    const alice = s.players.find((p) => p.id === 'p1')!;
+    expect(alice.resources.intelligence).toBe(1);
+    expect(alice.resources.wisdom).toBe(1);
+    // Burn's token has nowhere to go (no other learned Spell), so no prompt.
+    expect(s.pendingResolutionStack).toHaveLength(0);
+  });
+
+  it('slot 2 queues 2 Research and offers a move loop before draining', () => {
+    let s = setup('mancers.room.research-archive.a.slot-2');
+    s = driveToResolution(s);
+    // The move loop is active, so the queued Research has not drained yet.
+    expect(s.researchQueue.length).toBe(2);
+    expect(topPending(s).prompt.kind).toBe('choose-from-options');
+    s = chooseOption(s, 'base.spell.burn');
+    s = chooseOption(s, 'base.spell.bless');
+    expect(ownedSpell(s, 'base.spell.bless').wisPlacedLevel2).toBe(true);
+  });
+
+  it('slot 3 caps the move loop at 2 moves, then drains the Research', () => {
+    let s = setup('mancers.room.research-archive.a.slot-3');
+    s = driveToResolution(s);
+    expect(s.researchQueue.length).toBe(1);
+    // Move 1: Burn → Bless.
+    s = chooseOption(s, 'base.spell.burn');
+    s = chooseOption(s, 'base.spell.bless');
+    // Move 2: Bless → Burn (ping-pong); this exhausts the 2-move budget.
+    s = chooseOption(s, 'base.spell.bless');
+    s = chooseOption(s, 'base.spell.burn');
+    // Budget spent → loop ends → the 1 queued Research drains into a prompt.
+    expect(s.researchQueue.length).toBe(0);
+    expect(ownedSpell(s, 'base.spell.burn').wisPlacedLevel2).toBe(true);
+  });
+});
+
+// ============================================================================
 // Council Chamber A — Draft a Supporter OR Gain a Mark, capped at 1/round
 // ============================================================================
 

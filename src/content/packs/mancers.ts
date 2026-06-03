@@ -253,13 +253,81 @@ const laboratoryB: Room = {
   ],
 };
 
+// ============================================================================
+// Research Archive Side A — non-instant. Each slot gains some Research
+// and/or lets the player "move Research" — relocating a WIS token from a
+// learned spell (taking its top token: L3 first, else L2; reducing that
+// spell's level) onto another learned spell to unlock its next level.
+//   Slot 1 (merit, 1 MB): Gain 1 INT, Gain 1 WIS, and rearrange your
+//                         Research freely (unlimited moves until done).
+//   Slot 2 (regular):     Gain 2 Research, then move up to 3 Research.
+//   Slot 3 (regular):     Gain 1 Research, then move up to 2 Research.
+// Side B is a stub for now (declared so the setup sanity check passes).
+// ============================================================================
+
+const researchArchiveA: Room = {
+  id: 'mancers.room.research-archive.a',
+  name: 'Research Archive',
+  sourcePackId: PACK_ID,
+  isUniversityCentral: false,
+  side: 'A',
+  isInstantRoom: false,
+  cannotBePlacedInDirectly: false,
+  cannotBeLocked: false,
+  description:
+    'Gain Research and rearrange the WIS tokens on your learned Spells (move a token from one Spell to raise another).',
+  actionSpaces: [
+    {
+      id: 'mancers.room.research-archive.a.slot-1',
+      roomId: 'mancers.room.research-archive.a',
+      index: 0,
+      slotType: 'merit',
+      occupant: null,
+      effectId: 'mancers.room.research-archive-a.slot-1',
+      costToActivate: { meritBadges: 1 },
+      description:
+        'Gain 1 INT, Gain 1 WIS, and rearrange your Research freely.',
+    },
+    {
+      id: 'mancers.room.research-archive.a.slot-2',
+      roomId: 'mancers.room.research-archive.a',
+      index: 1,
+      slotType: 'regular',
+      occupant: null,
+      effectId: 'mancers.room.research-archive-a.slot-2',
+      description: 'Gain 2 Research, then move up to 3 Research.',
+    },
+    {
+      id: 'mancers.room.research-archive.a.slot-3',
+      roomId: 'mancers.room.research-archive.a',
+      index: 2,
+      slotType: 'regular',
+      occupant: null,
+      effectId: 'mancers.room.research-archive-a.slot-3',
+      description: 'Gain a Research, then move up to 2 Research.',
+    },
+  ],
+};
+
+const researchArchiveB: Room = {
+  id: 'mancers.room.research-archive.b',
+  name: 'Research Archive',
+  sourcePackId: PACK_ID,
+  isUniversityCentral: false,
+  side: 'B',
+  isInstantRoom: false,
+  cannotBePlacedInDirectly: false,
+  cannotBeLocked: false,
+  actionSpaces: [],
+};
+
 export const mancersPack: ContentPack = {
   id: PACK_ID,
   name: 'Mancers of the University',
-  description: 'Adds the Technomancy department: Technomancer (orange) mage piece, the two Technomancy leader candidates, and the Laboratory room (Sides A and B).',
+  description: 'Adds the Technomancy department: Technomancer (orange) mage piece, the two Technomancy leader candidates, and the Laboratory + Research Archive rooms.',
   mages,
   candidates,
-  rooms: [laboratoryA, laboratoryB],
+  rooms: [laboratoryA, laboratoryB, researchArchiveA, researchArchiveB],
   spells: [],
   legendarySpells: leaderSpells,
   vaultCards: [],

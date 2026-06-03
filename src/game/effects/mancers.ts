@@ -4,12 +4,15 @@ import { getEffect, hasEffect, registerEffect } from './registry';
 import {
   affordableVaultCards,
   applyGainMark,
+  applyMoveWisBetweenSpells,
   applyVaultPurchaseMaybeWaived,
   buildBurnTargets,
   buildReactionQueue,
   eligibleVotersForMark,
   gainResourcePatch,
+  gainResourcesPatch,
   healMageToSpace,
+  spellLabel,
   woundMage,
 } from './helpers';
 import type {
@@ -824,6 +827,247 @@ registerEffect(
     throw new Error(`${self}: unexpected step ${String(step)}`);
   },
 );
+
+// ============================================================================
+// Research Archive Side A — Gain Research and "move Research": relocate a WIS
+// token from one learned Spell (taking its top token — L3 first, else L2 —
+// which lowers that Spell's level) onto another learned Spell to unlock its
+// next level (L1→L2, or L2→L3). Each slot grants some Research, then offers
+// a bounded (or unlimited) number of moves.
+//   Slot 1 (merit): Gain 1 INT + 1 WIS, then rearrange freely (unlimited).
+//   Slot 2:         Gain 2 Research, then move up to 3 Research.
+//   Slot 3:         Gain 1 Research, then move up to 2 Research.
+//
+// Queued Research drains AFTER the move loop resolves (engine pump runs when
+// the stack is idle), so in play the moves happen first, then the gained
+// Research arrives.
+// ============================================================================
+
+interface OwnedSpellLike {
+  cardId: string;
+  intPlaced: boolean;
+  wisPlacedLevel2: boolean;
+  wisPlacedLevel3: boolean;
+}
+
+/** A Spell that still has room for one more WIS token (learned, not yet L3). */
+function moveWisDestAvailable(s: OwnedSpellLike): boolean {
+  return s.intPlaced && !(s.wisPlacedLevel2 && s.wisPlacedLevel3);
+}
+
+/** Sources are Spells holding a movable WIS token that also have a legal
+ * destination (some OTHER learned Spell with room). Without a destination a
+ * token isn't movable, so such Spells are excluded from the source list. */
+function eligibleMoveSources(player: {
+  ownedSpells: OwnedSpellLike[];
+}): OwnedSpellLike[] {
+  return player.ownedSpells.filter(
+    (s) =>
+      (s.wisPlacedLevel2 || s.wisPlacedLevel3) &&
+      player.ownedSpells.some(
+        (d) => d.cardId !== s.cardId && moveWisDestAvailable(d),
+      ),
+  );
+}
+
+const RESEARCH_ARCHIVE_MOVE = 'mancers.room.research-archive-a.move';
+
+/**
+ * Pause to offer the next "move Research" step, or finish. `remaining` is the
+ * number of moves left when `unlimited` is false; ignored when `unlimited` is
+ * true (slot 1 lets the player rearrange freely until they stop). `carryPatch`
+ * is applied on the pause so accumulated gains/moves persist.
+ */
+function researchArchiveMoveLoop(
+  ctx: EffectContext,
+  remaining: number,
+  unlimited: boolean,
+  carryPatch: GameStatePatch,
+): EffectResult {
+  if (!unlimited && remaining <= 0) {
+    return { kind: 'done', patch: carryPatch };
+  }
+  const player = ctx.state.players.find((p) => p.id === ctx.triggeringPlayerId);
+  if (!player) return { kind: 'done', patch: carryPatch };
+  const sources = eligibleMoveSources(player);
+  if (sources.length === 0) {
+    return { kind: 'done', patch: carryPatch };
+  }
+  const options: ChoiceOption[] = sources.map((s) => ({
+    id: s.cardId,
+    label: `Take WIS from ${spellLabel(ctx.state, s.cardId)}`,
+    payload: {},
+  }));
+  options.push({ id: 'stop', label: 'Stop moving Research', payload: {} });
+  return {
+    kind: 'pause',
+    patch: carryPatch,
+    pending: {
+      responderId: ctx.triggeringPlayerId,
+      prompt: { kind: 'choose-from-options', options },
+      resume: {
+        effectId: RESEARCH_ARCHIVE_MOVE,
+        context: { step: 'pick-source', remaining, unlimited },
+      },
+      source: ctx.source,
+    },
+  };
+}
+
+registerEffect(RESEARCH_ARCHIVE_MOVE, (ctx): EffectResult => {
+  const step = ctx.resumeContext?.['step'];
+  const remaining = Number(ctx.resumeContext?.['remaining'] ?? 0);
+  const unlimited = ctx.resumeContext?.['unlimited'] === true;
+
+  if (step === 'pick-source') {
+    if (ctx.resumeAnswer?.kind !== 'option-chosen') {
+      throw new Error('research-archive move pick-source expected option-chosen');
+    }
+    if (ctx.resumeAnswer.optionId === 'stop') {
+      return { kind: 'done', patch: {} };
+    }
+    const sourceCardId = ctx.resumeAnswer.optionId;
+    const player = ctx.state.players.find(
+      (p) => p.id === ctx.triggeringPlayerId,
+    );
+    if (!player) return { kind: 'done', patch: {} };
+    const dests = player.ownedSpells.filter(
+      (s) => s.cardId !== sourceCardId && moveWisDestAvailable(s),
+    );
+    if (dests.length === 0) {
+      // No legal destination after all — fall back into the loop so the
+      // player can pick a different source (or stop).
+      return researchArchiveMoveLoop(ctx, remaining, unlimited, {});
+    }
+    return {
+      kind: 'pause',
+      pending: {
+        responderId: ctx.triggeringPlayerId,
+        prompt: {
+          kind: 'choose-from-options',
+          options: dests.map((s) => ({
+            id: s.cardId,
+            label: `Place WIS on ${spellLabel(ctx.state, s.cardId)} → ${
+              s.wisPlacedLevel2 ? 'L3' : 'L2'
+            }`,
+            payload: {},
+          })),
+        },
+        resume: {
+          effectId: RESEARCH_ARCHIVE_MOVE,
+          context: { step: 'pick-dest', sourceCardId, remaining, unlimited },
+        },
+        source: ctx.source,
+      },
+    };
+  }
+
+  if (step === 'pick-dest') {
+    if (ctx.resumeAnswer?.kind !== 'option-chosen') {
+      throw new Error('research-archive move pick-dest expected option-chosen');
+    }
+    const destCardId = ctx.resumeAnswer.optionId;
+    const sourceCardId = ctx.resumeContext?.['sourceCardId'];
+    if (typeof sourceCardId !== 'string') {
+      throw new Error('research-archive move pick-dest: missing sourceCardId');
+    }
+    const movePatch = applyMoveWisBetweenSpells(
+      ctx.state,
+      ctx.triggeringPlayerId,
+      sourceCardId,
+      destCardId,
+    );
+    const working: GameState = { ...ctx.state, ...movePatch };
+    const nextRemaining = unlimited ? remaining : remaining - 1;
+    return researchArchiveMoveLoop(
+      { ...ctx, state: working },
+      nextRemaining,
+      unlimited,
+      { players: working.players },
+    );
+  }
+
+  throw new Error(`research-archive move: unexpected step ${String(step)}`);
+});
+
+/**
+ * Shared entry for the three Research Archive A slots: apply the slot's gains
+ * (INT/WIS resources and/or queued Research), then start the move loop.
+ */
+function researchArchiveSlot(
+  ctx: EffectContext,
+  cfg: {
+    gainInt?: number;
+    gainWis?: number;
+    gainResearch?: number;
+    moves: number;
+    unlimited: boolean;
+  },
+): EffectResult {
+  let working = ctx.state;
+  let patch: GameStatePatch = {};
+
+  const intGain = cfg.gainInt ?? 0;
+  const wisGain = cfg.gainWis ?? 0;
+  if (intGain > 0 || wisGain > 0) {
+    const gainPatch = gainResourcesPatch(working, ctx.triggeringPlayerId, {
+      intelligence: intGain,
+      wisdom: wisGain,
+    });
+    working = { ...working, ...gainPatch };
+    patch = { ...patch, ...gainPatch };
+  }
+
+  const research = cfg.gainResearch ?? 0;
+  if (research > 0) {
+    const rPatch = appendResearchQueueInline(
+      working,
+      ctx.triggeringPlayerId,
+      ctx.source,
+      research,
+    );
+    working = { ...working, ...rPatch };
+    patch = { ...patch, ...rPatch };
+  }
+
+  return researchArchiveMoveLoop(
+    { ...ctx, state: working },
+    cfg.moves,
+    cfg.unlimited,
+    patch,
+  );
+}
+
+registerEffect('mancers.room.research-archive-a.slot-1', (ctx): EffectResult => {
+  const step = ctx.resumeContext?.['step'];
+  if (step) return getEffect(RESEARCH_ARCHIVE_MOVE)(ctx);
+  return researchArchiveSlot(ctx, {
+    gainInt: 1,
+    gainWis: 1,
+    moves: 0,
+    unlimited: true,
+  });
+});
+
+registerEffect('mancers.room.research-archive-a.slot-2', (ctx): EffectResult => {
+  const step = ctx.resumeContext?.['step'];
+  if (step) return getEffect(RESEARCH_ARCHIVE_MOVE)(ctx);
+  return researchArchiveSlot(ctx, {
+    gainResearch: 2,
+    moves: 3,
+    unlimited: false,
+  });
+});
+
+registerEffect('mancers.room.research-archive-a.slot-3', (ctx): EffectResult => {
+  const step = ctx.resumeContext?.['step'];
+  if (step) return getEffect(RESEARCH_ARCHIVE_MOVE)(ctx);
+  return researchArchiveSlot(ctx, {
+    gainResearch: 1,
+    moves: 2,
+    unlimited: false,
+  });
+});
 
 // Re-export to satisfy the module's existing `export {}` shape.
 export {};
