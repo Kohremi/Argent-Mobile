@@ -5135,7 +5135,7 @@ registerEffect(
   (ctx: EffectContext): EffectResult =>
     astronomyTowerSlot(ctx, 'base.room.astronomy-tower-a.slot-3', {
       firstFree: false,
-      perSpace: 4,
+      perSpace: 3,
     }),
 );
 

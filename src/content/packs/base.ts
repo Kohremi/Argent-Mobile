@@ -2917,7 +2917,7 @@ const archmagesStudyB: Room = {
 // a player pays to move it. Slot effects fire during resolution.
 //   Slot 1 (merit, 1 MB): move 1 space free, then 1 Gold per space.
 //   Slot 2 (regular):     2 Gold per space.
-//   Slot 3 (regular):     4 Gold per space.
+//   Slot 3 (regular):     3 Gold per space.
 //   Track: 1 WIS + 2 Mana / 2 Research / 8 Gold / 1 INT + 1 Research /
 //          4 Mana / 2 Marks.
 // ============================================================================
@@ -2960,7 +2960,7 @@ const astronomyTowerA: Room = {
         index: 2,
         effectId: 'base.room.astronomy-tower-a.slot-3',
       }),
-      description: 'Pay 4 Gold per space moved.',
+      description: 'Pay 3 Gold per space moved.',
     },
   ],
 };
