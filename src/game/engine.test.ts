@@ -12246,11 +12246,14 @@ describe('Technomancy (Mancers expansion)', () => {
     );
   });
 
-  it('mancers pack exposes both leader starter spells (unique, single-level)', () => {
-    const surge = mancersPack.spells.find(
+  it('mancers pack exposes both leader starter spells in legendarySpells (unique, single-level; NOT in the draftable spells pool)', () => {
+    // Leader spells must live in `legendarySpells`, never `spells` — the
+    // `spells` array is the draftable pool that seeds the spell deck.
+    expect(mancersPack.spells).toHaveLength(0);
+    const surge = mancersPack.legendarySpells.find(
       (s) => s.id === 'mancers.spell.arcane-surge',
     );
-    const investigation = mancersPack.spells.find(
+    const investigation = mancersPack.legendarySpells.find(
       (s) => s.id === 'mancers.spell.arcane-investigation',
     );
     expect(surge?.unique).toBe(true);
@@ -12263,6 +12266,25 @@ describe('Technomancy (Mancers expansion)', () => {
     expect(investigation?.levels).toHaveLength(1);
     expect(investigation?.levels[0]?.manaCost).toBe(1);
     expect(investigation?.levels[0]?.timing).toBe('action');
+  });
+
+  it('leader spells never enter the draftable spell deck or tableau (with Mancers active)', () => {
+    const s = initGame({
+      ...TWO_PLAYER_CONFIG,
+      activePackIds: ['base', 'mancers'],
+    });
+    const inPool = new Set([...s.spellDeck, ...s.spellTableau]);
+    // Neither Mancers leader spell is in the draftable pool.
+    expect(inPool.has('mancers.spell.arcane-surge')).toBe(false);
+    expect(inPool.has('mancers.spell.arcane-investigation')).toBe(false);
+    // Belt-and-suspenders: no unique spell from any active pack leaked in.
+    for (const packId of s.activePackIds) {
+      const pack = listPacks().find((p) => p.id === packId);
+      if (!pack) continue;
+      for (const sp of [...pack.spells, ...pack.legendarySpells]) {
+        if (sp.unique) expect(inPool.has(sp.id)).toBe(false);
+      }
+    }
   });
 
   it('initGame with Mancers + useCandidateDraft exposes both Technomancy candidates as selectable', () => {

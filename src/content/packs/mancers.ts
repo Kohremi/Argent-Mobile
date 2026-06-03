@@ -77,7 +77,13 @@ const arcaneInvestigation: SpellCard = {
   ],
 };
 
-const spells: SpellCard[] = [arcaneSurge, arcaneInvestigation];
+// Leader (unique) spells live in `legendarySpells`, NOT `spells` — the
+// `spells` array is the draftable spell-deck pool, and unique starter
+// spells must never be shuffled into it (they belong to their leader's
+// player only, set up at candidate allocation). This matches the base
+// pack's convention. `unclaimedLegendaryBooks` skips `unique` entries,
+// so these aren't draftable via Sealed Scroll either.
+const leaderSpells: SpellCard[] = [arcaneSurge, arcaneInvestigation];
 
 // ============================================================================
 // Candidates — Mancers introduces ONLY the two Technomancy leaders.
@@ -254,8 +260,8 @@ export const mancersPack: ContentPack = {
   mages,
   candidates,
   rooms: [laboratoryA, laboratoryB],
-  spells,
-  legendarySpells: [],
+  spells: [],
+  legendarySpells: leaderSpells,
   vaultCards: [],
   supporters: [],
   voters: [],

@@ -467,8 +467,12 @@ export function buildInitialState(config: GameConfig): GameState {
   );
 
   // ---- Decks & opening tableaus ----
+  // Defensive: never shuffle a UNIQUE leader spell into the draftable
+  // pool even if a pack mistakenly lists one under `spells` instead of
+  // `legendarySpells`. Leader spells belong only to their candidate's
+  // player (set up at allocation) and must not be acquirable by others.
   const spellShuffle = shuffleWithState(
-    allSpells.map((s) => s.id),
+    allSpells.filter((s) => !s.unique).map((s) => s.id),
     rng,
   );
   rng = spellShuffle.state;
