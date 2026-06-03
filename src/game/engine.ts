@@ -2248,6 +2248,27 @@ function handleClaimBellTower(
   }
   state = consumeActionBudget(state, 'action', 'CLAIM_BELL_TOWER');
 
+  // Per the rulebook: taking a Bell Tower Offering ends your turn
+  // immediately, regardless of any other effects in play (such as extra
+  // actions granted by Spells). Force the action budget closed so no
+  // leftover bonus actions (Flare / Dazzle / Bend Time) can be used
+  // after the claim — the turn auto-advances once the card's own effect
+  // chain (and any last-card reaction window) settles. Rebuild the phase
+  // so the Bend Time tracker is dropped too.
+  if (state.phase.kind === 'errands') {
+    state = {
+      ...state,
+      phase: {
+        kind: 'errands',
+        round: state.phase.round,
+        activePlayerIndex: state.phase.activePlayerIndex,
+        actionUsed: true,
+        fastActionUsed: state.phase.fastActionUsed,
+        extraActions: 0,
+      },
+    };
+  }
+
   // If this claim empties the bell tower, queue a `bell-tower-last-claimed`
   // event so reactions (Tardy, Stop Time) can open AFTER the card's own
   // effect chain settles — see `drainBellTowerLastEventIfIdle`.

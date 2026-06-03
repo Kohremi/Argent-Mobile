@@ -1360,6 +1360,40 @@ describe('Bell Tower offerings', () => {
     expect(player?.resources.influence).toBe(6);
   });
 
+  it('claiming a Bell Tower Offering ends the turn immediately, forfeiting any extra actions', () => {
+    let s = startErrands();
+    const activeIdx = s.firstPlayerIndex;
+    const activeId = s.players[activeIdx]?.id;
+    if (!activeId) throw new Error('no active player');
+    // Simulate a spell having granted a bonus action this turn. Even with
+    // a bonus action available, claiming a Bell Tower Offering must end
+    // the turn right away (rulebook).
+    s = {
+      ...s,
+      phase: {
+        kind: 'errands',
+        round: 1,
+        activePlayerIndex: activeIdx,
+        actionUsed: false,
+        fastActionUsed: false,
+        extraActions: 1,
+      },
+    };
+    s = applyAction(s, {
+      type: 'CLAIM_BELL_TOWER',
+      playerId: activeId,
+      // gain-ip resolves immediately (no prompt) and isn't the last card,
+      // so the turn should auto-advance to the next player.
+      bellTowerCardId: 'base.bell.gain-ip',
+    });
+    if (s.phase.kind !== 'errands') throw new Error('expected errands phase');
+    // Turn advanced to the next player despite the leftover bonus action.
+    expect(s.phase.activePlayerIndex).not.toBe(activeIdx);
+    // The fresh turn has a clean budget (no leftover extra actions).
+    expect(s.phase.extraActions ?? 0).toBe(0);
+    expect(s.phase.actionUsed).toBe(false);
+  });
+
   it('Gold-or-Mana card pauses for player choice and grants the picked resource', () => {
     let s = startErrands();
     const activeId = s.players[s.firstPlayerIndex]?.id;
