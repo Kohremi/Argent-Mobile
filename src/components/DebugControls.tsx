@@ -3841,14 +3841,17 @@ function visibleActionSpaces(
  * which buffs are still in play this round. These slots have no shadow.
  */
 /**
- * Astronomy Tower Side A reward track. Six boxes (sized like worker
- * slots) laid out in a row, each showing its reward; the box the marker
- * currently sits on gets a highlighted outline. Mirrors the
- * `ASTRONOMY_A_TRACK` data in the engine.
+ * Astronomy Tower reward track display. Each space is either a set of
+ * resource parts (icon + amount) or a free-text label (for the special
+ * spaces). Mirrors `ASTRONOMY_A_TRACK` / `ASTRONOMY_B_TRACK` in the
+ * engine. The box the marker sits on gets a highlighted outline.
  */
-const ASTRONOMY_A_TRACK_DISPLAY: {
-  parts: { amount: number; kind: ResourceKind }[];
-}[] = [
+type AstronomyTrackCell = {
+  parts?: { amount: number; kind: ResourceKind }[];
+  text?: string;
+};
+
+const ASTRONOMY_A_TRACK_DISPLAY: AstronomyTrackCell[] = [
   { parts: [{ amount: 1, kind: 'wisdom' }, { amount: 2, kind: 'mana' }] },
   { parts: [{ amount: 2, kind: 'research' }] },
   { parts: [{ amount: 8, kind: 'gold' }] },
@@ -3857,28 +3860,54 @@ const ASTRONOMY_A_TRACK_DISPLAY: {
   { parts: [{ amount: 2, kind: 'marks' }] },
 ];
 
-function AstronomyTowerTrack({ state }: { state: GameState }) {
+const ASTRONOMY_B_TRACK_DISPLAY: AstronomyTrackCell[] = [
+  { text: 'Start' },
+  { parts: [{ amount: 5, kind: 'mana' }] },
+  { parts: [{ amount: 8, kind: 'gold' }] },
+  { parts: [{ amount: 2, kind: 'marks' }] },
+  {
+    parts: [
+      { amount: 1, kind: 'intelligence' },
+      { amount: 1, kind: 'wisdom' },
+      { amount: 1, kind: 'research' },
+    ],
+  },
+  { text: 'Draft 2 Vault' },
+  { text: 'Gain a Mage' },
+  { text: 'Choose any' },
+];
+
+function AstronomyTowerTrack({
+  state,
+  side,
+}: {
+  state: GameState;
+  side: 'A' | 'B';
+}) {
   const marker = state.astronomyTowerMarker;
+  const track =
+    side === 'A' ? ASTRONOMY_A_TRACK_DISPLAY : ASTRONOMY_B_TRACK_DISPLAY;
   return (
     <div className="space-y-1 text-center">
       <div className="text-[10px] uppercase tracking-wide text-slate-400">
         Reward track — marker on space {marker + 1}
+        {side === 'B' && ' (resets each round)'}
       </div>
-      <div className="flex gap-1 justify-center">
-        {ASTRONOMY_A_TRACK_DISPLAY.map((space, i) => {
+      <div className="flex gap-1 justify-center flex-wrap">
+        {track.map((space, i) => {
           const isMarker = i === marker;
           return (
             <div
               key={i}
               title={`Space ${i + 1}${isMarker ? ' (marker here)' : ''}`}
               className={clsx(
-                'w-12 h-12 rounded border-2 flex flex-col items-center justify-center gap-0.5 flex-shrink-0',
+                'w-12 h-12 rounded border-2 flex flex-col items-center justify-center gap-0.5 flex-shrink-0 p-0.5',
                 isMarker
                   ? 'border-amber-400 bg-amber-400/15 ring-2 ring-amber-400/40'
                   : 'border-slate-600 bg-slate-950/40',
               )}
             >
-              {space.parts.map((part, j) => (
+              {space.parts?.map((part, j) => (
                 <span
                   key={j}
                   className="inline-flex items-center gap-0.5 text-[10px] text-slate-200 leading-none"
@@ -3887,6 +3916,11 @@ function AstronomyTowerTrack({ state }: { state: GameState }) {
                   <ResourceIcon kind={part.kind} size={11} />
                 </span>
               ))}
+              {space.text && (
+                <span className="text-[8px] text-slate-300 leading-tight text-center">
+                  {space.text}
+                </span>
+              )}
             </div>
           );
         })}
@@ -4255,7 +4289,10 @@ function RoomsPanel({
                 </p>
               )}
               {room.id === 'base.room.astronomy-tower.a' && (
-                <AstronomyTowerTrack state={state} />
+                <AstronomyTowerTrack state={state} side="A" />
+              )}
+              {room.id === 'base.room.astronomy-tower.b' && (
+                <AstronomyTowerTrack state={state} side="B" />
               )}
               {room.cannotBePlacedInDirectly ? (
                 <div className="space-y-2">

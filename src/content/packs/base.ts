@@ -2965,9 +2965,18 @@ const astronomyTowerA: Room = {
   ],
 };
 
-// Astronomy Tower Side B — unwired stub (Side B's marker resets each
-// round + has its own reward track / mana costs; wired later). The
-// setup sanity check requires every room to declare both sides.
+// Astronomy Tower Side B — like Side A but the marker only moves RIGHT
+// and CLAMPS at the final space (no wrap), and its position RESETS to
+// the start at round-setup. The final space ("Choose any previous
+// reward") can still be activated by paying once even though the marker
+// can't advance further. Costs are paid in Mana. The merit slot is last
+// (the cheapest, 1 Mana/space).
+//   Slot 1 (regular):     2 Mana per space.
+//   Slot 2 (regular):     2 Mana per space.
+//   Slot 3 (merit, 1 MB): 1 Mana per space.
+//   Track: Start (no reward) / 5 Mana / 8 Gold / 2 Marks /
+//          1 INT + 1 WIS + 1 Research / Draft 2 Vault Cards /
+//          Gain a Mage from the supply / Choose any previous reward.
 const astronomyTowerB: Room = {
   id: 'base.room.astronomy-tower.b',
   name: 'Astronomy Tower',
@@ -2977,7 +2986,38 @@ const astronomyTowerB: Room = {
   isInstantRoom: false,
   cannotBePlacedInDirectly: false,
   cannotBeLocked: false,
-  actionSpaces: [],
+  description:
+    'Pay Mana to move the marker right along the reward track, then claim the reward it lands on (move at least 1 space; the marker stops at the end and resets each round).',
+  actionSpaces: [
+    {
+      ...regularSlot({
+        id: 'base.room.astronomy-tower.b.slot-1',
+        roomId: 'base.room.astronomy-tower.b',
+        index: 0,
+        effectId: 'base.room.astronomy-tower-b.slot-1',
+      }),
+      description: 'Pay 2 Mana per space moved.',
+    },
+    {
+      ...regularSlot({
+        id: 'base.room.astronomy-tower.b.slot-2',
+        roomId: 'base.room.astronomy-tower.b',
+        index: 1,
+        effectId: 'base.room.astronomy-tower-b.slot-2',
+      }),
+      description: 'Pay 2 Mana per space moved.',
+    },
+    {
+      id: 'base.room.astronomy-tower.b.slot-3',
+      roomId: 'base.room.astronomy-tower.b',
+      index: 2,
+      slotType: 'merit',
+      occupant: null,
+      effectId: 'base.room.astronomy-tower-b.slot-3',
+      costToActivate: { meritBadges: 1 },
+      description: 'Pay 1 Mana per space moved.',
+    },
+  ],
 };
 
 const rooms: Room[] = [

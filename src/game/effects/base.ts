@@ -5140,6 +5140,484 @@ registerEffect(
 );
 
 // ============================================================================
+// Astronomy Tower Side B — like Side A, but:
+//   * Costs are paid in MANA (not Gold).
+//   * The marker only moves RIGHT and CLAMPS at the final space (no wrap).
+//   * The final space ("Choose any previous reward") can be activated by
+//     paying once even though the marker can't advance further.
+//   * Richer reward track: includes a free 2-card Vault draft, a "gain a
+//     Mage from the supply" colour pick (2-per-department cap, Neutral
+//     uncapped), and the "choose any previous reward" meta-space.
+//   * The marker RESETS to 0 at round-setup (see engine.ts).
+// ============================================================================
+
+type AstronomyBReward = {
+  label: string;
+  gold?: number;
+  mana?: number;
+  intelligence?: number;
+  wisdom?: number;
+  research?: number;
+  marks?: number;
+  draftVault?: number; // draft N Vault Cards (free)
+  gainMage?: boolean; // colour-picker Mage gain
+  choosePrevious?: boolean; // pick one of the earlier spaces' rewards
+};
+
+const ASTRONOMY_B_TRACK: AstronomyBReward[] = [
+  { label: 'Start' }, // 0 — no reward (the reset position)
+  { label: '5 Mana', mana: 5 }, // 1
+  { label: '8 Gold', gold: 8 }, // 2
+  { label: '2 Marks', marks: 2 }, // 3
+  {
+    label: '1 INT + 1 WIS + 1 Research',
+    intelligence: 1,
+    wisdom: 1,
+    research: 1,
+  }, // 4
+  { label: 'Draft 2 Vault Cards', draftVault: 2 }, // 5
+  { label: 'Gain a Mage from the supply', gainMage: true }, // 6
+  { label: 'Choose any previous reward', choosePrevious: true }, // 7
+];
+
+const ASTRONOMY_B_LAST = ASTRONOMY_B_TRACK.length - 1;
+
+/** Builds the move/stop/decline prompt for the Side B move loop. */
+function astronomyBMovePrompt(
+  ctx: EffectContext,
+  selfEffectId: string,
+  perSpace: number,
+  pos: number,
+  spent: number,
+  moves: number,
+): EffectResult {
+  const player = ctx.state.players.find(
+    (p) => p.id === ctx.triggeringPlayerId,
+  );
+  const manaLeft = (player?.resources.mana ?? 0) - spent;
+  const canPay = manaLeft >= perSpace;
+  // Can advance while not at the end; at the end you may pay ONCE to
+  // activate the final space (but only if you haven't moved yet).
+  const canAdvance = pos < ASTRONOMY_B_LAST;
+  const canActivateAtEnd = pos === ASTRONOMY_B_LAST && moves === 0;
+  const options: ChoiceOption[] = [];
+  if (moves >= 1) {
+    options.push({
+      id: 'stop',
+      label: `Stop & claim: ${ASTRONOMY_B_TRACK[pos]!.label}`,
+      payload: {},
+    });
+  } else {
+    options.push({
+      id: 'decline',
+      label: 'Do not move — claim no reward',
+      payload: {},
+    });
+  }
+  if (canPay && (canAdvance || canActivateAtEnd)) {
+    const nextPos = Math.min(pos + 1, ASTRONOMY_B_LAST);
+    const label = canActivateAtEnd
+      ? `Activate ${ASTRONOMY_B_TRACK[pos]!.label} (pay ${perSpace} Mana)`
+      : `Move 1 ${moves >= 1 ? 'more ' : ''}→ ${ASTRONOMY_B_TRACK[nextPos]!.label} (pay ${perSpace} Mana)`;
+    options.push({ id: 'move', label, payload: {} });
+  }
+  return {
+    kind: 'pause',
+    pending: {
+      responderId: ctx.triggeringPlayerId,
+      prompt: { kind: 'choose-from-options', options },
+      resume: {
+        effectId: selfEffectId,
+        context: { step: 'choose', pos, spent, moves },
+      },
+      source: ctx.source,
+    },
+  };
+}
+
+/**
+ * Dispatches a Side B reward at `index` against the already-committed
+ * `working` state. `basePatch` carries the cumulative diff so far (mana
+ * deduction + marker commit, and any earlier resource gains). Resource
+ * rewards resolve in one patch; Marks / Vault draft / Mage gain / choose-
+ * previous pause for their own prompts.
+ */
+function astronomyBDispatchReward(
+  ctx: EffectContext,
+  selfEffectId: string,
+  working: GameState,
+  index: number,
+  basePatch: GameStatePatch,
+): EffectResult {
+  const reward = ASTRONOMY_B_TRACK[index]!;
+  const dctx: EffectContext = { ...ctx, state: working };
+
+  // Draft 2 Vault Cards (free).
+  if (reward.draftVault !== undefined && reward.draftVault > 0) {
+    if (working.vaultTableau.length === 0) {
+      return { kind: 'done', patch: basePatch };
+    }
+    return {
+      kind: 'pause',
+      patch: basePatch,
+      pending: {
+        responderId: ctx.triggeringPlayerId,
+        prompt: {
+          kind: 'choose-vault-card',
+          eligibleCardIds: [...working.vaultTableau],
+        },
+        resume: {
+          effectId: selfEffectId,
+          context: { step: 'draft-vault', remaining: reward.draftVault },
+        },
+        source: ctx.source,
+      },
+    };
+  }
+
+  // Gain a Mage from the supply (colour picker; 2-per-department cap).
+  if (reward.gainMage) {
+    const player = working.players.find(
+      (p) => p.id === ctx.triggeringPlayerId,
+    );
+    if (!player) return { kind: 'done', patch: basePatch };
+    const offered = DORMITORY_COLOR_OPTIONS.filter(
+      ({ requiresPackId }) =>
+        requiresPackId === undefined ||
+        working.activePackIds.includes(requiresPackId),
+    );
+    const options: ChoiceOption[] = offered.map(({ color, label }) => {
+      const { available, reasons } = dormitoryColorAvailable(
+        working,
+        player,
+        color,
+      );
+      return {
+        id: color,
+        label,
+        payload: {},
+        available,
+        ...(available ? {} : { unavailableReason: reasons.join(' + ') }),
+      };
+    });
+    if (!options.some((o) => o.available)) {
+      return { kind: 'done', patch: basePatch };
+    }
+    return {
+      kind: 'pause',
+      patch: basePatch,
+      pending: {
+        responderId: ctx.triggeringPlayerId,
+        prompt: { kind: 'choose-from-options', options },
+        resume: { effectId: selfEffectId, context: { step: 'gain-mage' } },
+        source: ctx.source,
+      },
+    };
+  }
+
+  // Choose any previous reward — pick one of the earlier reward spaces.
+  if (reward.choosePrevious) {
+    const options: ChoiceOption[] = [];
+    for (let i = 1; i < index; i++) {
+      // Skip the empty Start space (it has no reward); every other
+      // earlier space is a real reward.
+      options.push({
+        id: String(i),
+        label: ASTRONOMY_B_TRACK[i]!.label,
+        payload: {},
+      });
+    }
+    if (options.length === 0) {
+      return { kind: 'done', patch: basePatch };
+    }
+    return {
+      kind: 'pause',
+      patch: basePatch,
+      pending: {
+        responderId: ctx.triggeringPlayerId,
+        prompt: { kind: 'choose-from-options', options },
+        resume: { effectId: selfEffectId, context: { step: 'choose-prev' } },
+        source: ctx.source,
+      },
+    };
+  }
+
+  // Simple resource / research / marks reward.
+  let w = working;
+  if (
+    reward.gold !== undefined ||
+    reward.mana !== undefined ||
+    reward.intelligence !== undefined ||
+    reward.wisdom !== undefined
+  ) {
+    w = {
+      ...w,
+      ...gainResourcesPatch(w, ctx.triggeringPlayerId, {
+        ...(reward.gold !== undefined ? { gold: reward.gold } : {}),
+        ...(reward.mana !== undefined ? { mana: reward.mana } : {}),
+        ...(reward.intelligence !== undefined
+          ? { intelligence: reward.intelligence }
+          : {}),
+        ...(reward.wisdom !== undefined ? { wisdom: reward.wisdom } : {}),
+      }),
+    };
+  }
+  if (reward.research !== undefined && reward.research > 0) {
+    w = {
+      ...w,
+      ...appendResearchQueue(
+        w,
+        ctx.triggeringPlayerId,
+        ctx.source,
+        reward.research,
+      ),
+    };
+  }
+  const patch: GameStatePatch = {
+    ...basePatch,
+    players: w.players,
+    ...(w.researchQueue !== ctx.state.researchQueue
+      ? { researchQueue: w.researchQueue }
+      : {}),
+  };
+  if (reward.marks !== undefined && reward.marks > 0) {
+    return chapelBMarkChain({ ...dctx, state: w }, selfEffectId, reward.marks, patch);
+  }
+  return { kind: 'done', patch };
+}
+
+/** On "stop", deduct the pledged mana, commit the marker, apply reward. */
+function astronomyBApplyReward(
+  ctx: EffectContext,
+  selfEffectId: string,
+  pos: number,
+  spent: number,
+): EffectResult {
+  const working: GameState = {
+    ...ctx.state,
+    astronomyTowerMarker: pos,
+    players: ctx.state.players.map((p) =>
+      p.id !== ctx.triggeringPlayerId
+        ? p
+        : {
+            ...p,
+            resources: { ...p.resources, mana: p.resources.mana - spent },
+          },
+    ),
+  };
+  const basePatch: GameStatePatch = {
+    players: working.players,
+    astronomyTowerMarker: working.astronomyTowerMarker,
+  };
+  return astronomyBDispatchReward(ctx, selfEffectId, working, pos, basePatch);
+}
+
+/** Shared resolver for all three Astronomy Tower B slots. */
+function astronomyTowerBSlot(
+  ctx: EffectContext,
+  selfEffectId: string,
+  perSpace: number,
+): EffectResult {
+  const step = ctx.resumeContext?.['step'];
+
+  // Mark-chain continuation (2-Marks space, or choose-previous → marks).
+  if (step === 'after-mark') {
+    if (ctx.resumeAnswer?.kind !== 'voter-chosen') {
+      throw new Error(
+        `${selfEffectId} after-mark expected voter-chosen, got ${ctx.resumeAnswer?.kind}`,
+      );
+    }
+    const markPatch = applyGainMark(
+      ctx.state,
+      ctx.triggeringPlayerId,
+      ctx.resumeAnswer.voterId,
+    );
+    const working: GameState = { ...ctx.state, ...markPatch };
+    const remaining = Number(ctx.resumeContext?.['remaining'] ?? 0);
+    if (remaining <= 0) {
+      return { kind: 'done', patch: markPatch };
+    }
+    return chapelBMarkChain(
+      { ...ctx, state: working },
+      selfEffectId,
+      remaining,
+      { players: working.players, voterMarks: working.voterMarks },
+    );
+  }
+
+  // Vault-draft continuation (Draft 2 Vault Cards).
+  if (step === 'draft-vault') {
+    if (ctx.resumeAnswer?.kind !== 'card-chosen') {
+      throw new Error(
+        `${selfEffectId} draft-vault expected card-chosen, got ${ctx.resumeAnswer?.kind}`,
+      );
+    }
+    const draftPatch = applyVaultDraft(
+      ctx.state,
+      ctx.triggeringPlayerId,
+      ctx.resumeAnswer.cardId,
+    );
+    const working: GameState = { ...ctx.state, ...draftPatch };
+    const remaining = Number(ctx.resumeContext?.['remaining'] ?? 1) - 1;
+    if (remaining <= 0 || working.vaultTableau.length === 0) {
+      return { kind: 'done', patch: draftPatch };
+    }
+    return {
+      kind: 'pause',
+      patch: draftPatch,
+      pending: {
+        responderId: ctx.triggeringPlayerId,
+        prompt: {
+          kind: 'choose-vault-card',
+          eligibleCardIds: [...working.vaultTableau],
+        },
+        resume: { effectId: selfEffectId, context: { step: 'draft-vault', remaining } },
+        source: ctx.source,
+      },
+    };
+  }
+
+  // Gain-mage continuation (colour chosen).
+  if (step === 'gain-mage') {
+    if (ctx.resumeAnswer?.kind !== 'option-chosen') {
+      throw new Error(
+        `${selfEffectId} gain-mage expected option-chosen, got ${ctx.resumeAnswer?.kind}`,
+      );
+    }
+    const color = ctx.resumeAnswer.optionId as MageColor;
+    const player = ctx.state.players.find(
+      (p) => p.id === ctx.triggeringPlayerId,
+    );
+    if (!player || !(color in MAGE_CARD_BY_COLOR)) {
+      return { kind: 'done', patch: {} };
+    }
+    const { available } = dormitoryColorAvailable(ctx.state, player, color);
+    if (!available) return { kind: 'done', patch: {} };
+    const seq = ctx.state.nextSequenceId;
+    const poolCount = ctx.state.mageDraftPool[color] ?? 0;
+    return {
+      kind: 'done',
+      patch: {
+        nextSequenceId: seq + 1,
+        mageDraftPool: { ...ctx.state.mageDraftPool, [color]: poolCount - 1 },
+        players: ctx.state.players.map((p) =>
+          p.id !== ctx.triggeringPlayerId
+            ? p
+            : {
+                ...p,
+                mages: [
+                  ...p.mages,
+                  {
+                    id: `m-${seq}`,
+                    cardId: MAGE_CARD_BY_COLOR[color],
+                    color,
+                    location: {
+                      kind: 'office' as const,
+                      playerId: ctx.triggeringPlayerId,
+                    },
+                    isShadowing: false,
+                    isWounded: false,
+                  },
+                ],
+              },
+        ),
+      },
+    };
+  }
+
+  // Choose-previous continuation (which earlier space's reward).
+  if (step === 'choose-prev') {
+    if (ctx.resumeAnswer?.kind !== 'option-chosen') {
+      throw new Error(
+        `${selfEffectId} choose-prev expected option-chosen, got ${ctx.resumeAnswer?.kind}`,
+      );
+    }
+    const chosen = Number(ctx.resumeAnswer.optionId);
+    if (!Number.isInteger(chosen) || chosen < 1 || chosen >= ASTRONOMY_B_LAST) {
+      return { kind: 'done', patch: {} };
+    }
+    // Mana + marker already committed before this pause; apply the chosen
+    // reward against the current state with an empty base patch.
+    return astronomyBDispatchReward(ctx, selfEffectId, ctx.state, chosen, {});
+  }
+
+  // Move-loop continuation.
+  if (step === 'choose') {
+    if (ctx.resumeAnswer?.kind !== 'option-chosen') {
+      throw new Error(
+        `${selfEffectId} choose expected option-chosen, got ${ctx.resumeAnswer?.kind}`,
+      );
+    }
+    const pos = Number(ctx.resumeContext?.['pos'] ?? 0);
+    const spent = Number(ctx.resumeContext?.['spent'] ?? 0);
+    const moves = Number(ctx.resumeContext?.['moves'] ?? 0);
+    if (ctx.resumeAnswer.optionId === 'decline') {
+      return { kind: 'done', patch: {} };
+    }
+    if (ctx.resumeAnswer.optionId === 'stop') {
+      return astronomyBApplyReward(ctx, selfEffectId, pos, spent);
+    }
+    if (ctx.resumeAnswer.optionId !== 'move') {
+      throw new Error(
+        `${selfEffectId}: unknown option ${ctx.resumeAnswer.optionId}`,
+      );
+    }
+    const player = ctx.state.players.find(
+      (p) => p.id === ctx.triggeringPlayerId,
+    );
+    const newSpent = spent + perSpace;
+    if (!player || player.resources.mana < newSpent) {
+      if (moves >= 1) return astronomyBApplyReward(ctx, selfEffectId, pos, spent);
+      return { kind: 'done', patch: {} };
+    }
+    const newPos = Math.min(pos + 1, ASTRONOMY_B_LAST);
+    return astronomyBMovePrompt(
+      ctx,
+      selfEffectId,
+      perSpace,
+      newPos,
+      newSpent,
+      moves + 1,
+    );
+  }
+
+  // First entry — the first move is a paid choice (no free move).
+  const player = ctx.state.players.find(
+    (p) => p.id === ctx.triggeringPlayerId,
+  );
+  if (!player) return { kind: 'done', patch: {} };
+  if (player.resources.mana < perSpace) {
+    return { kind: 'done', patch: {} };
+  }
+  return astronomyBMovePrompt(
+    ctx,
+    selfEffectId,
+    perSpace,
+    ctx.state.astronomyTowerMarker,
+    0,
+    0,
+  );
+}
+
+registerEffect(
+  'base.room.astronomy-tower-b.slot-1',
+  (ctx: EffectContext): EffectResult =>
+    astronomyTowerBSlot(ctx, 'base.room.astronomy-tower-b.slot-1', 2),
+);
+
+registerEffect(
+  'base.room.astronomy-tower-b.slot-2',
+  (ctx: EffectContext): EffectResult =>
+    astronomyTowerBSlot(ctx, 'base.room.astronomy-tower-b.slot-2', 2),
+);
+
+registerEffect(
+  'base.room.astronomy-tower-b.slot-3',
+  (ctx: EffectContext): EffectResult =>
+    astronomyTowerBSlot(ctx, 'base.room.astronomy-tower-b.slot-3', 1),
+);
+
+// ============================================================================
 // Sorcery Mage — Ars Magna (fast action: spend 1 Mana, wound a Mage, take its slot)
 // ============================================================================
 

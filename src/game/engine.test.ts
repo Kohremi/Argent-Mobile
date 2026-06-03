@@ -13214,6 +13214,264 @@ describe('Astronomy Tower Side A (move-the-marker track)', () => {
   });
 });
 
+describe('Astronomy Tower Side B (mana track, clamps + resets)', () => {
+  // Track (indices):
+  //   0: Start (no reward)
+  //   1: 5 Mana
+  //   2: 8 Gold
+  //   3: 2 Marks
+  //   4: 1 INT + 1 WIS + 1 Research
+  //   5: Draft 2 Vault Cards
+  //   6: Gain a Mage from the supply
+  //   7: Choose any previous reward (last; clamps here)
+
+  it('slot 3 (merit, 1 Mana/space): pay to move; reaches 5 Mana on one move', () => {
+    let s = setupRoomSlotTest(
+      'Astronomy Tower',
+      'B',
+      'base.room.astronomy-tower.b.slot-3',
+    );
+    s = setMana(s, 'p1', 5);
+    expect(s.astronomyTowerMarker).toBe(0);
+    s = driveToResolution(s);
+    // First prompt: move (pay 1 Mana) / decline. Move once → index 1 = 5 Mana.
+    let prompt = topPending(s);
+    if (prompt.prompt.kind !== 'choose-from-options') throw new Error('unreachable');
+    expect(prompt.prompt.options.map((o) => o.id).sort()).toEqual([
+      'decline',
+      'move',
+    ]);
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: prompt.id,
+      answer: { kind: 'option-chosen', optionId: 'move', payload: {} },
+    });
+    // Now at index 1. Stop & claim 5 Mana.
+    prompt = topPending(s);
+    if (prompt.prompt.kind !== 'choose-from-options') throw new Error('unreachable');
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: prompt.id,
+      answer: { kind: 'option-chosen', optionId: 'stop', payload: {} },
+    });
+    expect(s.astronomyTowerMarker).toBe(1);
+    // Mana: 5 - 1 (one move) + 5 (reward) = 9.
+    expect(s.players.find((p) => p.id === 'p1')?.resources.mana).toBe(9);
+  });
+
+  it('slot 1 (2 Mana/space): claiming the 8 Gold space (two moves)', () => {
+    let s = setupRoomSlotTest(
+      'Astronomy Tower',
+      'B',
+      'base.room.astronomy-tower.b.slot-1',
+    );
+    s = setMana(s, 'p1', 10);
+    s = driveToResolution(s);
+    // Move twice (0→1→2) paying 2 each, then stop on 8 Gold.
+    for (let i = 0; i < 2; i++) {
+      const prompt = topPending(s);
+      if (prompt.prompt.kind !== 'choose-from-options') throw new Error('unreachable');
+      s = applyAction(s, {
+        type: 'RESOLVE_PENDING',
+        resolutionId: prompt.id,
+        answer: { kind: 'option-chosen', optionId: 'move', payload: {} },
+      });
+    }
+    const stopPrompt = topPending(s);
+    if (stopPrompt.prompt.kind !== 'choose-from-options') throw new Error('unreachable');
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: stopPrompt.id,
+      answer: { kind: 'option-chosen', optionId: 'stop', payload: {} },
+    });
+    expect(s.astronomyTowerMarker).toBe(2);
+    const alice = s.players.find((p) => p.id === 'p1')!;
+    expect(alice.resources.gold).toBe(8);
+    expect(alice.resources.mana).toBe(6); // 10 - 2*2
+  });
+
+  it('the marker CLAMPS at the last space — moving past the end stays put', () => {
+    let s = setupRoomSlotTest(
+      'Astronomy Tower',
+      'B',
+      'base.room.astronomy-tower.b.slot-3',
+    );
+    // Start one space before the end (index 6) with plenty of mana.
+    s = { ...s, astronomyTowerMarker: 6 };
+    s = setMana(s, 'p1', 10);
+    s = driveToResolution(s);
+    // Move once → clamps to index 7 (Choose any previous). No further move.
+    let prompt = topPending(s);
+    if (prompt.prompt.kind !== 'choose-from-options') throw new Error('unreachable');
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: prompt.id,
+      answer: { kind: 'option-chosen', optionId: 'move', payload: {} },
+    });
+    prompt = topPending(s);
+    if (prompt.prompt.kind !== 'choose-from-options') throw new Error('unreachable');
+    // At the end: only "stop" should be offered (no "move").
+    expect(prompt.prompt.options.map((o) => o.id)).toEqual(['stop']);
+    // Stop → choose-previous prompt opens.
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: prompt.id,
+      answer: { kind: 'option-chosen', optionId: 'stop', payload: {} },
+    });
+    expect(s.astronomyTowerMarker).toBe(7);
+    const choosePrompt = topPending(s);
+    expect(choosePrompt.prompt.kind).toBe('choose-from-options');
+  });
+
+  it('at the last space, pay once to activate "Choose any previous reward" without moving', () => {
+    let s = setupRoomSlotTest(
+      'Astronomy Tower',
+      'B',
+      'base.room.astronomy-tower.b.slot-3',
+    );
+    s = { ...s, astronomyTowerMarker: 7 }; // already at the end
+    s = setMana(s, 'p1', 10);
+    s = driveToResolution(s);
+    // First prompt: "Activate ... (pay 1 Mana)" / decline.
+    let prompt = topPending(s);
+    if (prompt.prompt.kind !== 'choose-from-options') throw new Error('unreachable');
+    expect(prompt.prompt.options.map((o) => o.id).sort()).toEqual([
+      'decline',
+      'move',
+    ]);
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: prompt.id,
+      answer: { kind: 'option-chosen', optionId: 'move', payload: {} },
+    });
+    // Marker stayed at 7. Now stop → choose-previous.
+    prompt = topPending(s);
+    if (prompt.prompt.kind !== 'choose-from-options') throw new Error('unreachable');
+    expect(prompt.prompt.options.map((o) => o.id)).toEqual(['stop']);
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: prompt.id,
+      answer: { kind: 'option-chosen', optionId: 'stop', payload: {} },
+    });
+    expect(s.astronomyTowerMarker).toBe(7); // didn't move past the end
+    // Choose-previous menu lists indices 1..6.
+    const choose = topPending(s);
+    if (choose.prompt.kind !== 'choose-from-options') throw new Error('unreachable');
+    expect(choose.prompt.options.map((o) => o.id)).toEqual([
+      '1',
+      '2',
+      '3',
+      '4',
+      '5',
+      '6',
+    ]);
+    // Pick "5 Mana" (index 1).
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: choose.id,
+      answer: { kind: 'option-chosen', optionId: '1', payload: {} },
+    });
+    // Mana: 10 - 1 (activate) + 5 (chosen reward) = 14.
+    expect(s.players.find((p) => p.id === 'p1')?.resources.mana).toBe(14);
+  });
+
+  it('Draft 2 Vault Cards space: drafts two tableau cards for free', () => {
+    let s = setupRoomSlotTest(
+      'Astronomy Tower',
+      'B',
+      'base.room.astronomy-tower.b.slot-3',
+    );
+    s = { ...s, astronomyTowerMarker: 4 }; // one move → index 5 (Draft 2 Vault)
+    s = setMana(s, 'p1', 10);
+    s = {
+      ...s,
+      vaultTableau: ['base.vault.gilded-chalice', 'base.vault.runestone'],
+      vaultDeck: [],
+    };
+    s = driveToResolution(s);
+    // Move once → index 5, then stop & claim → vault-card prompt.
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'option-chosen', optionId: 'move', payload: {} },
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'option-chosen', optionId: 'stop', payload: {} },
+    });
+    // First vault pick.
+    let vp = topPending(s);
+    expect(vp.prompt.kind).toBe('choose-vault-card');
+    if (vp.prompt.kind !== 'choose-vault-card') throw new Error('unreachable');
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: vp.id,
+      answer: { kind: 'card-chosen', cardId: 'base.vault.gilded-chalice' },
+    });
+    // Second vault pick.
+    vp = topPending(s);
+    expect(vp.prompt.kind).toBe('choose-vault-card');
+    if (vp.prompt.kind !== 'choose-vault-card') throw new Error('unreachable');
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: vp.id,
+      answer: { kind: 'card-chosen', cardId: 'base.vault.runestone' },
+    });
+    const alice = s.players.find((p) => p.id === 'p1')!;
+    expect(alice.vaultCards.map((v) => v.cardId).sort()).toEqual([
+      'base.vault.gilded-chalice',
+      'base.vault.runestone',
+    ]);
+  });
+
+  it('Gain a Mage space: colour picker adds a mage from the supply', () => {
+    let s = setupRoomSlotTest(
+      'Astronomy Tower',
+      'B',
+      'base.room.astronomy-tower.b.slot-3',
+    );
+    s = { ...s, astronomyTowerMarker: 5 }; // one move → index 6 (Gain a Mage)
+    s = setMana(s, 'p1', 10);
+    const redBefore = s.mageDraftPool.red;
+    s = driveToResolution(s);
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'option-chosen', optionId: 'move', payload: {} },
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'option-chosen', optionId: 'stop', payload: {} },
+    });
+    // Colour picker.
+    const cp = topPending(s);
+    expect(cp.prompt.kind).toBe('choose-from-options');
+    if (cp.prompt.kind !== 'choose-from-options') throw new Error('unreachable');
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: cp.id,
+      answer: { kind: 'option-chosen', optionId: 'red', payload: {} },
+    });
+    const alice = s.players.find((p) => p.id === 'p1')!;
+    expect(alice.mages.filter((m) => m.color === 'red')).toHaveLength(1);
+    expect(s.mageDraftPool.red).toBe(redBefore - 1);
+  });
+
+  it('the marker RESETS to 0 at round-setup (Side B only)', () => {
+    let s = setupRoomSlotTest(
+      'Astronomy Tower',
+      'B',
+      'base.room.astronomy-tower.b.slot-3',
+    );
+    s = { ...s, astronomyTowerMarker: 5 };
+    s = { ...s, phase: { kind: 'round-setup', round: 2 } };
+    s = applyAction(s, { type: 'ADVANCE_PHASE' });
+    expect(s.astronomyTowerMarker).toBe(0);
+  });
+});
+
 describe('Great Hall (instant; chain place up to 3)', () => {
   /**
    * Sets up p1 with `mageCount` blue mages in office, Great Hall as the

@@ -2619,6 +2619,7 @@ function processRoundSetup(state: GameState, round: RoundNumber): GameState {
   let updated = state;
   if (round > 1) {
     updated = clearArchmagesApprentice(updated);
+    updated = resetAstronomyTowerBMarker(updated);
     updated = returnSummonedMagesToSupply(updated);
     updated = refreshPlayerCardsAndMerit(updated);
     updated = redealTableaus(updated);
@@ -2694,6 +2695,20 @@ function clearArchmagesApprentice(state: GameState): GameState {
     players,
     rooms,
   };
+}
+
+/**
+ * Resets the Astronomy Tower marker to the start (index 0) — but only
+ * when Side B is the in-play Astronomy Tower. Side A's marker persists
+ * between rounds; Side B's resets each round. If neither side is in
+ * play the field is a harmless leftover and we leave it alone.
+ */
+function resetAstronomyTowerBMarker(state: GameState): GameState {
+  const hasSideB = state.rooms.some(
+    (r) => r.id === 'base.room.astronomy-tower.b',
+  );
+  if (!hasSideB || state.astronomyTowerMarker === 0) return state;
+  return { ...state, astronomyTowerMarker: 0 };
 }
 
 /**
