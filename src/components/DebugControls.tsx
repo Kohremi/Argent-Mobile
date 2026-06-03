@@ -3860,11 +3860,11 @@ const ASTRONOMY_A_TRACK_DISPLAY: {
 function AstronomyTowerTrack({ state }: { state: GameState }) {
   const marker = state.astronomyTowerMarker;
   return (
-    <div className="space-y-1">
+    <div className="space-y-1 text-center">
       <div className="text-[10px] uppercase tracking-wide text-slate-400">
         Reward track — marker on space {marker + 1}
       </div>
-      <div className="flex gap-1">
+      <div className="flex gap-1 justify-center">
         {ASTRONOMY_A_TRACK_DISPLAY.map((space, i) => {
           const isMarker = i === marker;
           return (
