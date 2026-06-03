@@ -4879,24 +4879,35 @@ function astronomyMovePrompt(
   perSpace: number,
   pos: number,
   spent: number,
+  moves: number,
 ): EffectResult {
   const player = ctx.state.players.find(
     (p) => p.id === ctx.triggeringPlayerId,
   );
   const goldLeft = (player?.resources.gold ?? 0) - spent;
-  const reward = ASTRONOMY_A_TRACK[pos]!;
-  const options: ChoiceOption[] = [
-    {
+  const canMove = goldLeft >= perSpace;
+  const options: ChoiceOption[] = [];
+  if (moves >= 1) {
+    // The marker has moved at least once → the reward is claimable.
+    options.push({
       id: 'stop',
-      label: `Stop & claim: ${reward.label}`,
+      label: `Stop & claim: ${ASTRONOMY_A_TRACK[pos]!.label}`,
       payload: {},
-    },
-  ];
-  if (goldLeft >= perSpace) {
+    });
+  } else {
+    // Haven't moved yet (slots 2/3) — declining claims NOTHING. You must
+    // move the marker at least one space to claim a reward.
+    options.push({
+      id: 'decline',
+      label: 'Do not move — claim no reward',
+      payload: {},
+    });
+  }
+  if (canMove) {
     const nextPos = (pos + 1) % ASTRONOMY_A_TRACK.length;
     options.push({
       id: 'move',
-      label: `Move 1 more → ${ASTRONOMY_A_TRACK[nextPos]!.label} (pay ${perSpace} Gold)`,
+      label: `Move 1 ${moves >= 1 ? 'more ' : ''}→ ${ASTRONOMY_A_TRACK[nextPos]!.label} (pay ${perSpace} Gold)`,
       payload: {},
     });
   }
@@ -4907,7 +4918,7 @@ function astronomyMovePrompt(
       prompt: { kind: 'choose-from-options', options },
       resume: {
         effectId: selfEffectId,
-        context: { step: 'choose', pos, spent },
+        context: { step: 'choose', pos, spent, moves },
       },
       source: ctx.source,
     },
@@ -5035,6 +5046,12 @@ function astronomyTowerSlot(
     }
     const pos = Number(ctx.resumeContext?.['pos'] ?? 0);
     const spent = Number(ctx.resumeContext?.['spent'] ?? 0);
+    const moves = Number(ctx.resumeContext?.['moves'] ?? 0);
+    if (ctx.resumeAnswer.optionId === 'decline') {
+      // Chose not to move from the start (slots 2/3) — no reward, no
+      // gold spent, marker unchanged.
+      return { kind: 'done', patch: {} };
+    }
     if (ctx.resumeAnswer.optionId === 'stop') {
       return astronomyApplyReward(ctx, selfEffectId, pos, spent);
     }
@@ -5049,30 +5066,49 @@ function astronomyTowerSlot(
     );
     const newSpent = spent + cfg.perSpace;
     if (!player || player.resources.gold < newSpent) {
-      // Can't afford — claim at the current position instead.
-      return astronomyApplyReward(ctx, selfEffectId, pos, spent);
+      // Can't afford the move now — claim at the current position if the
+      // marker has already moved, else fizzle (nothing to claim yet).
+      if (moves >= 1) {
+        return astronomyApplyReward(ctx, selfEffectId, pos, spent);
+      }
+      return { kind: 'done', patch: {} };
     }
     const newPos = (pos + 1) % ASTRONOMY_A_TRACK.length;
-    return astronomyMovePrompt(ctx, selfEffectId, cfg.perSpace, newPos, newSpent);
+    return astronomyMovePrompt(
+      ctx,
+      selfEffectId,
+      cfg.perSpace,
+      newPos,
+      newSpent,
+      moves + 1,
+    );
   }
 
-  // First entry — the mandatory first move.
+  // First entry.
   const player = ctx.state.players.find(
     (p) => p.id === ctx.triggeringPlayerId,
   );
   if (!player) return { kind: 'done', patch: {} };
-  const firstCost = cfg.firstFree ? 0 : cfg.perSpace;
-  // Can't make even the mandatory first move → fizzle.
-  if (player.resources.gold < firstCost) {
+  if (cfg.firstFree) {
+    // Slot 1 (merit): the first space is free and automatic — advance
+    // the marker, then offer to keep moving or stop & claim.
+    const startPos =
+      (ctx.state.astronomyTowerMarker + 1) % ASTRONOMY_A_TRACK.length;
+    return astronomyMovePrompt(ctx, selfEffectId, cfg.perSpace, startPos, 0, 1);
+  }
+  // Slots 2 / 3: the first move is a paid CHOICE — moving is required to
+  // claim anything. If the player can't afford it, fizzle outright.
+  if (player.resources.gold < cfg.perSpace) {
     return { kind: 'done', patch: {} };
   }
-  const startPos = (ctx.state.astronomyTowerMarker + 1) % ASTRONOMY_A_TRACK.length;
+  // Offer move/decline from the CURRENT marker position (not yet moved).
   return astronomyMovePrompt(
     ctx,
     selfEffectId,
     cfg.perSpace,
-    startPos,
-    firstCost,
+    ctx.state.astronomyTowerMarker,
+    0,
+    0,
   );
 }
 

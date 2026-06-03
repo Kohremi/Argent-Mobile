@@ -13069,7 +13069,7 @@ describe('Astronomy Tower Side A (move-the-marker track)', () => {
     expect(s.players.find((p) => p.id === 'p1')?.resources.gold).toBe(17);
   });
 
-  it('slot 2 (2 Gold/space): the first move is paid; landing on 1 WIS + 2 Mana wraps from the end', () => {
+  it('slot 2 (2 Gold/space): the first move is a paid choice; landing on 1 WIS + 2 Mana wraps from the end', () => {
     let s = setupRoomSlotTest(
       'Astronomy Tower',
       'A',
@@ -13079,9 +13079,24 @@ describe('Astronomy Tower Side A (move-the-marker track)', () => {
     s = { ...s, astronomyTowerMarker: 5 };
     s = setGold(s, 'p1', 10);
     s = driveToResolution(s);
-    // First (paid) move from 5 wraps to 0 = 1 WIS + 2 Mana. Stop.
-    const prompt = topPending(s);
+    // The first prompt offers move/decline (NOT stop — nothing claimable
+    // until the marker moves at least once on slots 2/3).
+    let prompt = topPending(s);
     if (prompt.prompt.kind !== 'choose-from-options') throw new Error('unreachable');
+    expect(prompt.prompt.options.map((o) => o.id).sort()).toEqual([
+      'decline',
+      'move',
+    ]);
+    // Pay 2 Gold to move from 5 → wraps to 0 = 1 WIS + 2 Mana.
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: prompt.id,
+      answer: { kind: 'option-chosen', optionId: 'move', payload: {} },
+    });
+    // Now at index 0 with the marker moved → stop is offered.
+    prompt = topPending(s);
+    if (prompt.prompt.kind !== 'choose-from-options') throw new Error('unreachable');
+    expect(prompt.prompt.options.map((o) => o.id)).toContain('stop');
     s = applyAction(s, {
       type: 'RESOLVE_PENDING',
       resolutionId: prompt.id,
@@ -13092,6 +13107,28 @@ describe('Astronomy Tower Side A (move-the-marker track)', () => {
     expect(alice.resources.wisdom).toBe(1);
     expect(alice.resources.mana).toBe(2);
     expect(alice.resources.gold).toBe(8); // 10 - 2 (one paid move)
+  });
+
+  it('slot 2: declining the first move claims NOTHING (no reward, no gold spent, marker unchanged)', () => {
+    let s = setupRoomSlotTest(
+      'Astronomy Tower',
+      'A',
+      'base.room.astronomy-tower.a.slot-2',
+    );
+    s = { ...s, astronomyTowerMarker: 3 };
+    s = setGold(s, 'p1', 10);
+    s = driveToResolution(s);
+    const prompt = topPending(s);
+    if (prompt.prompt.kind !== 'choose-from-options') throw new Error('unreachable');
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: prompt.id,
+      answer: { kind: 'option-chosen', optionId: 'decline', payload: {} },
+    });
+    // Nothing happened: marker stays at 3, gold unchanged, no pending.
+    expect(s.astronomyTowerMarker).toBe(3);
+    expect(s.players.find((p) => p.id === 'p1')?.resources.gold).toBe(10);
+    expect(s.pendingResolutionStack).toHaveLength(0);
   });
 
   it('slot 2 fizzles when the player cannot afford even the first paid move', () => {
