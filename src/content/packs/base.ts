@@ -408,7 +408,7 @@ const baseSpellBooks: SpellCard[] = [
     levels: [
       { level: 1, title: 'Mana Drain', manaCost: 0, timing: 'action', effectId: 'base.spell.thirteen-greater-mysteries.l1', description: 'Steal 1 mana from a single opponent.' },
       { level: 2, title: 'Tap the Well', manaCost: 0, timing: 'action', effectId: 'base.spell.thirteen-greater-mysteries.l2', description: 'Cast a Level 1 Spell from the Spell Tableau, paying all costs.' },
-      { level: 3, title: 'Energy Drain', manaCost: 0, timing: 'action', effectId: 'base.spell.thirteen-greater-mysteries.l3', description: 'X is the number of opponents in the game. During this round, opponents must pay you 1 extra mana in order to cast a Spell.' },
+      { level: 3, title: 'Energy Drain', manaCost: 0, manaCostKind: 'opponents', timing: 'action', effectId: 'base.spell.thirteen-greater-mysteries.l3', description: 'Costs X Mana, where X is the number of opponents in the game. During this round, opponents must pay you 1 extra mana in order to cast a Spell.' },
     ],
   },
   {

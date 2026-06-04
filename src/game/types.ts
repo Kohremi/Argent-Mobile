@@ -253,6 +253,14 @@ export interface SpellLevel {
   level: 1 | 2 | 3;
   title: string;
   manaCost: number;
+  /**
+   * How `manaCost` is interpreted. Omitted/`'fixed'` = the printed `manaCost`
+   * number. `'opponents'` = the cost is X, the number of opponents in the
+   * game (total players − 1) — e.g. Energy Drain (Thirteen Greater Mysteries
+   * L3). The `manaCost` field is kept as a display fallback. Compute the live
+   * value with `spellLevelBaseManaCost`.
+   */
+  manaCostKind?: 'fixed' | 'opponents';
   effectId: EffectId;
   timing: SpellTiming;
   /** Human-readable effect text for this level, copied from the card. */

@@ -9,7 +9,11 @@ import { useGameStore } from '../store/gameStore';
 import { baseGamePack } from '../content/packs/base';
 import { listPacks } from '../content/registry';
 import { computeFinalScoring, type VoterAward } from '../game/scoring';
-import { actsAsColor, countPlayerMagesInRoom } from '../game/effects/helpers';
+import {
+  actsAsColor,
+  countPlayerMagesInRoom,
+  spellLevelBaseManaCost,
+} from '../game/effects/helpers';
 import { BellIcon, LockIcon, MageIcon, ResourceIcon, ShieldIcon, type ResourceKind } from './icons';
 import type {
   BendTimeKind,
@@ -2075,7 +2079,7 @@ function PlayerCard({
                           {lv.timing}
                         </span>
                         <span className="text-[10px] uppercase text-cyan-300/70 inline-flex items-center gap-0.5">
-                          {lv.manaCost}
+                          {spellLevelBaseManaCost(state, lv)}
                           <ResourceIcon kind="mana" size={10} />
                         </span>
                         <span className="text-slate-400/80 flex-1">
@@ -2480,7 +2484,7 @@ function SpellAcquirePicker({
                   <span className="text-slate-300">
                     L{lv.level} {lv.title}
                   </span>{' '}
-                  ({lv.manaCost} Mana, {lv.timing}):{' '}
+                  ({spellLevelBaseManaCost(state, lv)} Mana, {lv.timing}):{' '}
                   <span className="italic">{lv.description ?? ''}</span>
                 </p>
               ))}
@@ -2888,7 +2892,7 @@ function TableauPanel({
                           {lv.timing}
                         </span>
                         <span className="text-[10px] text-cyan-300/70 inline-flex items-center gap-0.5">
-                          {lv.manaCost}
+                          {spellLevelBaseManaCost(state, lv)}
                           <ResourceIcon kind="mana" size={9} />
                         </span>
                       </li>

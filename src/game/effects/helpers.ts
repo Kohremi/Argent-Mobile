@@ -29,6 +29,7 @@ import type {
   SerializableValue,
   SpellCard,
   SpellCardId,
+  SpellLevel,
   SupporterCard,
   SupporterCardId,
   VaultCard,
@@ -322,6 +323,22 @@ export function spellManaDiscountFor(
     total += b.discount;
   }
   return total;
+}
+
+/**
+ * Base printed Mana cost of a spell level BEFORE discounts/surcharges. Most
+ * levels are a fixed number; a level with `manaCostKind: 'opponents'` costs X,
+ * the number of opponents in the game (total players − 1) — e.g. Energy Drain
+ * (Thirteen Greater Mysteries L3).
+ */
+export function spellLevelBaseManaCost(
+  state: GameState,
+  level: SpellLevel,
+): number {
+  if (level.manaCostKind === 'opponents') {
+    return Math.max(0, state.players.length - 1);
+  }
+  return level.manaCost;
 }
 
 /**

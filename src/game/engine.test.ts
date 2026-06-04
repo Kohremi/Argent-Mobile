@@ -21859,6 +21859,8 @@ describe('Energy Drain (Thirteen Greater Mysteries L3)', () => {
       wisPlacedLevel3: true,
     });
     s = addOwnedSpell(s, 'p2', 'base.spell.burn', { intPlaced: true });
+    // Energy Drain costs X = opponents (1 in a 2-player game), so fund Alice.
+    s = setMana(s, 'p1', 1);
     // Bob needs 2 mana to cast Burn (printed 1 + surcharge 1).
     s = setMana(s, 'p2', 2);
     s = addMage(s, 'p1', {
@@ -21981,6 +21983,58 @@ describe('Energy Drain (Thirteen Greater Mysteries L3)', () => {
         level: 1,
       }),
     ).toThrow(/insufficient mana/);
+  });
+
+  it('costs X = opponents to cast: 1 Mana with 2 players, 3 Mana with 4', () => {
+    // 2-player: X = 1.
+    let s2 = setupEnergyDrain();
+    s2 = setMana(s2, 'p1', 1);
+    s2 = applyAction(s2, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.thirteen-greater-mysteries',
+      level: 3,
+    });
+    expect(s2.players.find((p) => p.id === 'p1')!.resources.mana).toBe(0);
+
+    // 4-player: X = 3.
+    let s4 = initGame(FOUR_PLAYER_CONFIG);
+    s4 = zeroPlayerResources(s4, 'p1');
+    s4 = addOwnedSpell(s4, 'p1', 'base.spell.thirteen-greater-mysteries', {
+      intPlaced: true,
+      wisPlacedLevel2: true,
+      wisPlacedLevel3: true,
+    });
+    s4 = setMana(s4, 'p1', 3);
+    s4 = {
+      ...s4,
+      firstPlayerIndex: 0,
+      phase: {
+        kind: 'errands',
+        round: 1,
+        activePlayerIndex: 0,
+        actionUsed: false,
+        fastActionUsed: false,
+      },
+    };
+    // 2 Mana is not enough for X = 3.
+    expect(() =>
+      applyAction({ ...s4, players: s4.players.map((p) => (p.id === 'p1' ? { ...p, resources: { ...p.resources, mana: 2 } } : p)) }, {
+        type: 'CAST_SPELL',
+        playerId: 'p1',
+        spellCardId: 'base.spell.thirteen-greater-mysteries',
+        level: 3,
+      }),
+    ).toThrow(/insufficient mana/);
+    // 3 Mana pays exactly.
+    s4 = applyAction(s4, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.thirteen-greater-mysteries',
+      level: 3,
+    });
+    expect(s4.players.find((p) => p.id === 'p1')!.resources.mana).toBe(0);
+    expect(s4.activeBuffs.some((b) => b.kind === 'energy-drain')).toBe(true);
   });
 });
 

@@ -21,6 +21,7 @@ import {
   lookupCandidate,
   MAGE_CARD_BY_COLOR,
   placementsBlocked,
+  spellLevelBaseManaCost,
   spellManaDiscountFor,
   spellManaSurchargesAgainst,
   spellsBlocked,
@@ -1526,7 +1527,10 @@ function handleCastSpell(state: GameState, action: CastSpellAction): GameState {
   // opponents add a surcharge — opponents' Mana flows to those buff holders,
   // the caster still pays it as part of their cost.
   const discount = spellManaDiscountFor(state, action.playerId);
-  const discountedCost = Math.max(0, levelDef.manaCost - discount);
+  // Energy Drain (L3) costs X = number of opponents, resolved here against the
+  // live player count; other levels use the printed cost.
+  const printedCost = spellLevelBaseManaCost(state, levelDef);
+  const discountedCost = Math.max(0, printedCost - discount);
   const surcharges = spellManaSurchargesAgainst(state, action.playerId);
   const surchargeTotal = surcharges.reduce((sum, s) => sum + s.amount, 0);
   const baseCost = player.nextSpellFreeMana ? 0 : discountedCost;
