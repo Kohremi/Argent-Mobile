@@ -309,6 +309,16 @@ const researchArchiveA: Room = {
   ],
 };
 
+// ============================================================================
+// Research Archive Side B — non-instant.
+//   Slot 1 (merit, 1 MB): Gain 1 INT + 1 Research, OR Gain 2 WIS (a choice).
+//   Slot 2 (regular):     Gain 2 Research, then move up to 3 Research (== A.2).
+//   Slot 3 (regular):     Swap one of your (non-leader) Spells with one from
+//                         the Tableau, transferring ALL of its Research to the
+//                         new Spell. Driven by the board UI: click your own
+//                         Spell, then click the Tableau Spell to swap to.
+// ============================================================================
+
 const researchArchiveB: Room = {
   id: 'mancers.room.research-archive.b',
   name: 'Research Archive',
@@ -318,7 +328,39 @@ const researchArchiveB: Room = {
   isInstantRoom: false,
   cannotBePlacedInDirectly: false,
   cannotBeLocked: false,
-  actionSpaces: [],
+  description:
+    'Gain Research, rearrange WIS tokens, or swap one of your Spells with the Tableau (its Research transfers to the new Spell).',
+  actionSpaces: [
+    {
+      id: 'mancers.room.research-archive.b.slot-1',
+      roomId: 'mancers.room.research-archive.b',
+      index: 0,
+      slotType: 'merit',
+      occupant: null,
+      effectId: 'mancers.room.research-archive-b.slot-1',
+      costToActivate: { meritBadges: 1 },
+      description: 'Gain 1 INT and 1 Research, OR gain 2 WIS.',
+    },
+    {
+      id: 'mancers.room.research-archive.b.slot-2',
+      roomId: 'mancers.room.research-archive.b',
+      index: 1,
+      slotType: 'regular',
+      occupant: null,
+      effectId: 'mancers.room.research-archive-b.slot-2',
+      description: 'Gain 2 Research, then move up to 3 Research.',
+    },
+    {
+      id: 'mancers.room.research-archive.b.slot-3',
+      roomId: 'mancers.room.research-archive.b',
+      index: 2,
+      slotType: 'regular',
+      occupant: null,
+      effectId: 'mancers.room.research-archive-b.slot-3',
+      description:
+        'Swap one of your Spells with one from the Tableau; transfer all its Research to the new Spell.',
+    },
+  ],
 };
 
 export const mancersPack: ContentPack = {

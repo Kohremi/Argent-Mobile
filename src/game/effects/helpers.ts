@@ -2112,6 +2112,63 @@ export function applyMoveWisBetweenSpells(
   };
 }
 
+/**
+ * Swaps an owned Spell with one from the Spell Tableau, transferring ALL of
+ * the owned Spell's Research (its placed INT + WIS levels) to the new Spell.
+ * The owned Spell returns to the Tableau in the drafted Spell's slot — so the
+ * Tableau size is unchanged and the deck is untouched — and the new Spell
+ * joins the player's spellbook at the same research level (and unexhausted).
+ * Used by the Mancers Research Archive Side B slot 3. Throws if the source
+ * isn't owned, the source is a unique (leader) Spell, or the destination
+ * isn't in the Tableau.
+ */
+export function applySwapOwnedSpellWithTableau(
+  state: GameState,
+  playerId: PlayerId,
+  sourceSpellId: SpellCardId,
+  destSpellId: SpellCardId,
+): GameStatePatch {
+  const player = findPlayer(state, playerId);
+  if (!player) {
+    throw new Error(`applySwapOwnedSpellWithTableau: player ${playerId} not found`);
+  }
+  const owned = player.ownedSpells.find((s) => s.cardId === sourceSpellId);
+  if (!owned) {
+    throw new Error(`applySwapOwnedSpellWithTableau: ${sourceSpellId} not owned`);
+  }
+  if (lookupSpellCardDef(state, sourceSpellId)?.unique) {
+    throw new Error('applySwapOwnedSpellWithTableau: cannot swap a unique Spell');
+  }
+  const destIdx = state.spellTableau.indexOf(destSpellId);
+  if (destIdx === -1) {
+    throw new Error(`applySwapOwnedSpellWithTableau: ${destSpellId} not in tableau`);
+  }
+  return {
+    // The outgoing Spell takes the drafted Spell's tableau slot (no refill).
+    spellTableau: state.spellTableau.map((c, i) =>
+      i === destIdx ? sourceSpellId : c,
+    ),
+    players: state.players.map((p) =>
+      p.id !== playerId
+        ? p
+        : {
+            ...p,
+            ownedSpells: p.ownedSpells.map((s) =>
+              s.cardId !== sourceSpellId
+                ? s
+                : {
+                    cardId: destSpellId,
+                    intPlaced: owned.intPlaced,
+                    wisPlacedLevel2: owned.wisPlacedLevel2,
+                    wisPlacedLevel3: owned.wisPlacedLevel3,
+                    exhausted: false,
+                  },
+            ),
+          },
+    ),
+  };
+}
+
 // ============================================================================
 // Marks, Supporters, Secret Supporters
 // ============================================================================

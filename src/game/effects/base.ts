@@ -21,6 +21,7 @@ import {
   buildInfirmaryBonusOptions,
   applyMoveWisBetweenSpells,
   applySecretSupporterDraw,
+  applySwapOwnedSpellWithTableau,
   applySupporterDraft,
   applyVaultDraft,
   applyVaultPurchase,
@@ -691,6 +692,37 @@ registerEffect('base.system.spend-research', (ctx): EffectResult => {
       },
     };
   }
+  if (optionId === 'swap-spell') {
+    // Research Archive B slot 3: swap an owned (non-unique) Spell with one
+    // from the Tableau, transferring all its Research. This surfaces the
+    // source pick (the player's own Spells); the destination Tableau pick and
+    // apply happen in `research-swap-spell`.
+    const swapSources = player.ownedSpells.filter(
+      (s) => !lookupSpellCardDef(ctx.state, s.cardId)?.unique,
+    );
+    if (swapSources.length === 0 || ctx.state.spellTableau.length === 0) {
+      return { kind: 'done', patch: {} };
+    }
+    return {
+      kind: 'pause',
+      pending: {
+        responderId: ctx.triggeringPlayerId,
+        prompt: {
+          kind: 'choose-from-options',
+          options: swapSources.map((s) => ({
+            id: s.cardId,
+            label: `Swap out ${spellLabel(ctx.state, s.cardId)}`,
+            payload: {},
+          })),
+        },
+        resume: {
+          effectId: 'base.system.research-swap-spell',
+          context: { step: 'pick-dest' },
+        },
+        source: ctx.source,
+      },
+    };
+  }
   throw new Error(`spend-research: unknown optionId ${optionId}`);
 });
 
@@ -817,6 +849,76 @@ registerEffect('base.system.research-move-int', (ctx): EffectResult => {
     };
   }
   throw new Error(`research-move-int unexpected step ${String(step)}`);
+});
+
+/**
+ * Research Archive B slot 3: swap an owned Spell with one from the Tableau,
+ * transferring all of the owned Spell's Research to the new Spell. Two steps:
+ * the source (own Spell) arrives as the resume answer with step='pick-dest';
+ * the next prompt is the destination Tableau Spell; the final step applies
+ * the swap. The owned Spell returns to the Tableau in the drafted slot.
+ */
+registerEffect('base.system.research-swap-spell', (ctx): EffectResult => {
+  const step = ctx.resumeContext?.['step'];
+  if (step === 'pick-dest') {
+    if (ctx.resumeAnswer?.kind !== 'option-chosen') {
+      throw new Error('research-swap-spell pick-dest expected option-chosen');
+    }
+    const sourceCardId = ctx.resumeAnswer.optionId;
+    if (ctx.state.spellTableau.length === 0) return { kind: 'done', patch: {} };
+    return {
+      kind: 'pause',
+      pending: {
+        responderId: ctx.triggeringPlayerId,
+        prompt: {
+          kind: 'choose-from-options',
+          options: ctx.state.spellTableau.map((cid) => ({
+            id: cid,
+            label: `Swap to ${spellLabel(ctx.state, cid)}`,
+            payload: {},
+          })),
+        },
+        resume: {
+          effectId: 'base.system.research-swap-spell',
+          context: { step: 'apply', sourceCardId },
+        },
+        source: ctx.source,
+      },
+    };
+  }
+  if (step === 'apply') {
+    if (ctx.resumeAnswer?.kind !== 'option-chosen') {
+      throw new Error('research-swap-spell apply expected option-chosen');
+    }
+    const destCardId = ctx.resumeAnswer.optionId;
+    const sourceCardId = ctx.resumeContext?.['sourceCardId'];
+    if (typeof sourceCardId !== 'string') {
+      throw new Error('research-swap-spell apply: missing sourceCardId');
+    }
+    const player = ctx.state.players.find(
+      (p) => p.id === ctx.triggeringPlayerId,
+    );
+    // Re-validate against the live state (source still owned & non-unique,
+    // dest still in the tableau) before applying.
+    if (
+      !player ||
+      !player.ownedSpells.some((s) => s.cardId === sourceCardId) ||
+      lookupSpellCardDef(ctx.state, sourceCardId)?.unique ||
+      !ctx.state.spellTableau.includes(destCardId)
+    ) {
+      return { kind: 'done', patch: {} };
+    }
+    return {
+      kind: 'done',
+      patch: applySwapOwnedSpellWithTableau(
+        ctx.state,
+        ctx.triggeringPlayerId,
+        sourceCardId,
+        destCardId,
+      ),
+    };
+  }
+  throw new Error(`research-swap-spell unexpected step ${String(step)}`);
 });
 
 /** Spell-research action: add 1 WIS to a learned spell (L2 then L3). */

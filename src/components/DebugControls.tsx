@@ -86,6 +86,9 @@ interface ResearchInputMode {
    *  offers only the move-WIS action, so the UI relabels the banner / stop
    *  button ("Done moving" instead of "Discard Research"). */
   moveOnly: boolean;
+  /** Swap-spell opportunity (Research Archive B slot 3): click one of your
+   *  own Spells, then a Tableau Spell to swap to. Relabels the banners. */
+  swapOnly: boolean;
   onClickTableauSpell: (cardId: string) => void;
   onClickIntToken: (cardId: string) => void;
   onClickWisToken: (cardId: string) => void;
@@ -719,6 +722,7 @@ export function DebugControls() {
     const restrictDepartment =
       typeof restrictRaw === 'string' ? restrictRaw : null;
     const moveOnly = top.resume.context?.['moveOnly'] === true;
+    const swapOnly = top.resume.context?.['swapOnly'] === true;
     // Chains a sequence of option-chosen RESOLVE_PENDING dispatches.
     // Reads fresh state between dispatches so we always target the
     // current top-of-stack prompt id.
@@ -747,6 +751,7 @@ export function DebugControls() {
       responderLabel,
       restrictDepartment,
       moveOnly,
+      swapOnly,
       source: researchMoveSource,
       onClickTableauSpell: (cardId: string) => {
         // Department-restricted research: bail early if the picked card
@@ -761,6 +766,14 @@ export function DebugControls() {
           if (!availableOptions.has('draft')) return;
           chain(['draft', cardId]);
         } else if (researchMoveSource.kind === 'int') {
+          // Swap-spell (Research Archive B) takes priority over move-INT —
+          // the two share the "click own Spell, then a Tableau Spell" gesture
+          // but a given prompt only offers one of them.
+          if (availableOptions.has('swap-spell')) {
+            chain(['swap-spell', researchMoveSource.cardId, cardId]);
+            setResearchMoveSource(null);
+            return;
+          }
           if (!availableOptions.has('move-int')) return;
           chain(['move-int', researchMoveSource.cardId, cardId]);
           setResearchMoveSource(null);
@@ -773,7 +786,8 @@ export function DebugControls() {
           setResearchMoveSource({ kind: 'int', cardId });
           return;
         }
-        if (!availableOptions.has('move-int')) return;
+        if (!availableOptions.has('move-int') && !availableOptions.has('swap-spell'))
+          return;
         setResearchMoveSource({ kind: 'int', cardId });
       },
       onClickWisToken: (cardId: string) => {
@@ -1036,14 +1050,17 @@ function PendingPanel({
         <div className="space-y-2">
           {researchMode.source === null ? (
             <p className="text-xs text-amber-200/90 italic">
-              {researchMode.moveOnly
-                ? 'Move Research: click a placed WIS token, then click an empty WIS slot on another owned spell.'
-                : 'Click a spell in the tableau to learn it, an empty WIS slot to upgrade an owned spell, or an INT / WIS token to start a move.'}
+              {researchMode.swapOnly
+                ? 'Swap a Spell: click one of your own Spells (its INT box), then click a Tableau Spell to swap to — its Research transfers.'
+                : researchMode.moveOnly
+                  ? 'Move Research: click a placed WIS token, then click an empty WIS slot on another owned spell.'
+                  : 'Click a spell in the tableau to learn it, an empty WIS slot to upgrade an owned spell, or an INT / WIS token to start a move.'}
             </p>
           ) : researchMode.source.kind === 'int' ? (
             <p className="text-xs text-amber-200/90 italic">
-              Moving INT from {researchMode.source.cardId} — click a spell
-              in the tableau as the destination, or cancel.
+              {researchMode.swapOnly
+                ? `Swapping ${researchMode.source.cardId} — click a Tableau Spell to swap to (its Research transfers), or cancel.`
+                : `Moving INT from ${researchMode.source.cardId} — click a spell in the tableau as the destination, or cancel.`}
             </p>
           ) : (
             <p className="text-xs text-amber-200/90 italic">
@@ -1066,7 +1083,11 @@ function PendingPanel({
               onClick={researchMode.onDiscard}
               className="px-3 py-1.5 rounded bg-slate-700 hover:bg-slate-600 text-sm"
             >
-              {researchMode.moveOnly ? 'Done moving' : 'Discard Research'}
+              {researchMode.swapOnly
+                ? 'Skip swap'
+                : researchMode.moveOnly
+                  ? 'Done moving'
+                  : 'Discard Research'}
             </button>
           </div>
         </div>
@@ -1974,11 +1995,14 @@ function PlayerCard({
                         if (
                           owned &&
                           tokenKind === 'int' &&
-                          researchMode.availableOptions.has('move-int')
+                          (researchMode.availableOptions.has('move-int') ||
+                            researchMode.availableOptions.has('swap-spell'))
                         ) {
                           researchClick = () =>
                             researchMode.onClickIntToken(s.cardId);
-                          researchHint = 'Move this INT to a new spell';
+                          researchHint = researchMode.swapOnly
+                            ? 'Swap this Spell with the Tableau'
+                            : 'Move this INT to a new spell';
                         } else if (
                           owned &&
                           tokenKind === 'wis' &&
@@ -2910,7 +2934,9 @@ function TableauPanel({
                       title={
                         researchMode.source === null
                           ? 'Click to learn this spell (uses 1 INT)'
-                          : 'Click to draft this as the new spell (move INT)'
+                          : researchMode.swapOnly
+                            ? 'Click to swap to this spell (your Research transfers)'
+                            : 'Click to draft this as the new spell (move INT)'
                       }
                     >
                       {body}

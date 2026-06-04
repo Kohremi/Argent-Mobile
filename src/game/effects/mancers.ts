@@ -11,6 +11,7 @@ import {
   gainResourcePatch,
   gainResourcesPatch,
   healMageToSpace,
+  lookupSpellCardDef,
   woundMage,
 } from './helpers';
 import type {
@@ -911,6 +912,101 @@ registerEffect('mancers.room.research-archive-a.slot-2', (ctx): EffectResult =>
 registerEffect('mancers.room.research-archive-a.slot-3', (ctx): EffectResult =>
   researchArchiveSlot(ctx, { gainResearch: 1, moves: 2 }),
 );
+
+// ============================================================================
+// Research Archive Side B
+//   Slot 1: OR choice — Gain 1 INT + 1 Research, OR Gain 2 WIS.
+//   Slot 2: Gain 2 Research, then move up to 3 Research (reuses side A).
+//   Slot 3: Swap one of your (non-leader) Spells with one from the Tableau,
+//           transferring all its Research. Routed through spend-research's
+//           `swap-spell` action so the board UI (click your Spell, then the
+//           Tableau Spell) drives it.
+// ============================================================================
+
+registerEffect('mancers.room.research-archive-b.slot-1', (ctx): EffectResult => {
+  // Step 2: apply the chosen option.
+  if (ctx.resumeContext?.['step'] === 'choose') {
+    if (ctx.resumeAnswer?.kind !== 'option-chosen') {
+      throw new Error('research-archive-b slot-1 expected option-chosen');
+    }
+    if (ctx.resumeAnswer.optionId === 'wis2') {
+      return {
+        kind: 'done',
+        patch: gainResourcePatch(ctx.state, ctx.triggeringPlayerId, 'wisdom', 2),
+      };
+    }
+    // 'int-research': gain 1 INT now and queue 1 Research.
+    const intPatch = gainResourcePatch(
+      ctx.state,
+      ctx.triggeringPlayerId,
+      'intelligence',
+      1,
+    );
+    const working: GameState = { ...ctx.state, ...intPatch };
+    const rPatch = appendResearchQueueInline(
+      working,
+      ctx.triggeringPlayerId,
+      ctx.source,
+      1,
+    );
+    return { kind: 'done', patch: { ...intPatch, ...rPatch } };
+  }
+  // Step 1: surface the OR prompt.
+  return {
+    kind: 'pause',
+    pending: {
+      responderId: ctx.triggeringPlayerId,
+      prompt: {
+        kind: 'choose-from-options',
+        options: [
+          { id: 'int-research', label: 'Gain 1 INT and 1 Research', payload: {} },
+          { id: 'wis2', label: 'Gain 2 WIS', payload: {} },
+        ],
+      },
+      resume: {
+        effectId: 'mancers.room.research-archive-b.slot-1',
+        context: { step: 'choose' },
+      },
+      source: ctx.source,
+    },
+  };
+});
+
+registerEffect('mancers.room.research-archive-b.slot-2', (ctx): EffectResult =>
+  researchArchiveSlot(ctx, { gainResearch: 2, moves: 3 }),
+);
+
+registerEffect('mancers.room.research-archive-b.slot-3', (ctx): EffectResult => {
+  // Fizzle silently if there's no legal swap (no non-leader Spell owned, or
+  // an empty Tableau). Otherwise surface the swap menu through spend-research
+  // so the board UI drives the two clicks (own Spell → Tableau Spell).
+  const player = ctx.state.players.find((p) => p.id === ctx.triggeringPlayerId);
+  if (!player || ctx.state.spellTableau.length === 0) {
+    return { kind: 'done', patch: {} };
+  }
+  const hasSwappable = player.ownedSpells.some(
+    (s) => !lookupSpellCardDef(ctx.state, s.cardId)?.unique,
+  );
+  if (!hasSwappable) return { kind: 'done', patch: {} };
+  return {
+    kind: 'pause',
+    pending: {
+      responderId: ctx.triggeringPlayerId,
+      prompt: {
+        kind: 'choose-from-options',
+        options: [
+          { id: 'swap-spell', label: 'Swap a Spell with the Tableau', payload: {} },
+          { id: 'discard', label: 'Skip — no swap', payload: {} },
+        ],
+      },
+      resume: {
+        effectId: 'base.system.spend-research',
+        context: { swapOnly: true },
+      },
+      source: ctx.source,
+    },
+  };
+});
 
 // Re-export to satisfy the module's existing `export {}` shape.
 export {};

@@ -9764,6 +9764,156 @@ describe('Research Archive A (Mancers)', () => {
 });
 
 // ============================================================================
+// Research Archive B (Mancers) — slot 1 OR (1 INT + 1 Research / 2 WIS),
+// slot 2 (== A slot 2), slot 3 (swap an owned Spell with the Tableau,
+// transferring all its Research).
+// ============================================================================
+
+describe('Research Archive B (Mancers)', () => {
+  function forceResearchArchiveB(state: GameState): GameState {
+    const room = mancersPack.rooms.find(
+      (r) => r.name === 'Research Archive' && r.side === 'B',
+    );
+    if (!room) throw new Error('test helper: Research Archive B not in pack');
+    const replaceIdx = state.rooms.findIndex((r) => !r.isUniversityCentral);
+    if (replaceIdx === -1) return state;
+    return {
+      ...state,
+      rooms: state.rooms.map((r, i) => (i === replaceIdx ? room : r)),
+    };
+  }
+
+  function setup(slotId: string): GameState {
+    let s = initGame(TWO_PLAYER_CONFIG);
+    s = forceResearchArchiveB(s);
+    s = addMage(s, 'p1', {
+      id: 'alice-mage',
+      cardId: 'base.mage.neutral',
+      color: 'off-white',
+    });
+    s = placeMageOnSpace(s, 'p1', 'alice-mage', slotId);
+    s = zeroPlayerResources(s, 'p1');
+    s = setMeritBadges(s, 'p1', 5);
+    s = { ...s, bellTower: { ...s.bellTower, available: [] } };
+    return s;
+  }
+
+  function chooseOption(state: GameState, optionId: string): GameState {
+    const p = topPending(state);
+    if (p.prompt.kind !== 'choose-from-options') {
+      throw new Error(`expected choose-from-options, got ${p.prompt.kind}`);
+    }
+    return applyAction(state, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: p.id,
+      answer: { kind: 'option-chosen', optionId, payload: {} },
+    });
+  }
+
+  function p1(state: GameState) {
+    return state.players.find((p) => p.id === 'p1')!;
+  }
+
+  it('slot 1: choosing "2 WIS" gains 2 WIS', () => {
+    let s = setup('mancers.room.research-archive.b.slot-1');
+    s = driveToResolution(s);
+    s = chooseOption(s, 'wis2');
+    expect(p1(s).resources.wisdom).toBe(2);
+    expect(s.pendingResolutionStack).toHaveLength(0);
+  });
+
+  it('slot 1: choosing "1 INT + 1 Research" gains the INT and queues a Research', () => {
+    let s = setup('mancers.room.research-archive.b.slot-1');
+    s = driveToResolution(s);
+    s = chooseOption(s, 'int-research');
+    expect(p1(s).resources.intelligence).toBe(1);
+    // The 1 Research drains into a normal research menu (spend-research).
+    expect(topPending(s).resume.effectId).toBe('base.system.spend-research');
+    expect(topPending(s).resume.context?.['moveOnly']).toBeFalsy();
+  });
+
+  it('slot 2: gains 2 Research before offering the move loop (== side A)', () => {
+    let s = setup('mancers.room.research-archive.b.slot-2');
+    // Give Alice a movable token so the move loop has something to offer.
+    s = addOwnedSpell(s, 'p1', 'base.spell.burn', {
+      intPlaced: true,
+      wisPlacedLevel2: true,
+    });
+    s = addOwnedSpell(s, 'p1', 'base.spell.thirteen-greater-mysteries', {
+      intPlaced: true,
+    });
+    s = driveToResolution(s);
+    // Research first: the move menu hasn't surfaced yet.
+    expect(topPending(s).resume.context?.['moveOnly']).toBeFalsy();
+    expect(s.researchQueue.length).toBe(2);
+  });
+
+  it('slot 3: swap transfers all Research and returns the old Spell to the Tableau', () => {
+    let s = setup('mancers.room.research-archive.b.slot-3');
+    s = addOwnedSpell(s, 'p1', 'base.spell.burn', {
+      intPlaced: true,
+      wisPlacedLevel2: true,
+    });
+    s = { ...s, spellTableau: ['base.spell.thirteen-greater-mysteries'] };
+    s = driveToResolution(s);
+    // The swap menu routes through spend-research so the board UI drives it.
+    expect(topPending(s).resume.effectId).toBe('base.system.spend-research');
+    expect(topPending(s).resume.context?.['swapOnly']).toBe(true);
+    s = chooseOption(s, 'swap-spell');
+    s = chooseOption(s, 'base.spell.burn'); // swap out
+    s = chooseOption(s, 'base.spell.thirteen-greater-mysteries'); // swap to
+    const me = p1(s);
+    expect(me.ownedSpells.find((sp) => sp.cardId === 'base.spell.burn')).toBeUndefined();
+    const gained = me.ownedSpells.find(
+      (sp) => sp.cardId === 'base.spell.thirteen-greater-mysteries',
+    )!;
+    expect(gained.intPlaced).toBe(true);
+    expect(gained.wisPlacedLevel2).toBe(true); // Research transferred
+    expect(gained.exhausted).toBe(false);
+    // The outgoing Spell took the drafted Spell's slot — Tableau size kept.
+    expect(s.spellTableau).toContain('base.spell.burn');
+    expect(s.spellTableau).not.toContain('base.spell.thirteen-greater-mysteries');
+    expect(s.spellTableau).toHaveLength(1);
+  });
+
+  it('slot 3: leader (unique) Spells are excluded from the swap sources', () => {
+    let s = setup('mancers.room.research-archive.b.slot-3');
+    s = addOwnedSpell(s, 'p1', 'base.spell.burn', { intPlaced: true });
+    // base.spell.bless is a unique leader Spell.
+    s = addOwnedSpell(s, 'p1', 'base.spell.bless', { intPlaced: true });
+    s = { ...s, spellTableau: ['base.spell.thirteen-greater-mysteries'] };
+    s = driveToResolution(s);
+    s = chooseOption(s, 'swap-spell');
+    const top = topPending(s);
+    if (top.prompt.kind !== 'choose-from-options') throw new Error('unreachable');
+    const ids = top.prompt.options.map((o) => o.id);
+    expect(ids).toContain('base.spell.burn');
+    expect(ids).not.toContain('base.spell.bless');
+  });
+
+  it('slot 3: fizzles with no prompt when the Tableau is empty', () => {
+    let s = setup('mancers.room.research-archive.b.slot-3');
+    s = addOwnedSpell(s, 'p1', 'base.spell.burn', { intPlaced: true });
+    s = { ...s, spellTableau: [] };
+    s = driveToResolution(s);
+    expect(s.pendingResolutionStack).toHaveLength(0);
+  });
+
+  it('slot 3: "Skip swap" leaves spells and the Tableau unchanged', () => {
+    let s = setup('mancers.room.research-archive.b.slot-3');
+    s = addOwnedSpell(s, 'p1', 'base.spell.burn', { intPlaced: true });
+    s = { ...s, spellTableau: ['base.spell.thirteen-greater-mysteries'] };
+    s = driveToResolution(s);
+    s = chooseOption(s, 'discard');
+    expect(
+      p1(s).ownedSpells.find((sp) => sp.cardId === 'base.spell.burn'),
+    ).toBeDefined();
+    expect(s.spellTableau).toEqual(['base.spell.thirteen-greater-mysteries']);
+    expect(s.pendingResolutionStack).toHaveLength(0);
+  });
+});
+
+// ============================================================================
 // Council Chamber A — Draft a Supporter OR Gain a Mark, capped at 1/round
 // ============================================================================
 
