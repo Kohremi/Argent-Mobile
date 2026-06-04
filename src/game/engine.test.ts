@@ -10257,19 +10257,59 @@ describe('Golem Lab B (Mancers)', () => {
     expect(top.resume.effectId).toBe('mancers.mage.technomancy.place-after');
   });
 
-  it('slot 1: a red golem may Ars Magna-wound an opposing Mage', () => {
-    let s = setup(0, true);
-    const target = 'bob-target';
+  it('slot 1: a red golem uses Ars Magna — wound the occupant, pay 1 Mana, take its slot', () => {
+    let s = setup(1, true); // 1 Mana funds Ars Magna; opponent Mage is placed
+    const bobBefore = s.players
+      .find((p) => p.id === 'p2')!
+      .mages.find((m) => m.id === 'bob-target')!;
+    const slotId =
+      bobBefore.location.kind === 'action-space' ? bobBefore.location.spaceId : '';
     s = place(s, 'mancers.room.golem-lab.b.slot-1');
     s = chooseOption(s, 'red');
-    s = chooseFirstSpace(s);
-    expect(golems(s)[0]!.color).toBe('red');
-    // A wound prompt is offered; wounding sends the target to the Infirmary.
-    s = chooseMage(s, target);
-    const bob = s.players.find((p) => p.id === 'p2')!;
-    const t = bob.mages.find((m) => m.id === target)!;
-    expect(t.isWounded).toBe(true);
-    expect(t.location.kind).toBe('infirmary');
+    // The destination prompt offers the occupied opponent slot (Ars Magna).
+    const dest = topPending(s);
+    if (dest.prompt.kind !== 'choose-target-action-space') {
+      throw new Error('expected choose-target-action-space');
+    }
+    expect(dest.prompt.eligibleSpaceIds).toContain(slotId);
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: dest.id,
+      answer: { kind: 'space-chosen', spaceId: slotId },
+    });
+    // 1 Mana spent on the wound.
+    expect(s.players.find((p) => p.id === 'p1')!.resources.mana).toBe(0);
+    // Drive the standard wound chain: reaction window (pass) → Infirmary bonus.
+    let guard = 0;
+    while (s.pendingResolutionStack.length > 0 && guard++ < 10) {
+      const t = topPending(s);
+      if (t.prompt.kind === 'reaction-window') {
+        s = applyAction(s, {
+          type: 'RESOLVE_PENDING',
+          resolutionId: t.id,
+          answer: { kind: 'reaction-passed' },
+        });
+      } else if (t.prompt.kind === 'choose-from-options') {
+        s = applyAction(s, {
+          type: 'RESOLVE_PENDING',
+          resolutionId: t.id,
+          answer: { kind: 'option-chosen', optionId: t.prompt.options[0]!.id, payload: {} },
+        });
+      } else {
+        break;
+      }
+    }
+    // The opponent's Mage is wounded into the Infirmary.
+    const bob = s.players.find((p) => p.id === 'p2')!.mages.find((m) => m.id === 'bob-target')!;
+    expect(bob.isWounded).toBe(true);
+    expect(bob.location.kind).toBe('infirmary');
+    // A red golem now holds the vacated slot.
+    const space = s.rooms.flatMap((r) => r.actionSpaces).find((sp) => sp.id === slotId)!;
+    expect(space.occupant?.ownerId).toBe('p1');
+    const golem = golems(s).find(
+      (g) => g.location.kind === 'action-space' && g.location.spaceId === slotId,
+    )!;
+    expect(golem.color).toBe('red');
   });
 
   it('slot 2: pays 2 Mana to banish a Mage; a golem seizes its slot', () => {

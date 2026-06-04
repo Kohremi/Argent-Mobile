@@ -10,6 +10,7 @@ import {
   buildBanishTargets,
   buildBurnTargets,
   buildReactionQueue,
+  canArsMagnaTakeSpace,
   eligibleVotersForMark,
   gainResourcePatch,
   gainResourcesPatch,
@@ -1094,6 +1095,39 @@ function summonGolemPatch(
   };
 }
 
+/**
+ * Conjures a golem into the player's OFFICE (not on a slot) and returns its
+ * id. Used by the Side B slot-1 Sorcery (red) golem so it can place via the
+ * standard Ars Magna chain (wound the occupant, then `ars-magna.complete`
+ * moves THIS golem out of the office into the vacated slot).
+ */
+function conjureGolemInOfficePatch(
+  state: GameState,
+  playerId: PlayerId,
+  color: MageColor,
+): { patch: GameStatePatch; golemId: string } {
+  const seq = state.nextSequenceId;
+  const golemId = `m-${seq}`;
+  const golem: OwnedMage = {
+    id: golemId,
+    cardId: GOLEM_CARD_ID,
+    color,
+    location: { kind: 'office', playerId },
+    isShadowing: false,
+    isWounded: false,
+    isTemporary: true,
+  };
+  return {
+    patch: {
+      nextSequenceId: seq + 1,
+      players: state.players.map((p) =>
+        p.id !== playerId ? p : { ...p, mages: [...p.mages, golem] },
+      ),
+    },
+    golemId,
+  };
+}
+
 /** Shared first-step gate for the pay-then-place golem slots (1 and 3): check
  *  Mana affordability + an open destination, then prompt for the slot. */
 function golemPlacePrompt(
@@ -1269,48 +1303,80 @@ function opposingPlacedTargets(
   });
 }
 
-// Slot 1 — place a golem that takes a chosen Mage power.
+// Slot 1 — place a golem that takes a chosen Mage power. The golem places like
+// a normal Mage of that colour: a Sorcery (red) golem may use Ars Magna —
+// place on top of a vulnerable opponent's Mage, pay 1 Mana, wound it, and take
+// its slot — exactly like the normal red Mage power.
 registerEffect('mancers.room.golem-lab-b.slot-1', (ctx): EffectResult => {
   const self = 'mancers.room.golem-lab-b.slot-1';
   const step = ctx.resumeContext?.['step'];
 
-  // Sorcery (red) Ars Magna follow-up: wound an opposing Mage (or pass).
-  if (step === 'red-wound') {
-    if (ctx.resumeAnswer?.kind === 'pass') return { kind: 'done', patch: {} };
-    if (ctx.resumeAnswer?.kind !== 'mage-chosen') {
-      throw new Error(`${self} red-wound expected mage-chosen`);
-    }
-    const mageId = ctx.resumeAnswer.mageId;
-    const owner = ctx.state.players.find((p) =>
-      p.mages.some((m) => m.id === mageId),
-    );
-    if (!owner) return { kind: 'done', patch: {} };
-    const wounded = woundMage(ctx.state, mageId, ctx.triggeringPlayerId);
-    return {
-      kind: 'open-reaction',
-      patch: wounded.patch,
-      window: {
-        triggerEvents: [wounded.triggerEvent],
-        pendingResponderIds: buildReactionQueue(ctx.state, ctx.triggeringPlayerId),
-        reactedPlayerIds: [],
-        afterResume: {
-          effectId: 'base.system.post-wound-bonus',
-          context: {
-            triggerEvent: wounded.triggerEvent as unknown as SerializableContext,
-          },
-        },
-        source: ctx.source,
-      },
-    };
-  }
-
-  // Place the golem of the chosen colour, then fire its on-place proc.
+  // A destination was chosen — place the golem of the chosen colour.
   if (step === 'place') {
     if (ctx.resumeAnswer?.kind !== 'space-chosen') {
       throw new Error(`${self} place expected space-chosen`);
     }
     const spaceId = ctx.resumeAnswer.spaceId;
     const color = (ctx.resumeContext?.['color'] as MageColor) ?? 'off-white';
+    const space = ctx.state.rooms
+      .flatMap((r) => r.actionSpaces)
+      .find((s) => s.id === spaceId);
+
+    // Sorcery (red) Ars Magna: the chosen slot holds a vulnerable opponent's
+    // Mage. Conjure the red golem in the office, then run the standard wound →
+    // reaction-window → ars-magna.complete chain (which pays nothing further —
+    // the 1 Mana is spent here — and moves the golem into the vacated slot).
+    if (
+      color === 'red' &&
+      space?.occupant &&
+      canArsMagnaTakeSpace(ctx.state, ctx.triggeringPlayerId, space)
+    ) {
+      const targetMageId = space.occupant.mageId;
+      const { patch: conjurePatch, golemId } = conjureGolemInOfficePatch(
+        ctx.state,
+        ctx.triggeringPlayerId,
+        'red',
+      );
+      let working: GameState = { ...ctx.state, ...conjurePatch };
+      working = {
+        ...working,
+        ...gainResourcePatch(working, ctx.triggeringPlayerId, 'mana', -1),
+      };
+      const wounded = woundMage(working, targetMageId, ctx.triggeringPlayerId);
+      working = { ...working, ...wounded.patch };
+      const source: ResolutionSource = {
+        kind: 'mage-power',
+        id: golemId,
+        triggeringPlayerId: ctx.triggeringPlayerId,
+        description: 'Ars Magna (Golem Lab)',
+      };
+      return {
+        kind: 'open-reaction',
+        patch: {
+          players: working.players,
+          rooms: working.rooms,
+          nextSequenceId: working.nextSequenceId,
+          pendingRevivalChecks: working.pendingRevivalChecks,
+        },
+        window: {
+          triggerEvents: [wounded.triggerEvent],
+          pendingResponderIds: buildReactionQueue(working, ctx.triggeringPlayerId),
+          reactedPlayerIds: [],
+          afterResume: {
+            effectId: 'base.mage.sorcery.ars-magna.complete',
+            context: {
+              sourceMageId: golemId,
+              targetSpaceId: spaceId,
+              triggerEvent:
+                wounded.triggerEvent as unknown as SerializableContext,
+            },
+          },
+          source,
+        },
+      };
+    }
+
+    // Otherwise a normal placement into an open slot.
     if (!openBaseSlotsForGolem(ctx.state).includes(spaceId)) {
       return { kind: 'done', patch: {} };
     }
@@ -1340,42 +1406,33 @@ registerEffect('mancers.room.golem-lab-b.slot-1', (ctx): EffectResult => {
       };
     }
 
-    // Sorcery (red): offer an Ars Magna wound of an opposing Mage.
-    if (color === 'red') {
-      const targets = opposingPlacedTargets(
-        buildBurnTargets(working, ctx.triggeringPlayerId),
-        working,
-        ctx.triggeringPlayerId,
-      );
-      if (targets.length > 0) {
-        return {
-          kind: 'pause',
-          patch: placePatch,
-          pending: {
-            responderId: ctx.triggeringPlayerId,
-            prompt: {
-              kind: 'choose-target-mage',
-              eligibleMageIds: targets,
-              canPass: true,
-              label: 'Ars Magna — wound an opposing Mage (or pass)',
-            },
-            resume: { effectId: self, context: { step: 'red-wound' } },
-            source: ctx.source,
-          },
-        };
-      }
-    }
-
     return { kind: 'done', patch: placePatch };
   }
 
-  // A colour was chosen — prompt for the destination slot.
+  // A colour was chosen — prompt for the destination slot. Open slots are
+  // always offered; a red golem ALSO offers vulnerable opponent slots (Ars
+  // Magna targets).
   if (step === 'pick-slot') {
     if (ctx.resumeAnswer?.kind !== 'option-chosen') {
       throw new Error(`${self} pick-slot expected option-chosen`);
     }
     const color = ctx.resumeAnswer.optionId;
-    const slots = openBaseSlotsForGolem(ctx.state);
+    const slots = [...openBaseSlotsForGolem(ctx.state)];
+    if (color === 'red') {
+      for (const r of ctx.state.rooms) {
+        if (r.cannotBePlacedInDirectly) continue;
+        if (isRoomLocked(ctx.state, r.id)) continue;
+        for (const s of r.actionSpaces) {
+          if (
+            s.occupant &&
+            canArsMagnaTakeSpace(ctx.state, ctx.triggeringPlayerId, s) &&
+            !slots.includes(s.id)
+          ) {
+            slots.push(s.id);
+          }
+        }
+      }
+    }
     if (slots.length === 0) return { kind: 'done', patch: {} };
     return {
       kind: 'pause',
