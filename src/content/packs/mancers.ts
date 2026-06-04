@@ -419,6 +419,16 @@ const golemLabA: Room = {
   ],
 };
 
+// ============================================================================
+// Golem Lab Side B — INSTANT room. Conjures temporary golem Mages, but with
+// more aggressive options than Side A.
+//   Slot 1 (merit): Place a golem that takes a chosen Mage power (any type) —
+//                   so its on-place ability (e.g. Technomancy Research, Sorcery
+//                   Ars Magna wound) is available when conjured.
+//   Slot 2:         Pay 2 Mana to BANISH a Mage and drop a golem into its slot.
+//   Slot 3:         Pay 2 Mana to WOUND a Mage and drop a golem into its slot.
+// ============================================================================
+
 const golemLabB: Room = {
   id: 'mancers.room.golem-lab.b',
   name: 'Golem Lab',
@@ -428,7 +438,41 @@ const golemLabB: Room = {
   isInstantRoom: true,
   cannotBePlacedInDirectly: false,
   cannotBeLocked: false,
-  actionSpaces: [],
+  description:
+    'Instant room — conjure a powered golem, or banish / wound a Mage and seize its slot with a golem.',
+  actionSpaces: [
+    {
+      id: 'mancers.room.golem-lab.b.slot-1',
+      roomId: 'mancers.room.golem-lab.b',
+      index: 0,
+      slotType: 'merit',
+      occupant: null,
+      effectId: 'mancers.room.golem-lab-b.slot-1',
+      costToActivate: { meritBadges: 1 },
+      description:
+        'Immediately place a temporary golem Mage that takes a Mage power of your choice (any type).',
+    },
+    {
+      id: 'mancers.room.golem-lab.b.slot-2',
+      roomId: 'mancers.room.golem-lab.b',
+      index: 1,
+      slotType: 'regular',
+      occupant: null,
+      effectId: 'mancers.room.golem-lab-b.slot-2',
+      description:
+        'Immediately pay 2 Mana to banish a Mage and put a temporary golem Mage into its slot.',
+    },
+    {
+      id: 'mancers.room.golem-lab.b.slot-3',
+      roomId: 'mancers.room.golem-lab.b',
+      index: 2,
+      slotType: 'regular',
+      occupant: null,
+      effectId: 'mancers.room.golem-lab-b.slot-3',
+      description:
+        'Immediately pay 2 Mana to wound a Mage and put a temporary golem Mage into its slot.',
+    },
+  ],
 };
 
 export const mancersPack: ContentPack = {

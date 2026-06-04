@@ -10108,6 +10108,212 @@ describe('Golem Lab A (Mancers)', () => {
 });
 
 // ============================================================================
+// Golem Lab B (Mancers) — powered golem (chosen type) / banish+golem /
+// wound+golem.
+// ============================================================================
+
+describe('Golem Lab B (Mancers)', () => {
+  function forceGolemLabB(state: GameState): GameState {
+    const room = mancersPack.rooms.find(
+      (r) => r.name === 'Golem Lab' && r.side === 'B',
+    );
+    if (!room) throw new Error('test helper: Golem Lab B not in pack');
+    const replaceIdx = state.rooms.findIndex((r) => !r.isUniversityCentral);
+    if (replaceIdx === -1) return state;
+    return {
+      ...state,
+      rooms: state.rooms.map((r, i) => (i === replaceIdx ? room : r)),
+    };
+  }
+
+  /** First open base slot that is NOT in the Golem Lab. */
+  function firstOutsideOpenSlot(state: GameState): string {
+    for (const r of state.rooms) {
+      if (r.cannotBePlacedInDirectly) continue;
+      if (r.name === 'Golem Lab') continue;
+      for (const sp of r.actionSpaces) {
+        if (!sp.occupant) return sp.id;
+      }
+    }
+    throw new Error('no open slot found');
+  }
+
+  function setup(mana: number, withOpponentMage = false): GameState {
+    let s = initGame(TWO_PLAYER_CONFIG);
+    s = forceGolemLabB(s);
+    // The Golem Lab is a Mancers room, so treat Mancers as active (enables the
+    // orange/Technomancy power option in slot 1).
+    s = { ...s, activePackIds: ['base', 'mancers'] };
+    s = zeroPlayerResources(s, 'p1');
+    s = setMeritBadges(s, 'p1', 5);
+    s = setMana(s, 'p1', mana);
+    s = addMage(s, 'p1', {
+      id: 'alice-mage',
+      cardId: 'base.mage.neutral',
+      color: 'off-white',
+    });
+    if (withOpponentMage) {
+      s = addMage(s, 'p2', {
+        id: 'bob-target',
+        cardId: 'base.mage.neutral',
+        color: 'off-white',
+      });
+      s = placeMageOnSpace(s, 'p2', 'bob-target', firstOutsideOpenSlot(s));
+    }
+    return {
+      ...s,
+      firstPlayerIndex: 0,
+      phase: {
+        kind: 'errands',
+        round: 1,
+        activePlayerIndex: 0,
+        actionUsed: false,
+        fastActionUsed: false,
+      },
+    };
+  }
+
+  function place(s: GameState, slotId: string): GameState {
+    let next = applyAction(s, {
+      type: 'PLACE_WORKER',
+      playerId: 'p1',
+      mageId: 'alice-mage',
+      actionSpaceId: slotId,
+    });
+    const top = topPending(next);
+    if (top && top.resume.effectId === 'base.system.resolution-choice') {
+      next = applyAction(next, {
+        type: 'RESOLVE_PENDING',
+        resolutionId: top.id,
+        answer: { kind: 'option-chosen', optionId: 'reward', payload: {} },
+      });
+    }
+    return next;
+  }
+
+  function chooseOption(s: GameState, optionId: string): GameState {
+    const top = topPending(s);
+    if (top.prompt.kind !== 'choose-from-options') {
+      throw new Error(`expected choose-from-options, got ${top.prompt.kind}`);
+    }
+    return applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: top.id,
+      answer: { kind: 'option-chosen', optionId, payload: {} },
+    });
+  }
+
+  function chooseFirstSpace(s: GameState): GameState {
+    const top = topPending(s);
+    if (top.prompt.kind !== 'choose-target-action-space') {
+      throw new Error(`expected choose-target-action-space, got ${top.prompt.kind}`);
+    }
+    return applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: top.id,
+      answer: { kind: 'space-chosen', spaceId: top.prompt.eligibleSpaceIds[0]! },
+    });
+  }
+
+  function chooseMage(s: GameState, mageId: string): GameState {
+    const top = topPending(s);
+    if (top.prompt.kind !== 'choose-target-mage') {
+      throw new Error(`expected choose-target-mage, got ${top.prompt.kind}`);
+    }
+    return applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: top.id,
+      answer: { kind: 'mage-chosen', mageId },
+    });
+  }
+
+  function golems(s: GameState) {
+    return s.players.flatMap((p) => p.mages).filter((m) => m.isTemporary);
+  }
+
+  it('slot 1: places a golem of the chosen colour (Mysticism / grey)', () => {
+    let s = setup(0);
+    s = place(s, 'mancers.room.golem-lab.b.slot-1');
+    s = chooseOption(s, 'grey'); // pick the power
+    s = chooseFirstSpace(s);
+    const g = golems(s)[0]!;
+    expect(g.color).toBe('grey');
+    expect(g.cardId).toBe('mancers.mage.golem');
+  });
+
+  it('slot 1: an orange golem queues the Technomancy "pay 3 Gold → Research" proc', () => {
+    let s = setup(0);
+    // Fund the Gold so the Technomancy trigger surfaces its prompt.
+    s = mapPlayer(s, 'p1', (p) => ({
+      ...p,
+      resources: { ...p.resources, gold: 3 },
+    }));
+    s = place(s, 'mancers.room.golem-lab.b.slot-1');
+    s = chooseOption(s, 'orange');
+    s = chooseFirstSpace(s);
+    expect(golems(s)[0]!.color).toBe('orange');
+    // The Technomancer post-placement proc surfaces a pay/skip prompt.
+    const top = topPending(s);
+    expect(top.resume.effectId).toBe('mancers.mage.technomancy.place-after');
+  });
+
+  it('slot 1: a red golem may Ars Magna-wound an opposing Mage', () => {
+    let s = setup(0, true);
+    const target = 'bob-target';
+    s = place(s, 'mancers.room.golem-lab.b.slot-1');
+    s = chooseOption(s, 'red');
+    s = chooseFirstSpace(s);
+    expect(golems(s)[0]!.color).toBe('red');
+    // A wound prompt is offered; wounding sends the target to the Infirmary.
+    s = chooseMage(s, target);
+    const bob = s.players.find((p) => p.id === 'p2')!;
+    const t = bob.mages.find((m) => m.id === target)!;
+    expect(t.isWounded).toBe(true);
+    expect(t.location.kind).toBe('infirmary');
+  });
+
+  it('slot 2: pays 2 Mana to banish a Mage; a golem seizes its slot', () => {
+    let s = setup(2, true);
+    s = place(s, 'mancers.room.golem-lab.b.slot-2');
+    // Capture the target's slot, then banish it.
+    const bobBefore = s.players.find((p) => p.id === 'p2')!.mages.find((m) => m.id === 'bob-target')!;
+    const slotId =
+      bobBefore.location.kind === 'action-space' ? bobBefore.location.spaceId : '';
+    s = chooseMage(s, 'bob-target');
+    expect(s.players.find((p) => p.id === 'p1')!.resources.mana).toBe(0);
+    // Bob's mage is banished back to his office.
+    const bob = s.players.find((p) => p.id === 'p2')!.mages.find((m) => m.id === 'bob-target')!;
+    expect(bob.location).toEqual({ kind: 'office', playerId: 'p2' });
+    // A golem now holds that slot.
+    const space = s.rooms.flatMap((r) => r.actionSpaces).find((sp) => sp.id === slotId)!;
+    expect(space.occupant?.ownerId).toBe('p1');
+    expect(golems(s).some((g) => g.location.kind === 'action-space' && g.location.spaceId === slotId)).toBe(true);
+  });
+
+  it('slot 3: pays 2 Mana to wound a Mage; a golem seizes its slot', () => {
+    let s = setup(2, true);
+    s = place(s, 'mancers.room.golem-lab.b.slot-3');
+    const bobBefore = s.players.find((p) => p.id === 'p2')!.mages.find((m) => m.id === 'bob-target')!;
+    const slotId =
+      bobBefore.location.kind === 'action-space' ? bobBefore.location.spaceId : '';
+    s = chooseMage(s, 'bob-target');
+    expect(s.players.find((p) => p.id === 'p1')!.resources.mana).toBe(0);
+    const bob = s.players.find((p) => p.id === 'p2')!.mages.find((m) => m.id === 'bob-target')!;
+    expect(bob.isWounded).toBe(true);
+    expect(bob.location.kind).toBe('infirmary');
+    const space = s.rooms.flatMap((r) => r.actionSpaces).find((sp) => sp.id === slotId)!;
+    expect(space.occupant?.ownerId).toBe('p1');
+  });
+
+  it('slots 2/3 fizzle (no prompt) when the player cannot pay 2 Mana', () => {
+    let s = setup(1, true);
+    s = place(s, 'mancers.room.golem-lab.b.slot-2');
+    expect(s.pendingResolutionStack).toHaveLength(0);
+    expect(golems(s)).toHaveLength(0);
+  });
+});
+
+// ============================================================================
 // Council Chamber A — Draft a Supporter OR Gain a Mark, capped at 1/round
 // ============================================================================
 

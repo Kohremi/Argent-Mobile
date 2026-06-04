@@ -6,6 +6,8 @@ import {
   applyGainMark,
   applyRoomLockPatch,
   applyVaultPurchaseMaybeWaived,
+  banishMage,
+  buildBanishTargets,
   buildBurnTargets,
   buildReactionQueue,
   eligibleVotersForMark,
@@ -1057,12 +1059,13 @@ function summonGolemPatch(
   playerId: PlayerId,
   spaceId: ActionSpaceId,
   asShadow: boolean,
+  color: MageColor = 'off-white',
 ): GameStatePatch {
   const seq = state.nextSequenceId;
   const golem: OwnedMage = {
     id: `m-${seq}`,
     cardId: GOLEM_CARD_ID,
-    color: 'off-white',
+    color,
     location: { kind: 'action-space', spaceId },
     isShadowing: asShadow,
     isWounded: false,
@@ -1227,6 +1230,323 @@ registerEffect('mancers.room.golem-lab-a.slot-3', (ctx): EffectResult => {
     };
   }
   return { kind: 'done', patch };
+});
+
+// ============================================================================
+// Golem Lab Side B — INSTANT room.
+//   Slot 1 (merit): place a golem that takes a chosen Mage power (any type),
+//                   so its on-place ability is available when conjured. The
+//                   immediately-usable procs are Technomancy (orange → pay 3
+//                   Gold for a Research) and Sorcery (red → Ars Magna, wound
+//                   an opposing Mage). Other colours are carried on the golem
+//                   for a later normal re-placement (e.g. after heal).
+//   Slot 2:         Pay 2 Mana → banish a Mage → drop a golem into its slot.
+//   Slot 3:         Pay 2 Mana → wound a Mage → drop a golem into its slot.
+// ============================================================================
+
+const GOLEM_COLOR_OPTIONS: { color: MageColor; label: string; pack?: string }[] = [
+  { color: 'red', label: 'Sorcery (red) — Ars Magna wound' },
+  { color: 'blue', label: 'Divinity (blue)' },
+  { color: 'grey', label: 'Mysticism (grey)' },
+  { color: 'green', label: 'Natural Magick (green)' },
+  { color: 'purple', label: 'Planar Studies (purple)' },
+  { color: 'orange', label: 'Technomancy (orange) — Research', pack: 'mancers' },
+];
+
+/** Opposing, currently-PLACED targets (a golem can only seize a slot that a
+ *  Mage actually occupies). Filters a target-id list to opponents' Mages
+ *  sitting in an action space. */
+function opposingPlacedTargets(
+  ids: string[],
+  state: GameState,
+  playerId: PlayerId,
+): string[] {
+  return ids.filter((mid) => {
+    const owner = state.players.find((p) => p.mages.some((m) => m.id === mid));
+    if (!owner || owner.id === playerId) return false;
+    const m = owner.mages.find((mm) => mm.id === mid);
+    return m?.location.kind === 'action-space';
+  });
+}
+
+// Slot 1 — place a golem that takes a chosen Mage power.
+registerEffect('mancers.room.golem-lab-b.slot-1', (ctx): EffectResult => {
+  const self = 'mancers.room.golem-lab-b.slot-1';
+  const step = ctx.resumeContext?.['step'];
+
+  // Sorcery (red) Ars Magna follow-up: wound an opposing Mage (or pass).
+  if (step === 'red-wound') {
+    if (ctx.resumeAnswer?.kind === 'pass') return { kind: 'done', patch: {} };
+    if (ctx.resumeAnswer?.kind !== 'mage-chosen') {
+      throw new Error(`${self} red-wound expected mage-chosen`);
+    }
+    const mageId = ctx.resumeAnswer.mageId;
+    const owner = ctx.state.players.find((p) =>
+      p.mages.some((m) => m.id === mageId),
+    );
+    if (!owner) return { kind: 'done', patch: {} };
+    const wounded = woundMage(ctx.state, mageId, ctx.triggeringPlayerId);
+    return {
+      kind: 'open-reaction',
+      patch: wounded.patch,
+      window: {
+        triggerEvents: [wounded.triggerEvent],
+        pendingResponderIds: buildReactionQueue(ctx.state, ctx.triggeringPlayerId),
+        reactedPlayerIds: [],
+        afterResume: {
+          effectId: 'base.system.post-wound-bonus',
+          context: {
+            triggerEvent: wounded.triggerEvent as unknown as SerializableContext,
+          },
+        },
+        source: ctx.source,
+      },
+    };
+  }
+
+  // Place the golem of the chosen colour, then fire its on-place proc.
+  if (step === 'place') {
+    if (ctx.resumeAnswer?.kind !== 'space-chosen') {
+      throw new Error(`${self} place expected space-chosen`);
+    }
+    const spaceId = ctx.resumeAnswer.spaceId;
+    const color = (ctx.resumeContext?.['color'] as MageColor) ?? 'off-white';
+    if (!openBaseSlotsForGolem(ctx.state).includes(spaceId)) {
+      return { kind: 'done', patch: {} };
+    }
+    const placePatch = summonGolemPatch(
+      ctx.state,
+      ctx.triggeringPlayerId,
+      spaceId,
+      false,
+      color,
+    );
+    const working: GameState = { ...ctx.state, ...placePatch };
+
+    // Technomancy (orange): queue the "pay 3 Gold → Research" trigger.
+    if (color === 'orange') {
+      const room = working.rooms.find((r) =>
+        r.actionSpaces.some((s) => s.id === spaceId),
+      );
+      return {
+        kind: 'done',
+        patch: {
+          ...placePatch,
+          pendingTechnomancyTrigger: [
+            ...working.pendingTechnomancyTrigger,
+            { playerId: ctx.triggeringPlayerId, roomId: room?.id ?? '' },
+          ],
+        },
+      };
+    }
+
+    // Sorcery (red): offer an Ars Magna wound of an opposing Mage.
+    if (color === 'red') {
+      const targets = opposingPlacedTargets(
+        buildBurnTargets(working, ctx.triggeringPlayerId),
+        working,
+        ctx.triggeringPlayerId,
+      );
+      if (targets.length > 0) {
+        return {
+          kind: 'pause',
+          patch: placePatch,
+          pending: {
+            responderId: ctx.triggeringPlayerId,
+            prompt: {
+              kind: 'choose-target-mage',
+              eligibleMageIds: targets,
+              canPass: true,
+              label: 'Ars Magna — wound an opposing Mage (or pass)',
+            },
+            resume: { effectId: self, context: { step: 'red-wound' } },
+            source: ctx.source,
+          },
+        };
+      }
+    }
+
+    return { kind: 'done', patch: placePatch };
+  }
+
+  // A colour was chosen — prompt for the destination slot.
+  if (step === 'pick-slot') {
+    if (ctx.resumeAnswer?.kind !== 'option-chosen') {
+      throw new Error(`${self} pick-slot expected option-chosen`);
+    }
+    const color = ctx.resumeAnswer.optionId;
+    const slots = openBaseSlotsForGolem(ctx.state);
+    if (slots.length === 0) return { kind: 'done', patch: {} };
+    return {
+      kind: 'pause',
+      pending: {
+        responderId: ctx.triggeringPlayerId,
+        prompt: { kind: 'choose-target-action-space', eligibleSpaceIds: slots },
+        resume: { effectId: self, context: { step: 'place', color } },
+        source: ctx.source,
+      },
+    };
+  }
+
+  // Initial: choose the golem's colour / power.
+  const options: ChoiceOption[] = GOLEM_COLOR_OPTIONS.filter(
+    (o) => !o.pack || ctx.state.activePackIds.includes(o.pack),
+  ).map((o) => ({ id: o.color, label: o.label, payload: {} }));
+  return {
+    kind: 'pause',
+    pending: {
+      responderId: ctx.triggeringPlayerId,
+      prompt: { kind: 'choose-from-options', options },
+      resume: { effectId: self, context: { step: 'pick-slot' } },
+      source: ctx.source,
+    },
+  };
+});
+
+// Slot 2 — Pay 2 Mana, banish a Mage, put a golem into its slot.
+registerEffect('mancers.room.golem-lab-b.slot-2', (ctx): EffectResult => {
+  const self = 'mancers.room.golem-lab-b.slot-2';
+  const COST = 2;
+  if (ctx.resumeContext?.['step'] === 'apply') {
+    if (ctx.resumeAnswer?.kind !== 'mage-chosen') {
+      throw new Error(`${self} apply expected mage-chosen`);
+    }
+    const mageId = ctx.resumeAnswer.mageId;
+    const player = ctx.state.players.find((p) => p.id === ctx.triggeringPlayerId);
+    const owner = ctx.state.players.find((p) => p.mages.some((m) => m.id === mageId));
+    const target = owner?.mages.find((m) => m.id === mageId);
+    if (
+      !player ||
+      player.resources.mana < COST ||
+      !target ||
+      target.location.kind !== 'action-space'
+    ) {
+      return { kind: 'done', patch: {} };
+    }
+    const spaceId = target.location.spaceId;
+    let working: GameState = {
+      ...ctx.state,
+      ...gainResourcePatch(ctx.state, ctx.triggeringPlayerId, 'mana', -COST),
+    };
+    const ban = banishMage(working, mageId, ctx.triggeringPlayerId);
+    working = { ...working, ...ban.patch };
+    working = {
+      ...working,
+      ...summonGolemPatch(working, ctx.triggeringPlayerId, spaceId, false),
+    };
+    return {
+      kind: 'open-reaction',
+      patch: {
+        players: working.players,
+        rooms: working.rooms,
+        nextSequenceId: working.nextSequenceId,
+      },
+      window: {
+        triggerEvents: [ban.triggerEvent],
+        pendingResponderIds: buildReactionQueue(working, ctx.triggeringPlayerId),
+        reactedPlayerIds: [],
+        afterResume: { effectId: 'base.system.noop', context: {} },
+        source: ctx.source,
+      },
+    };
+  }
+  const player = ctx.state.players.find((p) => p.id === ctx.triggeringPlayerId);
+  if (!player || player.resources.mana < COST) return { kind: 'done', patch: {} };
+  const targets = opposingPlacedTargets(
+    buildBanishTargets(ctx.state, ctx.triggeringPlayerId),
+    ctx.state,
+    ctx.triggeringPlayerId,
+  );
+  if (targets.length === 0) return { kind: 'done', patch: {} };
+  return {
+    kind: 'pause',
+    pending: {
+      responderId: ctx.triggeringPlayerId,
+      prompt: {
+        kind: 'choose-target-mage',
+        eligibleMageIds: targets,
+        label: 'Banish a Mage — a golem seizes its slot',
+      },
+      resume: { effectId: self, context: { step: 'apply' } },
+      source: ctx.source,
+    },
+  };
+});
+
+// Slot 3 — Pay 2 Mana, wound a Mage, put a golem into its slot.
+registerEffect('mancers.room.golem-lab-b.slot-3', (ctx): EffectResult => {
+  const self = 'mancers.room.golem-lab-b.slot-3';
+  const COST = 2;
+  if (ctx.resumeContext?.['step'] === 'apply') {
+    if (ctx.resumeAnswer?.kind !== 'mage-chosen') {
+      throw new Error(`${self} apply expected mage-chosen`);
+    }
+    const mageId = ctx.resumeAnswer.mageId;
+    const player = ctx.state.players.find((p) => p.id === ctx.triggeringPlayerId);
+    const owner = ctx.state.players.find((p) => p.mages.some((m) => m.id === mageId));
+    const target = owner?.mages.find((m) => m.id === mageId);
+    if (
+      !player ||
+      player.resources.mana < COST ||
+      !target ||
+      target.location.kind !== 'action-space'
+    ) {
+      return { kind: 'done', patch: {} };
+    }
+    const spaceId = target.location.spaceId;
+    let working: GameState = {
+      ...ctx.state,
+      ...gainResourcePatch(ctx.state, ctx.triggeringPlayerId, 'mana', -COST),
+    };
+    const wounded = woundMage(working, mageId, ctx.triggeringPlayerId);
+    working = { ...working, ...wounded.patch };
+    working = {
+      ...working,
+      ...summonGolemPatch(working, ctx.triggeringPlayerId, spaceId, false),
+    };
+    return {
+      kind: 'open-reaction',
+      patch: {
+        players: working.players,
+        rooms: working.rooms,
+        nextSequenceId: working.nextSequenceId,
+        pendingRevivalChecks: working.pendingRevivalChecks,
+      },
+      window: {
+        triggerEvents: [wounded.triggerEvent],
+        pendingResponderIds: buildReactionQueue(working, ctx.triggeringPlayerId),
+        reactedPlayerIds: [],
+        afterResume: {
+          effectId: 'base.system.post-wound-bonus',
+          context: {
+            triggerEvent: wounded.triggerEvent as unknown as SerializableContext,
+          },
+        },
+        source: ctx.source,
+      },
+    };
+  }
+  const player = ctx.state.players.find((p) => p.id === ctx.triggeringPlayerId);
+  if (!player || player.resources.mana < COST) return { kind: 'done', patch: {} };
+  const targets = opposingPlacedTargets(
+    buildBurnTargets(ctx.state, ctx.triggeringPlayerId),
+    ctx.state,
+    ctx.triggeringPlayerId,
+  );
+  if (targets.length === 0) return { kind: 'done', patch: {} };
+  return {
+    kind: 'pause',
+    pending: {
+      responderId: ctx.triggeringPlayerId,
+      prompt: {
+        kind: 'choose-target-mage',
+        eligibleMageIds: targets,
+        label: 'Wound a Mage — a golem seizes its slot',
+      },
+      resume: { effectId: self, context: { step: 'apply' } },
+      source: ctx.source,
+    },
+  };
 });
 
 // Re-export to satisfy the module's existing `export {}` shape.
