@@ -217,12 +217,58 @@ export function MageIcon({
   className,
   size = 14,
   detailed,
+  golem,
 }: IconProps & {
   color: MageColor;
   /** Force-show hat decoration + robe accent. Auto-enabled when size >= 24. */
   detailed?: boolean;
+  /** Render a conjured Golem Lab temporary Mage — a rocky body with glowing
+   *  eyes — instead of the standard wizard silhouette. */
+  golem?: boolean;
 }) {
   const isDetailed = detailed ?? size >= 24;
+  if (golem) {
+    return (
+      <svg
+        width={size}
+        height={size}
+        viewBox="0 0 32 32"
+        role="img"
+        aria-label="Golem (temporary)"
+        className={clsx('inline-block flex-shrink-0 text-stone-400', className)}
+        fill="currentColor"
+      >
+        <title>Golem (temporary)</title>
+        {/* Hulking rocky body — broad, boulder-like shoulders. */}
+        <path d="M 6 30 L 6 19 Q 6 16 9 15.5 L 11 13 L 21 13 L 23 15.5 Q 26 16 26 19 L 26 30 Z" />
+        {/* Blocky stone head. */}
+        <rect x="10.5" y="5" width="11" height="9.5" rx="1.4" />
+        {/* Soft glow behind the eyes. */}
+        <circle cx="14" cy="9.8" r="2.3" fill="#fbbf24" opacity="0.3" />
+        <circle cx="18" cy="9.8" r="2.3" fill="#fbbf24" opacity="0.3" />
+        {/* Glowing eyes. */}
+        <circle cx="14" cy="9.8" r="1.3" fill="#fde68a" />
+        <circle cx="18" cy="9.8" r="1.3" fill="#fde68a" />
+        {/* Cracks across the body. */}
+        <path
+          d="M 13 18 L 15 21 L 13 24"
+          stroke="#44403c"
+          strokeOpacity="0.8"
+          strokeWidth="0.8"
+          fill="none"
+          strokeLinejoin="round"
+        />
+        <path
+          d="M 20 17 L 18.5 20.5 L 20.5 23.5"
+          stroke="#44403c"
+          strokeOpacity="0.8"
+          strokeWidth="0.8"
+          fill="none"
+          strokeLinejoin="round"
+        />
+      </svg>
+    );
+  }
   return (
     <svg
       width={size}

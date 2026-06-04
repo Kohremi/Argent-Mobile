@@ -148,6 +148,16 @@ export interface OwnedMage {
    * summoned mage and returns one to the off-white supply pool.
    */
   isSummoned?: boolean;
+  /**
+   * Marks a CONJURED temporary Mage — the Golem Lab's golems. Unlike
+   * `isSummoned`, a temporary Mage is created from nothing (it never draws
+   * from a colour's supply pool) and is therefore NOT returned to a pool at
+   * round-end — it is simply removed. Temporary Mages ignore placement limits
+   * (room caps), have no powers (off-white), and can be wounded / healed /
+   * moved like any other Mage until they vanish at the end of the round they
+   * were deployed.
+   */
+  isTemporary?: boolean;
 }
 
 export type MageLocation =

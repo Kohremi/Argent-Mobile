@@ -363,13 +363,88 @@ const researchArchiveB: Room = {
   ],
 };
 
+// ============================================================================
+// Golem Lab Side A — INSTANT room. Each slot conjures a TEMPORARY Mage (a
+// golem): a board piece that ignores placement limits, has no powers, can be
+// wounded / healed / moved like a normal Mage, and vanishes at the end of the
+// round it was deployed (see `isTemporary` + round-setup cleanup).
+//   Slot 1 (merit): Pay 1 Mana to place a golem, then LOCK the room it lands in.
+//   Slot 2:         Place a golem into any open shadow slot (free).
+//   Slot 3:         Pay 3 Mana to place a golem, then take another action.
+// Side B (wired later) adds a golem that may take a single Mage power.
+// ============================================================================
+
+const golemLabA: Room = {
+  id: 'mancers.room.golem-lab.a',
+  name: 'Golem Lab',
+  sourcePackId: PACK_ID,
+  isUniversityCentral: false,
+  side: 'A',
+  isInstantRoom: true,
+  cannotBePlacedInDirectly: false,
+  cannotBeLocked: false,
+  description:
+    'Instant room — conjure a temporary golem Mage that ignores limits and vanishes at end of round.',
+  actionSpaces: [
+    {
+      id: 'mancers.room.golem-lab.a.slot-1',
+      roomId: 'mancers.room.golem-lab.a',
+      index: 0,
+      slotType: 'merit',
+      occupant: null,
+      effectId: 'mancers.room.golem-lab-a.slot-1',
+      costToActivate: { meritBadges: 1 },
+      description:
+        'Immediately pay 1 Mana to place a temporary golem Mage and lock the room it is placed in.',
+    },
+    {
+      id: 'mancers.room.golem-lab.a.slot-2',
+      roomId: 'mancers.room.golem-lab.a',
+      index: 1,
+      slotType: 'regular',
+      occupant: null,
+      effectId: 'mancers.room.golem-lab-a.slot-2',
+      description: 'Immediately place a temporary golem Mage into any shadow slot.',
+    },
+    {
+      id: 'mancers.room.golem-lab.a.slot-3',
+      roomId: 'mancers.room.golem-lab.a',
+      index: 2,
+      slotType: 'regular',
+      occupant: null,
+      effectId: 'mancers.room.golem-lab-a.slot-3',
+      description:
+        'Immediately pay 3 Mana to place a temporary golem Mage and take another action.',
+    },
+  ],
+};
+
+const golemLabB: Room = {
+  id: 'mancers.room.golem-lab.b',
+  name: 'Golem Lab',
+  sourcePackId: PACK_ID,
+  isUniversityCentral: false,
+  side: 'B',
+  isInstantRoom: true,
+  cannotBePlacedInDirectly: false,
+  cannotBeLocked: false,
+  actionSpaces: [],
+};
+
 export const mancersPack: ContentPack = {
   id: PACK_ID,
   name: 'Mancers of the University',
-  description: 'Adds the Technomancy department: Technomancer (orange) mage piece, the two Technomancy leader candidates, and the Laboratory + Research Archive rooms.',
+  description: 'Adds the Technomancy department: Technomancer (orange) mage piece, the two Technomancy leader candidates, and the Laboratory + Research Archive + Golem Lab rooms.',
   mages,
   candidates,
-  rooms: [laboratoryA, laboratoryB, researchArchiveA, researchArchiveB],
+  rooms: [
+    laboratoryA,
+    laboratoryB,
+    researchArchiveA,
+    researchArchiveB,
+    golemLabA,
+    golemLabB,
+  ],
   spells: [],
   legendarySpells: leaderSpells,
   vaultCards: [],

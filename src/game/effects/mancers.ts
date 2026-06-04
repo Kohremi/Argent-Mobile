@@ -4,6 +4,7 @@ import { getEffect, hasEffect, registerEffect } from './registry';
 import {
   affordableVaultCards,
   applyGainMark,
+  applyRoomLockPatch,
   applyVaultPurchaseMaybeWaived,
   buildBurnTargets,
   buildReactionQueue,
@@ -11,6 +12,7 @@ import {
   gainResourcePatch,
   gainResourcesPatch,
   healMageToSpace,
+  isRoomLocked,
   lookupSpellCardDef,
   woundMage,
 } from './helpers';
@@ -26,6 +28,7 @@ import type {
   PlayerId,
   ResolutionSource,
   SerializableContext,
+  WorkerOccupancy,
 } from '../types';
 
 // ============================================================================
@@ -1006,6 +1009,224 @@ registerEffect('mancers.room.research-archive-b.slot-3', (ctx): EffectResult => 
       source: ctx.source,
     },
   };
+});
+
+// ============================================================================
+// Golem Lab Side A — INSTANT room. Each slot conjures a temporary "golem"
+// Mage that ignores placement limits, has no powers (off-white), and vanishes
+// at end of round (`isTemporary`). Golems are created from nothing — they do
+// NOT draw from any colour supply — so they ignore mage-count limits.
+//   Slot 1: Pay 1 Mana → place a golem in any open slot → lock that room.
+//   Slot 2: Place a golem in any open SHADOW slot (free).
+//   Slot 3: Pay 3 Mana → place a golem in any open slot → take another action.
+// ============================================================================
+
+const GOLEM_CARD_ID = 'mancers.mage.golem';
+
+/** Open base slots ignoring per-player room caps (temporary Mages ignore
+ *  limits). Locked rooms and non-placeable rooms are still excluded. */
+function openBaseSlotsForGolem(state: GameState): ActionSpaceId[] {
+  const out: ActionSpaceId[] = [];
+  for (const r of state.rooms) {
+    if (r.cannotBePlacedInDirectly) continue;
+    if (isRoomLocked(state, r.id)) continue;
+    for (const s of r.actionSpaces) if (!s.occupant) out.push(s.id);
+  }
+  return out;
+}
+
+/** Open shadow slots ignoring per-player room caps. */
+function openShadowSlotsForGolem(state: GameState): ActionSpaceId[] {
+  const out: ActionSpaceId[] = [];
+  for (const r of state.rooms) {
+    if (r.cannotBePlacedInDirectly) continue;
+    if (isRoomLocked(state, r.id)) continue;
+    for (const s of r.actionSpaces) if (!s.shadowOccupant) out.push(s.id);
+  }
+  return out;
+}
+
+/**
+ * Conjures a temporary golem Mage onto `spaceId` (base or shadow position)
+ * owned by `playerId`. Body-only — no instant-room reward is triggered for
+ * the golem's own landing (which also avoids a free self-recursion when the
+ * golem lands on another Golem Lab slot).
+ */
+function summonGolemPatch(
+  state: GameState,
+  playerId: PlayerId,
+  spaceId: ActionSpaceId,
+  asShadow: boolean,
+): GameStatePatch {
+  const seq = state.nextSequenceId;
+  const golem: OwnedMage = {
+    id: `m-${seq}`,
+    cardId: GOLEM_CARD_ID,
+    color: 'off-white',
+    location: { kind: 'action-space', spaceId },
+    isShadowing: asShadow,
+    isWounded: false,
+    isTemporary: true,
+  };
+  const occ: WorkerOccupancy = {
+    mageId: golem.id,
+    ownerId: playerId,
+    isShadowing: asShadow,
+  };
+  return {
+    nextSequenceId: seq + 1,
+    players: state.players.map((p) =>
+      p.id !== playerId ? p : { ...p, mages: [...p.mages, golem] },
+    ),
+    rooms: state.rooms.map((r) => ({
+      ...r,
+      actionSpaces: r.actionSpaces.map((s) =>
+        s.id !== spaceId
+          ? s
+          : asShadow
+            ? { ...s, shadowOccupant: occ }
+            : { ...s, occupant: occ },
+      ),
+    })),
+  };
+}
+
+/** Shared first-step gate for the pay-then-place golem slots (1 and 3): check
+ *  Mana affordability + an open destination, then prompt for the slot. */
+function golemPlacePrompt(
+  ctx: EffectContext,
+  selfEffectId: string,
+  manaCost: number,
+): EffectResult {
+  const player = ctx.state.players.find((p) => p.id === ctx.triggeringPlayerId);
+  if (!player || player.resources.mana < manaCost) {
+    return { kind: 'done', patch: {} };
+  }
+  const slots = openBaseSlotsForGolem(ctx.state);
+  if (slots.length === 0) return { kind: 'done', patch: {} };
+  return {
+    kind: 'pause',
+    pending: {
+      responderId: ctx.triggeringPlayerId,
+      prompt: { kind: 'choose-target-action-space', eligibleSpaceIds: slots },
+      resume: { effectId: selfEffectId, context: { step: 'apply', manaCost } },
+      source: ctx.source,
+    },
+  };
+}
+
+// Slot 1 — Pay 1 Mana, place a golem, lock the room it lands in.
+registerEffect('mancers.room.golem-lab-a.slot-1', (ctx): EffectResult => {
+  const self = 'mancers.room.golem-lab-a.slot-1';
+  if (ctx.resumeContext?.['step'] !== 'apply') {
+    return golemPlacePrompt(ctx, self, 1);
+  }
+  if (ctx.resumeAnswer?.kind !== 'space-chosen') {
+    throw new Error(`${self} apply expected space-chosen`);
+  }
+  const spaceId = ctx.resumeAnswer.spaceId;
+  const player = ctx.state.players.find((p) => p.id === ctx.triggeringPlayerId);
+  if (
+    !player ||
+    player.resources.mana < 1 ||
+    !openBaseSlotsForGolem(ctx.state).includes(spaceId)
+  ) {
+    return { kind: 'done', patch: {} };
+  }
+  let working: GameState = {
+    ...ctx.state,
+    ...gainResourcePatch(ctx.state, ctx.triggeringPlayerId, 'mana', -1),
+  };
+  working = {
+    ...working,
+    ...summonGolemPatch(working, ctx.triggeringPlayerId, spaceId, false),
+  };
+  const room = working.rooms.find((r) =>
+    r.actionSpaces.some((s) => s.id === spaceId),
+  );
+  if (room && !room.cannotBeLocked) {
+    working = { ...working, ...applyRoomLockPatch(working, room.id) };
+  }
+  return {
+    kind: 'done',
+    patch: {
+      players: working.players,
+      rooms: working.rooms,
+      nextSequenceId: working.nextSequenceId,
+      roomLocks: working.roomLocks,
+    },
+  };
+});
+
+// Slot 2 — Place a golem into any open shadow slot (free).
+registerEffect('mancers.room.golem-lab-a.slot-2', (ctx): EffectResult => {
+  const self = 'mancers.room.golem-lab-a.slot-2';
+  if (ctx.resumeContext?.['step'] !== 'apply') {
+    const slots = openShadowSlotsForGolem(ctx.state);
+    if (slots.length === 0) return { kind: 'done', patch: {} };
+    return {
+      kind: 'pause',
+      pending: {
+        responderId: ctx.triggeringPlayerId,
+        prompt: { kind: 'choose-target-action-space', eligibleSpaceIds: slots },
+        resume: { effectId: self, context: { step: 'apply' } },
+        source: ctx.source,
+      },
+    };
+  }
+  if (ctx.resumeAnswer?.kind !== 'space-chosen') {
+    throw new Error(`${self} apply expected space-chosen`);
+  }
+  const spaceId = ctx.resumeAnswer.spaceId;
+  if (!openShadowSlotsForGolem(ctx.state).includes(spaceId)) {
+    return { kind: 'done', patch: {} };
+  }
+  return {
+    kind: 'done',
+    patch: summonGolemPatch(ctx.state, ctx.triggeringPlayerId, spaceId, true),
+  };
+});
+
+// Slot 3 — Pay 3 Mana, place a golem, take another action.
+registerEffect('mancers.room.golem-lab-a.slot-3', (ctx): EffectResult => {
+  const self = 'mancers.room.golem-lab-a.slot-3';
+  if (ctx.resumeContext?.['step'] !== 'apply') {
+    return golemPlacePrompt(ctx, self, 3);
+  }
+  if (ctx.resumeAnswer?.kind !== 'space-chosen') {
+    throw new Error(`${self} apply expected space-chosen`);
+  }
+  const spaceId = ctx.resumeAnswer.spaceId;
+  const player = ctx.state.players.find((p) => p.id === ctx.triggeringPlayerId);
+  if (
+    !player ||
+    player.resources.mana < 3 ||
+    !openBaseSlotsForGolem(ctx.state).includes(spaceId)
+  ) {
+    return { kind: 'done', patch: {} };
+  }
+  let working: GameState = {
+    ...ctx.state,
+    ...gainResourcePatch(ctx.state, ctx.triggeringPlayerId, 'mana', -3),
+  };
+  working = {
+    ...working,
+    ...summonGolemPatch(working, ctx.triggeringPlayerId, spaceId, false),
+  };
+  const patch: GameStatePatch = {
+    players: working.players,
+    rooms: working.rooms,
+    nextSequenceId: working.nextSequenceId,
+  };
+  // "Take another action" — +1 to the errands extra-action counter so the
+  // turn stays open for one more Action.
+  if (working.phase.kind === 'errands') {
+    patch.phase = {
+      ...working.phase,
+      extraActions: (working.phase.extraActions ?? 0) + 1,
+    };
+  }
+  return { kind: 'done', patch };
 });
 
 // Re-export to satisfy the module's existing `export {}` shape.

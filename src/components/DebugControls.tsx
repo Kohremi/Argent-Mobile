@@ -247,6 +247,18 @@ function injectSpellAtLevel(
 
 /** Returns every spell across the active packs (regular + legendary),
  *  sorted by department then name for stable rendering. */
+/** True when a slot occupant is a conjured temporary golem (Golem Lab). */
+function occupantIsGolem(
+  state: GameState,
+  occ: { ownerId: string; mageId: string },
+): boolean {
+  return (
+    state.players
+      .find((p) => p.id === occ.ownerId)
+      ?.mages.find((m) => m.id === occ.mageId)?.isTemporary ?? false
+  );
+}
+
 function listAllAvailableSpells(state: GameState): SpellCard[] {
   const out: SpellCard[] = [];
   for (const packId of state.activePackIds) {
@@ -1881,7 +1893,7 @@ function PlayerCard({
                         : 'opacity-40 cursor-not-allowed',
                 )}
               >
-                <MageIcon color={m.color} size={28} />
+                <MageIcon color={m.color} golem={m.isTemporary ?? false} size={28} />
               </button>
             );
           })}
@@ -4003,7 +4015,11 @@ function InfirmaryBBuffSlots({
             className="inline-flex items-center gap-1 text-[10px] text-slate-200"
             title={`${args.occupant.ownerId} occupies this slot`}
           >
-            <MageIcon color={occupantColor(args.occupant)} size={14} />
+            <MageIcon
+              color={occupantColor(args.occupant)}
+              golem={occupantIsGolem(state, args.occupant)}
+              size={14}
+            />
             <span className="text-slate-400">{args.occupant.ownerId}</span>
           </span>
         ) : (
@@ -4173,7 +4189,11 @@ function NoShadowSlotsRow({
             : 'empty slot';
         const content = s.occupant ? (
           <div className="flex flex-col items-center gap-0.5">
-            <MageIcon color={occupantColor(s.occupant)} size={18} />
+            <MageIcon
+              color={occupantColor(s.occupant)}
+              golem={occupantIsGolem(state, s.occupant)}
+              size={18}
+            />
             <span className="text-[8px] uppercase tracking-wide text-slate-400 leading-none">
               {s.occupant.ownerId}
             </span>
@@ -4420,6 +4440,7 @@ function RoomsPanel({
                         <div className="flex flex-col items-center gap-0.5">
                           <MageIcon
                             color={occupantColor(occupant)}
+                            golem={occupantIsGolem(state, occupant)}
                             size={18}
                           />
                           <span className="text-[8px] uppercase tracking-wide text-slate-400 leading-none">

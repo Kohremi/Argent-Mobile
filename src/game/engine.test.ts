@@ -9914,6 +9914,200 @@ describe('Research Archive B (Mancers)', () => {
 });
 
 // ============================================================================
+// Golem Lab A (Mancers) — instant room; each slot conjures a temporary golem
+// Mage (ignores limits, no powers, vanishes at round-end).
+// ============================================================================
+
+describe('Golem Lab A (Mancers)', () => {
+  function forceGolemLabA(state: GameState): GameState {
+    const room = mancersPack.rooms.find(
+      (r) => r.name === 'Golem Lab' && r.side === 'A',
+    );
+    if (!room) throw new Error('test helper: Golem Lab A not in pack');
+    const replaceIdx = state.rooms.findIndex((r) => !r.isUniversityCentral);
+    if (replaceIdx === -1) return state;
+    return {
+      ...state,
+      rooms: state.rooms.map((r, i) => (i === replaceIdx ? room : r)),
+    };
+  }
+
+  function setup(mana: number): GameState {
+    let s = initGame(TWO_PLAYER_CONFIG);
+    s = forceGolemLabA(s);
+    s = zeroPlayerResources(s, 'p1');
+    s = setMeritBadges(s, 'p1', 5);
+    s = setMana(s, 'p1', mana);
+    // Neutral mage — no place power to interfere with the golem prompt.
+    s = addMage(s, 'p1', {
+      id: 'alice-mage',
+      cardId: 'base.mage.neutral',
+      color: 'off-white',
+    });
+    // Give Bob an office mage too, so the round doesn't immediately end after
+    // Alice's placement (which would advance to Resolution and clear locks).
+    // NOTE: leave the Bell Tower populated — an empty `available` list signals
+    // end-of-round, which would clear locks before we can observe them.
+    s = addMage(s, 'p2', {
+      id: 'bob-mage',
+      cardId: 'base.mage.neutral',
+      color: 'off-white',
+    });
+    return {
+      ...s,
+      firstPlayerIndex: 0,
+      phase: {
+        kind: 'errands',
+        round: 1,
+        activePlayerIndex: 0,
+        actionUsed: false,
+        fastActionUsed: false,
+      },
+    };
+  }
+
+  function place(s: GameState, slotId: string): GameState {
+    let next = applyAction(s, {
+      type: 'PLACE_WORKER',
+      playerId: 'p1',
+      mageId: 'alice-mage',
+      actionSpaceId: slotId,
+    });
+    // Instant rooms surface a take-reward / forfeit choice first; take it so
+    // the golem-conjuring effect runs.
+    const top = topPending(next);
+    if (top && top.resume.effectId === 'base.system.resolution-choice') {
+      next = applyAction(next, {
+        type: 'RESOLVE_PENDING',
+        resolutionId: top.id,
+        answer: { kind: 'option-chosen', optionId: 'reward', payload: {} },
+      });
+    }
+    return next;
+  }
+
+  // Resolves the golem-placement prompt by picking its first eligible space;
+  // returns the chosen space id alongside the new state.
+  function chooseFirstSpace(s: GameState): { state: GameState; spaceId: string } {
+    const top = topPending(s);
+    if (top.prompt.kind !== 'choose-target-action-space') {
+      throw new Error(`expected choose-target-action-space, got ${top.prompt.kind}`);
+    }
+    const spaceId = top.prompt.eligibleSpaceIds[0]!;
+    const state = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: top.id,
+      answer: { kind: 'space-chosen', spaceId },
+    });
+    return { state, spaceId };
+  }
+
+  function golems(s: GameState) {
+    return s.players
+      .find((p) => p.id === 'p1')!
+      .mages.filter((m) => m.isTemporary);
+  }
+
+  it('slot 1: pays 1 Mana, conjures a golem, and locks the destination room', () => {
+    let s = setup(1);
+    s = place(s, 'mancers.room.golem-lab.a.slot-1');
+    // Choose a destination inside a LOCKABLE room so we can assert the lock.
+    const top = topPending(s);
+    if (top.prompt.kind !== 'choose-target-action-space') {
+      throw new Error('expected choose-target-action-space');
+    }
+    const lockableSpaceId = top.prompt.eligibleSpaceIds.find((sid) => {
+      const room = s.rooms.find((r) =>
+        r.actionSpaces.some((sp) => sp.id === sid),
+      );
+      return room && !room.cannotBeLocked;
+    })!;
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: top.id,
+      answer: { kind: 'space-chosen', spaceId: lockableSpaceId },
+    });
+    expect(golems(s)).toHaveLength(1);
+    const g = golems(s)[0]!;
+    expect(g.cardId).toBe('mancers.mage.golem');
+    expect(g.location).toEqual({ kind: 'action-space', spaceId: lockableSpaceId });
+    expect(s.players.find((p) => p.id === 'p1')!.resources.mana).toBe(0);
+    // The destination room is now locked.
+    const destRoom = s.rooms.find((r) =>
+      r.actionSpaces.some((sp) => sp.id === lockableSpaceId),
+    )!;
+    expect(s.roomLocks.some((l) => l.roomId === destRoom.id)).toBe(true);
+    // Conjured — the off-white supply is untouched.
+    expect(s.mageDraftPool['off-white']).toBe(10);
+  });
+
+  it('slot 1: fizzles (no prompt, no golem) when the player cannot pay', () => {
+    let s = setup(0);
+    s = place(s, 'mancers.room.golem-lab.a.slot-1');
+    expect(s.pendingResolutionStack).toHaveLength(0);
+    expect(golems(s)).toHaveLength(0);
+  });
+
+  it('slot 2: places a golem into an open shadow slot (free)', () => {
+    let s = setup(0);
+    s = place(s, 'mancers.room.golem-lab.a.slot-2');
+    const { state, spaceId } = chooseFirstSpace(s);
+    s = state;
+    const g = golems(s)[0]!;
+    expect(g.isShadowing).toBe(true);
+    const space = s.rooms
+      .flatMap((r) => r.actionSpaces)
+      .find((sp) => sp.id === spaceId)!;
+    expect(space.shadowOccupant?.mageId).toBe(g.id);
+  });
+
+  it('slot 3: pays 3 Mana, conjures a golem, and grants another action', () => {
+    let s = setup(3);
+    s = place(s, 'mancers.room.golem-lab.a.slot-3');
+    s = chooseFirstSpace(s).state;
+    expect(golems(s)).toHaveLength(1);
+    expect(s.players.find((p) => p.id === 'p1')!.resources.mana).toBe(0);
+    // "Take another action" — the turn stays open via the extra-action counter.
+    expect(s.phase.kind).toBe('errands');
+    if (s.phase.kind === 'errands') {
+      expect(s.phase.extraActions ?? 0).toBe(1);
+    }
+  });
+
+  it('temporary golems vanish at round-end (not returned to any supply)', () => {
+    let s = setup(0);
+    // Use the free shadow slot to avoid resolving a base-slot reward.
+    s = place(s, 'mancers.room.golem-lab.a.slot-2');
+    s = chooseFirstSpace(s).state;
+    expect(golems(s)).toHaveLength(1);
+    const poolBefore = s.mageDraftPool['off-white'];
+    // Empty the Bell Tower so the round ends once both players pass, then
+    // drive through to round-setup of round 2.
+    s = { ...s, bellTower: { ...s.bellTower, available: [] } };
+    while (s.phase.kind === 'errands') {
+      const activeId = s.players[s.phase.activePlayerIndex]!.id;
+      s = applyAction(s, { type: 'PASS_TURN', playerId: activeId });
+    }
+    while (s.phase.kind === 'resolution') {
+      if (s.pendingResolutionStack.length > 0) {
+        s = applyAction(s, {
+          type: 'RESOLVE_PENDING',
+          resolutionId: topPending(s).id,
+          answer: { kind: 'option-chosen', optionId: 'forfeit', payload: {} },
+        });
+      } else {
+        s = applyAction(s, { type: 'ADVANCE_PHASE' });
+      }
+    }
+    s = applyAction(s, { type: 'ADVANCE_PHASE' }); // mid-game → round-setup
+    s = applyAction(s, { type: 'ADVANCE_PHASE' }); // round-setup → errands r2
+    // The golem is gone, and the off-white supply is unchanged (conjured).
+    expect(golems(s)).toHaveLength(0);
+    expect(s.mageDraftPool['off-white']).toBe(poolBefore);
+  });
+});
+
+// ============================================================================
 // Council Chamber A — Draft a Supporter OR Gain a Mark, capped at 1/round
 // ============================================================================
 

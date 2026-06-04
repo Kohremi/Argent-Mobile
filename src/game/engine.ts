@@ -2757,7 +2757,10 @@ function returnSummonedMagesToSupply(state: GameState): GameState {
   const players = state.players.map((p) => {
     const keep: OwnedMage[] = [];
     for (const m of p.mages) {
-      if (m.isSummoned) {
+      if (m.isTemporary) {
+        // Conjured (Golem Lab) — vanishes; never drew from a pool, so it is
+        // not returned to one.
+      } else if (m.isSummoned) {
         returnedByColor[m.color] = (returnedByColor[m.color] ?? 0) + 1;
       } else {
         keep.push(m);
