@@ -3096,6 +3096,43 @@ function TableauPanel({
           </ul>
         </div>
         <div>
+          {state.tavernARevealed && state.tavernARevealed.length > 0 && (
+            <div className="mb-2 rounded border border-amber-400/40 bg-amber-500/5 p-2">
+              <p className="font-medium text-amber-200 text-xs uppercase tracking-wide mb-1">
+                University Tavern — revealed ({state.tavernARevealed.length})
+              </p>
+              <ul className="space-y-1">
+                {state.tavernARevealed.map((cid, i) => {
+                  const card = findSupporterCard(state, cid);
+                  return (
+                    <li
+                      key={`tavern-${cid}-${i}`}
+                      className="rounded bg-slate-950/40 px-2 py-1"
+                    >
+                      <div className="flex items-baseline gap-1.5 flex-wrap">
+                        <span className="font-medium text-slate-200">
+                          {card?.name ?? cid}
+                        </span>
+                        {card && (
+                          <span className="text-[10px] uppercase tracking-wide text-slate-500">
+                            {card.department}
+                          </span>
+                        )}
+                      </div>
+                      {card?.description && (
+                        <div className="text-[11px] text-slate-300/90">
+                          {card.description}
+                        </div>
+                      )}
+                    </li>
+                  );
+                })}
+              </ul>
+              <p className="text-[10px] text-amber-200/70 mt-1 italic">
+                Occupants pick one each in slot order.
+              </p>
+            </div>
+          )}
           <p className="font-medium text-slate-200">
             Supporters ({state.supporterTableau.length}/5)
           </p>

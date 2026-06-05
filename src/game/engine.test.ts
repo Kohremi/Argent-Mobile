@@ -10354,6 +10354,144 @@ describe('Golem Lab B (Mancers)', () => {
 });
 
 // ============================================================================
+// University Tavern A (Mancers) — reveal top 3 Supporters, draft in slot order.
+// ============================================================================
+
+describe('University Tavern A (Mancers)', () => {
+  const S1 = 'base.supporter.adelaide-chivers';
+  const S2 = 'base.supporter.arec-russel-zane';
+  const S3 = 'base.supporter.allys-mehrmus';
+
+  function forceUniversityTavernA(state: GameState): GameState {
+    const room = mancersPack.rooms.find(
+      (r) => r.name === 'University Tavern' && r.side === 'A',
+    );
+    if (!room) throw new Error('test helper: University Tavern A not in pack');
+    const idx = state.rooms.findIndex((r) => !r.isUniversityCentral);
+    if (idx === -1) return state;
+    return { ...state, rooms: state.rooms.map((r, i) => (i === idx ? room : r)) };
+  }
+
+  function setup(slotIds: string[], deckTop: string[]): GameState {
+    let s = initGame(TWO_PLAYER_CONFIG);
+    s = forceUniversityTavernA(s);
+    s = zeroPlayerResources(s, 'p1');
+    s = zeroPlayerResources(s, 'p2');
+    s = setMeritBadges(s, 'p1', 5);
+    s = setMeritBadges(s, 'p2', 5);
+    slotIds.forEach((slotId, i) => {
+      const owner = i === 0 ? 'p1' : 'p2';
+      const mageId = `${owner}-mage-${i + 1}`;
+      s = addMage(s, owner, {
+        id: mageId,
+        cardId: 'base.mage.divinity',
+        color: 'blue',
+      });
+      s = placeMageOnSpace(s, owner, mageId, slotId);
+    });
+    return {
+      ...s,
+      supporterDeck: [
+        ...deckTop,
+        ...s.supporterDeck.filter((c) => !deckTop.includes(c)),
+      ],
+      bellTower: { ...s.bellTower, available: [] },
+    };
+  }
+
+  function driveToFirstSlot(s: GameState): GameState {
+    s = applyAction(s, { type: 'ADVANCE_PHASE' }); // round-setup → errands
+    s = applyAction(s, { type: 'ADVANCE_PHASE' }); // errands → resolution
+    s = applyAction(s, { type: 'ADVANCE_PHASE' }); // pump → forfeit-or-reward
+    return takeRewardAtResolution(s);
+  }
+
+  function supportersOf(s: GameState, pid: string) {
+    return s.players.find((p) => p.id === pid)!.supporters;
+  }
+
+  it('reveals the top 3 Supporters when the first occupied slot resolves', () => {
+    let s = setup(['mancers.room.university-tavern.a.slot-1'], [S1, S2, S3]);
+    s = driveToFirstSlot(s);
+    expect(s.tavernARevealed).toEqual([S1, S2, S3]);
+    const top = topPending(s);
+    expect(top.prompt.kind).toBe('choose-peeked-supporter');
+    if (top.prompt.kind !== 'choose-peeked-supporter') throw new Error('x');
+    expect([...top.prompt.eligibleCardIds].sort()).toEqual([S1, S2, S3].sort());
+    // The deck shrank by 3 (those cards moved into the revealed pool).
+    expect(s.supporterDeck.includes(S1)).toBe(false);
+  });
+
+  it('each occupant gains one in slot order from the shrinking pool', () => {
+    let s = setup(
+      [
+        'mancers.room.university-tavern.a.slot-1',
+        'mancers.room.university-tavern.a.slot-2',
+        'mancers.room.university-tavern.a.slot-3',
+      ],
+      [S1, S2, S3],
+    );
+    s = driveToFirstSlot(s);
+    // Alice (slot 1) gains S1.
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'card-chosen', cardId: S1 },
+    });
+    expect(supportersOf(s, 'p1')).toEqual([S1]);
+    expect(s.tavernARevealed).toEqual([S2, S3]);
+    // Pump advances to slot 2 (Bob): take its reward first, then draft S3.
+    s = takeRewardAtResolution(s);
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'card-chosen', cardId: S3 },
+    });
+    expect(supportersOf(s, 'p2')).toEqual([S3]);
+    expect(s.tavernARevealed).toEqual([S2]);
+    // Slot 3 (Bob's second mage): take reward, then draft the last one, S2.
+    s = takeRewardAtResolution(s);
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'card-chosen', cardId: S2 },
+    });
+    expect(supportersOf(s, 'p2').sort()).toEqual([S2, S3].sort());
+  });
+
+  it('unclaimed cards return to the top of the Supporter Deck when resolution leaves the room', () => {
+    let s = setup(['mancers.room.university-tavern.a.slot-1'], [S1, S2, S3]);
+    s = driveToFirstSlot(s);
+    // Alice takes one; two remain unclaimed.
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'card-chosen', cardId: S1 },
+    });
+    // Drive the pump past the room.
+    let guard = 0;
+    while (s.phase.kind === 'resolution' && guard++ < 50) {
+      if (s.pendingResolutionStack.length > 0) {
+        s = takeRewardAtResolution(s);
+      } else {
+        s = applyAction(s, { type: 'ADVANCE_PHASE' });
+      }
+    }
+    expect(s.tavernARevealed).toBeNull();
+    // The two unclaimed cards are back on top of the deck.
+    expect(s.supporterDeck.slice(0, 2).sort()).toEqual([S2, S3].sort());
+  });
+
+  it('fizzles with no draft prompt when the Supporter Deck is empty', () => {
+    let s = setup(['mancers.room.university-tavern.a.slot-1'], []);
+    s = { ...s, supporterDeck: [] };
+    s = driveToFirstSlot(s);
+    expect(s.pendingResolutionStack).toHaveLength(0);
+    expect(supportersOf(s, 'p1')).toHaveLength(0);
+  });
+});
+
+// ============================================================================
 // Council Chamber A — Draft a Supporter OR Gain a Mark, capped at 1/round
 // ============================================================================
 

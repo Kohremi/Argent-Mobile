@@ -532,6 +532,7 @@ export function buildInitialState(config: GameConfig): GameState {
     pendingMysticismPostCast: [],
     pendingTechnomancyTrigger: [],
     vaultARevealed: null,
+    tavernARevealed: null,
     adventuringBPool: null,
     activeBuffs: [],
     nextSequenceId: 1,

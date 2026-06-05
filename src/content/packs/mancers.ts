@@ -475,10 +475,67 @@ const golemLabB: Room = {
   ],
 };
 
+// ============================================================================
+// University Tavern Side A — non-instant. When the room resolves, the top 3
+// Supporters of the deck are revealed into a temporary pool; each occupant (in
+// slot order) selects and gains one. Unclaimed cards return to the top of the
+// Supporter Deck once resolution leaves the room. Mirrors Vault Side A. All
+// three slots share one effect; slot order is set by the resolution pump.
+//   Slot 1 (merit, 1 MB): Select and gain one of the revealed Supporters.
+//   Slot 2 (regular):     Same.
+//   Slot 3 (regular):     Same.
+// Side B (wired later) is a stub.
+// ============================================================================
+
+function universityTavernSlot(index: number, slotType: 'merit' | 'regular'): ActionSpace {
+  const base: ActionSpace = {
+    id: `mancers.room.university-tavern.a.slot-${index + 1}`,
+    roomId: 'mancers.room.university-tavern.a',
+    index,
+    slotType,
+    occupant: null,
+    effectId: 'mancers.room.university-tavern-a.slot',
+    description: 'Select and gain one of the revealed Supporters.',
+  };
+  return slotType === 'merit'
+    ? { ...base, costToActivate: { meritBadges: 1 } }
+    : base;
+}
+
+const universityTavernA: Room = {
+  id: 'mancers.room.university-tavern.a',
+  name: 'University Tavern',
+  sourcePackId: PACK_ID,
+  isUniversityCentral: false,
+  side: 'A',
+  isInstantRoom: false,
+  cannotBePlacedInDirectly: false,
+  cannotBeLocked: false,
+  description:
+    'When this room resolves, reveal the top 3 Supporters. Each occupant selects and gains one in slot order; unclaimed cards return to the top of the deck.',
+  actionSpaces: [
+    universityTavernSlot(0, 'merit'),
+    universityTavernSlot(1, 'regular'),
+    universityTavernSlot(2, 'regular'),
+  ],
+};
+
+const universityTavernB: Room = {
+  id: 'mancers.room.university-tavern.b',
+  name: 'University Tavern',
+  sourcePackId: PACK_ID,
+  isUniversityCentral: false,
+  side: 'B',
+  isInstantRoom: false,
+  cannotBePlacedInDirectly: false,
+  cannotBeLocked: false,
+  actionSpaces: [],
+};
+
 export const mancersPack: ContentPack = {
   id: PACK_ID,
   name: 'Mancers of the University',
-  description: 'Adds the Technomancy department: Technomancer (orange) mage piece, the two Technomancy leader candidates, and the Laboratory + Research Archive + Golem Lab rooms.',
+  description: 'Adds the Technomancy department: Technomancer (orange) mage piece, the two Technomancy leader candidates, and the Laboratory + Research Archive + Golem Lab + University Tavern rooms.',
   mages,
   candidates,
   rooms: [
@@ -488,6 +545,8 @@ export const mancersPack: ContentPack = {
     researchArchiveB,
     golemLabA,
     golemLabB,
+    universityTavernA,
+    universityTavernB,
   ],
   spells: [],
   legendarySpells: leaderSpells,

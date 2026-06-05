@@ -1267,6 +1267,15 @@ export interface GameState {
    * the top of the deck. `null` outside Vault A's resolution.
    */
   vaultARevealed: VaultCardId[] | null;
+  /**
+   * Transient revealed pool for University Tavern Side A (Mancers) — the
+   * Supporter analogue of `vaultARevealed`. When the first occupied slot
+   * resolves, three cards are popped from the top of the Supporter Deck and
+   * stashed here so the remaining slots draft from the same pool in slot
+   * order. The resolution pump clears the field once it leaves the room,
+   * returning any unclaimed cards to the top of the deck. `null` otherwise.
+   */
+  tavernARevealed: SupporterCardId[] | null;
   supporterDeck: SupporterCardId[];
   supporterTableau: SupporterCardId[];
   legendarySpells: SpellCardId[];

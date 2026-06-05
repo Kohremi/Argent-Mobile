@@ -1606,6 +1606,72 @@ registerEffect('mancers.room.golem-lab-b.slot-3', (ctx): EffectResult => {
   };
 });
 
+// ============================================================================
+// University Tavern Side A — shared slot effect (mirrors base.room.vault-a.slot
+// for Supporters). The first occupied slot to resolve seeds `tavernARevealed`
+// with the top 3 of the Supporter Deck; each occupant then drafts one in slot
+// order. The resolution pump returns any leftovers to the top of the deck once
+// it leaves the room (see advanceResolutionPointer). Fizzles silently once the
+// pool is empty.
+// ============================================================================
+
+registerEffect('mancers.room.university-tavern-a.slot', (ctx): EffectResult => {
+  if (!ctx.resumeAnswer) {
+    let working = ctx.state;
+    if (working.tavernARevealed === null) {
+      const popped = working.supporterDeck.slice(0, 3);
+      working = {
+        ...working,
+        tavernARevealed: popped,
+        supporterDeck: working.supporterDeck.slice(popped.length),
+      };
+    }
+    const pool = working.tavernARevealed ?? [];
+    const seedPatch: GameStatePatch =
+      working === ctx.state
+        ? {}
+        : {
+            tavernARevealed: working.tavernARevealed,
+            supporterDeck: working.supporterDeck,
+          };
+    if (pool.length === 0) {
+      // Deck exhausted (or fewer cards than occupants) — nothing to draft.
+      return { kind: 'done', patch: seedPatch };
+    }
+    return {
+      kind: 'pause',
+      patch: seedPatch,
+      pending: {
+        responderId: ctx.triggeringPlayerId,
+        prompt: { kind: 'choose-peeked-supporter', eligibleCardIds: [...pool] },
+        resume: { effectId: 'mancers.room.university-tavern-a.slot', context: {} },
+        source: ctx.source,
+      },
+    };
+  }
+  if (ctx.resumeAnswer.kind !== 'card-chosen') {
+    throw new Error(
+      `university-tavern-a.slot expected card-chosen, got ${ctx.resumeAnswer.kind}`,
+    );
+  }
+  const cardId = ctx.resumeAnswer.cardId;
+  const pool = ctx.state.tavernARevealed ?? [];
+  if (!pool.includes(cardId)) {
+    throw new Error(`university-tavern-a.slot: ${cardId} not in revealed pool`);
+  }
+  return {
+    kind: 'done',
+    patch: {
+      tavernARevealed: pool.filter((id) => id !== cardId),
+      players: ctx.state.players.map((p) =>
+        p.id !== ctx.triggeringPlayerId
+          ? p
+          : { ...p, supporters: [...p.supporters, cardId] },
+      ),
+    },
+  };
+});
+
 // Re-export to satisfy the module's existing `export {}` shape.
 export {};
 

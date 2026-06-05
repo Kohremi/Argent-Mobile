@@ -782,6 +782,17 @@ function advanceResolutionPointer(state: GameState, bumpRoom: boolean): GameStat
   }
   if (
     bumpRoom &&
+    state.tavernARevealed !== null &&
+    leavingRoom?.id === 'mancers.room.university-tavern.a'
+  ) {
+    next = {
+      ...next,
+      supporterDeck: [...state.tavernARevealed, ...next.supporterDeck],
+      tavernARevealed: null,
+    };
+  }
+  if (
+    bumpRoom &&
     state.adventuringBPool !== null &&
     leavingRoom?.id === 'base.room.adventuring.b'
   ) {
