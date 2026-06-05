@@ -2,12 +2,108 @@ import type { ContentPack } from '../types';
 import type {
   ActionSpace,
   Candidate,
+  Department,
   Mage,
   Room,
   SpellCard,
+  VaultCard,
 } from '../../game/types';
 
 const PACK_ID = 'mancers';
+
+// ============================================================================
+// Synthesis Treasures — one per magic department. They are NOT shuffled into
+// the Vault Deck (`copies: 0`); the only way to obtain one is the Synthesis
+// Workshop room, which converts a Treasure + Supporter into the synthesis
+// item matching the Supporter's department. All are Treasures.
+// ============================================================================
+
+const synthesisTreasures: VaultCard[] = [
+  {
+    id: 'mancers.vault.sacred-shield',
+    name: 'Sacred Shield',
+    sourcePackId: PACK_ID,
+    type: 'treasure',
+    goldCost: 0,
+    copies: 0,
+    timing: 'reaction',
+    effectId: 'mancers.vault.sacred-shield.react',
+    description:
+      'Reaction (does not exhaust): after one of your Mages is wounded, spend 1 Mana to move it to any open slot. May react to each Mage wounded by the same effect.',
+  },
+  {
+    id: 'mancers.vault.vanishing-staff',
+    name: 'Vanishing Staff',
+    sourcePackId: PACK_ID,
+    type: 'treasure',
+    goldCost: 0,
+    copies: 0,
+    timing: 'action',
+    effectId: 'mancers.vault.vanishing-staff',
+    description:
+      'Action: spend 1 Mana to shadow any space (including your own Mage or an empty slot).',
+  },
+  {
+    id: 'mancers.vault.lightning-totem',
+    name: 'Lightning Totem',
+    sourcePackId: PACK_ID,
+    type: 'treasure',
+    goldCost: 0,
+    copies: 0,
+    timing: 'fast-action',
+    effectId: 'mancers.vault.lightning-totem',
+    description:
+      'Fast Action: spend 1 Mana to wound up to 2 Mages in the same room.',
+  },
+  {
+    id: 'mancers.vault.hourglass-of-fate',
+    name: 'Hourglass of Fate',
+    sourcePackId: PACK_ID,
+    type: 'treasure',
+    goldCost: 0,
+    copies: 0,
+    timing: 'reaction',
+    effectId: 'mancers.vault.hourglass-of-fate.react',
+    description:
+      'Reaction: when the last Bell Tower Offering is taken by another player, place a Mage (using Mage powers).',
+  },
+  {
+    id: 'mancers.vault.sword-of-flame',
+    name: 'Sword of Flame',
+    sourcePackId: PACK_ID,
+    type: 'treasure',
+    goldCost: 0,
+    copies: 0,
+    timing: 'fast-action',
+    effectId: 'mancers.vault.sword-of-flame',
+    description:
+      'Fast Action: spend 1 Mana to wound a Mage and place one of yours in its slot.',
+  },
+  {
+    id: 'mancers.vault.endless-well-of-mana',
+    name: 'Endless Well of Mana',
+    sourcePackId: PACK_ID,
+    type: 'treasure',
+    goldCost: 0,
+    copies: 0,
+    timing: 'fast-action',
+    effectId: 'mancers.vault.endless-well-of-mana',
+    description: 'Fast Action: gain 2 Mana.',
+  },
+];
+
+/** Department → its synthesis Treasure id. A 'wild' (all-department) Supporter
+ *  lets the player pick any. Used by the Synthesis Workshop. */
+export const SYNTHESIS_BY_DEPARTMENT: Partial<Record<Department, string>> = {
+  divinity: 'mancers.vault.sacred-shield',
+  mysticism: 'mancers.vault.vanishing-staff',
+  'natural-magick': 'mancers.vault.lightning-totem',
+  'planar-studies': 'mancers.vault.hourglass-of-fate',
+  sorcery: 'mancers.vault.sword-of-flame',
+  technomancy: 'mancers.vault.endless-well-of-mana',
+};
+
+export const ALL_SYNTHESIS_IDS: string[] = synthesisTreasures.map((v) => v.id);
 
 // Mancers of the University expansion.
 // Holds the Technomancer (orange) mage piece, the two Technomancy
@@ -684,6 +780,63 @@ const atelierB: Room = {
   ],
 };
 
+// ============================================================================
+// Synthesis Workshop Side A — non-instant. Convert an unused Treasure + an
+// unused Supporter (and Mana for slot 2) into a Synthesis Treasure matching
+// the Supporter's department (a 'wild' Supporter lets the player pick any).
+// Only TWO slots.
+//   Slot 1 (merit, 1 MB): Swap a Treasure + a Supporter for a Synthesis item.
+//   Slot 2 (regular):     Swap a Treasure + a Supporter + 2 Mana for one.
+// Side B (wired later) is a stub.
+// ============================================================================
+
+const synthesisWorkshopA: Room = {
+  id: 'mancers.room.synthesis-workshop.a',
+  name: 'Synthesis Workshop',
+  sourcePackId: PACK_ID,
+  isUniversityCentral: false,
+  side: 'A',
+  isInstantRoom: false,
+  cannotBePlacedInDirectly: false,
+  cannotBeLocked: false,
+  description:
+    'Trade in an unused Treasure and Supporter for a Synthesis Treasure matching the Supporter\'s department.',
+  actionSpaces: [
+    {
+      id: 'mancers.room.synthesis-workshop.a.slot-1',
+      roomId: 'mancers.room.synthesis-workshop.a',
+      index: 0,
+      slotType: 'merit',
+      occupant: null,
+      effectId: 'mancers.room.synthesis-workshop-a.slot-1',
+      costToActivate: { meritBadges: 1 },
+      description: 'Swap a Treasure and a Supporter for a Synthesis item.',
+    },
+    {
+      id: 'mancers.room.synthesis-workshop.a.slot-2',
+      roomId: 'mancers.room.synthesis-workshop.a',
+      index: 1,
+      slotType: 'regular',
+      occupant: null,
+      effectId: 'mancers.room.synthesis-workshop-a.slot-2',
+      description:
+        'Swap a Treasure, a Supporter, and 2 Mana for a Synthesis item.',
+    },
+  ],
+};
+
+const synthesisWorkshopB: Room = {
+  id: 'mancers.room.synthesis-workshop.b',
+  name: 'Synthesis Workshop',
+  sourcePackId: PACK_ID,
+  isUniversityCentral: false,
+  side: 'B',
+  isInstantRoom: false,
+  cannotBePlacedInDirectly: false,
+  cannotBeLocked: false,
+  actionSpaces: [],
+};
+
 export const mancersPack: ContentPack = {
   id: PACK_ID,
   name: 'Mancers of the University',
@@ -701,10 +854,12 @@ export const mancersPack: ContentPack = {
     universityTavernB,
     atelierA,
     atelierB,
+    synthesisWorkshopA,
+    synthesisWorkshopB,
   ],
   spells: [],
   legendarySpells: leaderSpells,
-  vaultCards: [],
+  vaultCards: synthesisTreasures,
   supporters: [],
   voters: [],
   bellTowerCards: [],

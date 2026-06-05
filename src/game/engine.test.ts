@@ -10889,6 +10889,185 @@ describe('Atelier B (Mancers)', () => {
 });
 
 // ============================================================================
+// Synthesis Workshop A (Mancers) — Treasure + Supporter → department Synthesis
+// Treasure.
+// ============================================================================
+
+describe('Synthesis Workshop A (Mancers)', () => {
+  const TREASURE = 'base.vault.ancient-armor'; // any Treasure
+  const SORCERY_SUP = 'base.supporter.arec-russel-zane'; // → Sword of Flame
+  const WILD_SUP = 'base.supporter.white-ash'; // wild → pick any
+  const SWORD = 'mancers.vault.sword-of-flame';
+  const ALL_SYNTHESIS_IDS_FOR_TEST = [
+    'mancers.vault.sacred-shield',
+    'mancers.vault.vanishing-staff',
+    'mancers.vault.lightning-totem',
+    'mancers.vault.hourglass-of-fate',
+    'mancers.vault.sword-of-flame',
+    'mancers.vault.endless-well-of-mana',
+  ];
+
+  function forceRoom(state: GameState): GameState {
+    const room = mancersPack.rooms.find(
+      (r) => r.name === 'Synthesis Workshop' && r.side === 'A',
+    );
+    if (!room) throw new Error('test helper: Synthesis Workshop A not in pack');
+    const idx = state.rooms.findIndex((r) => !r.isUniversityCentral);
+    if (idx === -1) return state;
+    return { ...state, rooms: state.rooms.map((r, i) => (i === idx ? room : r)) };
+  }
+
+  function setup(
+    slotId: string,
+    opts: { treasures?: string[]; supporters?: string[]; mana?: number } = {},
+  ): GameState {
+    let s = initGame(TWO_PLAYER_CONFIG);
+    s = forceRoom(s);
+    s = { ...s, activePackIds: ['base', 'mancers'] };
+    s = zeroPlayerResources(s, 'p1');
+    s = setMeritBadges(s, 'p1', 5);
+    if (opts.mana) s = setMana(s, 'p1', opts.mana);
+    s = mapPlayer(s, 'p1', (p) => ({
+      ...p,
+      vaultCards: (opts.treasures ?? []).map((cardId) => ({
+        cardId,
+        exhausted: false,
+      })),
+      supporters: opts.supporters ?? [],
+    }));
+    s = addMage(s, 'p1', {
+      id: 'alice-mage',
+      cardId: 'base.mage.divinity',
+      color: 'blue',
+    });
+    s = placeMageOnSpace(s, 'p1', 'alice-mage', slotId);
+    return { ...s, bellTower: { ...s.bellTower, available: [] } };
+  }
+
+  function driveToSlot(s: GameState): GameState {
+    s = applyAction(s, { type: 'ADVANCE_PHASE' });
+    s = applyAction(s, { type: 'ADVANCE_PHASE' });
+    s = applyAction(s, { type: 'ADVANCE_PHASE' });
+    return takeRewardAtResolution(s);
+  }
+
+  function pick(s: GameState, optionId: string): GameState {
+    const top = topPending(s);
+    if (top.prompt.kind !== 'choose-from-options') {
+      throw new Error(`expected choose-from-options, got ${top.prompt.kind}`);
+    }
+    return applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: top.id,
+      answer: { kind: 'option-chosen', optionId, payload: {} },
+    });
+  }
+
+  const p1 = (s: GameState) => s.players.find((p) => p.id === 'p1')!;
+
+  it('slot 1: a Sorcery Supporter yields Sword of Flame; Treasure + Supporter consumed', () => {
+    let s = setup('mancers.room.synthesis-workshop.a.slot-1', {
+      treasures: [TREASURE],
+      supporters: [SORCERY_SUP],
+    });
+    s = driveToSlot(s);
+    s = pick(s, TREASURE); // choose Treasure to trade
+    s = pick(s, SORCERY_SUP); // choose Supporter → department maps directly
+    const me = p1(s);
+    expect(me.vaultCards.some((v) => v.cardId === SWORD)).toBe(true);
+    expect(me.vaultCards.some((v) => v.cardId === TREASURE)).toBe(false);
+    expect(me.supporters).not.toContain(SORCERY_SUP);
+  });
+
+  it('slot 1: a wild Supporter lets the player pick any Synthesis item', () => {
+    let s = setup('mancers.room.synthesis-workshop.a.slot-1', {
+      treasures: [TREASURE],
+      supporters: [WILD_SUP],
+    });
+    s = driveToSlot(s);
+    s = pick(s, TREASURE);
+    s = pick(s, WILD_SUP);
+    // Now a choose-any-Synthesis prompt is shown.
+    const top = topPending(s);
+    if (top.prompt.kind !== 'choose-from-options') throw new Error('x');
+    expect(top.prompt.options.map((o) => o.id).sort()).toEqual(
+      [...ALL_SYNTHESIS_IDS_FOR_TEST].sort(),
+    );
+    s = pick(s, 'mancers.vault.endless-well-of-mana');
+    expect(
+      p1(s).vaultCards.some((v) => v.cardId === 'mancers.vault.endless-well-of-mana'),
+    ).toBe(true);
+  });
+
+  it('slot 2: also spends 2 Mana', () => {
+    let s = setup('mancers.room.synthesis-workshop.a.slot-2', {
+      treasures: [TREASURE],
+      supporters: [SORCERY_SUP],
+      mana: 2,
+    });
+    s = driveToSlot(s);
+    s = pick(s, TREASURE);
+    s = pick(s, SORCERY_SUP);
+    expect(p1(s).resources.mana).toBe(0);
+    expect(p1(s).vaultCards.some((v) => v.cardId === SWORD)).toBe(true);
+  });
+
+  it('slot 2: fizzles with no prompt when the player lacks 2 Mana', () => {
+    let s = setup('mancers.room.synthesis-workshop.a.slot-2', {
+      treasures: [TREASURE],
+      supporters: [SORCERY_SUP],
+      mana: 1,
+    });
+    s = driveToSlot(s);
+    expect(s.pendingResolutionStack).toHaveLength(0);
+  });
+
+  it('fizzles when the player has no Treasure or no Supporter', () => {
+    let s = setup('mancers.room.synthesis-workshop.a.slot-1', {
+      treasures: [TREASURE],
+      supporters: [],
+    });
+    s = driveToSlot(s);
+    expect(s.pendingResolutionStack).toHaveLength(0);
+  });
+
+  it('synthesis Treasures are NOT shuffled into the Vault deck (copies: 0)', () => {
+    const s = { ...initGame(TWO_PLAYER_CONFIG), activePackIds: ['base', 'mancers'] };
+    const all = [...s.vaultDeck, ...s.vaultTableau];
+    for (const id of ALL_SYNTHESIS_IDS_FOR_TEST) {
+      expect(all).not.toContain(id);
+    }
+  });
+
+  it('Endless Well of Mana (Technomancy synthesis): Fast Action grants 2 Mana', () => {
+    let s = initGame(TWO_PLAYER_CONFIG);
+    s = { ...s, activePackIds: ['base', 'mancers'] };
+    s = zeroPlayerResources(s, 'p1');
+    s = mapPlayer(s, 'p1', (p) => ({
+      ...p,
+      vaultCards: [{ cardId: 'mancers.vault.endless-well-of-mana', exhausted: false }],
+    }));
+    s = {
+      ...s,
+      firstPlayerIndex: 0,
+      phase: {
+        kind: 'errands',
+        round: 1,
+        activePlayerIndex: 0,
+        actionUsed: false,
+        fastActionUsed: false,
+      },
+    };
+    s = applyAction(s, {
+      type: 'PLAY_VAULT_CARD',
+      playerId: 'p1',
+      vaultCardId: 'mancers.vault.endless-well-of-mana',
+    });
+    expect(p1(s).resources.mana).toBe(2);
+  });
+});
+
+// ============================================================================
 // Council Chamber A — Draft a Supporter OR Gain a Mark, capped at 1/round
 // ============================================================================
 
