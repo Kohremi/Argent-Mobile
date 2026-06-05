@@ -2,6 +2,7 @@
 
 import { getEffect, hasEffect, registerEffect } from './registry';
 import {
+  actsAsColor,
   affordableVaultCards,
   applyGainMark,
   applyRoomLockPatch,
@@ -24,6 +25,10 @@ import {
   woundMage,
 } from './helpers';
 import { nextRandom } from '../../utils/rng';
+import {
+  listPlaceWithoutPowersMages,
+  listPlaceWithoutPowersSlots,
+} from './base';
 import {
   ALL_SYNTHESIS_IDS,
   SYNTHESIS_BY_DEPARTMENT,
@@ -2706,6 +2711,182 @@ function lightningApply(ctx: EffectContext, mageIds: string[]): EffectResult {
     },
   };
 }
+
+// ============================================================================
+// Synthesis Treasure — Hourglass of Fate (Planar Studies): Reaction. When the
+// last Bell Tower Offering is taken by ANOTHER player, place one of your
+// office Mages — WITH its Mage powers (unlike Tardy / Stop Time, which place
+// without powers). The two immediate placement powers are Sorcery (red → Ars
+// Magna, place onto a vulnerable opponent and wound it) and Technomancy
+// (orange → pay 3 Gold for a Research). The card exhausts on use.
+// ============================================================================
+
+registerEffect('mancers.vault.hourglass-of-fate.react', (ctx): EffectResult => {
+  const self = 'mancers.vault.hourglass-of-fate.react';
+  const step = ctx.resumeContext?.['step'];
+  const playerId = ctx.triggeringPlayerId;
+  const player = ctx.state.players.find((p) => p.id === playerId);
+  if (!player) return { kind: 'done', patch: {} };
+
+  // Place the chosen office Mage into the chosen slot, firing its power.
+  if (step === 'apply') {
+    if (ctx.resumeAnswer?.kind !== 'space-chosen') {
+      throw new Error(`${self} apply expected space-chosen`);
+    }
+    const spaceId = ctx.resumeAnswer.spaceId;
+    const mageId = ctx.resumeContext?.['mageId'];
+    if (typeof mageId !== 'string') return { kind: 'done', patch: {} };
+    const mage = player.mages.find((m) => m.id === mageId);
+    if (!mage || mage.location.kind !== 'office') return { kind: 'done', patch: {} };
+    const space = ctx.state.rooms
+      .flatMap((r) => r.actionSpaces)
+      .find((s) => s.id === spaceId);
+
+    // Sorcery (red) Ars Magna: place onto a vulnerable opponent's slot.
+    if (
+      actsAsColor(mage, 'red') &&
+      space?.occupant &&
+      canArsMagnaTakeSpace(ctx.state, playerId, space)
+    ) {
+      const targetMageId = space.occupant.mageId;
+      let working: GameState = {
+        ...ctx.state,
+        ...gainResourcePatch(ctx.state, playerId, 'mana', -1),
+      };
+      const wound = woundMage(working, targetMageId, playerId);
+      working = { ...working, ...wound.patch };
+      return {
+        kind: 'open-reaction',
+        patch: {
+          players: working.players,
+          rooms: working.rooms,
+          nextSequenceId: working.nextSequenceId,
+          pendingRevivalChecks: working.pendingRevivalChecks,
+        },
+        window: {
+          triggerEvents: [wound.triggerEvent],
+          pendingResponderIds: buildReactionQueue(working, playerId),
+          reactedPlayerIds: [],
+          afterResume: {
+            effectId: 'base.mage.sorcery.ars-magna.complete',
+            context: {
+              sourceMageId: mageId,
+              targetSpaceId: spaceId,
+              triggerEvent: wound.triggerEvent as unknown as SerializableContext,
+            },
+          },
+          source: ctx.source,
+        },
+      };
+    }
+
+    // Normal placement into an open slot (cap/lock aware).
+    if (!listPlaceWithoutPowersSlots(ctx.state, playerId, undefined).includes(spaceId)) {
+      return { kind: 'done', patch: {} };
+    }
+    const occ: WorkerOccupancy = { mageId, ownerId: playerId, isShadowing: false };
+    let working: GameState = {
+      ...ctx.state,
+      players: ctx.state.players.map((p) =>
+        p.id !== playerId
+          ? p
+          : {
+              ...p,
+              mages: p.mages.map((m) =>
+                m.id !== mageId
+                  ? m
+                  : { ...m, location: { kind: 'action-space', spaceId } },
+              ),
+            },
+      ),
+      rooms: ctx.state.rooms.map((r) => ({
+        ...r,
+        actionSpaces: r.actionSpaces.map((s) =>
+          s.id !== spaceId ? s : { ...s, occupant: occ },
+        ),
+      })),
+    };
+    const patch: GameStatePatch = { players: working.players, rooms: working.rooms };
+    // Technomancy (orange): queue the "pay 3 Gold → Research" trigger.
+    if (actsAsColor(mage, 'orange')) {
+      const room = working.rooms.find((r) =>
+        r.actionSpaces.some((s) => s.id === spaceId),
+      );
+      patch.pendingTechnomancyTrigger = [
+        ...working.pendingTechnomancyTrigger,
+        { playerId, roomId: room?.id ?? '' },
+      ];
+    }
+    return { kind: 'done', patch };
+  }
+
+  // A Mage was chosen — prompt for the destination (open slots + Ars Magna
+  // targets when the Mage is red).
+  if (step === 'slot') {
+    if (ctx.resumeAnswer?.kind !== 'mage-chosen') {
+      throw new Error(`${self} slot expected mage-chosen`);
+    }
+    const mageId = ctx.resumeAnswer.mageId;
+    const mage = player.mages.find((m) => m.id === mageId);
+    const slots = [...listPlaceWithoutPowersSlots(ctx.state, playerId, undefined)];
+    if (mage && actsAsColor(mage, 'red')) {
+      for (const r of ctx.state.rooms) {
+        if (r.cannotBePlacedInDirectly || isRoomLocked(ctx.state, r.id)) continue;
+        for (const s of r.actionSpaces) {
+          if (
+            s.occupant &&
+            canArsMagnaTakeSpace(ctx.state, playerId, s) &&
+            !slots.includes(s.id)
+          ) {
+            slots.push(s.id);
+          }
+        }
+      }
+    }
+    if (slots.length === 0) return { kind: 'done', patch: {} };
+    return {
+      kind: 'pause',
+      pending: {
+        responderId: playerId,
+        prompt: { kind: 'choose-target-action-space', eligibleSpaceIds: slots },
+        resume: { effectId: self, context: { step: 'apply', mageId } },
+        source: ctx.source,
+      },
+    };
+  }
+
+  // Reaction entry: exhaust the card, then prompt for which Mage to place.
+  const exhaustPatch: GameStatePatch = {
+    players: ctx.state.players.map((p) =>
+      p.id !== playerId
+        ? p
+        : {
+            ...p,
+            vaultCards: p.vaultCards.map((v) =>
+              v.cardId === 'mancers.vault.hourglass-of-fate' && !v.exhausted
+                ? { ...v, exhausted: true }
+                : v,
+            ),
+          },
+    ),
+  };
+  const mages = listPlaceWithoutPowersMages(ctx.state, playerId);
+  if (mages.length === 0) return { kind: 'done', patch: exhaustPatch };
+  return {
+    kind: 'pause',
+    patch: exhaustPatch,
+    pending: {
+      responderId: playerId,
+      prompt: {
+        kind: 'choose-target-mage',
+        eligibleMageIds: mages,
+        label: 'Place which Mage (with its powers)?',
+      },
+      resume: { effectId: self, context: { step: 'slot' } },
+      source: ctx.source,
+    },
+  };
+});
 
 // Re-export to satisfy the module's existing `export {}` shape.
 export {};

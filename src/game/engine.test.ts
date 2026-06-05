@@ -11335,6 +11335,83 @@ describe('Synthesis Workshop A (Mancers)', () => {
     expect(p2.vaultCards[0]!.exhausted).toBe(false);
   });
 
+  it('Hourglass of Fate (Planar synthesis): on opponent\'s last Bell Tower claim, place a Mage', () => {
+    const BELLS = ['base.bell.gain-ip', 'base.bell.first-player', 'base.bell.gold-or-mana'];
+    let s = initGame(FOUR_PLAYER_CONFIG);
+    s = { ...s, activePackIds: ['base', 'mancers'] };
+    s = applyAction(s, { type: 'ADVANCE_PHASE' }); // round-setup → errands
+    s = {
+      ...s,
+      bellTower: {
+        ...s.bellTower,
+        available: s.bellTower.available.filter((c) => BELLS.includes(c.id)),
+      },
+    };
+    // After 3 claims the non-claimer is firstPlayerIndex + 3 (mod 4).
+    const nonClaimer = s.players[(s.firstPlayerIndex + 3) % s.players.length]!.id;
+    s = mapPlayer(s, nonClaimer, (p) => ({
+      ...p,
+      vaultCards: [{ cardId: 'mancers.vault.hourglass-of-fate', exhausted: false }],
+      mages: [
+        {
+          id: 'hg-mage',
+          cardId: 'base.mage.neutral',
+          color: 'off-white',
+          location: { kind: 'office' as const, playerId: nonClaimer },
+          isShadowing: false,
+          isWounded: false,
+        },
+      ],
+    }));
+    const activeId = () => {
+      if (s.phase.kind !== 'errands') throw new Error('not errands');
+      return s.players[s.phase.activePlayerIndex]!.id;
+    };
+    s = applyAction(s, { type: 'CLAIM_BELL_TOWER', playerId: activeId(), bellTowerCardId: 'base.bell.gain-ip' });
+    s = applyAction(s, { type: 'CLAIM_BELL_TOWER', playerId: activeId(), bellTowerCardId: 'base.bell.first-player' });
+    s = applyAction(s, { type: 'CLAIM_BELL_TOWER', playerId: activeId(), bellTowerCardId: 'base.bell.gold-or-mana' });
+    // Resolve Gold-or-Mana's own choice first (LIFO).
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'option-chosen', optionId: 'mana', payload: {} },
+    });
+    // Hourglass reaction window for the non-claimer.
+    const rp = topPending(s);
+    expect(rp.prompt.kind).toBe('reaction-window');
+    expect(rp.responderId).toBe(nonClaimer);
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: rp.id,
+      answer: {
+        kind: 'reaction-played',
+        effectId: 'mancers.vault.hourglass-of-fate.react',
+        reactionContext: {},
+      },
+    });
+    // Pick the Mage, then an open slot.
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'mage-chosen', mageId: 'hg-mage' },
+    });
+    const slotPrompt = topPending(s);
+    if (slotPrompt.prompt.kind !== 'choose-target-action-space') throw new Error('x');
+    const spaceId = slotPrompt.prompt.eligibleSpaceIds[0]!;
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: slotPrompt.id,
+      answer: { kind: 'space-chosen', spaceId },
+    });
+    // The Mage is placed; Hourglass is exhausted.
+    const me = s.players.find((p) => p.id === nonClaimer)!;
+    expect(me.mages.find((m) => m.id === 'hg-mage')!.location).toEqual({
+      kind: 'action-space',
+      spaceId,
+    });
+    expect(me.vaultCards[0]!.exhausted).toBe(true);
+  });
+
   it('Vanishing Staff (Mysticism synthesis): shadows an empty space with your Mage', () => {
     let s = errandsWith('mancers.vault.vanishing-staff');
     s = addMage(s, 'p1', {
