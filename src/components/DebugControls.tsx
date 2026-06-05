@@ -7,7 +7,11 @@ import { useEffect, useState } from 'react';
 import clsx from 'clsx';
 import { useGameStore } from '../store/gameStore';
 import { baseGamePack } from '../content/packs/base';
+import { ALL_SYNTHESIS_IDS } from '../content/packs/mancers';
 import { listPacks } from '../content/registry';
+
+/** Synthesis Treasures (Synthesis Workshop) get a soft "SYNTHESIZED" tag. */
+const SYNTHESIS_ID_SET = new Set<string>(ALL_SYNTHESIS_IDS);
 import { computeFinalScoring, type VoterAward } from '../game/scoring';
 import {
   actsAsColor,
@@ -2201,6 +2205,14 @@ function PlayerCard({
                     <span className="font-medium text-slate-200">
                       {card.name}
                     </span>
+                    {SYNTHESIS_ID_SET.has(v.cardId) && (
+                      <span
+                        className="text-[10px] uppercase tracking-wide text-sky-400 font-semibold"
+                        title="Synthesized at the Synthesis Workshop"
+                      >
+                        Synthesized
+                      </span>
+                    )}
                     <span className="text-[10px] uppercase tracking-wide text-slate-500">
                       {card.type}
                     </span>
