@@ -11412,6 +11412,61 @@ describe('Synthesis Workshop A (Mancers)', () => {
     expect(me.vaultCards[0]!.exhausted).toBe(true);
   });
 
+  it('Hourglass of Fate: triggers in a 2-player game when the opponent claims the final bell', () => {
+    let s = initGame(TWO_PLAYER_CONFIG);
+    s = { ...s, activePackIds: ['base', 'mancers'] };
+    s = applyAction(s, { type: 'ADVANCE_PHASE' }); // → errands
+    const bells = s.bellTower.available.map((c) => c.id);
+    expect(bells.length).toBe(2);
+    // Bob owns Hourglass + an office mage; Alice (p1) will claim both bells.
+    s = mapPlayer(s, 'p2', (p) => ({
+      ...p,
+      vaultCards: [{ cardId: 'mancers.vault.hourglass-of-fate', exhausted: false }],
+      mages: [
+        {
+          id: 'hg-mage',
+          cardId: 'base.mage.neutral',
+          color: 'off-white',
+          location: { kind: 'office' as const, playerId: 'p2' },
+          isShadowing: false,
+          isWounded: false,
+        },
+      ],
+    }));
+    if (s.phase.kind !== 'errands') throw new Error('expected errands');
+    s = { ...s, firstPlayerIndex: 0, phase: { ...s.phase, activePlayerIndex: 0 } };
+    const active = () => {
+      if (s.phase.kind !== 'errands') throw new Error('not errands');
+      return s.players[s.phase.activePlayerIndex]!.id;
+    };
+    const settle = (st: GameState): GameState => {
+      let cur = st;
+      while (cur.pendingResolutionStack.length > 0) {
+        const t = topPending(cur);
+        if (t.prompt.kind === 'reaction-window') break;
+        if (t.prompt.kind !== 'choose-from-options') break;
+        cur = applyAction(cur, {
+          type: 'RESOLVE_PENDING',
+          resolutionId: t.id,
+          answer: { kind: 'option-chosen', optionId: t.prompt.options[0]!.id, payload: {} },
+        });
+      }
+      return cur;
+    };
+    s = settle(applyAction(s, { type: 'CLAIM_BELL_TOWER', playerId: active(), bellTowerCardId: bells[0]! }));
+    if (s.phase.kind === 'errands') s = applyAction(s, { type: 'PASS_TURN', playerId: active() });
+    s = settle(applyAction(s, { type: 'CLAIM_BELL_TOWER', playerId: active(), bellTowerCardId: bells[1]! }));
+    // The Hourglass reaction window is open for the non-claimer (Bob).
+    const rp = topPending(s);
+    expect(rp.prompt.kind).toBe('reaction-window');
+    expect(rp.responderId).toBe('p2');
+    if (rp.prompt.kind === 'reaction-window') {
+      expect(rp.prompt.reactionOptions.map((o) => o.effectId)).toContain(
+        'mancers.vault.hourglass-of-fate.react',
+      );
+    }
+  });
+
   it('Vanishing Staff (Mysticism synthesis): shadows an empty space with your Mage', () => {
     let s = errandsWith('mancers.vault.vanishing-staff');
     s = addMage(s, 'p1', {

@@ -2855,7 +2855,10 @@ registerEffect('mancers.vault.hourglass-of-fate.react', (ctx): EffectResult => {
     };
   }
 
-  // Reaction entry: exhaust the card, then prompt for which Mage to place.
+  // Reaction entry: if there's nothing to place, it's a harmless no-op and the
+  // card is NOT spent. Otherwise exhaust it and prompt for which Mage to place.
+  const mages = listPlaceWithoutPowersMages(ctx.state, playerId);
+  if (mages.length === 0) return { kind: 'done', patch: {} };
   const exhaustPatch: GameStatePatch = {
     players: ctx.state.players.map((p) =>
       p.id !== playerId
@@ -2870,8 +2873,6 @@ registerEffect('mancers.vault.hourglass-of-fate.react', (ctx): EffectResult => {
           },
     ),
   };
-  const mages = listPlaceWithoutPowersMages(ctx.state, playerId);
-  if (mages.length === 0) return { kind: 'done', patch: exhaustPatch };
   return {
     kind: 'pause',
     patch: exhaustPatch,
