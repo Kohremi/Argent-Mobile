@@ -11156,6 +11156,71 @@ describe('Synthesis Workshop A (Mancers)', () => {
     expect(space.occupant?.mageId).toBe('alice-placer');
   });
 
+  function roomWithTwoOpenSlots(s: GameState): string[] {
+    for (const r of s.rooms) {
+      if (r.cannotBePlacedInDirectly) continue;
+      if (r.name === 'Synthesis Workshop') continue;
+      const open = r.actionSpaces.filter((sp) => !sp.occupant).map((sp) => sp.id);
+      if (open.length >= 2) return [open[0]!, open[1]!];
+    }
+    throw new Error('no room with two open slots');
+  }
+
+  it('Lightning Totem (Natural Magick synthesis): wounds up to 2 Mages in one room', () => {
+    let s = errandsWith('mancers.vault.lightning-totem');
+    s = addMage(s, 'p2', {
+      id: 'bob-1',
+      cardId: 'base.mage.neutral',
+      color: 'off-white',
+    });
+    s = addMage(s, 'p2', {
+      id: 'bob-2',
+      cardId: 'base.mage.neutral',
+      color: 'off-white',
+    });
+    const [slotA, slotB] = roomWithTwoOpenSlots(s);
+    s = placeMageOnSpace(s, 'p2', 'bob-1', slotA!);
+    s = placeMageOnSpace(s, 'p2', 'bob-2', slotB!);
+    s = applyAction(s, {
+      type: 'PLAY_VAULT_CARD',
+      playerId: 'p1',
+      vaultCardId: 'mancers.vault.lightning-totem',
+    });
+    // Pick first target, then the same-room second.
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'mage-chosen', mageId: 'bob-1' },
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'mage-chosen', mageId: 'bob-2' },
+    });
+    // Drive the batch reaction window (pass) + per-owner Infirmary bonuses.
+    let guard = 0;
+    while (s.pendingResolutionStack.length > 0 && guard++ < 12) {
+      const t = topPending(s);
+      if (t.prompt.kind === 'reaction-window') {
+        s = applyAction(s, {
+          type: 'RESOLVE_PENDING',
+          resolutionId: t.id,
+          answer: { kind: 'reaction-passed' },
+        });
+      } else if (t.prompt.kind === 'choose-from-options') {
+        s = applyAction(s, {
+          type: 'RESOLVE_PENDING',
+          resolutionId: t.id,
+          answer: { kind: 'option-chosen', optionId: t.prompt.options[0]!.id, payload: {} },
+        });
+      } else break;
+    }
+    const bob = s.players.find((p) => p.id === 'p2')!;
+    expect(bob.mages.find((m) => m.id === 'bob-1')!.isWounded).toBe(true);
+    expect(bob.mages.find((m) => m.id === 'bob-2')!.isWounded).toBe(true);
+    expect(p1(s).resources.mana).toBe(0);
+  });
+
   it('Vanishing Staff (Mysticism synthesis): shadows an empty space with your Mage', () => {
     let s = errandsWith('mancers.vault.vanishing-staff');
     s = addMage(s, 'p1', {

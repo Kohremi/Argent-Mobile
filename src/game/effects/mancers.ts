@@ -2552,6 +2552,161 @@ registerEffect('mancers.vault.vanishing-staff', (ctx): EffectResult => {
   };
 });
 
+// ============================================================================
+// Synthesis Treasure — Lightning Totem (Natural Magick): Fast Action, spend 1
+// Mana to wound up to 2 Mages in the same room. Wounds open a single batch
+// reaction window (each affected owner reacts once); Infirmary bonuses are
+// surfaced afterward via the engine's `base.system.batch-post-wound-bonus`.
+// ============================================================================
+
+/** The id of the room a placed Mage occupies (base or shadow position). */
+function roomIdOfMage(state: GameState, mageId: string): string | null {
+  for (const r of state.rooms) {
+    for (const s of r.actionSpaces) {
+      if (s.occupant?.mageId === mageId || s.shadowOccupant?.mageId === mageId) {
+        return r.id;
+      }
+    }
+  }
+  return null;
+}
+
+registerEffect('mancers.vault.lightning-totem', (ctx): EffectResult => {
+  const self = 'mancers.vault.lightning-totem';
+  const step = ctx.resumeContext?.['step'];
+  const player = ctx.state.players.find((p) => p.id === ctx.triggeringPlayerId);
+  if (!player) return { kind: 'done', patch: {} };
+
+  // A first target was chosen — offer a same-room second (or wound just one).
+  if (step === 'second') {
+    if (ctx.resumeAnswer?.kind !== 'mage-chosen') {
+      throw new Error(`${self} second expected mage-chosen`);
+    }
+    const firstId = ctx.resumeAnswer.mageId;
+    const secondCandidates = opposingPlacedTargets(
+      buildBurnTargets(ctx.state, ctx.triggeringPlayerId),
+      ctx.state,
+      ctx.triggeringPlayerId,
+    ).filter(
+      (id) =>
+        id !== firstId &&
+        roomIdOfMage(ctx.state, id) === roomIdOfMage(ctx.state, firstId),
+    );
+    if (secondCandidates.length > 0) {
+      return {
+        kind: 'pause',
+        pending: {
+          responderId: ctx.triggeringPlayerId,
+          prompt: {
+            kind: 'choose-target-mage',
+            eligibleMageIds: secondCandidates,
+            canPass: true,
+            label: 'Wound a second Mage in the same room (or pass)',
+          },
+          resume: { effectId: self, context: { step: 'apply', firstId } },
+          source: ctx.source,
+        },
+      };
+    }
+    // No same-room second target — wound just the first.
+    return lightningApply(ctx, [firstId]);
+  }
+
+  // The optional second target resolved (or was passed) — wound them.
+  if (step === 'apply') {
+    const firstId = ctx.resumeContext?.['firstId'];
+    if (typeof firstId !== 'string') return { kind: 'done', patch: {} };
+    const mageIds = [firstId];
+    if (ctx.resumeAnswer?.kind === 'mage-chosen') {
+      mageIds.push(ctx.resumeAnswer.mageId);
+    }
+    return lightningApply(ctx, mageIds);
+  }
+
+  // Initial: need 1 Mana and a woundable opposing Mage on a slot.
+  if (player.resources.mana < 1) return { kind: 'done', patch: {} };
+  const targets = opposingPlacedTargets(
+    buildBurnTargets(ctx.state, ctx.triggeringPlayerId),
+    ctx.state,
+    ctx.triggeringPlayerId,
+  );
+  if (targets.length === 0) return { kind: 'done', patch: {} };
+  return {
+    kind: 'pause',
+    pending: {
+      responderId: ctx.triggeringPlayerId,
+      prompt: {
+        kind: 'choose-target-mage',
+        eligibleMageIds: targets,
+        label: 'Wound which Mage (up to 2 in one room)?',
+      },
+      resume: { effectId: self, context: { step: 'second' } },
+      source: ctx.source,
+    },
+  };
+});
+
+/** Pays 1 Mana, wounds the chosen Mages, and opens one batch reaction window
+ *  whose afterResume surfaces per-owner Infirmary bonuses. */
+function lightningApply(ctx: EffectContext, mageIds: string[]): EffectResult {
+  const playerId = ctx.triggeringPlayerId;
+  const player = ctx.state.players.find((p) => p.id === playerId);
+  if (!player || player.resources.mana < 1) return { kind: 'done', patch: {} };
+  let working: GameState = {
+    ...ctx.state,
+    ...gainResourcePatch(ctx.state, playerId, 'mana', -1),
+  };
+  // Wound each (skip any that slipped off a slot since selection).
+  const events: ReactionTriggerEvent[] = [];
+  for (const mageId of mageIds) {
+    const m = working.players.flatMap((p) => p.mages).find((mm) => mm.id === mageId);
+    if (!m || m.location.kind !== 'action-space') continue;
+    const wound = woundMage(working, mageId, playerId);
+    working = { ...working, ...wound.patch };
+    events.push(wound.triggerEvent);
+  }
+  if (events.length === 0) {
+    return { kind: 'done', patch: { players: working.players } };
+  }
+  // Reactor queue: affected owners (excluding the caster) in turn order.
+  const affected = new Set(
+    events.map((e) => ('ownerId' in e ? e.ownerId : '')).filter(Boolean),
+  );
+  affected.delete(playerId);
+  const reactorQueue = buildReactionQueue(working, playerId).filter((pid) =>
+    affected.has(pid),
+  );
+  // Order events by reactor turn order for the Infirmary-bonus walk.
+  const rank = new Map(reactorQueue.map((pid, i) => [pid, i] as const));
+  const ordered = [...events].sort((a, b) => {
+    const ar = 'ownerId' in a ? (rank.get(a.ownerId) ?? 9999) : 9999;
+    const br = 'ownerId' in b ? (rank.get(b.ownerId) ?? 9999) : 9999;
+    return ar - br;
+  });
+  return {
+    kind: 'open-reaction',
+    patch: {
+      players: working.players,
+      rooms: working.rooms,
+      nextSequenceId: working.nextSequenceId,
+      pendingRevivalChecks: working.pendingRevivalChecks,
+    },
+    window: {
+      triggerEvents: events,
+      pendingResponderIds: reactorQueue,
+      reactedPlayerIds: [],
+      afterResume: {
+        effectId: 'base.system.batch-post-wound-bonus',
+        context: {
+          events: ordered as unknown as SerializableContext['events'],
+          queueIndex: 0,
+        },
+      },
+      source: ctx.source,
+    },
+  };
+}
+
 // Re-export to satisfy the module's existing `export {}` shape.
 export {};
 
