@@ -2742,6 +2742,24 @@ registerEffect('mancers.vault.hourglass-of-fate.react', (ctx): EffectResult => {
       .flatMap((r) => r.actionSpaces)
       .find((s) => s.id === spaceId);
 
+    // The placement is committing now — exhaust the card (only here, never on
+    // an entry/pass). All placement patches below build from this base.
+    const s0: GameState = {
+      ...ctx.state,
+      players: ctx.state.players.map((p) =>
+        p.id !== playerId
+          ? p
+          : {
+              ...p,
+              vaultCards: p.vaultCards.map((v) =>
+                v.cardId === 'mancers.vault.hourglass-of-fate' && !v.exhausted
+                  ? { ...v, exhausted: true }
+                  : v,
+              ),
+            },
+      ),
+    };
+
     // Sorcery (red) Ars Magna: place onto a vulnerable opponent's slot.
     if (
       actsAsColor(mage, 'red') &&
@@ -2750,8 +2768,8 @@ registerEffect('mancers.vault.hourglass-of-fate.react', (ctx): EffectResult => {
     ) {
       const targetMageId = space.occupant.mageId;
       let working: GameState = {
-        ...ctx.state,
-        ...gainResourcePatch(ctx.state, playerId, 'mana', -1),
+        ...s0,
+        ...gainResourcePatch(s0, playerId, 'mana', -1),
       };
       const wound = woundMage(working, targetMageId, playerId);
       working = { ...working, ...wound.patch };
@@ -2786,8 +2804,8 @@ registerEffect('mancers.vault.hourglass-of-fate.react', (ctx): EffectResult => {
     }
     const occ: WorkerOccupancy = { mageId, ownerId: playerId, isShadowing: false };
     let working: GameState = {
-      ...ctx.state,
-      players: ctx.state.players.map((p) =>
+      ...s0,
+      players: s0.players.map((p) =>
         p.id !== playerId
           ? p
           : {
@@ -2799,7 +2817,7 @@ registerEffect('mancers.vault.hourglass-of-fate.react', (ctx): EffectResult => {
               ),
             },
       ),
-      rooms: ctx.state.rooms.map((r) => ({
+      rooms: s0.rooms.map((r) => ({
         ...r,
         actionSpaces: r.actionSpaces.map((s) =>
           s.id !== spaceId ? s : { ...s, occupant: occ },
@@ -2823,6 +2841,7 @@ registerEffect('mancers.vault.hourglass-of-fate.react', (ctx): EffectResult => {
   // A Mage was chosen — prompt for the destination (open slots + Ars Magna
   // targets when the Mage is red).
   if (step === 'slot') {
+    if (ctx.resumeAnswer?.kind === 'pass') return { kind: 'done', patch: {} };
     if (ctx.resumeAnswer?.kind !== 'mage-chosen') {
       throw new Error(`${self} slot expected mage-chosen`);
     }
@@ -2855,32 +2874,20 @@ registerEffect('mancers.vault.hourglass-of-fate.react', (ctx): EffectResult => {
     };
   }
 
-  // Reaction entry: if there's nothing to place, it's a harmless no-op and the
-  // card is NOT spent. Otherwise exhaust it and prompt for which Mage to place.
+  // Reaction entry: if there's nothing to place, it's a harmless no-op (the
+  // option shouldn't even be offered without an office Mage). Prompt for the
+  // Mage — `canPass` lets the player back out, and the card is only spent when
+  // a placement actually happens (in the 'apply' step), never on a pass.
   const mages = listPlaceWithoutPowersMages(ctx.state, playerId);
   if (mages.length === 0) return { kind: 'done', patch: {} };
-  const exhaustPatch: GameStatePatch = {
-    players: ctx.state.players.map((p) =>
-      p.id !== playerId
-        ? p
-        : {
-            ...p,
-            vaultCards: p.vaultCards.map((v) =>
-              v.cardId === 'mancers.vault.hourglass-of-fate' && !v.exhausted
-                ? { ...v, exhausted: true }
-                : v,
-            ),
-          },
-    ),
-  };
   return {
     kind: 'pause',
-    patch: exhaustPatch,
     pending: {
       responderId: playerId,
       prompt: {
         kind: 'choose-target-mage',
         eligibleMageIds: mages,
+        canPass: true,
         label: 'Place which Mage (with its powers)?',
       },
       resume: { effectId: self, context: { step: 'slot' } },

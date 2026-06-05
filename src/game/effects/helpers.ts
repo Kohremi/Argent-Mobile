@@ -1210,13 +1210,13 @@ export function buildReactionOptionsFor(
       });
     }
     // Hourglass of Fate (Mancers synthesis Treasure) — place a Mage WITH its
-    // Mage powers (unlike Tardy / Stop Time). Offered to any non-claimer who
-    // owns an unexhausted copy, consistent with the other bell-tower reactions
-    // (which don't gate on having a Mage to place).
+    // Mage powers (unlike Tardy / Stop Time). Only offered when the responder
+    // owns an unexhausted copy AND has an office Mage to place — otherwise
+    // playing it would strand the player on a prompt with nothing to choose.
     const hourglass = responder.vaultCards.find(
       (v) => v.cardId === 'mancers.vault.hourglass-of-fate' && !v.exhausted,
     );
-    if (hourglass) {
+    if (hourglass && responder.mages.some((m) => m.location.kind === 'office')) {
       options.push({
         sourceKind: 'vault-card',
         sourceId: 'mancers.vault.hourglass-of-fate',
