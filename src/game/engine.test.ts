@@ -11065,6 +11065,129 @@ describe('Synthesis Workshop A (Mancers)', () => {
     });
     expect(p1(s).resources.mana).toBe(2);
   });
+
+  // -- Item effects played via PLAY_VAULT_CARD --
+
+  function errandsWith(vaultCardId: string): GameState {
+    let s = initGame(TWO_PLAYER_CONFIG);
+    s = { ...s, activePackIds: ['base', 'mancers'] };
+    s = zeroPlayerResources(s, 'p1');
+    s = setMana(s, 'p1', 1);
+    s = mapPlayer(s, 'p1', (p) => ({
+      ...p,
+      vaultCards: [{ cardId: vaultCardId, exhausted: false }],
+    }));
+    return {
+      ...s,
+      firstPlayerIndex: 0,
+      phase: {
+        kind: 'errands',
+        round: 1,
+        activePlayerIndex: 0,
+        actionUsed: false,
+        fastActionUsed: false,
+      },
+      bellTower: { ...s.bellTower, available: [] },
+    };
+  }
+
+  function anyOpenBaseSlot(s: GameState): string {
+    for (const r of s.rooms) {
+      if (r.cannotBePlacedInDirectly) continue;
+      if (r.name === 'Synthesis Workshop') continue;
+      for (const sp of r.actionSpaces) if (!sp.occupant) return sp.id;
+    }
+    throw new Error('no open slot');
+  }
+
+  it('Sword of Flame (Sorcery synthesis): wounds a Mage and seizes its slot', () => {
+    let s = errandsWith('mancers.vault.sword-of-flame');
+    s = addMage(s, 'p1', {
+      id: 'alice-placer',
+      cardId: 'base.mage.neutral',
+      color: 'off-white',
+    });
+    s = addMage(s, 'p2', {
+      id: 'bob-target',
+      cardId: 'base.mage.neutral',
+      color: 'off-white',
+    });
+    const slot = anyOpenBaseSlot(s);
+    s = placeMageOnSpace(s, 'p2', 'bob-target', slot);
+    s = applyAction(s, {
+      type: 'PLAY_VAULT_CARD',
+      playerId: 'p1',
+      vaultCardId: 'mancers.vault.sword-of-flame',
+    });
+    // Pick the wound target, then which of your Mages to place.
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'mage-chosen', mageId: 'bob-target' },
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'mage-chosen', mageId: 'alice-placer' },
+    });
+    expect(p1(s).resources.mana).toBe(0); // 1 Mana spent on the wound
+    // Drive the wound chain: reaction window (pass) → Infirmary bonus.
+    let guard = 0;
+    while (s.pendingResolutionStack.length > 0 && guard++ < 10) {
+      const t = topPending(s);
+      if (t.prompt.kind === 'reaction-window') {
+        s = applyAction(s, {
+          type: 'RESOLVE_PENDING',
+          resolutionId: t.id,
+          answer: { kind: 'reaction-passed' },
+        });
+      } else if (t.prompt.kind === 'choose-from-options') {
+        s = applyAction(s, {
+          type: 'RESOLVE_PENDING',
+          resolutionId: t.id,
+          answer: { kind: 'option-chosen', optionId: t.prompt.options[0]!.id, payload: {} },
+        });
+      } else break;
+    }
+    const bob = s.players.find((p) => p.id === 'p2')!.mages.find((m) => m.id === 'bob-target')!;
+    expect(bob.isWounded).toBe(true);
+    expect(bob.location.kind).toBe('infirmary');
+    const space = s.rooms.flatMap((r) => r.actionSpaces).find((sp) => sp.id === slot)!;
+    expect(space.occupant?.mageId).toBe('alice-placer');
+  });
+
+  it('Vanishing Staff (Mysticism synthesis): shadows an empty space with your Mage', () => {
+    let s = errandsWith('mancers.vault.vanishing-staff');
+    s = addMage(s, 'p1', {
+      id: 'alice-shadow',
+      cardId: 'base.mage.neutral',
+      color: 'off-white',
+    });
+    s = applyAction(s, {
+      type: 'PLAY_VAULT_CARD',
+      playerId: 'p1',
+      vaultCardId: 'mancers.vault.vanishing-staff',
+    });
+    // Pick the Mage, then the space to shadow.
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'mage-chosen', mageId: 'alice-shadow' },
+    });
+    const top = topPending(s);
+    if (top.prompt.kind !== 'choose-target-action-space') throw new Error('x');
+    const spaceId = top.prompt.eligibleSpaceIds[0]!;
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: top.id,
+      answer: { kind: 'space-chosen', spaceId },
+    });
+    expect(p1(s).resources.mana).toBe(0);
+    const mage = p1(s).mages.find((m) => m.id === 'alice-shadow')!;
+    expect(mage.isShadowing).toBe(true);
+    const space = s.rooms.flatMap((r) => r.actionSpaces).find((sp) => sp.id === spaceId)!;
+    expect(space.shadowOccupant?.mageId).toBe('alice-shadow');
+  });
 });
 
 // ============================================================================

@@ -38,6 +38,7 @@ import type {
   MageColor,
   OwnedMage,
   PlayerId,
+  ReactionTriggerEvent,
   ResolutionSource,
   SerializableContext,
   WorkerOccupancy,
@@ -2297,6 +2298,259 @@ registerEffect('mancers.vault.endless-well-of-mana', (ctx): EffectResult => ({
   kind: 'done',
   patch: gainResourcePatch(ctx.state, ctx.triggeringPlayerId, 'mana', 2),
 }));
+
+// ============================================================================
+// Synthesis Treasure — Sword of Flame (Sorcery): Fast Action, spend 1 Mana to
+// wound a Mage and place one of yours in its slot. Reuses the standard Ars
+// Magna completion (wound → reaction window → move your Mage into the slot +
+// Infirmary bonus).
+// ============================================================================
+
+registerEffect('mancers.vault.sword-of-flame', (ctx): EffectResult => {
+  const self = 'mancers.vault.sword-of-flame';
+  const step = ctx.resumeContext?.['step'];
+  const player = ctx.state.players.find((p) => p.id === ctx.triggeringPlayerId);
+  if (!player) return { kind: 'done', patch: {} };
+
+  if (step === 'apply') {
+    if (ctx.resumeAnswer?.kind !== 'mage-chosen') {
+      throw new Error(`${self} apply expected mage-chosen`);
+    }
+    const placerMageId = ctx.resumeAnswer.mageId;
+    const targetMageId = ctx.resumeContext?.['targetMageId'];
+    if (typeof targetMageId !== 'string') return { kind: 'done', patch: {} };
+    const placer = player.mages.find((m) => m.id === placerMageId);
+    const target = ctx.state.players
+      .flatMap((p) => p.mages)
+      .find((m) => m.id === targetMageId);
+    if (
+      !placer ||
+      placer.location.kind !== 'office' ||
+      !target ||
+      target.location.kind !== 'action-space' ||
+      player.resources.mana < 1
+    ) {
+      return { kind: 'done', patch: {} };
+    }
+    const targetSpaceId = target.location.spaceId;
+    let working: GameState = {
+      ...ctx.state,
+      ...gainResourcePatch(ctx.state, ctx.triggeringPlayerId, 'mana', -1),
+    };
+    const wound = woundMage(working, targetMageId, ctx.triggeringPlayerId);
+    working = { ...working, ...wound.patch };
+    return {
+      kind: 'open-reaction',
+      patch: {
+        players: working.players,
+        rooms: working.rooms,
+        nextSequenceId: working.nextSequenceId,
+        pendingRevivalChecks: working.pendingRevivalChecks,
+      },
+      window: {
+        triggerEvents: [wound.triggerEvent],
+        pendingResponderIds: buildReactionQueue(working, ctx.triggeringPlayerId),
+        reactedPlayerIds: [],
+        afterResume: {
+          effectId: 'base.mage.sorcery.ars-magna.complete',
+          context: {
+            sourceMageId: placerMageId,
+            targetSpaceId,
+            triggerEvent: wound.triggerEvent as unknown as SerializableContext,
+          },
+        },
+        source: ctx.source,
+      },
+    };
+  }
+
+  if (step === 'pick-placer') {
+    if (ctx.resumeAnswer?.kind !== 'mage-chosen') {
+      throw new Error(`${self} pick-placer expected mage-chosen`);
+    }
+    const targetMageId = ctx.resumeAnswer.mageId;
+    const officeMages = player.mages
+      .filter((m) => m.location.kind === 'office')
+      .map((m) => m.id);
+    if (officeMages.length === 0) return { kind: 'done', patch: {} };
+    return {
+      kind: 'pause',
+      pending: {
+        responderId: ctx.triggeringPlayerId,
+        prompt: {
+          kind: 'choose-target-mage',
+          eligibleMageIds: officeMages,
+          label: 'Place which of your Mages into the slot?',
+        },
+        resume: { effectId: self, context: { step: 'apply', targetMageId } },
+        source: ctx.source,
+      },
+    };
+  }
+
+  // Initial: need 1 Mana, an office Mage to place, and a wound target on a slot.
+  if (player.resources.mana < 1) return { kind: 'done', patch: {} };
+  if (!player.mages.some((m) => m.location.kind === 'office')) {
+    return { kind: 'done', patch: {} };
+  }
+  const targets = opposingPlacedTargets(
+    buildBurnTargets(ctx.state, ctx.triggeringPlayerId),
+    ctx.state,
+    ctx.triggeringPlayerId,
+  );
+  if (targets.length === 0) return { kind: 'done', patch: {} };
+  return {
+    kind: 'pause',
+    pending: {
+      responderId: ctx.triggeringPlayerId,
+      prompt: {
+        kind: 'choose-target-mage',
+        eligibleMageIds: targets,
+        label: 'Wound which Mage (you take its slot)?',
+      },
+      resume: { effectId: self, context: { step: 'pick-placer' } },
+      source: ctx.source,
+    },
+  };
+});
+
+// ============================================================================
+// Synthesis Treasure — Vanishing Staff (Mysticism): Action, spend 1 Mana to
+// shadow any space (including your own Mage or an empty slot) with one of your
+// office Mages. Shadowing an opponent's Mage opens the standard mage-shadowed
+// reaction window.
+// ============================================================================
+
+registerEffect('mancers.vault.vanishing-staff', (ctx): EffectResult => {
+  const self = 'mancers.vault.vanishing-staff';
+  const step = ctx.resumeContext?.['step'];
+  const player = ctx.state.players.find((p) => p.id === ctx.triggeringPlayerId);
+  if (!player) return { kind: 'done', patch: {} };
+
+  if (step === 'apply') {
+    if (ctx.resumeAnswer?.kind !== 'space-chosen') {
+      throw new Error(`${self} apply expected space-chosen`);
+    }
+    const spaceId = ctx.resumeAnswer.spaceId;
+    const mageId = ctx.resumeContext?.['mageId'];
+    if (typeof mageId !== 'string') return { kind: 'done', patch: {} };
+    const mage = player.mages.find((m) => m.id === mageId);
+    const space = ctx.state.rooms
+      .flatMap((r) => r.actionSpaces)
+      .find((s) => s.id === spaceId);
+    if (
+      !mage ||
+      mage.location.kind !== 'office' ||
+      !space ||
+      space.shadowOccupant ||
+      player.resources.mana < 1
+    ) {
+      return { kind: 'done', patch: {} };
+    }
+    let working: GameState = {
+      ...ctx.state,
+      ...gainResourcePatch(ctx.state, ctx.triggeringPlayerId, 'mana', -1),
+    };
+    const occ: WorkerOccupancy = {
+      mageId,
+      ownerId: ctx.triggeringPlayerId,
+      isShadowing: true,
+    };
+    working = {
+      ...working,
+      players: working.players.map((p) =>
+        p.id !== ctx.triggeringPlayerId
+          ? p
+          : {
+              ...p,
+              mages: p.mages.map((m) =>
+                m.id !== mageId
+                  ? m
+                  : {
+                      ...m,
+                      location: { kind: 'action-space', spaceId },
+                      isShadowing: true,
+                    },
+              ),
+            },
+      ),
+      rooms: working.rooms.map((r) => ({
+        ...r,
+        actionSpaces: r.actionSpaces.map((s) =>
+          s.id !== spaceId ? s : { ...s, shadowOccupant: occ },
+        ),
+      })),
+    };
+    const patch: GameStatePatch = {
+      players: working.players,
+      rooms: working.rooms,
+    };
+    // Shadowing an opponent's base Mage opens a mage-shadowed reaction window.
+    const baseOcc = space.occupant;
+    if (baseOcc && baseOcc.ownerId !== ctx.triggeringPlayerId) {
+      const event: ReactionTriggerEvent = {
+        kind: 'mage-shadowed',
+        mageId: baseOcc.mageId,
+        ownerId: baseOcc.ownerId,
+        byPlayerId: ctx.triggeringPlayerId,
+        spaceId,
+      };
+      return {
+        kind: 'open-reaction',
+        patch,
+        window: {
+          triggerEvents: [event],
+          pendingResponderIds: buildReactionQueue(working, ctx.triggeringPlayerId),
+          reactedPlayerIds: [],
+          afterResume: { effectId: 'base.system.noop', context: {} },
+          source: ctx.source,
+        },
+      };
+    }
+    return { kind: 'done', patch };
+  }
+
+  if (step === 'space') {
+    if (ctx.resumeAnswer?.kind !== 'mage-chosen') {
+      throw new Error(`${self} space expected mage-chosen`);
+    }
+    const mageId = ctx.resumeAnswer.mageId;
+    const spaces = openShadowSlotsForGolem(ctx.state);
+    if (spaces.length === 0) return { kind: 'done', patch: {} };
+    return {
+      kind: 'pause',
+      pending: {
+        responderId: ctx.triggeringPlayerId,
+        prompt: { kind: 'choose-target-action-space', eligibleSpaceIds: spaces },
+        resume: { effectId: self, context: { step: 'apply', mageId } },
+        source: ctx.source,
+      },
+    };
+  }
+
+  // Initial: need 1 Mana, an office Mage, and an open shadow position.
+  if (player.resources.mana < 1) return { kind: 'done', patch: {} };
+  const officeMages = player.mages
+    .filter((m) => m.location.kind === 'office')
+    .map((m) => m.id);
+  if (officeMages.length === 0) return { kind: 'done', patch: {} };
+  if (openShadowSlotsForGolem(ctx.state).length === 0) {
+    return { kind: 'done', patch: {} };
+  }
+  return {
+    kind: 'pause',
+    pending: {
+      responderId: ctx.triggeringPlayerId,
+      prompt: {
+        kind: 'choose-target-mage',
+        eligibleMageIds: officeMages,
+        label: 'Shadow a space with which of your Mages?',
+      },
+      resume: { effectId: self, context: { step: 'space' } },
+      source: ctx.source,
+    },
+  };
+});
 
 // Re-export to satisfy the module's existing `export {}` shape.
 export {};
