@@ -10492,6 +10492,113 @@ describe('University Tavern A (Mancers)', () => {
 });
 
 // ============================================================================
+// University Tavern B (Mancers) — per-slot peek-and-keep; rest to deck bottom.
+// ============================================================================
+
+describe('University Tavern B (Mancers)', () => {
+  const S1 = 'base.supporter.adelaide-chivers';
+  const S2 = 'base.supporter.arec-russel-zane';
+  const S3 = 'base.supporter.allys-mehrmus';
+  const X = 'base.supporter.alumis';
+  const Y = 'base.supporter.andros-duvalt';
+
+  function forceUniversityTavernB(state: GameState): GameState {
+    const room = mancersPack.rooms.find(
+      (r) => r.name === 'University Tavern' && r.side === 'B',
+    );
+    if (!room) throw new Error('test helper: University Tavern B not in pack');
+    const idx = state.rooms.findIndex((r) => !r.isUniversityCentral);
+    if (idx === -1) return state;
+    return { ...state, rooms: state.rooms.map((r, i) => (i === idx ? room : r)) };
+  }
+
+  function setup(slotId: string, deckTop: string[]): GameState {
+    let s = initGame(TWO_PLAYER_CONFIG);
+    s = forceUniversityTavernB(s);
+    s = zeroPlayerResources(s, 'p1');
+    s = setMeritBadges(s, 'p1', 5);
+    s = addMage(s, 'p1', {
+      id: 'alice-mage',
+      cardId: 'base.mage.divinity',
+      color: 'blue',
+    });
+    s = placeMageOnSpace(s, 'p1', 'alice-mage', slotId);
+    return {
+      ...s,
+      supporterDeck: [
+        ...deckTop,
+        ...s.supporterDeck.filter((c) => !deckTop.includes(c)),
+      ],
+      bellTower: { ...s.bellTower, available: [] },
+    };
+  }
+
+  function driveToSlot(s: GameState): GameState {
+    s = applyAction(s, { type: 'ADVANCE_PHASE' }); // round-setup → errands
+    s = applyAction(s, { type: 'ADVANCE_PHASE' }); // errands → resolution
+    s = applyAction(s, { type: 'ADVANCE_PHASE' }); // pump → forfeit-or-reward
+    return takeRewardAtResolution(s);
+  }
+
+  const supportersOf = (s: GameState, pid: string) =>
+    s.players.find((p) => p.id === pid)!.supporters;
+
+  it('slot 1: reveals top 3, keeps one, returns the other two to the deck bottom', () => {
+    let s = setup('mancers.room.university-tavern.b.slot-1', [S1, S2, S3, X, Y]);
+    s = driveToSlot(s);
+    const top = topPending(s);
+    expect(top.prompt.kind).toBe('choose-peeked-supporter');
+    if (top.prompt.kind !== 'choose-peeked-supporter') throw new Error('x');
+    expect([...top.prompt.eligibleCardIds].sort()).toEqual([S1, S2, S3].sort());
+    // Keep S2.
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: top.id,
+      answer: { kind: 'card-chosen', cardId: S2 },
+    });
+    expect(supportersOf(s, 'p1')).toEqual([S2]);
+    // S2 is no longer in the deck; the unchosen S1/S3 are at the bottom.
+    expect(s.supporterDeck.includes(S2)).toBe(false);
+    expect(s.supporterDeck.slice(-2)).toEqual([S1, S3]);
+    // The next live card is what sat below the revealed three.
+    expect(s.supporterDeck[0]).toBe(X);
+  });
+
+  it('slot 2: reveals top 2, keeps one, returns the other to the deck bottom', () => {
+    let s = setup('mancers.room.university-tavern.b.slot-2', [S1, S2, X]);
+    s = driveToSlot(s);
+    const top = topPending(s);
+    if (top.prompt.kind !== 'choose-peeked-supporter') throw new Error('x');
+    expect([...top.prompt.eligibleCardIds].sort()).toEqual([S1, S2].sort());
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: top.id,
+      answer: { kind: 'card-chosen', cardId: S1 },
+    });
+    expect(supportersOf(s, 'p1')).toEqual([S1]);
+    expect(s.supporterDeck[0]).toBe(X);
+    expect(s.supporterDeck.slice(-1)).toEqual([S2]);
+  });
+
+  it('slot 3: draws and keeps the top Supporter with no choice', () => {
+    let s = setup('mancers.room.university-tavern.b.slot-3', [S1, S2]);
+    s = driveToSlot(s);
+    // No prompt — the top card was taken directly.
+    expect(supportersOf(s, 'p1')).toEqual([S1]);
+    expect(s.supporterDeck[0]).toBe(S2);
+    expect(s.supporterDeck.includes(S1)).toBe(false);
+  });
+
+  it('slot 1: fizzles with no prompt when the deck is empty', () => {
+    let s = setup('mancers.room.university-tavern.b.slot-1', []);
+    s = { ...s, supporterDeck: [] };
+    s = driveToSlot(s);
+    expect(s.pendingResolutionStack).toHaveLength(0);
+    expect(supportersOf(s, 'p1')).toHaveLength(0);
+  });
+});
+
+// ============================================================================
 // Council Chamber A — Draft a Supporter OR Gain a Mark, capped at 1/round
 // ============================================================================
 

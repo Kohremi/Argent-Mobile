@@ -1672,6 +1672,91 @@ registerEffect('mancers.room.university-tavern-a.slot', (ctx): EffectResult => {
   };
 });
 
+// ============================================================================
+// University Tavern Side B — per-slot peek-and-keep (Mystic Lantern style, but
+// the kept card is a normal Supporter). Each slot independently reveals the
+// top N of the Supporter Deck; the occupant keeps one and the unchosen cards
+// go to the BOTTOM of the deck. Slot 3 (reveal 1) is a no-choice "draw & keep".
+// No shared pool — prompts block deck mutations, so each slot peeks the live
+// top in resolution order.
+// ============================================================================
+
+/** Builds the patch that grants `chosen` to the player and cycles the rest of
+ *  the `peeked` cards to the bottom of the Supporter Deck. */
+function tavernBKeepPatch(
+  state: GameState,
+  playerId: PlayerId,
+  peeked: string[],
+  chosen: string,
+): GameStatePatch {
+  const unchosen = peeked.filter((id) => id !== chosen);
+  return {
+    supporterDeck: [...state.supporterDeck.slice(peeked.length), ...unchosen],
+    players: state.players.map((p) =>
+      p.id !== playerId
+        ? p
+        : { ...p, supporters: [...p.supporters, chosen] },
+    ),
+  };
+}
+
+function universityTavernBDraft(
+  ctx: EffectContext,
+  selfEffectId: string,
+  revealCount: number,
+): EffectResult {
+  if (!ctx.resumeAnswer) {
+    const peeked = ctx.state.supporterDeck.slice(0, revealCount);
+    if (peeked.length === 0) return { kind: 'done', patch: {} };
+    // A single card (or a reveal-1 slot) is just drawn and kept — no choice.
+    if (peeked.length === 1) {
+      return {
+        kind: 'done',
+        patch: tavernBKeepPatch(
+          ctx.state,
+          ctx.triggeringPlayerId,
+          peeked,
+          peeked[0]!,
+        ),
+      };
+    }
+    return {
+      kind: 'pause',
+      pending: {
+        responderId: ctx.triggeringPlayerId,
+        prompt: { kind: 'choose-peeked-supporter', eligibleCardIds: [...peeked] },
+        resume: { effectId: selfEffectId, context: {} },
+        source: ctx.source,
+      },
+    };
+  }
+  if (ctx.resumeAnswer.kind !== 'card-chosen') {
+    throw new Error(
+      `${selfEffectId} expected card-chosen, got ${ctx.resumeAnswer.kind}`,
+    );
+  }
+  const chosen = ctx.resumeAnswer.cardId;
+  // Re-peek (prompts block deck mutations, so this matches the original peek).
+  const peeked = ctx.state.supporterDeck.slice(0, revealCount);
+  if (!peeked.includes(chosen)) {
+    throw new Error(`${selfEffectId}: ${chosen} not among the revealed cards`);
+  }
+  return {
+    kind: 'done',
+    patch: tavernBKeepPatch(ctx.state, ctx.triggeringPlayerId, peeked, chosen),
+  };
+}
+
+registerEffect('mancers.room.university-tavern-b.slot-1', (ctx): EffectResult =>
+  universityTavernBDraft(ctx, 'mancers.room.university-tavern-b.slot-1', 3),
+);
+registerEffect('mancers.room.university-tavern-b.slot-2', (ctx): EffectResult =>
+  universityTavernBDraft(ctx, 'mancers.room.university-tavern-b.slot-2', 2),
+);
+registerEffect('mancers.room.university-tavern-b.slot-3', (ctx): EffectResult =>
+  universityTavernBDraft(ctx, 'mancers.room.university-tavern-b.slot-3', 1),
+);
+
 // Re-export to satisfy the module's existing `export {}` shape.
 export {};
 

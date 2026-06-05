@@ -520,6 +520,16 @@ const universityTavernA: Room = {
   ],
 };
 
+// ============================================================================
+// University Tavern Side B — non-instant. Unlike Side A's shared pool, each
+// slot peeks fresh off the top of the Supporter Deck, the occupant keeps one,
+// and any unchosen cards go to the BOTTOM of the deck (the Mystic Lantern
+// pattern, but the kept card is a normal Supporter).
+//   Slot 1 (merit, 1 MB): Reveal 3, keep one, return the rest to the bottom.
+//   Slot 2 (regular):     Reveal 2, keep one, return the other to the bottom.
+//   Slot 3 (regular):     Draw 1 Supporter and keep it.
+// ============================================================================
+
 const universityTavernB: Room = {
   id: 'mancers.room.university-tavern.b',
   name: 'University Tavern',
@@ -529,7 +539,40 @@ const universityTavernB: Room = {
   isInstantRoom: false,
   cannotBePlacedInDirectly: false,
   cannotBeLocked: false,
-  actionSpaces: [],
+  description:
+    'Each occupant peeks the top of the Supporter Deck and keeps one; unchosen cards go to the bottom of the deck.',
+  actionSpaces: [
+    {
+      id: 'mancers.room.university-tavern.b.slot-1',
+      roomId: 'mancers.room.university-tavern.b',
+      index: 0,
+      slotType: 'merit',
+      occupant: null,
+      effectId: 'mancers.room.university-tavern-b.slot-1',
+      costToActivate: { meritBadges: 1 },
+      description:
+        'Reveal the top 3 Supporters, keep one, and return the others to the bottom of the deck.',
+    },
+    {
+      id: 'mancers.room.university-tavern.b.slot-2',
+      roomId: 'mancers.room.university-tavern.b',
+      index: 1,
+      slotType: 'regular',
+      occupant: null,
+      effectId: 'mancers.room.university-tavern-b.slot-2',
+      description:
+        'Reveal the top 2 Supporters, keep one, and return the other to the bottom of the deck.',
+    },
+    {
+      id: 'mancers.room.university-tavern.b.slot-3',
+      roomId: 'mancers.room.university-tavern.b',
+      index: 2,
+      slotType: 'regular',
+      occupant: null,
+      effectId: 'mancers.room.university-tavern-b.slot-3',
+      description: 'Draw a Supporter Card and keep it.',
+    },
+  ],
 };
 
 export const mancersPack: ContentPack = {
