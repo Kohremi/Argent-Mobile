@@ -5,6 +5,7 @@ import {
   affordableVaultCards,
   applyGainMark,
   applyRoomLockPatch,
+  applyVaultDraft,
   applyVaultPurchaseMaybeWaived,
   banishMage,
   buildBanishTargets,
@@ -17,8 +18,10 @@ import {
   healMageToSpace,
   isRoomLocked,
   lookupSpellCardDef,
+  lookupVaultCardDef,
   woundMage,
 } from './helpers';
+import { nextRandom } from '../../utils/rng';
 import type {
   ActionSpaceId,
   ChoiceOption,
@@ -1756,6 +1759,200 @@ registerEffect('mancers.room.university-tavern-b.slot-2', (ctx): EffectResult =>
 registerEffect('mancers.room.university-tavern-b.slot-3', (ctx): EffectResult =>
   universityTavernBDraft(ctx, 'mancers.room.university-tavern-b.slot-3', 1),
 );
+
+// ============================================================================
+// Atelier Side A.
+//   Slots 1 & 2 — pick ONE exchange direction (Gold→Mana or Mana→Gold), then
+//   swap up to N times in that direction only (no back-and-forth). Each swap
+//   spends 1 of the source resource for the configured amount of the other.
+//   Slot 3 — draft a Consumable from the Vault tableau, or (if none are shown)
+//   draw a random Consumable from the Vault deck.
+// ============================================================================
+
+/** Builds the "swap again? / stop" prompt for the chosen direction. */
+function atelierAsk(
+  ctx: EffectContext,
+  selfEffectId: string,
+  cfg: { goldToMana: number; manaToGold: number; total: number },
+  dir: 'g2m' | 'm2g',
+  remaining: number,
+  carryPatch: GameStatePatch,
+): EffectResult {
+  const label =
+    dir === 'g2m'
+      ? `Swap 1 Gold for ${cfg.goldToMana} Mana`
+      : `Swap 1 Mana for ${cfg.manaToGold} Gold`;
+  return {
+    kind: 'pause',
+    patch: carryPatch,
+    pending: {
+      responderId: ctx.triggeringPlayerId,
+      prompt: {
+        kind: 'choose-from-options',
+        options: [
+          { id: 'swap', label: `${label} (${remaining} left)`, payload: {} },
+          { id: 'stop', label: 'Stop swapping', payload: {} },
+        ],
+      },
+      resume: { effectId: selfEffectId, context: { step: 'ask', dir, remaining } },
+      source: ctx.source,
+    },
+  };
+}
+
+function atelierSwapSlot(
+  ctx: EffectContext,
+  selfEffectId: string,
+  cfg: { goldToMana: number; manaToGold: number; total: number },
+): EffectResult {
+  const step = ctx.resumeContext?.['step'];
+  const player = ctx.state.players.find((p) => p.id === ctx.triggeringPlayerId);
+  if (!player) return { kind: 'done', patch: {} };
+
+  if (step === 'ask') {
+    if (ctx.resumeAnswer?.kind !== 'option-chosen') {
+      throw new Error(`${selfEffectId} ask expected option-chosen`);
+    }
+    if (ctx.resumeAnswer.optionId === 'stop') return { kind: 'done', patch: {} };
+    const dir = ctx.resumeContext?.['dir'] === 'm2g' ? 'm2g' : 'g2m';
+    const remaining = Number(ctx.resumeContext?.['remaining'] ?? 0);
+    const src = dir === 'g2m' ? 'gold' : 'mana';
+    const tgt = dir === 'g2m' ? 'mana' : 'gold';
+    const tgtAmt = dir === 'g2m' ? cfg.goldToMana : cfg.manaToGold;
+    if (player.resources[src] < 1) return { kind: 'done', patch: {} };
+    let working: GameState = {
+      ...ctx.state,
+      ...gainResourcePatch(ctx.state, ctx.triggeringPlayerId, src, -1),
+    };
+    working = {
+      ...working,
+      ...gainResourcePatch(working, ctx.triggeringPlayerId, tgt, tgtAmt),
+    };
+    const patch: GameStatePatch = { players: working.players };
+    const next = remaining - 1;
+    const after = working.players.find((p) => p.id === ctx.triggeringPlayerId)!;
+    if (next > 0 && after.resources[src] >= 1) {
+      return atelierAsk(
+        { ...ctx, state: working },
+        selfEffectId,
+        cfg,
+        dir,
+        next,
+        patch,
+      );
+    }
+    return { kind: 'done', patch };
+  }
+
+  if (step === 'direction') {
+    if (ctx.resumeAnswer?.kind !== 'option-chosen') {
+      throw new Error(`${selfEffectId} direction expected option-chosen`);
+    }
+    const opt = ctx.resumeAnswer.optionId;
+    if (opt === 'skip') return { kind: 'done', patch: {} };
+    const dir = opt === 'mana-to-gold' ? 'm2g' : 'g2m';
+    return atelierAsk(ctx, selfEffectId, cfg, dir, cfg.total, {});
+  }
+
+  // Initial: offer the affordable direction(s).
+  const options: ChoiceOption[] = [];
+  if (player.resources.gold >= 1) {
+    options.push({
+      id: 'gold-to-mana',
+      label: `Swap 1 Gold for ${cfg.goldToMana} Mana (up to ${cfg.total}×)`,
+      payload: {},
+    });
+  }
+  if (player.resources.mana >= 1) {
+    options.push({
+      id: 'mana-to-gold',
+      label: `Swap 1 Mana for ${cfg.manaToGold} Gold (up to ${cfg.total}×)`,
+      payload: {},
+    });
+  }
+  if (options.length === 0) return { kind: 'done', patch: {} };
+  options.push({ id: 'skip', label: 'Skip', payload: {} });
+  return {
+    kind: 'pause',
+    pending: {
+      responderId: ctx.triggeringPlayerId,
+      prompt: { kind: 'choose-from-options', options },
+      resume: { effectId: selfEffectId, context: { step: 'direction' } },
+      source: ctx.source,
+    },
+  };
+}
+
+registerEffect('mancers.room.atelier-a.slot-1', (ctx): EffectResult =>
+  atelierSwapSlot(ctx, 'mancers.room.atelier-a.slot-1', {
+    goldToMana: 3,
+    manaToGold: 4,
+    total: 3,
+  }),
+);
+registerEffect('mancers.room.atelier-a.slot-2', (ctx): EffectResult =>
+  atelierSwapSlot(ctx, 'mancers.room.atelier-a.slot-2', {
+    goldToMana: 2,
+    manaToGold: 3,
+    total: 4,
+  }),
+);
+
+// Slot 3 — draft a Consumable from the Vault tableau, else draw one from the
+// deck at random.
+registerEffect('mancers.room.atelier-a.slot-3', (ctx): EffectResult => {
+  const isConsumable = (id: string) =>
+    lookupVaultCardDef(ctx.state, id)?.type === 'consumable';
+  if (!ctx.resumeAnswer) {
+    const shown = ctx.state.vaultTableau.filter(isConsumable);
+    if (shown.length > 0) {
+      return {
+        kind: 'pause',
+        pending: {
+          responderId: ctx.triggeringPlayerId,
+          prompt: { kind: 'choose-vault-card', eligibleCardIds: [...shown] },
+          resume: {
+            effectId: 'mancers.room.atelier-a.slot-3',
+            context: {},
+          },
+          source: ctx.source,
+        },
+      };
+    }
+    // None on the tableau — draw a random Consumable from the deck.
+    const deckConsumables = ctx.state.vaultDeck.filter(isConsumable);
+    if (deckConsumables.length === 0) return { kind: 'done', patch: {} };
+    const { value, state: nextRng } = nextRandom(ctx.state.rng);
+    const pick =
+      deckConsumables[Math.floor(value * deckConsumables.length)] ??
+      deckConsumables[0]!;
+    return {
+      kind: 'done',
+      patch: {
+        rng: nextRng,
+        vaultDeck: ctx.state.vaultDeck.filter((id) => id !== pick),
+        players: ctx.state.players.map((p) =>
+          p.id !== ctx.triggeringPlayerId
+            ? p
+            : { ...p, vaultCards: [...p.vaultCards, { cardId: pick, exhausted: false }] },
+        ),
+      },
+    };
+  }
+  if (ctx.resumeAnswer.kind !== 'card-chosen') {
+    throw new Error(
+      `atelier-a.slot-3 expected card-chosen, got ${ctx.resumeAnswer.kind}`,
+    );
+  }
+  const cardId = ctx.resumeAnswer.cardId;
+  if (!ctx.state.vaultTableau.includes(cardId) || !isConsumable(cardId)) {
+    return { kind: 'done', patch: {} };
+  }
+  return {
+    kind: 'done',
+    patch: applyVaultDraft(ctx.state, ctx.triggeringPlayerId, cardId),
+  };
+});
 
 // Re-export to satisfy the module's existing `export {}` shape.
 export {};

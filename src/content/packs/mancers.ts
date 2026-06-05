@@ -575,10 +575,80 @@ const universityTavernB: Room = {
   ],
 };
 
+// ============================================================================
+// Atelier Side A — non-instant. Gold/Mana exchange + a free Consumable draft.
+//   Slot 1 (merit, 1 MB): Swap 1 Gold → 3 Mana up to 3×, OR 1 Mana → 4 Gold
+//                         up to 3× (one direction only — no back-and-forth).
+//   Slot 2 (regular):     Swap 1 Gold → 2 Mana up to 4×, OR 1 Mana → 3 Gold
+//                         up to 4×.
+//   Slot 3 (regular):     Draft a Consumable from the Vault tableau; if none
+//                         are present, draw a Consumable from the Vault deck
+//                         at random.
+// Side B (wired later) is a stub.
+// ============================================================================
+
+const atelierA: Room = {
+  id: 'mancers.room.atelier.a',
+  name: 'Atelier',
+  sourcePackId: PACK_ID,
+  isUniversityCentral: false,
+  side: 'A',
+  isInstantRoom: false,
+  cannotBePlacedInDirectly: false,
+  cannotBeLocked: false,
+  description:
+    'Exchange Gold and Mana (one direction only), or draft a Consumable from the Vault.',
+  actionSpaces: [
+    {
+      id: 'mancers.room.atelier.a.slot-1',
+      roomId: 'mancers.room.atelier.a',
+      index: 0,
+      slotType: 'merit',
+      occupant: null,
+      effectId: 'mancers.room.atelier-a.slot-1',
+      costToActivate: { meritBadges: 1 },
+      description:
+        'Swap 1 Gold for 3 Mana up to 3 times, OR 1 Mana for 4 Gold up to 3 times.',
+    },
+    {
+      id: 'mancers.room.atelier.a.slot-2',
+      roomId: 'mancers.room.atelier.a',
+      index: 1,
+      slotType: 'regular',
+      occupant: null,
+      effectId: 'mancers.room.atelier-a.slot-2',
+      description:
+        'Swap 1 Gold for 2 Mana up to 4 times, OR 1 Mana for 3 Gold up to 4 times.',
+    },
+    {
+      id: 'mancers.room.atelier.a.slot-3',
+      roomId: 'mancers.room.atelier.a',
+      index: 2,
+      slotType: 'regular',
+      occupant: null,
+      effectId: 'mancers.room.atelier-a.slot-3',
+      description:
+        'Draft a Consumable from the Vault tableau (or draw one from the deck at random if none are shown).',
+    },
+  ],
+};
+
+const atelierB: Room = {
+  id: 'mancers.room.atelier.b',
+  name: 'Atelier',
+  sourcePackId: PACK_ID,
+  isUniversityCentral: false,
+  side: 'B',
+  isInstantRoom: false,
+  cannotBePlacedInDirectly: false,
+  cannotBeLocked: false,
+  actionSpaces: [],
+};
+
 export const mancersPack: ContentPack = {
   id: PACK_ID,
   name: 'Mancers of the University',
-  description: 'Adds the Technomancy department: Technomancer (orange) mage piece, the two Technomancy leader candidates, and the Laboratory + Research Archive + Golem Lab + University Tavern rooms.',
+  description: 'Adds the Technomancy department: Technomancer (orange) mage piece, the two Technomancy leader candidates, and the Laboratory + Research Archive + Golem Lab + University Tavern + Atelier rooms.',
   mages,
   candidates,
   rooms: [
@@ -590,6 +660,8 @@ export const mancersPack: ContentPack = {
     golemLabB,
     universityTavernA,
     universityTavernB,
+    atelierA,
+    atelierB,
   ],
   spells: [],
   legendarySpells: leaderSpells,

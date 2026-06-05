@@ -10599,6 +10599,161 @@ describe('University Tavern B (Mancers)', () => {
 });
 
 // ============================================================================
+// Atelier A (Mancers) — Gold/Mana exchange + Consumable draft.
+// ============================================================================
+
+describe('Atelier A (Mancers)', () => {
+  const CONSUMABLE = 'base.vault.auric-catalyst';
+  const TREASURE_1 = 'base.vault.ancient-armor';
+  const TREASURE_2 = 'base.vault.the-arcane-eye';
+
+  function forceAtelierA(state: GameState): GameState {
+    const room = mancersPack.rooms.find(
+      (r) => r.name === 'Atelier' && r.side === 'A',
+    );
+    if (!room) throw new Error('test helper: Atelier A not in pack');
+    const idx = state.rooms.findIndex((r) => !r.isUniversityCentral);
+    if (idx === -1) return state;
+    return { ...state, rooms: state.rooms.map((r, i) => (i === idx ? room : r)) };
+  }
+
+  function setup(slotId: string): GameState {
+    let s = initGame(TWO_PLAYER_CONFIG);
+    s = forceAtelierA(s);
+    s = zeroPlayerResources(s, 'p1');
+    s = setMeritBadges(s, 'p1', 5);
+    s = addMage(s, 'p1', {
+      id: 'alice-mage',
+      cardId: 'base.mage.divinity',
+      color: 'blue',
+    });
+    s = placeMageOnSpace(s, 'p1', 'alice-mage', slotId);
+    return { ...s, bellTower: { ...s.bellTower, available: [] } };
+  }
+
+  function driveToSlot(s: GameState): GameState {
+    s = applyAction(s, { type: 'ADVANCE_PHASE' });
+    s = applyAction(s, { type: 'ADVANCE_PHASE' });
+    s = applyAction(s, { type: 'ADVANCE_PHASE' });
+    return takeRewardAtResolution(s);
+  }
+
+  function choose(s: GameState, optionId: string): GameState {
+    const top = topPending(s);
+    if (top.prompt.kind !== 'choose-from-options') {
+      throw new Error(`expected choose-from-options, got ${top.prompt.kind}`);
+    }
+    return applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: top.id,
+      answer: { kind: 'option-chosen', optionId, payload: {} },
+    });
+  }
+
+  const res = (s: GameState) =>
+    s.players.find((p) => p.id === 'p1')!.resources;
+
+  it('slot 1: Gold→Mana exchanges 1:3 up to the 3× cap', () => {
+    let s = setup('mancers.room.atelier.a.slot-1');
+    s = setGold(s, 'p1', 5);
+    s = driveToSlot(s);
+    s = choose(s, 'gold-to-mana');
+    s = choose(s, 'swap'); // 1
+    s = choose(s, 'swap'); // 2
+    s = choose(s, 'swap'); // 3 → cap reached, loop ends
+    expect(res(s).gold).toBe(2); // 5 − 3
+    expect(res(s).mana).toBe(9); // +3 each
+    expect(s.pendingResolutionStack).toHaveLength(0);
+  });
+
+  it('slot 1: Mana→Gold exchanges 1:4 and stops when Mana runs out', () => {
+    let s = setup('mancers.room.atelier.a.slot-1');
+    s = setMana(s, 'p1', 2);
+    s = driveToSlot(s);
+    // Only the Mana→Gold direction is affordable (no Gold).
+    const top = topPending(s);
+    if (top.prompt.kind !== 'choose-from-options') throw new Error('x');
+    expect(top.prompt.options.map((o) => o.id)).not.toContain('gold-to-mana');
+    s = choose(s, 'mana-to-gold');
+    s = choose(s, 'swap'); // 1
+    s = choose(s, 'swap'); // 2 → out of Mana, loop ends without a 3rd prompt
+    expect(res(s).mana).toBe(0);
+    expect(res(s).gold).toBe(8); // 2 × 4
+    expect(s.pendingResolutionStack).toHaveLength(0);
+  });
+
+  it('slot 1: Stop ends the loop early', () => {
+    let s = setup('mancers.room.atelier.a.slot-1');
+    s = setGold(s, 'p1', 5);
+    s = driveToSlot(s);
+    s = choose(s, 'gold-to-mana');
+    s = choose(s, 'swap'); // 1
+    s = choose(s, 'stop');
+    expect(res(s).gold).toBe(4);
+    expect(res(s).mana).toBe(3);
+  });
+
+  it('slot 1: fizzles with no prompt when the player has no Gold or Mana', () => {
+    let s = setup('mancers.room.atelier.a.slot-1');
+    s = driveToSlot(s);
+    expect(s.pendingResolutionStack).toHaveLength(0);
+    expect(res(s).gold).toBe(0);
+    expect(res(s).mana).toBe(0);
+  });
+
+  it('slot 2: Gold→Mana exchanges 1:2 up to the 4× cap', () => {
+    let s = setup('mancers.room.atelier.a.slot-2');
+    s = setGold(s, 'p1', 10);
+    s = driveToSlot(s);
+    s = choose(s, 'gold-to-mana');
+    s = choose(s, 'swap');
+    s = choose(s, 'swap');
+    s = choose(s, 'swap');
+    s = choose(s, 'swap'); // 4 → cap
+    expect(res(s).gold).toBe(6); // 10 − 4
+    expect(res(s).mana).toBe(8); // 4 × 2
+    expect(s.pendingResolutionStack).toHaveLength(0);
+  });
+
+  it('slot 3: drafts a Consumable from the Vault tableau (Treasures excluded)', () => {
+    let s = setup('mancers.room.atelier.a.slot-3');
+    s = { ...s, vaultTableau: [TREASURE_1, CONSUMABLE, TREASURE_2] };
+    s = driveToSlot(s);
+    const top = topPending(s);
+    expect(top.prompt.kind).toBe('choose-vault-card');
+    if (top.prompt.kind !== 'choose-vault-card') throw new Error('x');
+    // Only the Consumable is eligible.
+    expect(top.prompt.eligibleCardIds).toEqual([CONSUMABLE]);
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: top.id,
+      answer: { kind: 'card-chosen', cardId: CONSUMABLE },
+    });
+    const owned = s.players.find((p) => p.id === 'p1')!.vaultCards;
+    expect(owned.some((v) => v.cardId === CONSUMABLE)).toBe(true);
+    expect(s.vaultTableau).not.toContain(CONSUMABLE);
+  });
+
+  it('slot 3: draws a random Consumable from the deck when none are shown', () => {
+    let s = setup('mancers.room.atelier.a.slot-3');
+    // No Consumables on the tableau; one waiting in the deck.
+    s = {
+      ...s,
+      vaultTableau: [TREASURE_1, TREASURE_2],
+      vaultDeck: [TREASURE_1, CONSUMABLE].filter(
+        (id) => id !== undefined,
+      ) as string[],
+    };
+    s = driveToSlot(s);
+    // No prompt — a Consumable was drawn straight from the deck.
+    expect(s.pendingResolutionStack).toHaveLength(0);
+    const owned = s.players.find((p) => p.id === 'p1')!.vaultCards;
+    expect(owned.some((v) => v.cardId === CONSUMABLE)).toBe(true);
+    expect(s.vaultDeck).not.toContain(CONSUMABLE);
+  });
+});
+
+// ============================================================================
 // Council Chamber A — Draft a Supporter OR Gain a Mark, capped at 1/round
 // ============================================================================
 
