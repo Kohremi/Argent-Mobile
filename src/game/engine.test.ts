@@ -11221,6 +11221,120 @@ describe('Synthesis Workshop A (Mancers)', () => {
     expect(p1(s).resources.mana).toBe(0);
   });
 
+  it('Sacred Shield (Divinity synthesis): pay 1 Mana to move a wounded Mage; does NOT exhaust', () => {
+    let s = initGame(TWO_PLAYER_CONFIG);
+    s = { ...s, activePackIds: ['base', 'mancers'] };
+    s = zeroPlayerResources(s, 'p1');
+    s = zeroPlayerResources(s, 'p2');
+    s = addMage(s, 'p1', { id: 'alice', cardId: 'base.mage.divinity', color: 'blue' });
+    s = setMana(s, 'p1', 5);
+    s = addOwnedSpell(s, 'p1', 'base.spell.burn');
+    s = addMage(s, 'p2', { id: 'bob', cardId: 'base.mage.neutral', color: 'off-white' });
+    const [slotA, slotB] = roomWithTwoOpenSlots(s);
+    s = placeMageOnSpace(s, 'p2', 'bob', slotA!);
+    s = mapPlayer(s, 'p2', (p) => ({
+      ...p,
+      vaultCards: [{ cardId: 'mancers.vault.sacred-shield', exhausted: false }],
+      resources: { ...p.resources, mana: 1 },
+    }));
+    s = {
+      ...s,
+      firstPlayerIndex: 0,
+      phase: { kind: 'errands', round: 1, activePlayerIndex: 0, actionUsed: false, fastActionUsed: false },
+      bellTower: { ...s.bellTower, available: [] },
+    };
+    s = applyAction(s, { type: 'CAST_SPELL', playerId: 'p1', spellCardId: 'base.spell.burn', level: 1 });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'mage-chosen', mageId: 'bob' },
+    });
+    // Reaction window for Bob offers Sacred Shield.
+    const rp = topPending(s);
+    expect(rp.prompt.kind).toBe('reaction-window');
+    if (rp.prompt.kind === 'reaction-window') {
+      expect(rp.prompt.reactionOptions.map((o) => o.sourceId)).toContain(
+        'mancers.vault.sacred-shield',
+      );
+    }
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: rp.id,
+      answer: {
+        kind: 'reaction-played',
+        effectId: 'mancers.vault.sacred-shield.react',
+        reactionContext: { destinationSpaceId: slotB! },
+      },
+    });
+    const bob = s.players.find((p) => p.id === 'p2')!.mages.find((m) => m.id === 'bob')!;
+    expect(bob.isWounded).toBe(false);
+    expect(bob.location).toEqual({ kind: 'action-space', spaceId: slotB });
+    const p2 = s.players.find((p) => p.id === 'p2')!;
+    expect(p2.resources.mana).toBe(0);
+    // Not exhausted — Sacred Shield can be used again.
+    expect(p2.vaultCards).toEqual([
+      { cardId: 'mancers.vault.sacred-shield', exhausted: false },
+    ]);
+  });
+
+  it('Sacred Shield is repeatable: saves EACH Mage wounded by the same effect', () => {
+    let s = errandsWith('mancers.vault.lightning-totem'); // p1 owns Lightning Totem
+    s = addMage(s, 'p2', { id: 'b1', cardId: 'base.mage.neutral', color: 'off-white' });
+    s = addMage(s, 'p2', { id: 'b2', cardId: 'base.mage.neutral', color: 'off-white' });
+    const [slotA, slotB] = roomWithTwoOpenSlots(s);
+    s = placeMageOnSpace(s, 'p2', 'b1', slotA!);
+    s = placeMageOnSpace(s, 'p2', 'b2', slotB!);
+    s = mapPlayer(s, 'p2', (p) => ({
+      ...p,
+      vaultCards: [{ cardId: 'mancers.vault.sacred-shield', exhausted: false }],
+      resources: { ...p.resources, mana: 2 },
+    }));
+    s = applyAction(s, {
+      type: 'PLAY_VAULT_CARD',
+      playerId: 'p1',
+      vaultCardId: 'mancers.vault.lightning-totem',
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'mage-chosen', mageId: 'b1' },
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'mage-chosen', mageId: 'b2' },
+    });
+    // Multi-wound reaction window for p2 — react with Sacred Shield on b1...
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: {
+        kind: 'reaction-played',
+        effectId: 'mancers.vault.sacred-shield.react',
+        forMageId: 'b1',
+        reactionContext: { destinationSpaceId: slotA! },
+      },
+    });
+    // ...then re-prompted, react again on b2 (the repeatable behaviour).
+    const rp2 = topPending(s);
+    expect(rp2.prompt.kind).toBe('reaction-window');
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: rp2.id,
+      answer: {
+        kind: 'reaction-played',
+        effectId: 'mancers.vault.sacred-shield.react',
+        forMageId: 'b2',
+        reactionContext: { destinationSpaceId: slotB! },
+      },
+    });
+    const p2 = s.players.find((p) => p.id === 'p2')!;
+    expect(p2.mages.find((m) => m.id === 'b1')!.isWounded).toBe(false);
+    expect(p2.mages.find((m) => m.id === 'b2')!.isWounded).toBe(false);
+    expect(p2.resources.mana).toBe(0); // 1 Mana per Mage
+    expect(p2.vaultCards[0]!.exhausted).toBe(false);
+  });
+
   it('Vanishing Staff (Mysticism synthesis): shadows an empty space with your Mage', () => {
     let s = errandsWith('mancers.vault.vanishing-staff');
     s = addMage(s, 'p1', {

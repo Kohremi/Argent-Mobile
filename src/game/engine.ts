@@ -2482,11 +2482,25 @@ function resolveReactionPrompt(
     const reactionResult = reactionEffect(reactionCtx);
     curr = applyEffectResult(curr, reactionResult, reactionCtx);
 
-    curr = replaceWindow(curr, windowId, (w) => ({
-      ...w,
-      reactedPlayerIds: [...w.reactedPlayerIds, responderId],
-      pendingResponderIds: w.pendingResponderIds.filter((id) => id !== responderId),
-    }));
+    // Repeatable reactions (Sacred Shield) keep the responder in the queue so
+    // they may react again — but only while a repeatable option remains (e.g.
+    // another of their Mages is still wounded and they can still pay). Once
+    // none remain, they're removed normally.
+    const stillRepeatable =
+      reactionOption.repeatable === true &&
+      buildReactionOptionsFor(
+        curr,
+        responderId,
+        window.triggerEvents,
+        window.source,
+      ).some((o) => o.repeatable === true);
+    if (!stillRepeatable) {
+      curr = replaceWindow(curr, windowId, (w) => ({
+        ...w,
+        reactedPlayerIds: [...w.reactedPlayerIds, responderId],
+        pendingResponderIds: w.pendingResponderIds.filter((id) => id !== responderId),
+      }));
+    }
   } else if (answer.kind === 'reaction-passed') {
     curr = replaceWindow(curr, windowId, (w) => ({
       ...w,

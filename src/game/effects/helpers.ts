@@ -1132,6 +1132,7 @@ type ReactionOptionShape = {
   label: string;
   requiresSlotPick?: boolean;
   forMageId?: OwnedMageId;
+  repeatable?: boolean;
 };
 
 /**
@@ -1233,6 +1234,9 @@ export function buildReactionOptionsFor(
   const hasShieldPotion = has('base.vault.shield-potion');
   const hasAncientArmor = has('base.vault.ancient-armor', true);
   const hasMysticAmulet = has('base.vault.mystic-amulet', true);
+  // Sacred Shield (Mancers synthesis Treasure) never exhausts, so it's offered
+  // whether or not it's been used this round — gated only by 1 Mana.
+  const hasSacredShield = has('mancers.vault.sacred-shield');
 
   // When this is a single-mage window we omit `forMageId` so the existing
   // single-event prompt continues to render with unadorned labels.
@@ -1267,6 +1271,25 @@ export function buildReactionOptionsFor(
         sourceId: 'base.vault.phase-steppers',
         effectId: 'base.vault.phase-steppers.react',
         label: `Play Phase Steppers${labelSuffix(mageId)}`,
+        ...(multi ? { forMageId: mageId } : {}),
+      });
+    }
+    // Sacred Shield: after one of YOUR Mages is wounded (any source), pay 1
+    // Mana to move it to any open slot. Doesn't exhaust, so it's offered for
+    // each still-wounded Mage in a multi-wound window (`repeatable`).
+    if (
+      event.kind === 'mage-wounded' &&
+      hasSacredShield &&
+      responder.resources.mana >= 1 &&
+      responder.mages.find((m) => m.id === mageId)?.isWounded === true
+    ) {
+      options.push({
+        sourceKind: 'vault-card',
+        sourceId: 'mancers.vault.sacred-shield',
+        effectId: 'mancers.vault.sacred-shield.react',
+        label: `Play Sacred Shield${labelSuffix(mageId)} (1 Mana)`,
+        requiresSlotPick: true,
+        repeatable: true,
         ...(multi ? { forMageId: mageId } : {}),
       });
     }

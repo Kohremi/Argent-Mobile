@@ -690,6 +690,13 @@ export interface ReactionOption {
    * window's only event is used implicitly.
    */
   forMageId?: OwnedMageId;
+  /**
+   * When true, playing this reaction does NOT consume the responder's slot in
+   * the window — they're re-prompted and may react again (to another affected
+   * Mage) as long as a repeatable option remains. Used by Sacred Shield, which
+   * doesn't exhaust and can save several Mages wounded by the same effect.
+   */
+  repeatable?: boolean;
 }
 
 export type PendingPrompt =

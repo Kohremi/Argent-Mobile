@@ -1231,7 +1231,9 @@ function applyReactionReposition(
     destinationSpaceId: string;
     asShadow: boolean;
     cardId: string;
-    disposal: 'consumable' | 'exhaust';
+    /** `'consumable'` → discard; `'exhaust'` → mark the Treasure exhausted;
+     *  `'none'` → leave the card untouched (Sacred Shield never exhausts). */
+    disposal: 'consumable' | 'exhaust' | 'none';
   },
 ): { players: Player[]; rooms: GameState['rooms'] } {
   const {
@@ -1263,7 +1265,7 @@ function applyReactionReposition(
         ),
       };
     }
-    if (p.id === reactorId) {
+    if (p.id === reactorId && disposal !== 'none') {
       const idx = updated.vaultCards.findIndex((v) => v.cardId === cardId);
       if (idx === -1) {
         throw new Error(`${cardId}: reactor does not own the card`);
@@ -1507,6 +1509,52 @@ registerEffect('base.vault.ancient-armor.react', (ctx): EffectResult => {
       asShadow: false,
       cardId: 'base.vault.ancient-armor',
       disposal: 'exhaust',
+    }),
+  };
+});
+
+/**
+ * Sacred Shield (Mancers synthesis Treasure, reaction — does NOT exhaust) —
+ * after one of your Mages is wounded (any source), spend 1 Mana to move it to
+ * any open slot. The reactor may play it again for each Mage wounded by the
+ * same effect (the option is flagged `repeatable`). Registered here to reuse
+ * the shared reposition + slot-pick plumbing.
+ */
+registerEffect('mancers.vault.sacred-shield.react', (ctx): EffectResult => {
+  const raw = ctx.resumeContext?.['triggerEvent'];
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    throw new Error('Sacred Shield: missing triggerEvent');
+  }
+  const event = raw as unknown as ReactionTriggerEvent;
+  if (event.kind !== 'mage-wounded') {
+    throw new Error(`Sacred Shield cannot react to ${event.kind}`);
+  }
+  if (event.ownerId !== ctx.triggeringPlayerId) {
+    throw new Error('Sacred Shield: only protects your own Mage');
+  }
+  const player = ctx.state.players.find((p) => p.id === ctx.triggeringPlayerId);
+  if (!player || player.resources.mana < 1) return { kind: 'done', patch: {} };
+  const destinationSpaceId = resolveReactionDestination(
+    ctx.state,
+    event,
+    ctx.resumeContext,
+  );
+  if (!destinationSpaceId) return { kind: 'done', patch: {} };
+  // Pay 1 Mana, then reposition (the card is NOT exhausted: disposal 'none').
+  const afterMana: GameState = {
+    ...ctx.state,
+    ...gainResourcePatch(ctx.state, ctx.triggeringPlayerId, 'mana', -1),
+  };
+  return {
+    kind: 'done',
+    patch: applyReactionReposition(afterMana, {
+      mageId: event.mageId,
+      ownerId: event.ownerId,
+      reactorId: ctx.triggeringPlayerId,
+      destinationSpaceId,
+      asShadow: false,
+      cardId: 'mancers.vault.sacred-shield',
+      disposal: 'none',
     }),
   };
 });
