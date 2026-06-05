@@ -10754,6 +10754,141 @@ describe('Atelier A (Mancers)', () => {
 });
 
 // ============================================================================
+// Atelier B (Mancers) — trade in a Consumable (used or unused) + Mana for a
+// reward.
+// ============================================================================
+
+describe('Atelier B (Mancers)', () => {
+  const C1 = 'base.vault.auric-catalyst'; // a Consumable
+  const C2 = 'base.vault.bottled-memories'; // a Consumable
+
+  function forceAtelierB(state: GameState): GameState {
+    const room = mancersPack.rooms.find(
+      (r) => r.name === 'Atelier' && r.side === 'B',
+    );
+    if (!room) throw new Error('test helper: Atelier B not in pack');
+    const idx = state.rooms.findIndex((r) => !r.isUniversityCentral);
+    if (idx === -1) return state;
+    return { ...state, rooms: state.rooms.map((r, i) => (i === idx ? room : r)) };
+  }
+
+  function setup(
+    slotId: string,
+    opts: { unused?: string[]; used?: string[]; mana?: number } = {},
+  ): GameState {
+    let s = initGame(TWO_PLAYER_CONFIG);
+    s = forceAtelierB(s);
+    s = zeroPlayerResources(s, 'p1');
+    s = setMeritBadges(s, 'p1', 5);
+    if (opts.mana) s = setMana(s, 'p1', opts.mana);
+    s = mapPlayer(s, 'p1', (p) => ({
+      ...p,
+      vaultCards: (opts.unused ?? []).map((cardId) => ({
+        cardId,
+        exhausted: false,
+      })),
+      personalDiscard: (opts.used ?? []).map((cardId) => ({
+        kind: 'consumable' as const,
+        cardId,
+      })),
+    }));
+    s = addMage(s, 'p1', {
+      id: 'alice-mage',
+      cardId: 'base.mage.divinity',
+      color: 'blue',
+    });
+    s = placeMageOnSpace(s, 'p1', 'alice-mage', slotId);
+    return { ...s, bellTower: { ...s.bellTower, available: [] } };
+  }
+
+  function driveToSlot(s: GameState): GameState {
+    s = applyAction(s, { type: 'ADVANCE_PHASE' });
+    s = applyAction(s, { type: 'ADVANCE_PHASE' });
+    s = applyAction(s, { type: 'ADVANCE_PHASE' });
+    return takeRewardAtResolution(s);
+  }
+
+  function pick(s: GameState, optionId: string): GameState {
+    const top = topPending(s);
+    if (top.prompt.kind !== 'choose-from-options') {
+      throw new Error(`expected choose-from-options, got ${top.prompt.kind}`);
+    }
+    return applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: top.id,
+      answer: { kind: 'option-chosen', optionId, payload: {} },
+    });
+  }
+
+  const p1 = (s: GameState) => s.players.find((p) => p.id === 'p1')!;
+
+  it('slot 1: swaps an UNUSED Consumable for 6 Mana', () => {
+    let s = setup('mancers.room.atelier.b.slot-1', { unused: [C1] });
+    s = driveToSlot(s);
+    s = pick(s, C1);
+    expect(p1(s).resources.mana).toBe(6);
+    expect(p1(s).vaultCards.some((v) => v.cardId === C1)).toBe(false);
+  });
+
+  it('slot 1: can also swap a USED Consumable from the discard pile', () => {
+    let s = setup('mancers.room.atelier.b.slot-1', { used: [C1] });
+    s = driveToSlot(s);
+    // The used card is offered.
+    const top = topPending(s);
+    if (top.prompt.kind !== 'choose-from-options') throw new Error('x');
+    expect(top.prompt.options.map((o) => o.id)).toContain(C1);
+    s = pick(s, C1);
+    expect(p1(s).resources.mana).toBe(6);
+    expect(
+      p1(s).personalDiscard.some(
+        (e) => e.kind === 'consumable' && e.cardId === C1,
+      ),
+    ).toBe(false);
+  });
+
+  it('slot 2: swaps a Consumable + 2 Mana for 4 IP', () => {
+    let s = setup('mancers.room.atelier.b.slot-2', { unused: [C1], mana: 2 });
+    s = driveToSlot(s);
+    s = pick(s, C1);
+    expect(p1(s).resources.influence).toBe(4);
+    expect(p1(s).resources.mana).toBe(0);
+    expect(p1(s).vaultCards).toHaveLength(0);
+  });
+
+  it('slot 2: fizzles with no prompt when the player lacks the 2 Mana', () => {
+    let s = setup('mancers.room.atelier.b.slot-2', { unused: [C1], mana: 1 });
+    s = driveToSlot(s);
+    expect(s.pendingResolutionStack).toHaveLength(0);
+    expect(p1(s).resources.influence).toBe(0);
+    expect(p1(s).vaultCards).toHaveLength(1);
+  });
+
+  it('slot 3: swaps a Consumable + 4 Mana for 12 Gold', () => {
+    let s = setup('mancers.room.atelier.b.slot-3', { used: [C2], mana: 4 });
+    s = driveToSlot(s);
+    s = pick(s, C2);
+    expect(p1(s).resources.gold).toBe(12);
+    expect(p1(s).resources.mana).toBe(0);
+    expect(p1(s).personalDiscard).toHaveLength(0);
+  });
+
+  it('fizzles with no prompt when the player has no Consumable', () => {
+    let s = setup('mancers.room.atelier.b.slot-1', {});
+    s = driveToSlot(s);
+    expect(s.pendingResolutionStack).toHaveLength(0);
+    expect(p1(s).resources.mana).toBe(0);
+  });
+
+  it('Skip leaves everything unchanged', () => {
+    let s = setup('mancers.room.atelier.b.slot-1', { unused: [C1] });
+    s = driveToSlot(s);
+    s = pick(s, 'skip');
+    expect(p1(s).resources.mana).toBe(0);
+    expect(p1(s).vaultCards.some((v) => v.cardId === C1)).toBe(true);
+  });
+});
+
+// ============================================================================
 // Council Chamber A — Draft a Supporter OR Gain a Mark, capped at 1/round
 // ============================================================================
 

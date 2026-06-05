@@ -11,6 +11,7 @@ import {
   buildBanishTargets,
   buildBurnTargets,
   buildReactionQueue,
+  bumpInfluencePatch,
   canArsMagnaTakeSpace,
   eligibleVotersForMark,
   gainResourcePatch,
@@ -1953,6 +1954,132 @@ registerEffect('mancers.room.atelier-a.slot-3', (ctx): EffectResult => {
     patch: applyVaultDraft(ctx.state, ctx.triggeringPlayerId, cardId),
   };
 });
+
+// ============================================================================
+// Atelier Side B — trade in a Consumable (unused from the office OR a used one
+// from the discard pile) plus optional Mana for a reward.
+//   Slot 1 (merit): Consumable → 6 Mana.
+//   Slot 2:         Consumable + 2 Mana → 4 IP.
+//   Slot 3:         Consumable + 4 Mana → 12 Gold.
+// ============================================================================
+
+/** Every Consumable the player can trade in: unused cards in their office plus
+ *  used ones in their discard pile. Returns each id with a `used` flag for the
+ *  prompt label. */
+function eligibleSwapConsumables(
+  state: GameState,
+  player: GameState['players'][number],
+): { cardId: string; used: boolean }[] {
+  const out: { cardId: string; used: boolean }[] = [];
+  for (const v of player.vaultCards) {
+    if (lookupVaultCardDef(state, v.cardId)?.type === 'consumable') {
+      out.push({ cardId: v.cardId, used: false });
+    }
+  }
+  for (const e of player.personalDiscard) {
+    if (e.kind === 'consumable') out.push({ cardId: e.cardId, used: true });
+  }
+  return out;
+}
+
+/** Removes the given Consumable from wherever the player holds it (office or
+ *  discard) — the card is traded away and leaves the player entirely. */
+function removeConsumablePatch(
+  state: GameState,
+  playerId: PlayerId,
+  cardId: string,
+): GameStatePatch {
+  return {
+    players: state.players.map((p) =>
+      p.id !== playerId
+        ? p
+        : {
+            ...p,
+            vaultCards: p.vaultCards.filter((v) => v.cardId !== cardId),
+            personalDiscard: p.personalDiscard.filter(
+              (e) => !(e.kind === 'consumable' && e.cardId === cardId),
+            ),
+          },
+    ),
+  };
+}
+
+function atelierBSwapSlot(
+  ctx: EffectContext,
+  selfEffectId: string,
+  cfg: { manaCost: number; reward: (state: GameState, pid: PlayerId) => GameStatePatch },
+): EffectResult {
+  const player = ctx.state.players.find((p) => p.id === ctx.triggeringPlayerId);
+  if (!player) return { kind: 'done', patch: {} };
+
+  if (!ctx.resumeAnswer) {
+    // Need the extra Mana AND at least one Consumable to trade.
+    if (player.resources.mana < cfg.manaCost) return { kind: 'done', patch: {} };
+    const eligible = eligibleSwapConsumables(ctx.state, player);
+    if (eligible.length === 0) return { kind: 'done', patch: {} };
+    const options: ChoiceOption[] = eligible.map(({ cardId, used }) => ({
+      id: cardId,
+      label: `${lookupVaultCardDef(ctx.state, cardId)?.name ?? cardId}${used ? ' (used)' : ''}`,
+      payload: {},
+    }));
+    options.push({ id: 'skip', label: 'Skip', payload: {} });
+    return {
+      kind: 'pause',
+      pending: {
+        responderId: ctx.triggeringPlayerId,
+        prompt: { kind: 'choose-from-options', options },
+        resume: { effectId: selfEffectId, context: {} },
+        source: ctx.source,
+      },
+    };
+  }
+  if (ctx.resumeAnswer.kind !== 'option-chosen') {
+    throw new Error(`${selfEffectId} expected option-chosen`);
+  }
+  const opt = ctx.resumeAnswer.optionId;
+  if (opt === 'skip') return { kind: 'done', patch: {} };
+  // Re-validate against the live state.
+  const stillEligible = eligibleSwapConsumables(ctx.state, player).some(
+    (e) => e.cardId === opt,
+  );
+  if (!stillEligible || player.resources.mana < cfg.manaCost) {
+    return { kind: 'done', patch: {} };
+  }
+  let working: GameState = {
+    ...ctx.state,
+    ...removeConsumablePatch(ctx.state, ctx.triggeringPlayerId, opt),
+  };
+  if (cfg.manaCost > 0) {
+    working = {
+      ...working,
+      ...gainResourcePatch(working, ctx.triggeringPlayerId, 'mana', -cfg.manaCost),
+    };
+  }
+  working = { ...working, ...cfg.reward(working, ctx.triggeringPlayerId) };
+  return {
+    kind: 'done',
+    patch: { players: working.players, nextSequenceId: working.nextSequenceId },
+  };
+}
+
+registerEffect('mancers.room.atelier-b.slot-1', (ctx): EffectResult =>
+  atelierBSwapSlot(ctx, 'mancers.room.atelier-b.slot-1', {
+    manaCost: 0,
+    reward: (state, pid) => gainResourcePatch(state, pid, 'mana', 6),
+  }),
+);
+registerEffect('mancers.room.atelier-b.slot-2', (ctx): EffectResult =>
+  atelierBSwapSlot(ctx, 'mancers.room.atelier-b.slot-2', {
+    manaCost: 2,
+    reward: (state, pid) => bumpInfluencePatch(state, pid, 4),
+  }),
+);
+registerEffect('mancers.room.atelier-b.slot-3', (ctx): EffectResult =>
+  atelierBSwapSlot(ctx, 'mancers.room.atelier-b.slot-3', {
+    manaCost: 4,
+    reward: (state, pid) => gainResourcePatch(state, pid, 'gold', 12),
+  }),
+);
 
 // Re-export to satisfy the module's existing `export {}` shape.
 export {};

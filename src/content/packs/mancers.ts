@@ -633,6 +633,14 @@ const atelierA: Room = {
   ],
 };
 
+// ============================================================================
+// Atelier Side B — non-instant. Trade in a Consumable (unused from your office
+// OR a used one from your discard pile) plus optional Mana for a reward.
+//   Slot 1 (merit, 1 MB): Swap a Consumable for 6 Mana.
+//   Slot 2 (regular):     Swap a Consumable + 2 Mana for 4 IP.
+//   Slot 3 (regular):     Swap a Consumable + 4 Mana for 12 Gold.
+// ============================================================================
+
 const atelierB: Room = {
   id: 'mancers.room.atelier.b',
   name: 'Atelier',
@@ -642,7 +650,38 @@ const atelierB: Room = {
   isInstantRoom: false,
   cannotBePlacedInDirectly: false,
   cannotBeLocked: false,
-  actionSpaces: [],
+  description:
+    'Trade in a Consumable (used or unused) plus Mana for Mana, IP, or Gold.',
+  actionSpaces: [
+    {
+      id: 'mancers.room.atelier.b.slot-1',
+      roomId: 'mancers.room.atelier.b',
+      index: 0,
+      slotType: 'merit',
+      occupant: null,
+      effectId: 'mancers.room.atelier-b.slot-1',
+      costToActivate: { meritBadges: 1 },
+      description: 'Swap a Consumable for 6 Mana.',
+    },
+    {
+      id: 'mancers.room.atelier.b.slot-2',
+      roomId: 'mancers.room.atelier.b',
+      index: 1,
+      slotType: 'regular',
+      occupant: null,
+      effectId: 'mancers.room.atelier-b.slot-2',
+      description: 'Swap a Consumable and 2 Mana for 4 IP.',
+    },
+    {
+      id: 'mancers.room.atelier.b.slot-3',
+      roomId: 'mancers.room.atelier.b',
+      index: 2,
+      slotType: 'regular',
+      occupant: null,
+      effectId: 'mancers.room.atelier-b.slot-3',
+      description: 'Swap a Consumable and 4 Mana for 12 Gold.',
+    },
+  ],
 };
 
 export const mancersPack: ContentPack = {
