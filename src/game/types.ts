@@ -235,6 +235,20 @@ export interface Player {
    */
   nextSpellSkipsExhaust?: boolean;
   /**
+   * Buff flag: the next time this player casts a Spell this turn, they
+   * place a Mage (without using Mage powers) immediately after the spell
+   * resolves. Set by Mystic's Cowl. Consumed by CAST_SPELL (queued onto
+   * `pendingPlaceChain`), and cleared unconditionally at turn end.
+   */
+  nextSpellPlacesMage?: boolean;
+  /**
+   * Buff flag: the next time this player would discard a Vault Card this
+   * turn, they keep it (the card stays in their office / readied instead
+   * of going to the discard). Set by Clockwerk Replicator. Consumed by
+   * the first vault-card disposal, and cleared unconditionally at turn end.
+   */
+  nextVaultDiscardKept?: boolean;
+  /**
    * Buff flag: the next Gold cost this player would pay is reduced to
    * zero. Set by Auric Catalyst's reaction. Consumed by the post-window
    * apply-buy step (or the equivalent paid acquisition). Does NOT

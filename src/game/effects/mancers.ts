@@ -3963,6 +3963,36 @@ registerEffect('mancers.vault.nature-mages-cap', (ctx): EffectResult => {
   };
 });
 
+// Mystic's Cowl — set a one-shot buff: the next Spell cast this turn places a
+// Mage immediately after it resolves. The placement is queued by CAST_SPELL
+// onto `pendingPlaceChain` and drains once the spell's chain settles.
+registerEffect('mancers.vault.mystics-cowl', (ctx): EffectResult => {
+  const playerId = ctx.triggeringPlayerId;
+  return {
+    kind: 'done',
+    patch: {
+      players: ctx.state.players.map((p) =>
+        p.id === playerId ? { ...p, nextSpellPlacesMage: true } : p,
+      ),
+    },
+  };
+});
+
+// Clockwerk Replicator — set a one-shot buff: the next Vault Card you would
+// discard this turn (i.e. the next Consumable you play) is kept readied in
+// your vault instead. Consumed by PLAY_VAULT_CARD's disposal step.
+registerEffect('mancers.vault.clockwerk-replicator', (ctx): EffectResult => {
+  const playerId = ctx.triggeringPlayerId;
+  return {
+    kind: 'done',
+    patch: {
+      players: ctx.state.players.map((p) =>
+        p.id === playerId ? { ...p, nextVaultDiscardKept: true } : p,
+      ),
+    },
+  };
+});
+
 // Re-export to satisfy the module's existing `export {}` shape.
 export {};
 

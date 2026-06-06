@@ -12185,6 +12185,55 @@ describe('Mancers Vault cards (Mancers)', () => {
     const placer = p1(s).mages.find((m) => m.id === 'placer')!;
     expect(placer.location).toEqual({ kind: 'action-space', spaceId: slotA });
   });
+
+  it("Mystic's Cowl: arms a post-cast placement; next Spell places a Mage", () => {
+    let s = setup('mancers.vault.mystics-cowl', { mana: 5 });
+    s = addOwnedSpell(s, 'p1', 'base.spell.burn');
+    s = addMage(s, 'p1', { id: 'cowlmage', cardId: 'base.mage.neutral', color: 'off-white' });
+    s = play(s, 'mancers.vault.mystics-cowl');
+    expect(p1(s).nextSpellPlacesMage).toBe(true);
+    // No enemy Mages on the board → Burn finds no target and resolves; the
+    // armed placement then surfaces.
+    s = applyAction(s, { type: 'CAST_SPELL', playerId: 'p1', spellCardId: 'base.spell.burn', level: 1 });
+    expect(p1(s).nextSpellPlacesMage).toBe(false);
+    // Drive the post-cast placement (and pass any reaction windows).
+    let guard = 0;
+    while (s.pendingResolutionStack.length > 0 && guard++ < 20) {
+      const t = topPending(s);
+      if (t.prompt.kind === 'reaction-window') {
+        s = applyAction(s, { type: 'RESOLVE_PENDING', resolutionId: t.id, answer: { kind: 'reaction-passed' } });
+      } else if (t.prompt.kind === 'choose-target-mage') {
+        s = applyAction(s, { type: 'RESOLVE_PENDING', resolutionId: t.id, answer: { kind: 'mage-chosen', mageId: 'cowlmage' } });
+      } else if (t.prompt.kind === 'choose-target-action-space') {
+        s = applyAction(s, { type: 'RESOLVE_PENDING', resolutionId: t.id, answer: { kind: 'space-chosen', spaceId: t.prompt.eligibleSpaceIds[0]! } });
+      } else if (t.prompt.kind === 'choose-from-options') {
+        s = applyAction(s, { type: 'RESOLVE_PENDING', resolutionId: t.id, answer: { kind: 'option-chosen', optionId: t.prompt.options[0]!.id, payload: {} } });
+      } else break;
+    }
+    expect(p1(s).mages.find((m) => m.id === 'cowlmage')!.location.kind).toBe('action-space');
+    expect(s.pendingPlaceChain).toBeNull();
+  });
+
+  it('Clockwerk Replicator: keeps the next discarded Vault Card (a Consumable) readied', () => {
+    let s = setup('mancers.vault.clockwerk-replicator', { mana: 2 });
+    s = addVaultCard(s, 'p1', 'mancers.vault.chrysopoeia-potion');
+    s = play(s, 'mancers.vault.clockwerk-replicator');
+    expect(p1(s).nextVaultDiscardKept).toBe(true);
+    // Play the Consumable — normally it would land in the discard.
+    s = play(s, 'mancers.vault.chrysopoeia-potion');
+    s = opt(s, 'stop');
+    // The Potion stayed in the vault, readied (unexhausted), and is NOT in
+    // the discard. The buff is spent.
+    expect(p1(s).nextVaultDiscardKept).toBe(false);
+    const kept = p1(s).vaultCards.find((v) => v.cardId === 'mancers.vault.chrysopoeia-potion');
+    expect(kept).toBeDefined();
+    expect(kept!.exhausted).toBe(false);
+    expect(
+      p1(s).personalDiscard.some(
+        (e) => e.kind === 'consumable' && e.cardId === 'mancers.vault.chrysopoeia-potion',
+      ),
+    ).toBe(false);
+  });
 });
 
 // ============================================================================

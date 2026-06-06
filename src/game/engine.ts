@@ -1544,6 +1544,7 @@ function handleCastSpell(state: GameState, action: CastSpellAction): GameState {
   const discountedCost = Math.max(0, printedCost - discount);
   const surcharges = spellManaSurchargesAgainst(state, action.playerId);
   const surchargeTotal = surcharges.reduce((sum, s) => sum + s.amount, 0);
+  const placeAfterCast = player.nextSpellPlacesMage === true;
   const baseCost = player.nextSpellFreeMana ? 0 : discountedCost;
   const effectiveManaCost = baseCost + surchargeTotal;
   if (player.resources.mana < effectiveManaCost) {
@@ -1597,6 +1598,7 @@ function handleCastSpell(state: GameState, action: CastSpellAction): GameState {
           ),
           nextSpellFreeMana: false,
           nextSpellSkipsExhaust: false,
+          nextSpellPlacesMage: false,
         };
       }
       const gain = surchargeByPlayer.get(p.id) ?? 0;
@@ -1635,9 +1637,29 @@ function handleCastSpell(state: GameState, action: CastSpellAction): GameState {
         }
       : next;
 
+  // Mystic's Cowl: "place a Mage immediately after" the spell resolves.
+  // Queued onto `pendingPlaceChain` AFTER the spell's own effect runs (so a
+  // spell that sets its own chain, e.g. Stop Time, isn't clobbered — we
+  // increment its remaining for the same player instead). The chain drains
+  // once the spell's full resolution settles. `source` here is the spell's.
+  const queueCowlPlacement = (s: GameState): GameState => {
+    if (!placeAfterCast) return s;
+    const existing = s.pendingPlaceChain;
+    if (existing && existing.playerId === action.playerId) {
+      return {
+        ...s,
+        pendingPlaceChain: { ...existing, remaining: existing.remaining + 1 },
+      };
+    }
+    return {
+      ...s,
+      pendingPlaceChain: { playerId: action.playerId, source, remaining: 1 },
+    };
+  };
+
   // Invoke the spell's effect.
   if (!hasEffect(levelDef.effectId)) {
-    return withMysticismQueued;
+    return queueCowlPlacement(withMysticismQueued);
   }
   const effect = getEffect(levelDef.effectId);
   const ctx: EffectContext = {
@@ -1647,7 +1669,7 @@ function handleCastSpell(state: GameState, action: CastSpellAction): GameState {
     allowReactions: true,
   };
   const result = effect(ctx);
-  return applyEffectResult(withMysticismQueued, result, ctx);
+  return queueCowlPlacement(applyEffectResult(withMysticismQueued, result, ctx));
 }
 
 /**
@@ -2211,7 +2233,18 @@ function handlePlayVaultCard(
           ),
         };
       }
-      // consumable
+      // consumable: would go to discard — unless Clockwerk Replicator is
+      // active, which keeps it readied (unexhausted) in your vault instead.
+      // The buff is one-shot, consumed by this disposal.
+      if (p.nextVaultDiscardKept) {
+        return {
+          ...p,
+          nextVaultDiscardKept: false,
+          vaultCards: p.vaultCards.map((v, i) =>
+            i === ownedIdx ? { ...v, exhausted: false } : v,
+          ),
+        };
+      }
       return {
         ...p,
         vaultCards: p.vaultCards.filter((_, i) => i !== ownedIdx),
@@ -2908,7 +2941,13 @@ function processErrandsAdvance(state: GameState): GameState {
     ? state.players.map((p) =>
         p.id !== outgoingId
           ? p
-          : { ...p, nextSpellFreeMana: false, nextSpellSkipsExhaust: false },
+          : {
+              ...p,
+              nextSpellFreeMana: false,
+              nextSpellSkipsExhaust: false,
+              nextSpellPlacesMage: false,
+              nextVaultDiscardKept: false,
+            },
       )
     : state.players;
   if (state.bellTower.available.length === 0) {
