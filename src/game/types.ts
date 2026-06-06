@@ -475,6 +475,7 @@ export type ScoringCriterion =
   | 'most-natural-magick'
   | 'most-planar-studies'
   | 'most-divinity'
+  | 'most-technomancy'
   | 'custom';
 
 export interface ConsortiumVoter {

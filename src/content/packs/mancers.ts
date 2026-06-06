@@ -2,10 +2,12 @@ import type { ContentPack } from '../types';
 import type {
   ActionSpace,
   Candidate,
+  ConsortiumVoter,
   Department,
   Mage,
   Room,
   SpellCard,
+  SupporterCard,
   VaultCard,
 } from '../../game/types';
 
@@ -870,10 +872,119 @@ const synthesisWorkshopB: Room = {
   ],
 };
 
+// ============================================================================
+// Technomancy (orange) Supporters — the department's supporter set. Seven have
+// active effects; the Rune Knight is the department's passive Familiar (scoring
+// only, like the base familiars). Effects registered in game/effects/mancers.ts.
+// ============================================================================
+
+const supporters: SupporterCard[] = [
+  {
+    id: 'mancers.supporter.cin-atalar',
+    name: 'Cin Atalar',
+    title: 'Debate Team Captain',
+    sourcePackId: PACK_ID,
+    department: 'technomancy',
+    timing: 'fast-action',
+    effectId: 'mancers.supporter.cin-atalar',
+    description: 'Swap one of your Mages for a Technomancy Mage from the supply.',
+  },
+  {
+    id: 'mancers.supporter.garek-tesias',
+    name: 'Garek Tesias',
+    title: 'Leader of the Mad Manticores',
+    sourcePackId: PACK_ID,
+    department: 'technomancy',
+    timing: 'action',
+    effectId: 'mancers.supporter.garek-tesias',
+    description: 'Swap 3 Gold for a Technomancy (Orange) Mage from the supply.',
+  },
+  {
+    id: 'mancers.supporter.lixis-ran-kanda',
+    name: 'Lixis Ran Kanda',
+    title: 'Visiting Alchemy Lecturer',
+    sourcePackId: PACK_ID,
+    department: 'technomancy',
+    timing: 'action',
+    effectId: 'mancers.supporter.lixis-ran-kanda',
+    description: 'Swap 3 Gold for the top card of the Vault Deck, up to 2 times.',
+  },
+  {
+    id: 'mancers.supporter.orman-kasper',
+    name: 'Orman Kasper',
+    title: 'Research Assistant',
+    sourcePackId: PACK_ID,
+    department: 'technomancy',
+    timing: 'action',
+    effectId: 'mancers.supporter.orman-kasper',
+    description: 'Swap 3 Gold for the top card of the Vault Deck.',
+  },
+  {
+    id: 'mancers.supporter.rokan',
+    name: 'Rokan',
+    title: 'Professor of Mechanics',
+    sourcePackId: PACK_ID,
+    department: 'technomancy',
+    timing: 'action',
+    effectId: 'mancers.supporter.rokan',
+    description: 'Gain 2 Research. Use this Research only on Technomancy (Orange) Spells.',
+  },
+  {
+    id: 'mancers.supporter.rune-knight',
+    name: 'Rune Knight',
+    title: 'Technomagic Familiar',
+    sourcePackId: PACK_ID,
+    department: 'technomancy',
+    timing: 'passive',
+    effectId: 'mancers.supporter.rune-knight',
+    description: 'Place this card in your discard pile.',
+  },
+  {
+    id: 'mancers.supporter.runika-zenanen',
+    name: 'Runika Zenanen',
+    title: 'Renowned Artificer',
+    sourcePackId: PACK_ID,
+    department: 'technomancy',
+    timing: 'action',
+    effectId: 'mancers.supporter.runika-zenanen',
+    description: 'Gain a Treasure from the Vault Tableau.',
+  },
+  {
+    id: 'mancers.supporter.tegusgan',
+    name: 'Tegusgan',
+    title: 'University Chef',
+    sourcePackId: PACK_ID,
+    department: 'technomancy',
+    timing: 'action',
+    effectId: 'mancers.supporter.tegusgan',
+    description: 'Gain a Consumable from the Vault Tableau.',
+  },
+];
+
+// ============================================================================
+// Consortium Voter — Welsie Acktern awards a vote for the most Technomancy
+// Spell Research + Supporter Cards (the 'most-technomancy' scoring criterion).
+// ============================================================================
+
+const voters: ConsortiumVoter[] = [
+  {
+    id: 'mancers.voter.most-technomancy',
+    name: 'Welsie Acktern',
+    title: 'Magister of Willat',
+    sourcePackId: PACK_ID,
+    criterion: 'most-technomancy',
+    description:
+      'Awards a vote to the player with the most Technomancy Spell Research and Supporter Cards.',
+    votes: 1,
+    isAlwaysFaceUp: false,
+    revealed: false,
+  },
+];
+
 export const mancersPack: ContentPack = {
   id: PACK_ID,
   name: 'Mancers of the University',
-  description: 'Adds the Technomancy department: Technomancer (orange) mage piece, the two Technomancy leader candidates, and the Laboratory + Research Archive + Golem Lab + University Tavern + Atelier rooms.',
+  description: 'Adds the Technomancy department: Technomancer (orange) mage piece, the two Technomancy leader candidates, the Laboratory + Research Archive + Golem Lab + University Tavern + Atelier + Synthesis Workshop rooms, the Technomancy supporters, and a Technomancy voter.',
   mages,
   candidates,
   rooms: [
@@ -893,7 +1004,7 @@ export const mancersPack: ContentPack = {
   spells: [],
   legendarySpells: leaderSpells,
   vaultCards: synthesisTreasures,
-  supporters: [],
-  voters: [],
+  supporters,
+  voters,
   bellTowerCards: [],
 };

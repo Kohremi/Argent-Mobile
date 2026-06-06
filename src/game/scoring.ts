@@ -53,6 +53,8 @@ export function scorePlayerForCriterion(
       return countDepartment(state, player, 'planar-studies');
     case 'most-divinity':
       return countDepartment(state, player, 'divinity');
+    case 'most-technomancy':
+      return countDepartment(state, player, 'technomancy');
     case 'second-most-influence':
     case 'second-most-supporters':
       // Resolved by `computeVoterWinner` via second-place ranking; the

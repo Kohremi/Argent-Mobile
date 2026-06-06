@@ -22,6 +22,7 @@ import {
   lookupSpellCardDef,
   lookupSupporterCardDef,
   lookupVaultCardDef,
+  MAGE_CARD_BY_COLOR,
   woundMage,
 } from './helpers';
 import { nextRandom } from '../../utils/rng';
@@ -3093,6 +3094,196 @@ registerEffect('mancers.vault.hourglass-of-fate.react', (ctx): EffectResult => {
     },
   };
 });
+
+// ============================================================================
+// Technomancy (orange) Supporters.
+//   Rokan          — Gain 2 Research, usable only on Technomancy Spells.
+//   Runika Zenanen — Gain a Treasure from the Vault Tableau.
+//   Tegusgan       — Gain a Consumable from the Vault Tableau.
+//   Garek Tesias   — Pay 3 Gold for a Technomancy (orange) Mage from supply.
+//   Orman Kasper   — Pay 3 Gold for the top card of the Vault Deck.
+//   Lixis Ran Kanda— Pay 3 Gold for the top of the Vault Deck, up to 2 times.
+//   Cin Atalar / Rune Knight — see notes below.
+// ============================================================================
+
+// Rokan — Gain 2 Research, restricted to Technomancy (orange) Spells.
+registerEffect('mancers.supporter.rokan', (ctx): EffectResult => {
+  const entries: GameState['researchQueue'] = [
+    { playerId: ctx.triggeringPlayerId, source: ctx.source, restrictDepartment: 'technomancy' },
+    { playerId: ctx.triggeringPlayerId, source: ctx.source, restrictDepartment: 'technomancy' },
+  ];
+  return {
+    kind: 'done',
+    patch: { researchQueue: [...ctx.state.researchQueue, ...entries] },
+  };
+});
+
+/** Shared: gain one Vault card of the given type from the TABLEAU (free
+ *  draft). Fizzles if none of that type are shown. */
+function gainVaultFromTableauByType(
+  ctx: EffectContext,
+  selfEffectId: string,
+  type: 'treasure' | 'consumable',
+): EffectResult {
+  if (!ctx.resumeAnswer) {
+    const eligible = ctx.state.vaultTableau.filter(
+      (id) => lookupVaultCardDef(ctx.state, id)?.type === type,
+    );
+    if (eligible.length === 0) return { kind: 'done', patch: {} };
+    return {
+      kind: 'pause',
+      pending: {
+        responderId: ctx.triggeringPlayerId,
+        prompt: { kind: 'choose-vault-card', eligibleCardIds: [...eligible] },
+        resume: { effectId: selfEffectId, context: {} },
+        source: ctx.source,
+      },
+    };
+  }
+  if (ctx.resumeAnswer.kind !== 'card-chosen') {
+    throw new Error(`${selfEffectId} expected card-chosen`);
+  }
+  const cardId = ctx.resumeAnswer.cardId;
+  if (
+    !ctx.state.vaultTableau.includes(cardId) ||
+    lookupVaultCardDef(ctx.state, cardId)?.type !== type
+  ) {
+    return { kind: 'done', patch: {} };
+  }
+  return {
+    kind: 'done',
+    patch: applyVaultDraft(ctx.state, ctx.triggeringPlayerId, cardId),
+  };
+}
+
+registerEffect('mancers.supporter.runika-zenanen', (ctx): EffectResult =>
+  gainVaultFromTableauByType(ctx, 'mancers.supporter.runika-zenanen', 'treasure'),
+);
+registerEffect('mancers.supporter.tegusgan', (ctx): EffectResult =>
+  gainVaultFromTableauByType(ctx, 'mancers.supporter.tegusgan', 'consumable'),
+);
+
+// Garek Tesias — Pay 3 Gold for a Technomancy (orange) Mage from the supply.
+registerEffect('mancers.supporter.garek-tesias', (ctx): EffectResult => {
+  const player = ctx.state.players.find((p) => p.id === ctx.triggeringPlayerId);
+  if (!player || player.resources.gold < 3) return { kind: 'done', patch: {} };
+  if ((ctx.state.mageDraftPool.orange ?? 0) <= 0) return { kind: 'done', patch: {} };
+  const seq = ctx.state.nextSequenceId;
+  const goldPatch = gainResourcePatch(ctx.state, ctx.triggeringPlayerId, 'gold', -3);
+  const working: GameState = { ...ctx.state, ...goldPatch };
+  return {
+    kind: 'done',
+    patch: {
+      nextSequenceId: seq + 1,
+      mageDraftPool: {
+        ...working.mageDraftPool,
+        orange: (working.mageDraftPool.orange ?? 0) - 1,
+      },
+      players: working.players.map((p) =>
+        p.id !== ctx.triggeringPlayerId
+          ? p
+          : {
+              ...p,
+              mages: [
+                ...p.mages,
+                {
+                  id: `m-${seq}`,
+                  cardId: MAGE_CARD_BY_COLOR.orange,
+                  color: 'orange' as MageColor,
+                  location: { kind: 'office' as const, playerId: ctx.triggeringPlayerId },
+                  isShadowing: false,
+                  isWounded: false,
+                },
+              ],
+            },
+      ),
+    },
+  };
+});
+
+/** Pays 3 Gold and moves the top of the Vault Deck into the player's vault. */
+function buyTopOfVaultDeck(state: GameState, playerId: PlayerId): GameStatePatch {
+  const top = state.vaultDeck[0];
+  if (top === undefined) return {};
+  const working: GameState = {
+    ...state,
+    ...gainResourcePatch(state, playerId, 'gold', -3),
+  };
+  return {
+    vaultDeck: working.vaultDeck.slice(1),
+    players: working.players.map((p) =>
+      p.id !== playerId
+        ? p
+        : { ...p, vaultCards: [...p.vaultCards, { cardId: top, exhausted: false }] },
+    ),
+  };
+}
+
+// Orman Kasper — Pay 3 Gold for the top card of the Vault Deck.
+registerEffect('mancers.supporter.orman-kasper', (ctx): EffectResult => {
+  const player = ctx.state.players.find((p) => p.id === ctx.triggeringPlayerId);
+  if (!player || player.resources.gold < 3 || ctx.state.vaultDeck.length === 0) {
+    return { kind: 'done', patch: {} };
+  }
+  return {
+    kind: 'done',
+    patch: buyTopOfVaultDeck(ctx.state, ctx.triggeringPlayerId),
+  };
+});
+
+// Lixis Ran Kanda — Pay 3 Gold for the top of the Vault Deck, up to 2 times.
+registerEffect('mancers.supporter.lixis-ran-kanda', (ctx): EffectResult => {
+  const self = 'mancers.supporter.lixis-ran-kanda';
+  const player = ctx.state.players.find((p) => p.id === ctx.triggeringPlayerId);
+  if (!player) return { kind: 'done', patch: {} };
+
+  // After the first buy, offer an optional second.
+  if (ctx.resumeContext?.['step'] === 'again') {
+    if (ctx.resumeAnswer?.kind !== 'option-chosen') {
+      throw new Error(`${self} again expected option-chosen`);
+    }
+    if (ctx.resumeAnswer.optionId !== 'buy') return { kind: 'done', patch: {} };
+    if (player.resources.gold < 3 || ctx.state.vaultDeck.length === 0) {
+      return { kind: 'done', patch: {} };
+    }
+    return {
+      kind: 'done',
+      patch: buyTopOfVaultDeck(ctx.state, ctx.triggeringPlayerId),
+    };
+  }
+
+  // First buy (if affordable + deck), then prompt for a second.
+  if (player.resources.gold < 3 || ctx.state.vaultDeck.length === 0) {
+    return { kind: 'done', patch: {} };
+  }
+  const firstPatch = buyTopOfVaultDeck(ctx.state, ctx.triggeringPlayerId);
+  const working: GameState = { ...ctx.state, ...firstPatch };
+  const after = working.players.find((p) => p.id === ctx.triggeringPlayerId)!;
+  if (after.resources.gold < 3 || working.vaultDeck.length === 0) {
+    return { kind: 'done', patch: firstPatch };
+  }
+  return {
+    kind: 'pause',
+    patch: firstPatch,
+    pending: {
+      responderId: ctx.triggeringPlayerId,
+      prompt: {
+        kind: 'choose-from-options',
+        options: [
+          { id: 'buy', label: 'Pay 3 Gold for another Vault card', payload: {} },
+          { id: 'stop', label: 'Stop', payload: {} },
+        ],
+      },
+      resume: { effectId: self, context: { step: 'again' } },
+      source: ctx.source,
+    },
+  };
+});
+
+// Cin Atalar (swap a Mage for a Technomancy Mage) and the Rune Knight
+// (passive Familiar — scoring only, never played as an action) are defined in
+// the pack but not yet wired here; an unwired Supporter effect is a graceful
+// no-op when played.
 
 // Re-export to satisfy the module's existing `export {}` shape.
 export {};

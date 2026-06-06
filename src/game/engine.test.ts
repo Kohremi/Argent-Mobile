@@ -806,6 +806,27 @@ describe('Endgame scoring', () => {
     expect(scorePlayerForCriterion(s, p1, 'most-mysticism')).toBe(0);
   });
 
+  it('most-technomancy (Welsie Acktern) counts Technomancy research + supporters', () => {
+    let s = initGame({ ...FOUR_PLAYER_CONFIG, activePackIds: ['base', 'mancers'] });
+    s = mapPlayer(s, 'p1', (p) => ({
+      ...p,
+      ownedSpells: [
+        {
+          cardId: 'mancers.spell.arcane-surge', // technomancy (1 level)
+          intPlaced: true,
+          wisPlacedLevel2: false,
+          wisPlacedLevel3: false,
+          exhausted: false,
+        },
+      ],
+      supporters: ['mancers.supporter.rokan', 'mancers.supporter.tegusgan'],
+    }));
+    const p1 = s.players.find((p) => p.id === 'p1')!;
+    // 1 spell level + 2 technomancy supporters = 3.
+    expect(scorePlayerForCriterion(s, p1, 'most-technomancy')).toBe(3);
+    expect(scorePlayerForCriterion(s, p1, 'most-sorcery')).toBe(0);
+  });
+
   it('department voters: skips spells that have not been researched at L1', () => {
     let s = initGame(FOUR_PLAYER_CONFIG);
     s = mapPlayer(s, 'p1', (p) => ({
@@ -11675,6 +11696,120 @@ describe('Synthesis Workshop B (Mancers)', () => {
     });
     s = driveToSlot(s);
     expect(s.pendingResolutionStack).toHaveLength(0);
+  });
+});
+
+// ============================================================================
+// Technomancy Supporters (Mancers).
+// ============================================================================
+
+describe('Technomancy Supporters (Mancers)', () => {
+  function setup(supporterId: string, gold = 0): GameState {
+    let s = initGame({ ...TWO_PLAYER_CONFIG, activePackIds: ['base', 'mancers'] });
+    s = zeroPlayerResources(s, 'p1');
+    if (gold) s = setGold(s, 'p1', gold);
+    s = addSupporter(s, 'p1', supporterId);
+    return {
+      ...s,
+      firstPlayerIndex: 0,
+      phase: {
+        kind: 'errands',
+        round: 1,
+        activePlayerIndex: 0,
+        actionUsed: false,
+        fastActionUsed: false,
+      },
+      bellTower: { ...s.bellTower, available: [] },
+    };
+  }
+
+  const play = (s: GameState, supporterCardId: string) =>
+    applyAction(s, { type: 'PLAY_SUPPORTER', playerId: 'p1', supporterCardId });
+
+  const p1 = (s: GameState) => s.players.find((p) => p.id === 'p1')!;
+
+  it('Rokan: queues 2 Research restricted to Technomancy', () => {
+    let s = setup('mancers.supporter.rokan');
+    s = play(s, 'mancers.supporter.rokan');
+    // One Research drained into a prompt; the menu is Technomancy-restricted.
+    const top = topPending(s);
+    expect(top.resume.effectId).toBe('base.system.spend-research');
+    expect(top.resume.context?.['restrictDepartment']).toBe('technomancy');
+    // Two were queued: one surfaced, one still in the queue.
+    expect(s.researchQueue.length).toBe(1);
+    expect(s.researchQueue[0]?.restrictDepartment).toBe('technomancy');
+  });
+
+  it('Garek Tesias: pays 3 Gold for a Technomancy (orange) Mage from the supply', () => {
+    let s = setup('mancers.supporter.garek-tesias', 3);
+    const poolBefore = s.mageDraftPool.orange;
+    s = play(s, 'mancers.supporter.garek-tesias');
+    expect(p1(s).resources.gold).toBe(0);
+    const gained = p1(s).mages.filter((m) => m.color === 'orange');
+    expect(gained.length).toBe(1);
+    expect(gained[0]!.location).toEqual({ kind: 'office', playerId: 'p1' });
+    expect(s.mageDraftPool.orange).toBe(poolBefore - 1);
+  });
+
+  it('Garek Tesias: fizzles when the player cannot pay 3 Gold', () => {
+    let s = setup('mancers.supporter.garek-tesias', 2);
+    s = play(s, 'mancers.supporter.garek-tesias');
+    expect(p1(s).mages.some((m) => m.color === 'orange')).toBe(false);
+    expect(p1(s).resources.gold).toBe(2);
+  });
+
+  it('Orman Kasper: pays 3 Gold for the top card of the Vault Deck', () => {
+    let s = setup('mancers.supporter.orman-kasper', 3);
+    const top = s.vaultDeck[0]!;
+    const deckLen = s.vaultDeck.length;
+    s = play(s, 'mancers.supporter.orman-kasper');
+    expect(p1(s).resources.gold).toBe(0);
+    expect(p1(s).vaultCards.some((v) => v.cardId === top)).toBe(true);
+    expect(s.vaultDeck.length).toBe(deckLen - 1);
+    expect(s.vaultDeck[0]).not.toBe(top);
+  });
+
+  it('Lixis Ran Kanda: buys the top Vault card, then offers a second buy', () => {
+    let s = setup('mancers.supporter.lixis-ran-kanda', 6);
+    const first = s.vaultDeck[0]!;
+    s = play(s, 'mancers.supporter.lixis-ran-kanda');
+    // First buy happened; a "buy again?" prompt is open.
+    expect(p1(s).vaultCards.some((v) => v.cardId === first)).toBe(true);
+    expect(p1(s).resources.gold).toBe(3);
+    const second = s.vaultDeck[0]!;
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'option-chosen', optionId: 'buy', payload: {} },
+    });
+    expect(p1(s).vaultCards.some((v) => v.cardId === second)).toBe(true);
+    expect(p1(s).resources.gold).toBe(0);
+  });
+
+  it('Runika Zenanen: gains a Treasure from the Vault Tableau (consumables excluded)', () => {
+    let s = setup('mancers.supporter.runika-zenanen');
+    // Pin a Treasure + Consumable into the tableau.
+    s = { ...s, vaultTableau: ['base.vault.ancient-armor', 'base.vault.auric-catalyst'] };
+    s = play(s, 'mancers.supporter.runika-zenanen');
+    const top = topPending(s);
+    expect(top.prompt.kind).toBe('choose-vault-card');
+    if (top.prompt.kind !== 'choose-vault-card') throw new Error('x');
+    expect(top.prompt.eligibleCardIds).toEqual(['base.vault.ancient-armor']);
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: top.id,
+      answer: { kind: 'card-chosen', cardId: 'base.vault.ancient-armor' },
+    });
+    expect(p1(s).vaultCards.some((v) => v.cardId === 'base.vault.ancient-armor')).toBe(true);
+  });
+
+  it('Tegusgan: gains a Consumable from the Vault Tableau (treasures excluded)', () => {
+    let s = setup('mancers.supporter.tegusgan');
+    s = { ...s, vaultTableau: ['base.vault.ancient-armor', 'base.vault.auric-catalyst'] };
+    s = play(s, 'mancers.supporter.tegusgan');
+    const top = topPending(s);
+    if (top.prompt.kind !== 'choose-vault-card') throw new Error('x');
+    expect(top.prompt.eligibleCardIds).toEqual(['base.vault.auric-catalyst']);
   });
 });
 
