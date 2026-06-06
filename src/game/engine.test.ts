@@ -11502,6 +11502,162 @@ describe('Synthesis Workshop A (Mancers)', () => {
 });
 
 // ============================================================================
+// Synthesis Workshop B (Mancers) — Treasure + Spell → department Synthesis
+// Treasure; the Spell's INT/WIS are refunded and it leaves the game.
+// ============================================================================
+
+describe('Synthesis Workshop B (Mancers)', () => {
+  const TREASURE = 'base.vault.ancient-armor';
+  const SORCERY_SPELL = 'base.spell.burn'; // sorcery → Sword of Flame
+  const LEADER_SPELL = 'base.spell.thirteen-greater-mysteries'; // used as innate
+  const SWORD = 'mancers.vault.sword-of-flame';
+
+  function forceRoom(state: GameState): GameState {
+    const room = mancersPack.rooms.find(
+      (r) => r.name === 'Synthesis Workshop' && r.side === 'B',
+    );
+    if (!room) throw new Error('test helper: Synthesis Workshop B not in pack');
+    const idx = state.rooms.findIndex((r) => !r.isUniversityCentral);
+    if (idx === -1) return state;
+    return { ...state, rooms: state.rooms.map((r, i) => (i === idx ? room : r)) };
+  }
+
+  function setup(
+    slotId: string,
+    opts: {
+      treasures?: string[];
+      spells?: { cardId: string; level?: 1 | 2 | 3 }[];
+      leader?: string;
+      mana?: number;
+    } = {},
+  ): GameState {
+    let s = initGame(TWO_PLAYER_CONFIG);
+    s = forceRoom(s);
+    s = { ...s, activePackIds: ['base', 'mancers'] };
+    s = zeroPlayerResources(s, 'p1');
+    s = setMeritBadges(s, 'p1', 5);
+    if (opts.mana) s = setMana(s, 'p1', opts.mana);
+    s = mapPlayer(s, 'p1', (p) => ({
+      ...p,
+      vaultCards: (opts.treasures ?? []).map((cardId) => ({ cardId, exhausted: false })),
+      ownedSpells: (opts.spells ?? []).map(({ cardId, level }) => ({
+        cardId,
+        intPlaced: true,
+        wisPlacedLevel2: (level ?? 1) >= 2,
+        wisPlacedLevel3: (level ?? 1) >= 3,
+        exhausted: false,
+      })),
+      candidateStartingSpellId: opts.leader ?? '',
+    }));
+    s = addMage(s, 'p1', {
+      id: 'alice-mage',
+      cardId: 'base.mage.divinity',
+      color: 'blue',
+    });
+    s = placeMageOnSpace(s, 'p1', 'alice-mage', slotId);
+    return { ...s, bellTower: { ...s.bellTower, available: [] } };
+  }
+
+  function driveToSlot(s: GameState): GameState {
+    s = applyAction(s, { type: 'ADVANCE_PHASE' });
+    s = applyAction(s, { type: 'ADVANCE_PHASE' });
+    s = applyAction(s, { type: 'ADVANCE_PHASE' });
+    return takeRewardAtResolution(s);
+  }
+
+  function pick(s: GameState, optionId: string): GameState {
+    const top = topPending(s);
+    if (top.prompt.kind !== 'choose-from-options') {
+      throw new Error(`expected choose-from-options, got ${top.prompt.kind}`);
+    }
+    return applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: top.id,
+      answer: { kind: 'option-chosen', optionId, payload: {} },
+    });
+  }
+
+  const p1 = (s: GameState) => s.players.find((p) => p.id === 'p1')!;
+
+  it('slot 1: trades a Treasure + Spell for the Spell-department Synthesis item', () => {
+    let s = setup('mancers.room.synthesis-workshop.b.slot-1', {
+      treasures: [TREASURE],
+      spells: [{ cardId: SORCERY_SPELL, level: 1 }],
+    });
+    s = driveToSlot(s);
+    s = pick(s, TREASURE);
+    s = pick(s, SORCERY_SPELL);
+    const me = p1(s);
+    expect(me.vaultCards.some((v) => v.cardId === SWORD)).toBe(true);
+    expect(me.vaultCards.some((v) => v.cardId === TREASURE)).toBe(false);
+    // Spell removed from the game; its L1 INT refunded.
+    expect(me.ownedSpells.some((sp) => sp.cardId === SORCERY_SPELL)).toBe(false);
+    expect(me.resources.intelligence).toBe(1);
+    expect(me.resources.wisdom).toBe(0);
+  });
+
+  it('refunds all placed Research: an L3 Spell gives back 1 INT + 2 WIS', () => {
+    let s = setup('mancers.room.synthesis-workshop.b.slot-1', {
+      treasures: [TREASURE],
+      spells: [{ cardId: SORCERY_SPELL, level: 3 }],
+    });
+    s = driveToSlot(s);
+    s = pick(s, TREASURE);
+    s = pick(s, SORCERY_SPELL);
+    expect(p1(s).resources.intelligence).toBe(1);
+    expect(p1(s).resources.wisdom).toBe(2);
+  });
+
+  it('the leader (candidate starter) Spell cannot be traded; legendary/other can', () => {
+    let s = setup('mancers.room.synthesis-workshop.b.slot-1', {
+      treasures: [TREASURE],
+      spells: [{ cardId: SORCERY_SPELL }, { cardId: LEADER_SPELL }],
+      leader: LEADER_SPELL,
+    });
+    s = driveToSlot(s);
+    s = pick(s, TREASURE);
+    const top = topPending(s);
+    if (top.prompt.kind !== 'choose-from-options') throw new Error('x');
+    const ids = top.prompt.options.map((o) => o.id);
+    expect(ids).toContain(SORCERY_SPELL);
+    expect(ids).not.toContain(LEADER_SPELL);
+  });
+
+  it('slot 2: also spends 3 Mana', () => {
+    let s = setup('mancers.room.synthesis-workshop.b.slot-2', {
+      treasures: [TREASURE],
+      spells: [{ cardId: SORCERY_SPELL }],
+      mana: 3,
+    });
+    s = driveToSlot(s);
+    s = pick(s, TREASURE);
+    s = pick(s, SORCERY_SPELL);
+    expect(p1(s).resources.mana).toBe(0);
+    expect(p1(s).vaultCards.some((v) => v.cardId === SWORD)).toBe(true);
+  });
+
+  it('slot 2 fizzles with no prompt when the player lacks 3 Mana', () => {
+    let s = setup('mancers.room.synthesis-workshop.b.slot-2', {
+      treasures: [TREASURE],
+      spells: [{ cardId: SORCERY_SPELL }],
+      mana: 2,
+    });
+    s = driveToSlot(s);
+    expect(s.pendingResolutionStack).toHaveLength(0);
+  });
+
+  it('fizzles when the player has no tradeable Spell (only their leader Spell)', () => {
+    let s = setup('mancers.room.synthesis-workshop.b.slot-1', {
+      treasures: [TREASURE],
+      spells: [{ cardId: LEADER_SPELL }],
+      leader: LEADER_SPELL,
+    });
+    s = driveToSlot(s);
+    expect(s.pendingResolutionStack).toHaveLength(0);
+  });
+});
+
+// ============================================================================
 // Council Chamber A — Draft a Supporter OR Gain a Mark, capped at 1/round
 // ============================================================================
 

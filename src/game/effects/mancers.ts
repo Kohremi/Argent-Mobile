@@ -2295,6 +2295,204 @@ registerEffect('mancers.room.synthesis-workshop-a.slot-2', (ctx): EffectResult =
 );
 
 // ============================================================================
+// Synthesis Workshop Side B — trade an UNUSED Treasure + a Spell (and 3 Mana
+// for slot 2) for the Synthesis Treasure matching the SPELL's department. The
+// traded Spell is removed from the game; its placed INT + WIS are refunded.
+// Leader (candidate starter) Spells can't be traded; everything else (regular
+// + legendary books) can.
+// ============================================================================
+
+/** Spells the player may trade in — everything they own except their innate
+ *  candidate starter (leader) Spell. */
+function tradeableSpells(player: GameState['players'][number]) {
+  return player.ownedSpells.filter(
+    (s) => s.cardId !== player.candidateStartingSpellId,
+  );
+}
+
+function applySynthesisSwapSpell(
+  state: GameState,
+  playerId: PlayerId,
+  treasureId: string,
+  spellId: string,
+  synthesisId: string,
+  manaCost: number,
+): GameStatePatch {
+  return {
+    players: state.players.map((p) => {
+      if (p.id !== playerId) return p;
+      // Refund the traded Spell's placed Research, drop the Spell + the first
+      // unexhausted copy of the Treasure, and add the gained Synthesis item.
+      const spell = p.ownedSpells.find((s) => s.cardId === spellId);
+      const intRefund = spell?.intPlaced ? 1 : 0;
+      const wisRefund =
+        (spell?.wisPlacedLevel2 ? 1 : 0) + (spell?.wisPlacedLevel3 ? 1 : 0);
+      let removedTreasure = false;
+      const vaultCards = p.vaultCards.filter((v) => {
+        if (!removedTreasure && v.cardId === treasureId && !v.exhausted) {
+          removedTreasure = true;
+          return false;
+        }
+        return true;
+      });
+      return {
+        ...p,
+        resources: {
+          ...p.resources,
+          mana: p.resources.mana - manaCost,
+          intelligence: p.resources.intelligence + intRefund,
+          wisdom: p.resources.wisdom + wisRefund,
+        },
+        ownedSpells: p.ownedSpells.filter((s) => s.cardId !== spellId),
+        vaultCards: [...vaultCards, { cardId: synthesisId, exhausted: false }],
+      };
+    }),
+  };
+}
+
+function synthesisWorkshopBSlot(
+  ctx: EffectContext,
+  selfEffectId: string,
+  manaCost: number,
+): EffectResult {
+  const player = ctx.state.players.find((p) => p.id === ctx.triggeringPlayerId);
+  if (!player) return { kind: 'done', patch: {} };
+  const step = ctx.resumeContext?.['step'];
+
+  // Apply with a player-picked Synthesis item (wild / non-magic Spell path).
+  if (step === 'apply') {
+    if (ctx.resumeAnswer?.kind !== 'option-chosen') {
+      throw new Error(`${selfEffectId} apply expected option-chosen`);
+    }
+    const synthesisId = ctx.resumeAnswer.optionId;
+    const treasureId = ctx.resumeContext?.['treasureId'];
+    const spellId = ctx.resumeContext?.['spellId'];
+    if (
+      typeof treasureId !== 'string' ||
+      typeof spellId !== 'string' ||
+      !ALL_SYNTHESIS_IDS.includes(synthesisId)
+    ) {
+      return { kind: 'done', patch: {} };
+    }
+    return {
+      kind: 'done',
+      patch: applySynthesisSwapSpell(
+        ctx.state,
+        ctx.triggeringPlayerId,
+        treasureId,
+        spellId,
+        synthesisId,
+        manaCost,
+      ),
+    };
+  }
+
+  // A Spell was chosen — resolve its department to a Synthesis item.
+  if (step === 'spell') {
+    if (ctx.resumeAnswer?.kind !== 'option-chosen') {
+      throw new Error(`${selfEffectId} spell expected option-chosen`);
+    }
+    const spellId = ctx.resumeAnswer.optionId;
+    const treasureId = ctx.resumeContext?.['treasureId'];
+    if (typeof treasureId !== 'string') return { kind: 'done', patch: {} };
+    const dept = lookupSpellCardDef(ctx.state, spellId)?.department;
+    const mapped = dept ? SYNTHESIS_BY_DEPARTMENT[dept] : undefined;
+    if (mapped) {
+      return {
+        kind: 'done',
+        patch: applySynthesisSwapSpell(
+          ctx.state,
+          ctx.triggeringPlayerId,
+          treasureId,
+          spellId,
+          mapped,
+          manaCost,
+        ),
+      };
+    }
+    // Non-magic department (Students / Wild) — let the player pick any item.
+    return {
+      kind: 'pause',
+      pending: {
+        responderId: ctx.triggeringPlayerId,
+        prompt: {
+          kind: 'choose-from-options',
+          options: ALL_SYNTHESIS_IDS.map((id) => ({
+            id,
+            label: lookupVaultCardDef(ctx.state, id)?.name ?? id,
+            payload: {},
+          })),
+        },
+        resume: {
+          effectId: selfEffectId,
+          context: { step: 'apply', treasureId, spellId },
+        },
+        source: ctx.source,
+      },
+    };
+  }
+
+  // A Treasure was chosen — prompt for the Spell to trade.
+  if (step === 'treasure') {
+    if (ctx.resumeAnswer?.kind !== 'option-chosen') {
+      throw new Error(`${selfEffectId} treasure expected option-chosen`);
+    }
+    const treasureId = ctx.resumeAnswer.optionId;
+    const spells = tradeableSpells(player);
+    if (spells.length === 0) return { kind: 'done', patch: {} };
+    return {
+      kind: 'pause',
+      pending: {
+        responderId: ctx.triggeringPlayerId,
+        prompt: {
+          kind: 'choose-from-options',
+          options: spells.map((s) => ({
+            id: s.cardId,
+            label: lookupSpellCardDef(ctx.state, s.cardId)?.name ?? s.cardId,
+            payload: {},
+          })),
+        },
+        resume: { effectId: selfEffectId, context: { step: 'spell', treasureId } },
+        source: ctx.source,
+      },
+    };
+  }
+
+  // Initial: require an unused Treasure, a tradeable Spell, and the Mana.
+  const treasures = unusedTreasures(ctx.state, player);
+  if (
+    treasures.length === 0 ||
+    tradeableSpells(player).length === 0 ||
+    player.resources.mana < manaCost
+  ) {
+    return { kind: 'done', patch: {} };
+  }
+  return {
+    kind: 'pause',
+    pending: {
+      responderId: ctx.triggeringPlayerId,
+      prompt: {
+        kind: 'choose-from-options',
+        options: treasures.map((v) => ({
+          id: v.cardId,
+          label: lookupVaultCardDef(ctx.state, v.cardId)?.name ?? v.cardId,
+          payload: {},
+        })),
+      },
+      resume: { effectId: selfEffectId, context: { step: 'treasure' } },
+      source: ctx.source,
+    },
+  };
+}
+
+registerEffect('mancers.room.synthesis-workshop-b.slot-1', (ctx): EffectResult =>
+  synthesisWorkshopBSlot(ctx, 'mancers.room.synthesis-workshop-b.slot-1', 0),
+);
+registerEffect('mancers.room.synthesis-workshop-b.slot-2', (ctx): EffectResult =>
+  synthesisWorkshopBSlot(ctx, 'mancers.room.synthesis-workshop-b.slot-2', 3),
+);
+
+// ============================================================================
 // Synthesis Treasure — Endless Well of Mana (Technomancy): Fast Action, gain
 // 2 Mana. (The other synthesis item effects are wired separately.)
 // ============================================================================

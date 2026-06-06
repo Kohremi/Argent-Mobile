@@ -825,6 +825,16 @@ const synthesisWorkshopA: Room = {
   ],
 };
 
+// ============================================================================
+// Synthesis Workshop Side B — like Side A, but trade in a Spell (not a
+// Supporter) alongside a Treasure. The Spell's department picks the Synthesis
+// item; turning the Spell in refunds its placed INT + WIS and removes it from
+// the game. Leader (candidate starter) Spells can't be traded; legendary books
+// can. Only TWO slots.
+//   Slot 1 (merit, 1 MB): Swap a Treasure + a Spell for a Synthesis item.
+//   Slot 2 (regular):     Swap a Treasure + a Spell + 3 Mana for one.
+// ============================================================================
+
 const synthesisWorkshopB: Room = {
   id: 'mancers.room.synthesis-workshop.b',
   name: 'Synthesis Workshop',
@@ -834,7 +844,30 @@ const synthesisWorkshopB: Room = {
   isInstantRoom: false,
   cannotBePlacedInDirectly: false,
   cannotBeLocked: false,
-  actionSpaces: [],
+  description:
+    'Trade in an unused Treasure and a Spell (its INT/WIS refunded) for a Synthesis Treasure matching the Spell\'s department.',
+  actionSpaces: [
+    {
+      id: 'mancers.room.synthesis-workshop.b.slot-1',
+      roomId: 'mancers.room.synthesis-workshop.b',
+      index: 0,
+      slotType: 'merit',
+      occupant: null,
+      effectId: 'mancers.room.synthesis-workshop-b.slot-1',
+      costToActivate: { meritBadges: 1 },
+      description: 'Swap a Treasure and a Spell for a Synthesis item.',
+    },
+    {
+      id: 'mancers.room.synthesis-workshop.b.slot-2',
+      roomId: 'mancers.room.synthesis-workshop.b',
+      index: 1,
+      slotType: 'regular',
+      occupant: null,
+      effectId: 'mancers.room.synthesis-workshop-b.slot-2',
+      description:
+        'Swap a Treasure, a Spell, and 3 Mana for a Synthesis item.',
+    },
+  ],
 };
 
 export const mancersPack: ContentPack = {
