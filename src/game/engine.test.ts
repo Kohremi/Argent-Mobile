@@ -11852,6 +11852,138 @@ describe('Technomancy Supporters (Mancers)', () => {
 });
 
 // ============================================================================
+// Mancers "Stuff" Vault cards.
+// ============================================================================
+
+describe('Mancers Vault cards (Mancers)', () => {
+  function setup(
+    cardId: string,
+    opts: { gold?: number; mana?: number } = {},
+  ): GameState {
+    let s = initGame({ ...TWO_PLAYER_CONFIG, activePackIds: ['base', 'mancers'] });
+    s = zeroPlayerResources(s, 'p1');
+    if (opts.gold) s = setGold(s, 'p1', opts.gold);
+    if (opts.mana) s = setMana(s, 'p1', opts.mana);
+    s = addVaultCard(s, 'p1', cardId);
+    // NOTE: leave the Bell Tower populated — an empty one ends the round after
+    // one action (→ Resolution), which would clear room locks (Time Prism).
+    return {
+      ...s,
+      firstPlayerIndex: 0,
+      phase: {
+        kind: 'errands',
+        round: 1,
+        activePlayerIndex: 0,
+        actionUsed: false,
+        fastActionUsed: false,
+      },
+    };
+  }
+  const play = (s: GameState, vaultCardId: string) =>
+    applyAction(s, { type: 'PLAY_VAULT_CARD', playerId: 'p1', vaultCardId });
+  const p1 = (s: GameState) => s.players.find((p) => p.id === 'p1')!;
+  const opt = (s: GameState, optionId: string) =>
+    applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'option-chosen', optionId, payload: {} },
+    });
+
+  it("Philosopher's Stone: gains 4 Gold", () => {
+    let s = setup('mancers.vault.philosophers-stone');
+    s = play(s, 'mancers.vault.philosophers-stone');
+    expect(p1(s).resources.gold).toBe(4);
+  });
+
+  it('Chrysopoeia Potion: swaps 1 Mana for 3 Gold up to 4 times', () => {
+    let s = setup('mancers.vault.chrysopoeia-potion', { mana: 4 });
+    s = play(s, 'mancers.vault.chrysopoeia-potion');
+    s = opt(s, 'swap');
+    s = opt(s, 'swap');
+    s = opt(s, 'stop');
+    expect(p1(s).resources.mana).toBe(2);
+    expect(p1(s).resources.gold).toBe(6); // 2 × 3
+  });
+
+  it('Tonic of Panacea: returns all of your Infirmary Mages to your office', () => {
+    let s = setup('mancers.vault.tonic-of-panacea');
+    s = mapPlayer(s, 'p1', (p) => ({
+      ...p,
+      mages: [
+        { id: 'w1', cardId: 'base.mage.neutral', color: 'off-white', location: { kind: 'infirmary' }, isShadowing: false, isWounded: true },
+        { id: 'w2', cardId: 'base.mage.neutral', color: 'off-white', location: { kind: 'infirmary' }, isShadowing: false, isWounded: true },
+      ],
+    }));
+    s = play(s, 'mancers.vault.tonic-of-panacea');
+    const mine = p1(s).mages;
+    expect(mine.every((m) => m.location.kind === 'office' && !m.isWounded)).toBe(true);
+  });
+
+  it('Time Prism: toggles a room lock', () => {
+    let s = setup('mancers.vault.time-prism');
+    s = play(s, 'mancers.vault.time-prism');
+    const top = topPending(s);
+    if (top.prompt.kind !== 'choose-from-options') throw new Error('x');
+    const roomId = top.prompt.options[0]!.id;
+    s = opt(s, roomId);
+    expect(s.roomLocks.some((l) => l.roomId === roomId)).toBe(true);
+  });
+
+  it('Potion of Vigor: takes a Supporter from discard back into your office', () => {
+    let s = setup('mancers.vault.potion-of-vigor');
+    s = mapPlayer(s, 'p1', (p) => ({
+      ...p,
+      personalDiscard: [{ kind: 'supporter', cardId: 'base.supporter.kallistar-flarechild' }],
+    }));
+    s = play(s, 'mancers.vault.potion-of-vigor');
+    s = opt(s, 'base.supporter.kallistar-flarechild');
+    expect(p1(s).supporters).toContain('base.supporter.kallistar-flarechild');
+    // The supporter left the discard (the played Potion consumable is now there).
+    expect(
+      p1(s).personalDiscard.some(
+        (e) => e.kind === 'supporter' && e.cardId === 'base.supporter.kallistar-flarechild',
+      ),
+    ).toBe(false);
+  });
+
+  it("Sorceror's Hat: wounds a Mage and places one of yours in its slot (free)", () => {
+    let s = setup('mancers.vault.sorcerors-hat');
+    s = addMage(s, 'p1', { id: 'placer', cardId: 'base.mage.neutral', color: 'off-white' });
+    s = addMage(s, 'p2', { id: 'victim', cardId: 'base.mage.neutral', color: 'off-white' });
+    // Place the victim on an open slot.
+    const slot = s.rooms
+      .flatMap((r) => (r.cannotBePlacedInDirectly ? [] : r.actionSpaces))
+      .find((sp) => !sp.occupant)!.id;
+    s = placeMageOnSpace(s, 'p2', 'victim', slot);
+    s = play(s, 'mancers.vault.sorcerors-hat');
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'mage-chosen', mageId: 'victim' },
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'mage-chosen', mageId: 'placer' },
+    });
+    let guard = 0;
+    while (s.pendingResolutionStack.length > 0 && guard++ < 10) {
+      const t = topPending(s);
+      if (t.prompt.kind === 'reaction-window') {
+        s = applyAction(s, { type: 'RESOLVE_PENDING', resolutionId: t.id, answer: { kind: 'reaction-passed' } });
+      } else if (t.prompt.kind === 'choose-from-options') {
+        s = applyAction(s, { type: 'RESOLVE_PENDING', resolutionId: t.id, answer: { kind: 'option-chosen', optionId: t.prompt.options[0]!.id, payload: {} } });
+      } else break;
+    }
+    expect(p1(s).resources.mana).toBe(0); // free
+    const victim = s.players.find((p) => p.id === 'p2')!.mages.find((m) => m.id === 'victim')!;
+    expect(victim.isWounded).toBe(true);
+    const space = s.rooms.flatMap((r) => r.actionSpaces).find((sp) => sp.id === slot)!;
+    expect(space.occupant?.mageId).toBe('placer');
+  });
+});
+
+// ============================================================================
 // Council Chamber A — Draft a Supporter OR Gain a Mark, capped at 1/round
 // ============================================================================
 

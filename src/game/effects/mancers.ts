@@ -23,6 +23,7 @@ import {
   lookupSupporterCardDef,
   lookupVaultCardDef,
   MAGE_CARD_BY_COLOR,
+  returnMageToOfficePatch,
   woundMage,
 } from './helpers';
 import { nextRandom } from '../../utils/rng';
@@ -2510,8 +2511,14 @@ registerEffect('mancers.vault.endless-well-of-mana', (ctx): EffectResult => ({
 // Infirmary bonus).
 // ============================================================================
 
-registerEffect('mancers.vault.sword-of-flame', (ctx): EffectResult => {
-  const self = 'mancers.vault.sword-of-flame';
+/** Wound an opposing placed Mage and place one of your office Mages in its
+ *  slot (the Ars Magna chain). Shared by Sword of Flame (1 Mana) and
+ *  Sorceror's Hat (free). */
+function woundAndPlaceEffect(
+  ctx: EffectContext,
+  self: string,
+  manaCost: number,
+): EffectResult {
   const step = ctx.resumeContext?.['step'];
   const player = ctx.state.players.find((p) => p.id === ctx.triggeringPlayerId);
   if (!player) return { kind: 'done', patch: {} };
@@ -2532,14 +2539,14 @@ registerEffect('mancers.vault.sword-of-flame', (ctx): EffectResult => {
       placer.location.kind !== 'office' ||
       !target ||
       target.location.kind !== 'action-space' ||
-      player.resources.mana < 1
+      player.resources.mana < manaCost
     ) {
       return { kind: 'done', patch: {} };
     }
     const targetSpaceId = target.location.spaceId;
     let working: GameState = {
       ...ctx.state,
-      ...gainResourcePatch(ctx.state, ctx.triggeringPlayerId, 'mana', -1),
+      ...gainResourcePatch(ctx.state, ctx.triggeringPlayerId, 'mana', -manaCost),
     };
     const wound = woundMage(working, targetMageId, ctx.triggeringPlayerId);
     working = { ...working, ...wound.patch };
@@ -2592,8 +2599,8 @@ registerEffect('mancers.vault.sword-of-flame', (ctx): EffectResult => {
     };
   }
 
-  // Initial: need 1 Mana, an office Mage to place, and a wound target on a slot.
-  if (player.resources.mana < 1) return { kind: 'done', patch: {} };
+  // Initial: need the Mana, an office Mage to place, and a wound target.
+  if (player.resources.mana < manaCost) return { kind: 'done', patch: {} };
   if (!player.mages.some((m) => m.location.kind === 'office')) {
     return { kind: 'done', patch: {} };
   }
@@ -2616,7 +2623,14 @@ registerEffect('mancers.vault.sword-of-flame', (ctx): EffectResult => {
       source: ctx.source,
     },
   };
-});
+}
+
+registerEffect('mancers.vault.sword-of-flame', (ctx): EffectResult =>
+  woundAndPlaceEffect(ctx, 'mancers.vault.sword-of-flame', 1),
+);
+registerEffect('mancers.vault.sorcerors-hat', (ctx): EffectResult =>
+  woundAndPlaceEffect(ctx, 'mancers.vault.sorcerors-hat', 0),
+);
 
 // ============================================================================
 // Synthesis Treasure — Vanishing Staff (Mysticism): Action, spend 1 Mana to
@@ -3392,6 +3406,182 @@ registerEffect('mancers.supporter.khadath-ahemusei', (ctx): EffectResult =>
 registerEffect('mancers.supporter.cindra-flama', (ctx): EffectResult =>
   swapMageForColor(ctx, 'mancers.supporter.cindra-flama', 'blue'),
 );
+
+// ============================================================================
+// Mancers "Stuff" Vault cards — self-contained effects.
+// ============================================================================
+
+// Philosopher's Stone — gain 4 Gold.
+registerEffect('mancers.vault.philosophers-stone', (ctx): EffectResult => ({
+  kind: 'done',
+  patch: gainResourcePatch(ctx.state, ctx.triggeringPlayerId, 'gold', 4),
+}));
+
+// Chrysopoeia Potion — swap 1 Mana for 3 Gold, up to 4 times.
+function chrysopoeiaAsk(
+  ctx: EffectContext,
+  remaining: number,
+  carryPatch: GameStatePatch,
+): EffectResult {
+  const player = ctx.state.players.find((p) => p.id === ctx.triggeringPlayerId);
+  if (!player || remaining <= 0 || player.resources.mana < 1) {
+    return { kind: 'done', patch: carryPatch };
+  }
+  return {
+    kind: 'pause',
+    patch: carryPatch,
+    pending: {
+      responderId: ctx.triggeringPlayerId,
+      prompt: {
+        kind: 'choose-from-options',
+        options: [
+          { id: 'swap', label: `Swap 1 Mana for 3 Gold (${remaining} left)`, payload: {} },
+          { id: 'stop', label: 'Stop', payload: {} },
+        ],
+      },
+      resume: {
+        effectId: 'mancers.vault.chrysopoeia-potion',
+        context: { step: 'ask', remaining },
+      },
+      source: ctx.source,
+    },
+  };
+}
+
+registerEffect('mancers.vault.chrysopoeia-potion', (ctx): EffectResult => {
+  if (ctx.resumeContext?.['step'] === 'ask') {
+    if (ctx.resumeAnswer?.kind !== 'option-chosen') {
+      throw new Error('chrysopoeia-potion ask expected option-chosen');
+    }
+    if (ctx.resumeAnswer.optionId !== 'swap') return { kind: 'done', patch: {} };
+    const remaining = Number(ctx.resumeContext?.['remaining'] ?? 0);
+    const player = ctx.state.players.find((p) => p.id === ctx.triggeringPlayerId);
+    if (!player || player.resources.mana < 1) return { kind: 'done', patch: {} };
+    let working: GameState = {
+      ...ctx.state,
+      ...gainResourcePatch(ctx.state, ctx.triggeringPlayerId, 'mana', -1),
+    };
+    working = {
+      ...working,
+      ...gainResourcePatch(working, ctx.triggeringPlayerId, 'gold', 3),
+    };
+    return chrysopoeiaAsk({ ...ctx, state: working }, remaining - 1, {
+      players: working.players,
+    });
+  }
+  return chrysopoeiaAsk(ctx, 4, {});
+});
+
+// Tonic of Panacea — return all of your Infirmary Mages to your office.
+registerEffect('mancers.vault.tonic-of-panacea', (ctx): EffectResult => {
+  const playerId = ctx.triggeringPlayerId;
+  const player = ctx.state.players.find((p) => p.id === playerId);
+  if (!player) return { kind: 'done', patch: {} };
+  const wounded = player.mages.filter((m) => m.location.kind === 'infirmary');
+  if (wounded.length === 0) return { kind: 'done', patch: {} };
+  let working = ctx.state;
+  for (const m of wounded) {
+    working = { ...working, ...returnMageToOfficePatch(working, m.id) };
+  }
+  return {
+    kind: 'done',
+    patch: {
+      players: working.players,
+      ...(working.rooms !== ctx.state.rooms ? { rooms: working.rooms } : {}),
+    },
+  };
+});
+
+// Time Prism — lock or unlock a room (toggles the chosen room's lock).
+registerEffect('mancers.vault.time-prism', (ctx): EffectResult => {
+  if (!ctx.resumeAnswer) {
+    const rooms = ctx.state.rooms.filter(
+      (r) => !r.cannotBeLocked && !r.cannotBePlacedInDirectly,
+    );
+    if (rooms.length === 0) return { kind: 'done', patch: {} };
+    return {
+      kind: 'pause',
+      pending: {
+        responderId: ctx.triggeringPlayerId,
+        prompt: {
+          kind: 'choose-from-options',
+          options: rooms.map((r) => ({
+            id: r.id,
+            label: `${r.name} (${isRoomLocked(ctx.state, r.id) ? 'locked → unlock' : 'unlocked → lock'})`,
+            payload: {},
+          })),
+        },
+        resume: { effectId: 'mancers.vault.time-prism', context: {} },
+        source: ctx.source,
+      },
+    };
+  }
+  if (ctx.resumeAnswer.kind !== 'option-chosen') {
+    throw new Error('time-prism expected option-chosen');
+  }
+  const roomId = ctx.resumeAnswer.optionId;
+  if (isRoomLocked(ctx.state, roomId)) {
+    return {
+      kind: 'done',
+      patch: { roomLocks: ctx.state.roomLocks.filter((l) => l.roomId !== roomId) },
+    };
+  }
+  return {
+    kind: 'done',
+    patch: { roomLocks: [...ctx.state.roomLocks, { roomId }] },
+  };
+});
+
+// Potion of Vigor — take a Supporter from your discard into your office.
+registerEffect('mancers.vault.potion-of-vigor', (ctx): EffectResult => {
+  const playerId = ctx.triggeringPlayerId;
+  const player = ctx.state.players.find((p) => p.id === playerId);
+  if (!player) return { kind: 'done', patch: {} };
+  const eligible = player.personalDiscard
+    .filter((e) => e.kind === 'supporter')
+    .map((e) => e.cardId);
+  if (eligible.length === 0) return { kind: 'done', patch: {} };
+  if (!ctx.resumeAnswer) {
+    return {
+      kind: 'pause',
+      pending: {
+        responderId: playerId,
+        prompt: {
+          kind: 'choose-from-options',
+          options: eligible.map((id) => ({
+            id,
+            label: lookupSupporterCardDef(ctx.state, id)?.name ?? id,
+            payload: {},
+          })),
+        },
+        resume: { effectId: 'mancers.vault.potion-of-vigor', context: {} },
+        source: ctx.source,
+      },
+    };
+  }
+  if (ctx.resumeAnswer.kind !== 'option-chosen') {
+    throw new Error('potion-of-vigor expected option-chosen');
+  }
+  const cardId = ctx.resumeAnswer.optionId;
+  return {
+    kind: 'done',
+    patch: {
+      players: ctx.state.players.map((p) => {
+        if (p.id !== playerId) return p;
+        let removed = false;
+        const personalDiscard = p.personalDiscard.filter((e) => {
+          if (!removed && e.kind === 'supporter' && e.cardId === cardId) {
+            removed = true;
+            return false;
+          }
+          return true;
+        });
+        if (!removed) return p;
+        return { ...p, personalDiscard, supporters: [...p.supporters, cardId] };
+      }),
+    },
+  };
+});
 
 // Re-export to satisfy the module's existing `export {}` shape.
 export {};
