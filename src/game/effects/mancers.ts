@@ -3725,6 +3725,103 @@ registerEffect('mancers.vault.alkahest-potion', (ctx): EffectResult => {
   };
 });
 
+// Elixir of Life — move all of your Infirmary Mages to open slots of your
+// choice (one prompt per Mage; un-wounds each as it lands).
+function moveMageToSlotPatch(
+  state: GameState,
+  playerId: PlayerId,
+  mageId: string,
+  spaceId: ActionSpaceId,
+): GameStatePatch {
+  const occ: WorkerOccupancy = { mageId, ownerId: playerId, isShadowing: false };
+  return {
+    players: state.players.map((p) =>
+      p.id !== playerId
+        ? p
+        : {
+            ...p,
+            mages: p.mages.map((m) =>
+              m.id !== mageId
+                ? m
+                : {
+                    ...m,
+                    isWounded: false,
+                    isShadowing: false,
+                    location: { kind: 'action-space', spaceId },
+                  },
+            ),
+          },
+    ),
+    rooms: state.rooms.map((r) => ({
+      ...r,
+      actionSpaces: r.actionSpaces.map((s) =>
+        s.id !== spaceId ? s : { ...s, occupant: occ },
+      ),
+    })),
+  };
+}
+
+function elixirNext(ctx: EffectContext, carryPatch: GameStatePatch): EffectResult {
+  const player = ctx.state.players.find((p) => p.id === ctx.triggeringPlayerId);
+  if (!player) return { kind: 'done', patch: carryPatch };
+  const infirmary = player.mages.filter((m) => m.location.kind === 'infirmary');
+  const slots = openBaseSlotsForGolem(ctx.state);
+  if (infirmary.length === 0 || slots.length === 0) {
+    return { kind: 'done', patch: carryPatch };
+  }
+  return {
+    kind: 'pause',
+    patch: carryPatch,
+    pending: {
+      responderId: ctx.triggeringPlayerId,
+      prompt: {
+        kind: 'choose-target-action-space',
+        eligibleSpaceIds: slots,
+        label: 'Move an Infirmary Mage to an open slot',
+      },
+      resume: {
+        effectId: 'mancers.vault.elixir-of-life',
+        context: { step: 'place', mageId: infirmary[0]!.id },
+      },
+      source: ctx.source,
+    },
+  };
+}
+
+registerEffect('mancers.vault.elixir-of-life', (ctx): EffectResult => {
+  if (ctx.resumeContext?.['step'] === 'place') {
+    if (ctx.resumeAnswer?.kind !== 'space-chosen') {
+      throw new Error('elixir-of-life place expected space-chosen');
+    }
+    const spaceId = ctx.resumeAnswer.spaceId;
+    const mageId = ctx.resumeContext?.['mageId'];
+    if (typeof mageId !== 'string') return { kind: 'done', patch: {} };
+    const player = ctx.state.players.find((p) => p.id === ctx.triggeringPlayerId);
+    const mage = player?.mages.find((m) => m.id === mageId);
+    if (
+      !player ||
+      !mage ||
+      mage.location.kind !== 'infirmary' ||
+      !openBaseSlotsForGolem(ctx.state).includes(spaceId)
+    ) {
+      // Couldn't place this one — move on to the next Infirmary Mage.
+      return elixirNext(ctx, {});
+    }
+    const patch = moveMageToSlotPatch(
+      ctx.state,
+      ctx.triggeringPlayerId,
+      mageId,
+      spaceId,
+    );
+    const working: GameState = { ...ctx.state, ...patch };
+    return elixirNext(
+      { ...ctx, state: working },
+      { players: working.players, rooms: working.rooms },
+    );
+  }
+  return elixirNext(ctx, {});
+});
+
 // Re-export to satisfy the module's existing `export {}` shape.
 export {};
 

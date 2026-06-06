@@ -12066,6 +12066,28 @@ describe('Mancers Vault cards (Mancers)', () => {
     expect(p1(s).vaultCards.some((v) => v.cardId === 'mancers.vault.philosophers-stone')).toBe(false);
   });
 
+  it('Elixir of Life: moves your Infirmary Mages to open slots of your choice', () => {
+    let s = setup('mancers.vault.elixir-of-life');
+    s = mapPlayer(s, 'p1', (p) => ({
+      ...p,
+      mages: [
+        { id: 'w1', cardId: 'base.mage.neutral', color: 'off-white', location: { kind: 'infirmary' }, isShadowing: false, isWounded: true },
+      ],
+    }));
+    s = play(s, 'mancers.vault.elixir-of-life');
+    const top = topPending(s);
+    if (top.prompt.kind !== 'choose-target-action-space') throw new Error('x');
+    const slot = top.prompt.eligibleSpaceIds[0]!;
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: top.id,
+      answer: { kind: 'space-chosen', spaceId: slot },
+    });
+    const w1 = p1(s).mages.find((m) => m.id === 'w1')!;
+    expect(w1.isWounded).toBe(false);
+    expect(w1.location).toEqual({ kind: 'action-space', spaceId: slot });
+  });
+
   it("Diviner's Mitre: reacts to a spell wound, repositioning your Mage; exhausts", () => {
     let s = initGame({ ...TWO_PLAYER_CONFIG, activePackIds: ['base', 'mancers'] });
     s = zeroPlayerResources(s, 'p1');
