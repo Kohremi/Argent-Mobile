@@ -11981,6 +11981,80 @@ describe('Mancers Vault cards (Mancers)', () => {
     const space = s.rooms.flatMap((r) => r.actionSpaces).find((sp) => sp.id === slot)!;
     expect(space.occupant?.mageId).toBe('placer');
   });
+
+  const mage = (s: GameState, id: string) =>
+    s.players.find((p) => p.id === 'p1')!.mages.find((m) => m.id === id)!;
+  const chooseMage = (s: GameState, mageId: string) =>
+    applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'mage-chosen', mageId },
+    });
+  const chooseFirstSpace = (s: GameState): GameState => {
+    const top = topPending(s);
+    if (top.prompt.kind !== 'choose-target-action-space') throw new Error('x');
+    return applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: top.id,
+      answer: { kind: 'space-chosen', spaceId: top.prompt.eligibleSpaceIds[0]! },
+    });
+  };
+
+  it('Planar Scouter: places one of your office Mages', () => {
+    let s = setup('mancers.vault.planar-scouter');
+    s = addMage(s, 'p1', { id: 'scout', cardId: 'base.mage.neutral', color: 'off-white' });
+    s = play(s, 'mancers.vault.planar-scouter');
+    s = chooseMage(s, 'scout');
+    s = chooseFirstSpace(s);
+    expect(mage(s, 'scout').location.kind).toBe('action-space');
+  });
+
+  it("Technomancer's Top Hat: places a Mage, then surfaces a Research", () => {
+    let s = setup('mancers.vault.technomancers-top-hat');
+    s = addMage(s, 'p1', { id: 'th', cardId: 'base.mage.neutral', color: 'off-white' });
+    s = play(s, 'mancers.vault.technomancers-top-hat');
+    s = chooseMage(s, 'th');
+    s = chooseFirstSpace(s);
+    expect(mage(s, 'th').location.kind).toBe('action-space');
+    // The Research was queued — either still pending (if the placement slot's
+    // own instant-reward prompt is on top) or already surfaced as a menu.
+    const researchPending =
+      s.researchQueue.length >= 1 ||
+      topPending(s).resume.effectId === 'base.system.spend-research';
+    expect(researchPending).toBe(true);
+  });
+
+  it("Trickster's Cape: shadows a space with one of your Mages (free)", () => {
+    let s = setup('mancers.vault.tricksters-cape');
+    s = addMage(s, 'p1', { id: 'tc', cardId: 'base.mage.neutral', color: 'off-white' });
+    s = play(s, 'mancers.vault.tricksters-cape');
+    s = chooseMage(s, 'tc');
+    s = chooseFirstSpace(s);
+    expect(mage(s, 'tc').isShadowing).toBe(true);
+  });
+
+  it('Shadow Salve: shadows only over one of your own placed Mages', () => {
+    let s = setup('mancers.vault.shadow-salve');
+    s = addMage(s, 'p1', { id: 'mine', cardId: 'base.mage.neutral', color: 'off-white' });
+    s = addMage(s, 'p1', { id: 'cloak', cardId: 'base.mage.neutral', color: 'off-white' });
+    const slot = s.rooms
+      .flatMap((r) => (r.cannotBePlacedInDirectly ? [] : r.actionSpaces))
+      .find((sp) => !sp.occupant)!.id;
+    s = placeMageOnSpace(s, 'p1', 'mine', slot);
+    s = play(s, 'mancers.vault.shadow-salve');
+    s = chooseMage(s, 'cloak');
+    const sp = topPending(s);
+    if (sp.prompt.kind !== 'choose-target-action-space') throw new Error('x');
+    // Only your own Mage's slot is eligible.
+    expect(sp.prompt.eligibleSpaceIds).toContain(slot);
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: sp.id,
+      answer: { kind: 'space-chosen', spaceId: slot },
+    });
+    const space = s.rooms.flatMap((r) => r.actionSpaces).find((x) => x.id === slot)!;
+    expect(space.shadowOccupant?.mageId).toBe('cloak');
+  });
 });
 
 // ============================================================================

@@ -2639,8 +2639,33 @@ registerEffect('mancers.vault.sorcerors-hat', (ctx): EffectResult =>
 // reaction window.
 // ============================================================================
 
-registerEffect('mancers.vault.vanishing-staff', (ctx): EffectResult => {
-  const self = 'mancers.vault.vanishing-staff';
+/** Open shadow positions a Mage may be placed into. When `ownBaseOnly` is set
+ *  (Shadow Salve) only slots whose BASE is held by the player are eligible. */
+function eligibleShadowDests(
+  state: GameState,
+  playerId: PlayerId,
+  ownBaseOnly: boolean,
+): ActionSpaceId[] {
+  const base = openShadowSlotsForGolem(state);
+  if (!ownBaseOnly) return base;
+  return base.filter((sid) => {
+    const space = state.rooms
+      .flatMap((r) => r.actionSpaces)
+      .find((s) => s.id === sid);
+    return space?.occupant?.ownerId === playerId;
+  });
+}
+
+/** Place one of your office Mages into a slot's shadow position. Shared by
+ *  Vanishing Staff (1 Mana, any space), Trickster's Cape (free, any space) and
+ *  Shadow Salve (free, only over your own Mages). Shadowing an opponent's base
+ *  Mage opens the standard mage-shadowed reaction window. */
+function shadowPlaceEffect(
+  ctx: EffectContext,
+  self: string,
+  manaCost: number,
+  ownBaseOnly: boolean,
+): EffectResult {
   const step = ctx.resumeContext?.['step'];
   const player = ctx.state.players.find((p) => p.id === ctx.triggeringPlayerId);
   if (!player) return { kind: 'done', patch: {} };
@@ -2661,13 +2686,14 @@ registerEffect('mancers.vault.vanishing-staff', (ctx): EffectResult => {
       mage.location.kind !== 'office' ||
       !space ||
       space.shadowOccupant ||
-      player.resources.mana < 1
+      player.resources.mana < manaCost ||
+      !eligibleShadowDests(ctx.state, ctx.triggeringPlayerId, ownBaseOnly).includes(spaceId)
     ) {
       return { kind: 'done', patch: {} };
     }
     let working: GameState = {
       ...ctx.state,
-      ...gainResourcePatch(ctx.state, ctx.triggeringPlayerId, 'mana', -1),
+      ...gainResourcePatch(ctx.state, ctx.triggeringPlayerId, 'mana', -manaCost),
     };
     const occ: WorkerOccupancy = {
       mageId,
@@ -2733,7 +2759,7 @@ registerEffect('mancers.vault.vanishing-staff', (ctx): EffectResult => {
       throw new Error(`${self} space expected mage-chosen`);
     }
     const mageId = ctx.resumeAnswer.mageId;
-    const spaces = openShadowSlotsForGolem(ctx.state);
+    const spaces = eligibleShadowDests(ctx.state, ctx.triggeringPlayerId, ownBaseOnly);
     if (spaces.length === 0) return { kind: 'done', patch: {} };
     return {
       kind: 'pause',
@@ -2746,13 +2772,13 @@ registerEffect('mancers.vault.vanishing-staff', (ctx): EffectResult => {
     };
   }
 
-  // Initial: need 1 Mana, an office Mage, and an open shadow position.
-  if (player.resources.mana < 1) return { kind: 'done', patch: {} };
+  // Initial: need the Mana, an office Mage, and an eligible shadow position.
+  if (player.resources.mana < manaCost) return { kind: 'done', patch: {} };
   const officeMages = player.mages
     .filter((m) => m.location.kind === 'office')
     .map((m) => m.id);
   if (officeMages.length === 0) return { kind: 'done', patch: {} };
-  if (openShadowSlotsForGolem(ctx.state).length === 0) {
+  if (eligibleShadowDests(ctx.state, ctx.triggeringPlayerId, ownBaseOnly).length === 0) {
     return { kind: 'done', patch: {} };
   }
   return {
@@ -2768,7 +2794,17 @@ registerEffect('mancers.vault.vanishing-staff', (ctx): EffectResult => {
       source: ctx.source,
     },
   };
-});
+}
+
+registerEffect('mancers.vault.vanishing-staff', (ctx): EffectResult =>
+  shadowPlaceEffect(ctx, 'mancers.vault.vanishing-staff', 1, false),
+);
+registerEffect('mancers.vault.tricksters-cape', (ctx): EffectResult =>
+  shadowPlaceEffect(ctx, 'mancers.vault.tricksters-cape', 0, false),
+);
+registerEffect('mancers.vault.shadow-salve', (ctx): EffectResult =>
+  shadowPlaceEffect(ctx, 'mancers.vault.shadow-salve', 0, true),
+);
 
 // ============================================================================
 // Synthesis Treasure — Lightning Totem (Natural Magick): Fast Action, spend 1
@@ -3581,6 +3617,44 @@ registerEffect('mancers.vault.potion-of-vigor', (ctx): EffectResult => {
       }),
     },
   };
+});
+
+// Planar Scouter — place a Mage (reuses the engine's place-without-powers
+// primitive: pick an office Mage, then an open slot).
+registerEffect('mancers.vault.planar-scouter', (ctx): EffectResult =>
+  getEffect('base.system.place-mage-without-powers')({
+    state: ctx.state,
+    source: ctx.source,
+    triggeringPlayerId: ctx.triggeringPlayerId,
+    allowReactions: false,
+  }),
+);
+
+// Technomancer's Top Hat — place a Mage, then gain a Research. The Research is
+// queued first (it drains once the placement chain settles, so it resolves
+// after the placement, matching the card text).
+registerEffect('mancers.vault.technomancers-top-hat', (ctx): EffectResult => {
+  const researchPatch: GameStatePatch = {
+    researchQueue: [
+      ...ctx.state.researchQueue,
+      { playerId: ctx.triggeringPlayerId, source: ctx.source },
+    ],
+  };
+  const delegate = getEffect('base.system.place-mage-without-powers')({
+    state: { ...ctx.state, ...researchPatch },
+    source: ctx.source,
+    triggeringPlayerId: ctx.triggeringPlayerId,
+    allowReactions: false,
+  });
+  if (delegate.kind === 'pause') {
+    return {
+      kind: 'pause',
+      patch: { ...researchPatch, ...(delegate.patch ?? {}) },
+      pending: delegate.pending,
+    };
+  }
+  // No legal placement — still gain the Research.
+  return { kind: 'done', patch: { ...researchPatch, ...delegate.patch } };
 });
 
 // Re-export to satisfy the module's existing `export {}` shape.
