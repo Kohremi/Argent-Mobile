@@ -59,6 +59,7 @@ import {
   returnMageToOfficePatch,
   playerHasAuricCatalyst,
   spellLabel,
+  technomancyOnPlacePatch,
   unclaimedLegendaryBooks,
   woundMage,
 } from './helpers';
@@ -9259,6 +9260,7 @@ function placeOfficeMageOnSpace(
       spaceId as ActionSpaceId,
       playerId,
     ),
+    ...technomancyOnPlacePatch(state, playerId, mageId, spaceId as ActionSpaceId),
   };
 }
 

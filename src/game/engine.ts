@@ -25,6 +25,7 @@ import {
   spellManaDiscountFor,
   spellManaSurchargesAgainst,
   spellsBlocked,
+  technomancyOnPlacePatch,
   woundMage,
 } from './effects/helpers';
 import { buildAdventuringBPickPrompt } from './effects/helpers';
@@ -1256,26 +1257,15 @@ function handlePlaceWorker(state: GameState, action: PlaceWorkerAction): GameSta
   // Technomancy (orange) post-placement trigger — queued here so it
   // fires AFTER the instant-room reward chain (and the resolution-stack)
   // settles, mirroring the Mysticism post-cast pattern. This keeps the
-  // ability out of the placement action itself. The Archmage's
-  // Apprentice acts as orange (and every department colour), so
-  // placing it ALSO queues the Technomancy trigger when Mancers is
-  // active — but only if the Mancers pack is seated, since the
-  // Apprentice exists in non-Mancers games too.
-  const triggersTechnomancy =
-    actsAsColor(mage, 'orange') &&
-    state.activePackIds.includes('mancers');
-  const pendingTechnomancyTrigger = triggersTechnomancy
-    ? [
-        ...state.pendingTechnomancyTrigger,
-        { playerId: action.playerId, roomId: room.id },
-      ]
-    : state.pendingTechnomancyTrigger;
-
+  // ability out of the placement action itself. Shared with every other
+  // placement path (spells / items) via `technomancyOnPlacePatch`, which
+  // also handles the Archmage's Apprentice (acts as orange) and the
+  // Mancers-pack-active gate.
   const placed: GameState = {
     ...state,
     rooms: updatedRooms,
     players: updatedPlayers,
-    pendingTechnomancyTrigger,
+    ...technomancyOnPlacePatch(state, action.playerId, mage.id, space.id),
   };
 
   // Instant rooms resolve at placement time. We push the same forfeit-or-

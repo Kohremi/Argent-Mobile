@@ -25,6 +25,7 @@ import {
   MAGE_CARD_BY_COLOR,
   moveMageToSpace,
   returnMageToOfficePatch,
+  technomancyOnPlacePatch,
   woundMage,
 } from './helpers';
 import { nextRandom } from '../../utils/rng';
@@ -3074,17 +3075,12 @@ registerEffect('mancers.vault.hourglass-of-fate.react', (ctx): EffectResult => {
         ),
       })),
     };
-    const patch: GameStatePatch = { players: working.players, rooms: working.rooms };
-    // Technomancy (orange): queue the "pay 3 Gold → Research" trigger.
-    if (actsAsColor(mage, 'orange')) {
-      const room = working.rooms.find((r) =>
-        r.actionSpaces.some((s) => s.id === spaceId),
-      );
-      patch.pendingTechnomancyTrigger = [
-        ...working.pendingTechnomancyTrigger,
-        { playerId, roomId: room?.id ?? '' },
-      ];
-    }
+    const patch: GameStatePatch = {
+      players: working.players,
+      rooms: working.rooms,
+      // Technomancy "upon placement" trigger (orange Mage placed by its owner).
+      ...technomancyOnPlacePatch(working, playerId, mageId, spaceId),
+    };
     return { kind: 'done', patch };
   }
 
@@ -3759,6 +3755,8 @@ function moveMageToSlotPatch(
         s.id !== spaceId ? s : { ...s, occupant: occ },
       ),
     })),
+    // Technomancy "upon placement" trigger (orange Mage placed by its owner).
+    ...technomancyOnPlacePatch(state, playerId, mageId, spaceId),
   };
 }
 

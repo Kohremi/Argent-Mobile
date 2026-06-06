@@ -15089,6 +15089,37 @@ describe('Technomancy (Mancers expansion)', () => {
     ]);
   });
 
+  it('placing an orange mage via a Vault item (Planar Scouter) also triggers Technomancy', () => {
+    let s = setupTechnomancyPlaceTest({ gold: 3 });
+    s = addVaultCard(s, 'p1', 'mancers.vault.planar-scouter');
+    s = applyAction(s, {
+      type: 'PLAY_VAULT_CARD',
+      playerId: 'p1',
+      vaultCardId: 'mancers.vault.planar-scouter',
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'mage-chosen', mageId: 'alice-orange' },
+    });
+    const sp = topPending(s);
+    if (sp.prompt.kind !== 'choose-target-action-space') throw new Error('x');
+    const target = sp.prompt.eligibleSpaceIds.includes('base.room.library.a.slot-3')
+      ? 'base.room.library.a.slot-3'
+      : sp.prompt.eligibleSpaceIds[0]!;
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: sp.id,
+      answer: { kind: 'space-chosen', spaceId: target },
+    });
+    // The placement went through place-mage-without-powers (not PLACE_WORKER),
+    // yet the Technomancy "pay 3 Gold → Research" prompt still surfaces.
+    const prompt = topPending(s);
+    expect(prompt.resume.effectId).toBe('mancers.mage.technomancy.place-after');
+    if (prompt.prompt.kind !== 'choose-from-options') throw new Error('unreachable');
+    expect(prompt.prompt.options.map((o) => o.id).sort()).toEqual(['pay', 'skip']);
+  });
+
   it('Pay path: spends 3 Gold and surfaces a Research prompt', () => {
     let s = setupTechnomancyPlaceTest({ gold: 5 });
     s = applyAction(s, {

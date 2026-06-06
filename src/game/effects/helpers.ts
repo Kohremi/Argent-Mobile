@@ -2722,6 +2722,46 @@ export function actsAsColor(m: OwnedMage, color: MageColor): boolean {
   return false;
 }
 
+/**
+ * Technomancy (orange) "upon placement" hook. Whenever an orange Mage — or
+ * the Archmage's Apprentice, which acts as every department colour — is
+ * placed onto a slot by its owner while the Mancers pack is active, queue
+ * the "pay 3 Gold → gain a Research" trigger. Centralised here so EVERY
+ * placement path fires the ability uniformly: the normal PLACE_WORKER
+ * action, the generic place-mage-without-powers primitive (Stop Time, Slow
+ * Time, Planar Scouter, Technomancer's Top Hat, Mystic's Cowl …), the
+ * office/infirmary slot helpers (Elixir of Life, Sorceror's Hat, Nature
+ * Mage's Cap), and Summon Golem.
+ *
+ * Pass a `state` in which the placed Mage is findable (pre-placement for
+ * office/infirmary helpers; post-placement for freshly-minted golems) — the
+ * trigger is appended onto that state's `pendingTechnomancyTrigger`. The
+ * drain (`drainTechnomancyTriggerIfIdle`) applies the Mesmerize / can't-pay
+ * gates, so this hook only needs the colour + Mancers-active check. Returns
+ * `{}` when not applicable, so it merges cleanly into any placement patch.
+ */
+export function technomancyOnPlacePatch(
+  state: GameState,
+  playerId: PlayerId,
+  mageId: string,
+  spaceId: ActionSpaceId,
+): GameStatePatch {
+  if (!state.activePackIds.includes('mancers')) return {};
+  const player = state.players.find((p) => p.id === playerId);
+  const mage = player?.mages.find((m) => m.id === mageId);
+  if (!mage || !actsAsColor(mage, 'orange')) return {};
+  const room = state.rooms.find((r) =>
+    r.actionSpaces.some((s) => s.id === spaceId),
+  );
+  if (!room) return {};
+  return {
+    pendingTechnomancyTrigger: [
+      ...state.pendingTechnomancyTrigger,
+      { playerId, roomId: room.id },
+    ],
+  };
+}
+
 export const MAGE_CARD_BY_COLOR: Record<MageColor, string> = {
   red: 'base.mage.sorcery',
   grey: 'base.mage.mysticism',
