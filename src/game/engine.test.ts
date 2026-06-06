@@ -12141,6 +12141,50 @@ describe('Mancers Vault cards (Mancers)', () => {
       s.players.find((p) => p.id === 'p2')!.vaultCards.find((v) => v.cardId === 'mancers.vault.diviners-mitre')!.exhausted,
     ).toBe(true);
   });
+
+  it("Nature Mage's Cap: moves an opponent's Mage, places yours, then opens a move reaction", () => {
+    let s = setup('mancers.vault.nature-mages-cap');
+    s = addMage(s, 'p1', { id: 'placer', cardId: 'base.mage.neutral', color: 'off-white' });
+    s = addMage(s, 'p2', { id: 'victim', cardId: 'base.mage.neutral', color: 'off-white' });
+    const [slotA, slotB] = (() => {
+      for (const r of s.rooms) {
+        if (r.cannotBePlacedInDirectly) continue;
+        const open = r.actionSpaces.filter((sp) => !sp.occupant).map((sp) => sp.id);
+        if (open.length >= 2) return [open[0]!, open[1]!];
+      }
+      throw new Error('no room with two open slots');
+    })();
+    s = placeMageOnSpace(s, 'p2', 'victim', slotA);
+    s = play(s, 'mancers.vault.nature-mages-cap');
+    // 1) pick opponent Mage, 2) pick destination slot, 3) pick your Mage.
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'mage-chosen', mageId: 'victim' },
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'space-chosen', spaceId: slotB },
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'mage-chosen', mageId: 'placer' },
+    });
+    // The opponent now gets a reaction window for being moved — pass it.
+    const rp = topPending(s);
+    expect(rp.prompt.kind).toBe('reaction-window');
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: rp.id,
+      answer: { kind: 'reaction-passed' },
+    });
+    const victim = s.players.find((p) => p.id === 'p2')!.mages.find((m) => m.id === 'victim')!;
+    expect(victim.location).toEqual({ kind: 'action-space', spaceId: slotB });
+    const placer = p1(s).mages.find((m) => m.id === 'placer')!;
+    expect(placer.location).toEqual({ kind: 'action-space', spaceId: slotA });
+  });
 });
 
 // ============================================================================

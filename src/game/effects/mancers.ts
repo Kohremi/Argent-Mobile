@@ -23,6 +23,7 @@ import {
   lookupSupporterCardDef,
   lookupVaultCardDef,
   MAGE_CARD_BY_COLOR,
+  moveMageToSpace,
   returnMageToOfficePatch,
   woundMage,
 } from './helpers';
@@ -3820,6 +3821,146 @@ registerEffect('mancers.vault.elixir-of-life', (ctx): EffectResult => {
     );
   }
   return elixirNext(ctx, {});
+});
+
+// Nature Mage's Cap — move an opponent's Mage to another slot in the SAME
+// room, then put one of your Mages in its vacated slot. Per the reaction rule
+// the whole card resolves first; the move's reaction window opens afterward.
+function openSlotsInRoom(state: GameState, roomId: string): ActionSpaceId[] {
+  const r = state.rooms.find((rr) => rr.id === roomId);
+  if (!r || r.cannotBePlacedInDirectly || isRoomLocked(state, r.id)) return [];
+  return r.actionSpaces.filter((s) => !s.occupant).map((s) => s.id);
+}
+
+registerEffect('mancers.vault.nature-mages-cap', (ctx): EffectResult => {
+  const self = 'mancers.vault.nature-mages-cap';
+  const step = ctx.resumeContext?.['step'];
+  const playerId = ctx.triggeringPlayerId;
+  const player = ctx.state.players.find((p) => p.id === playerId);
+  if (!player) return { kind: 'done', patch: {} };
+
+  if (step === 'apply') {
+    if (ctx.resumeAnswer?.kind !== 'mage-chosen') {
+      throw new Error(`${self} apply expected mage-chosen`);
+    }
+    const placerMageId = ctx.resumeAnswer.mageId;
+    const targetMageId = ctx.resumeContext?.['targetMageId'];
+    const destSpaceId = ctx.resumeContext?.['destSpaceId'];
+    if (typeof targetMageId !== 'string' || typeof destSpaceId !== 'string') {
+      return { kind: 'done', patch: {} };
+    }
+    const placer = player.mages.find((m) => m.id === placerMageId);
+    const target = ctx.state.players
+      .flatMap((p) => p.mages)
+      .find((m) => m.id === targetMageId);
+    const destOpen = openSlotsInRoom(ctx.state, roomIdOfMage(ctx.state, targetMageId) ?? '').includes(destSpaceId);
+    if (
+      !placer ||
+      placer.location.kind !== 'office' ||
+      !target ||
+      target.location.kind !== 'action-space' ||
+      !destOpen
+    ) {
+      return { kind: 'done', patch: {} };
+    }
+    const vacatedSpaceId = target.location.spaceId;
+    // Move the opponent's Mage, then place yours in the vacated slot.
+    const moved = moveMageToSpace(ctx.state, targetMageId, destSpaceId, playerId);
+    let working: GameState = { ...ctx.state, ...moved.patch };
+    working = {
+      ...working,
+      ...moveMageToSlotPatch(working, playerId, placerMageId, vacatedSpaceId),
+    };
+    // Card fully resolved — NOW open the move's reaction window.
+    return {
+      kind: 'open-reaction',
+      patch: { players: working.players, rooms: working.rooms },
+      window: {
+        triggerEvents: [moved.triggerEvent],
+        pendingResponderIds: buildReactionQueue(working, playerId),
+        reactedPlayerIds: [],
+        afterResume: { effectId: 'base.system.noop', context: {} },
+        source: ctx.source,
+      },
+    };
+  }
+
+  if (step === 'dest') {
+    if (ctx.resumeAnswer?.kind !== 'mage-chosen') {
+      throw new Error(`${self} dest expected mage-chosen`);
+    }
+    const targetMageId = ctx.resumeAnswer.mageId;
+    const roomId = roomIdOfMage(ctx.state, targetMageId);
+    const dests = roomId ? openSlotsInRoom(ctx.state, roomId) : [];
+    if (dests.length === 0) return { kind: 'done', patch: {} };
+    return {
+      kind: 'pause',
+      pending: {
+        responderId: playerId,
+        prompt: {
+          kind: 'choose-target-action-space',
+          eligibleSpaceIds: dests,
+          label: 'Move the Mage to which slot (same room)?',
+        },
+        resume: { effectId: self, context: { step: 'placer', targetMageId } },
+        source: ctx.source,
+      },
+    };
+  }
+
+  if (step === 'placer') {
+    if (ctx.resumeAnswer?.kind !== 'space-chosen') {
+      throw new Error(`${self} placer expected space-chosen`);
+    }
+    const destSpaceId = ctx.resumeAnswer.spaceId;
+    const targetMageId = ctx.resumeContext?.['targetMageId'];
+    if (typeof targetMageId !== 'string') return { kind: 'done', patch: {} };
+    const officeMages = player.mages
+      .filter((m) => m.location.kind === 'office')
+      .map((m) => m.id);
+    if (officeMages.length === 0) return { kind: 'done', patch: {} };
+    return {
+      kind: 'pause',
+      pending: {
+        responderId: playerId,
+        prompt: {
+          kind: 'choose-target-mage',
+          eligibleMageIds: officeMages,
+          label: "Place which of your Mages in the Mage's old slot?",
+        },
+        resume: { effectId: self, context: { step: 'apply', targetMageId, destSpaceId } },
+        source: ctx.source,
+      },
+    };
+  }
+
+  // Initial: need an office Mage and an opponent Mage whose room has an open
+  // slot to move into.
+  if (!player.mages.some((m) => m.location.kind === 'office')) {
+    return { kind: 'done', patch: {} };
+  }
+  const targets = ctx.state.players
+    .flatMap((p) => (p.id === playerId ? [] : p.mages))
+    .filter(
+      (m) =>
+        m.location.kind === 'action-space' &&
+        openSlotsInRoom(ctx.state, roomIdOfMage(ctx.state, m.id) ?? '').length > 0,
+    )
+    .map((m) => m.id);
+  if (targets.length === 0) return { kind: 'done', patch: {} };
+  return {
+    kind: 'pause',
+    pending: {
+      responderId: playerId,
+      prompt: {
+        kind: 'choose-target-mage',
+        eligibleMageIds: targets,
+        label: "Move which opponent's Mage?",
+      },
+      resume: { effectId: self, context: { step: 'dest' } },
+      source: ctx.source,
+    },
+  };
 });
 
 // Re-export to satisfy the module's existing `export {}` shape.
