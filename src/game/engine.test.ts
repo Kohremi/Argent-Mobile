@@ -78,6 +78,27 @@ describe('initGame', () => {
     expect(s.phase).toEqual({ kind: 'round-setup', round: 1 });
   });
 
+  it('defaults every department mage ability to Side A', () => {
+    const s = initGame(FOUR_PLAYER_CONFIG);
+    expect(s.mageAbilitySides.sorcery).toBe('A');
+    expect(s.mageAbilitySides.mysticism).toBe('A');
+    expect(s.mageAbilitySides['natural-magick']).toBe('A');
+    expect(s.mageAbilitySides['planar-studies']).toBe('A');
+    expect(s.mageAbilitySides.divinity).toBe('A');
+    expect(s.mageAbilitySides.technomancy).toBe('A');
+  });
+
+  it('honors per-department ability-side overrides from the config', () => {
+    const s = initGame({
+      ...FOUR_PLAYER_CONFIG,
+      mageAbilitySides: { sorcery: 'B', technomancy: 'B' },
+    });
+    expect(s.mageAbilitySides.sorcery).toBe('B');
+    expect(s.mageAbilitySides.technomancy).toBe('B');
+    // Unspecified departments still default to A.
+    expect(s.mageAbilitySides.divinity).toBe('A');
+  });
+
   it('seats 4 players with stable initiative order', () => {
     const s = initGame(FOUR_PLAYER_CONFIG);
     expect(s.players).toHaveLength(4);

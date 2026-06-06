@@ -1,5 +1,34 @@
 import { create } from 'zustand';
-import type { PackId, RoomId } from '../game/types';
+import type {
+  Department,
+  MageAbilitySide,
+  PackId,
+  RoomId,
+} from '../game/types';
+
+/** The six magic departments that have worker-Mage abilities, in display
+ *  order. Technomancy is from the Mancers expansion. */
+export const ABILITY_DEPARTMENTS: { id: Department; label: string; pack?: PackId }[] = [
+  { id: 'sorcery', label: 'Sorcery' },
+  { id: 'mysticism', label: 'Mysticism' },
+  { id: 'natural-magick', label: 'Natural Magick' },
+  { id: 'planar-studies', label: 'Planar Studies' },
+  { id: 'divinity', label: 'Divinity' },
+  { id: 'technomancy', label: 'Technomancy', pack: 'mancers' },
+];
+
+function defaultMageAbilitySides(): Record<Department, MageAbilitySide> {
+  return {
+    sorcery: 'A',
+    mysticism: 'A',
+    'natural-magick': 'A',
+    'planar-studies': 'A',
+    divinity: 'A',
+    technomancy: 'A',
+    students: 'A',
+    wild: 'A',
+  };
+}
 
 const MIN_PLAYERS = 2;
 const MAX_PLAYERS = 6;
@@ -28,6 +57,12 @@ interface SetupState {
    * not their positions.
    */
   customRoomIds: RoomId[];
+  /**
+   * Per-department choice of which worker-Mage power side (A/B) is in play.
+   * Defaults to all Side A — all currently-wired abilities are Side A; the
+   * Side B selector is forward-looking.
+   */
+  mageAbilitySides: Record<Department, MageAbilitySide>;
   setSelectedPacks: (ids: PackId[]) => void;
   togglePack: (id: PackId) => void;
   setPlayerName: (index: number, name: string) => void;
@@ -43,6 +78,7 @@ interface SetupState {
     roomId: RoomId,
     otherSideRoomId: RoomId | null,
   ) => void;
+  setMageAbilitySide: (dept: Department, side: MageAbilitySide) => void;
 }
 
 function defaultPlayerNames(count: number): string[] {
@@ -71,6 +107,7 @@ export const useSetupStore = create<SetupState>((set) => ({
     'base.room.library.a',
     'base.room.infirmary.a',
   ],
+  mageAbilitySides: defaultMageAbilitySides(),
 
   setSelectedPacks: (ids) => set({ selectedPackIds: ids }),
 
@@ -128,6 +165,11 @@ export const useSetupStore = create<SetupState>((set) => ({
           : current.filter((id) => id !== otherSideRoomId);
       return { customRoomIds: [...filtered, roomId] };
     }),
+
+  setMageAbilitySide: (dept, side) =>
+    set((s) => ({
+      mageAbilitySides: { ...s.mageAbilitySides, [dept]: side },
+    })),
 }));
 
 export const PLAYER_COUNT_RANGE = { min: MIN_PLAYERS, max: MAX_PLAYERS };

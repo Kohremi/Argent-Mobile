@@ -2,9 +2,11 @@ import { requirePack } from '../content/registry';
 import type {
   BellTowerCard,
   ConsortiumVoter,
+  Department,
   GameConfig,
   GamePhase,
   GameState,
+  MageAbilitySide,
   MageColor,
   PackId,
   Player,
@@ -520,6 +522,7 @@ export function buildInitialState(config: GameConfig): GameState {
     archmagesApprenticeOwner: null,
     roomLocks: [],
     astronomyTowerMarker: 0,
+    mageAbilitySides: makeMageAbilitySides(config.mageAbilitySides),
     mageDraftPool: makeInitialMageDraftPool(config.activePackIds),
     phase: initialPhase(config, firstPlayerIndex),
     pendingResolutionStack: [],
@@ -563,6 +566,27 @@ function makeInitialMageDraftPool(
     rainbow: 0,
     'off-white': 10,
   };
+}
+
+/**
+ * Builds the per-department worker-Mage ability side record. Every department
+ * defaults to Side A; `overrides` (from the setup screen) can flip individual
+ * departments to Side B.
+ */
+function makeMageAbilitySides(
+  overrides?: Partial<Record<Department, MageAbilitySide>>,
+): Record<Department, MageAbilitySide> {
+  const base: Record<Department, MageAbilitySide> = {
+    sorcery: 'A',
+    mysticism: 'A',
+    'natural-magick': 'A',
+    'planar-studies': 'A',
+    divinity: 'A',
+    technomancy: 'A',
+    students: 'A',
+    wild: 'A',
+  };
+  return { ...base, ...overrides };
 }
 
 function initialPhase(config: GameConfig, firstPlayerIndex: number): GamePhase {

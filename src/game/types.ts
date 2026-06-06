@@ -1307,6 +1307,15 @@ export interface GameState {
   astronomyTowerMarker: number;
 
   /**
+   * Which side (A or B) of each department's worker-Mage power is in play this
+   * game, chosen at setup. All abilities currently wired are the Side A
+   * abilities; the Side B selector exists so future Side B powers can be
+   * dispatched per department. Defaults to all 'A'. Covers every Department for
+   * typing convenience; only the six magic departments have worker Mages.
+   */
+  mageAbilitySides: Record<Department, MageAbilitySide>;
+
+  /**
    * Shared Mage pool used during the candidate / mage-draft setup phases.
    * Initialized to 4 of each color (Sorcery red, Mysticism grey, Natural
    * Magick green, Divinity blue, Planar Studies purple, Neutral off-white).
@@ -1370,12 +1379,21 @@ export interface GameConfig {
    *     order; the grid dimensions are derived from the count.
    */
   roomLayoutMode?: RoomLayoutMode;
+  /**
+   * Per-department choice of which worker-Mage power side (A/B) is in play.
+   * Any department omitted defaults to 'A'. All currently-wired Mage abilities
+   * are Side A; this prepares the game for future Side B powers.
+   */
+  mageAbilitySides?: Partial<Record<Department, MageAbilitySide>>;
 }
 
 export type RoomLayoutMode =
   | { kind: 'first-time' }
   | { kind: 'random' }
   | { kind: 'custom'; roomIds: RoomId[] };
+
+/** Which side of a department's worker-Mage power is in play. */
+export type MageAbilitySide = 'A' | 'B';
 
 /**
  * 2-D grid layout for rooms in play. `cols × rows` cells, each holding a

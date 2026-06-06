@@ -2,6 +2,7 @@ import { useMemo } from 'react';
 import clsx from 'clsx';
 import { listPacks } from '../../content/registry';
 import {
+  ABILITY_DEPARTMENTS,
   PLAYER_COUNT_RANGE,
   ROOM_COUNT_RANGE,
   useSetupStore,
@@ -49,6 +50,8 @@ export function SetupScreen() {
   const setNumberOfRooms = useSetupStore((s) => s.setNumberOfRooms);
   const setLayoutMode = useSetupStore((s) => s.setLayoutMode);
   const toggleCustomRoomSide = useSetupStore((s) => s.toggleCustomRoomSide);
+  const mageAbilitySides = useSetupStore((s) => s.mageAbilitySides);
+  const setMageAbilitySide = useSetupStore((s) => s.setMageAbilitySide);
   const startGame = useGameStore((s) => s.start);
 
   // Index every wired room across the selected packs, grouped by name so
@@ -121,6 +124,7 @@ export function SetupScreen() {
           : layoutMode === 'custom'
             ? { kind: 'custom', roomIds: customRoomIds }
             : { kind: 'random' },
+      mageAbilitySides,
     };
     startGame(config);
   };
@@ -382,6 +386,71 @@ export function SetupScreen() {
             )}
           </div>
         )}
+      </section>
+
+      <section className="mb-8">
+        <h2 className="text-xl font-medium mb-1">Mage Abilities</h2>
+        <p className="text-sm text-slate-400 mb-3">
+          Pick which side of each department's worker-Mage power is in play.
+          All current abilities are Side A.
+        </p>
+        <ul className="space-y-1">
+          {ABILITY_DEPARTMENTS.map((dept) => {
+            const requiresPack = dept.pack !== undefined;
+            const packActive =
+              !requiresPack || selectedPackIds.includes(dept.pack!);
+            const current = mageAbilitySides[dept.id];
+            const renderSideButton = (side: 'A' | 'B') => {
+              const active = current === side;
+              return (
+                <button
+                  key={side}
+                  type="button"
+                  disabled={!packActive}
+                  onClick={() => setMageAbilitySide(dept.id, side)}
+                  className={clsx(
+                    'px-2 py-0.5 rounded text-xs w-7 text-center font-medium border',
+                    active
+                      ? 'bg-amber-400 text-slate-950 border-amber-300'
+                      : 'bg-slate-800 hover:bg-slate-700 text-slate-200 border-slate-700',
+                    !packActive && 'opacity-40 cursor-not-allowed hover:bg-slate-800',
+                  )}
+                  aria-pressed={active}
+                  aria-label={`${dept.label} side ${side}`}
+                >
+                  {side}
+                </button>
+              );
+            };
+            return (
+              <li
+                key={dept.id}
+                className="flex items-center gap-2 px-2 py-1.5 rounded bg-slate-950/40"
+              >
+                <span
+                  className={clsx(
+                    'flex-1 text-sm',
+                    !packActive && 'text-slate-500',
+                  )}
+                >
+                  {dept.label}
+                  {requiresPack && (
+                    <span
+                      className={clsx(
+                        'ml-2 text-[10px] uppercase tracking-wide',
+                        packActive ? 'text-slate-500' : 'text-slate-600',
+                      )}
+                    >
+                      Mancers{packActive ? '' : ' — not included'}
+                    </span>
+                  )}
+                </span>
+                {renderSideButton('A')}
+                {renderSideButton('B')}
+              </li>
+            );
+          })}
+        </ul>
       </section>
 
       <button
