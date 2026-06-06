@@ -11811,6 +11811,44 @@ describe('Technomancy Supporters (Mancers)', () => {
     if (top.prompt.kind !== 'choose-vault-card') throw new Error('x');
     expect(top.prompt.eligibleCardIds).toEqual(['base.vault.auric-catalyst']);
   });
+
+  it('Cin Atalar: swaps an office Mage for a Technomancy (orange) Mage', () => {
+    let s = setup('mancers.supporter.cin-atalar');
+    s = addMage(s, 'p1', { id: 'swap-me', cardId: 'base.mage.neutral', color: 'off-white' });
+    const orangeBefore = s.mageDraftPool.orange;
+    const offWhiteBefore = s.mageDraftPool['off-white'];
+    s = play(s, 'mancers.supporter.cin-atalar');
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'mage-chosen', mageId: 'swap-me' },
+    });
+    const me = p1(s);
+    expect(me.mages.some((m) => m.id === 'swap-me')).toBe(false); // given up
+    expect(me.mages.filter((m) => m.color === 'orange')).toHaveLength(1); // gained
+    expect(s.mageDraftPool.orange).toBe(orangeBefore - 1);
+    expect(s.mageDraftPool['off-white']).toBe(offWhiteBefore + 1); // returned to pool
+  });
+
+  it('Viona Larone: swaps an office Mage for a Sorcery (red) Mage', () => {
+    let s = setup('mancers.supporter.viona-larone');
+    s = addMage(s, 'p1', { id: 'swap-me', cardId: 'base.mage.neutral', color: 'off-white' });
+    s = play(s, 'mancers.supporter.viona-larone');
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'mage-chosen', mageId: 'swap-me' },
+    });
+    expect(p1(s).mages.filter((m) => m.color === 'red')).toHaveLength(1);
+  });
+
+  it('swap supporters fizzle with no prompt when there is no office Mage', () => {
+    let s = setup('mancers.supporter.cin-atalar');
+    // No mages added — nothing to swap.
+    s = play(s, 'mancers.supporter.cin-atalar');
+    expect(s.pendingResolutionStack).toHaveLength(0);
+    expect(p1(s).mages.filter((m) => m.color === 'orange')).toHaveLength(0);
+  });
 });
 
 // ============================================================================

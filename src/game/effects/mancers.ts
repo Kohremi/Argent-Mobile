@@ -3280,10 +3280,118 @@ registerEffect('mancers.supporter.lixis-ran-kanda', (ctx): EffectResult => {
   };
 });
 
-// Cin Atalar (swap a Mage for a Technomancy Mage) and the Rune Knight
-// (passive Familiar — scoring only, never played as an action) are defined in
-// the pack but not yet wired here; an unwired Supporter effect is a graceful
-// no-op when played.
+// ============================================================================
+// Department-swap Supporters (Cin Atalar + the five base-department swaps).
+// Each swaps one of your UNPLACED (office) Mages for a Mage of a fixed colour
+// from the supply: the given-up Mage returns to its colour's pool, and the new
+// Mage joins your office. The Archmage's Apprentice and temporary golems can't
+// be swapped, and the swap fizzles if you have no office Mage or the target
+// colour's supply is empty.
+//
+// The Rune Knight is the Technomancy Familiar — `timing: 'passive'`, so it's
+// never played as an action; it just sits and counts for scoring, like the
+// base familiars. No effect to register.
+// ============================================================================
+
+function swapMageForColor(
+  ctx: EffectContext,
+  selfEffectId: string,
+  targetColor: MageColor,
+): EffectResult {
+  const player = ctx.state.players.find((p) => p.id === ctx.triggeringPlayerId);
+  if (!player) return { kind: 'done', patch: {} };
+  if ((ctx.state.mageDraftPool[targetColor] ?? 0) <= 0) {
+    return { kind: 'done', patch: {} };
+  }
+  const eligible = player.mages.filter(
+    (m) =>
+      m.location.kind === 'office' &&
+      m.color !== 'rainbow' &&
+      !m.isTemporary,
+  );
+  if (eligible.length === 0) return { kind: 'done', patch: {} };
+
+  if (ctx.resumeContext?.['step'] === 'apply') {
+    if (ctx.resumeAnswer?.kind !== 'mage-chosen') {
+      throw new Error(`${selfEffectId} apply expected mage-chosen`);
+    }
+    const mageId = ctx.resumeAnswer.mageId;
+    const source = player.mages.find((m) => m.id === mageId);
+    if (
+      !source ||
+      source.location.kind !== 'office' ||
+      source.color === 'rainbow' ||
+      source.isTemporary ||
+      (ctx.state.mageDraftPool[targetColor] ?? 0) <= 0
+    ) {
+      return { kind: 'done', patch: {} };
+    }
+    const seq = ctx.state.nextSequenceId;
+    // Return the given-up Mage to its pool, draw the target colour. Computed
+    // step-by-step so a same-colour swap nets zero rather than double-counting.
+    const pool = { ...ctx.state.mageDraftPool };
+    pool[source.color] = (pool[source.color] ?? 0) + 1;
+    pool[targetColor] = (pool[targetColor] ?? 0) - 1;
+    return {
+      kind: 'done',
+      patch: {
+        nextSequenceId: seq + 1,
+        mageDraftPool: pool,
+        players: ctx.state.players.map((p) =>
+          p.id !== ctx.triggeringPlayerId
+            ? p
+            : {
+                ...p,
+                mages: [
+                  ...p.mages.filter((m) => m.id !== mageId),
+                  {
+                    id: `m-${seq}`,
+                    cardId: MAGE_CARD_BY_COLOR[targetColor],
+                    color: targetColor,
+                    location: { kind: 'office' as const, playerId: ctx.triggeringPlayerId },
+                    isShadowing: false,
+                    isWounded: false,
+                  },
+                ],
+              },
+        ),
+      },
+    };
+  }
+
+  return {
+    kind: 'pause',
+    pending: {
+      responderId: ctx.triggeringPlayerId,
+      prompt: {
+        kind: 'choose-target-mage',
+        eligibleMageIds: eligible.map((m) => m.id),
+        label: 'Swap one of your Mages for a new one from the supply',
+      },
+      resume: { effectId: selfEffectId, context: { step: 'apply' } },
+      source: ctx.source,
+    },
+  };
+}
+
+registerEffect('mancers.supporter.cin-atalar', (ctx): EffectResult =>
+  swapMageForColor(ctx, 'mancers.supporter.cin-atalar', 'orange'),
+);
+registerEffect('mancers.supporter.viona-larone', (ctx): EffectResult =>
+  swapMageForColor(ctx, 'mancers.supporter.viona-larone', 'red'),
+);
+registerEffect('mancers.supporter.xenitia-zook', (ctx): EffectResult =>
+  swapMageForColor(ctx, 'mancers.supporter.xenitia-zook', 'grey'),
+);
+registerEffect('mancers.supporter.hikaru-sorayama', (ctx): EffectResult =>
+  swapMageForColor(ctx, 'mancers.supporter.hikaru-sorayama', 'green'),
+);
+registerEffect('mancers.supporter.khadath-ahemusei', (ctx): EffectResult =>
+  swapMageForColor(ctx, 'mancers.supporter.khadath-ahemusei', 'purple'),
+);
+registerEffect('mancers.supporter.cindra-flama', (ctx): EffectResult =>
+  swapMageForColor(ctx, 'mancers.supporter.cindra-flama', 'blue'),
+);
 
 // Re-export to satisfy the module's existing `export {}` shape.
 export {};

@@ -873,12 +873,66 @@ const synthesisWorkshopB: Room = {
 };
 
 // ============================================================================
-// Technomancy (orange) Supporters — the department's supporter set. Seven have
-// active effects; the Rune Knight is the department's passive Familiar (scoring
-// only, like the base familiars). Effects registered in game/effects/mancers.ts.
+// Mancers Supporters. The Technomancy (orange) set is the department's own
+// supporters (seven active + the passive Rune Knight Familiar). The five
+// "department-swap" Supporters belong to the five base departments — each lets
+// you swap one of your Mages for a Mage of that department from the supply.
+// Effects registered in game/effects/mancers.ts.
 // ============================================================================
 
 const supporters: SupporterCard[] = [
+  // -- Department-swap Supporters (one per base department) --
+  {
+    id: 'mancers.supporter.viona-larone',
+    name: 'Viona Larone',
+    title: 'University Radio DJ',
+    sourcePackId: PACK_ID,
+    department: 'sorcery',
+    timing: 'fast-action',
+    effectId: 'mancers.supporter.viona-larone',
+    description: 'Swap one of your Mages for a Sorcery Mage from the supply.',
+  },
+  {
+    id: 'mancers.supporter.xenitia-zook',
+    name: 'Xenitia Zook',
+    title: 'Infirmary Overseer',
+    sourcePackId: PACK_ID,
+    department: 'mysticism',
+    timing: 'fast-action',
+    effectId: 'mancers.supporter.xenitia-zook',
+    description: 'Swap one of your Mages for a Mysticism Mage from the supply.',
+  },
+  {
+    id: 'mancers.supporter.hikaru-sorayama',
+    name: 'Hikaru Sorayama',
+    title: 'Graduate Student',
+    sourcePackId: PACK_ID,
+    department: 'natural-magick',
+    timing: 'fast-action',
+    effectId: 'mancers.supporter.hikaru-sorayama',
+    description: 'Swap one of your Mages for a Natural Magick Mage from the supply.',
+  },
+  {
+    id: 'mancers.supporter.khadath-ahemusei',
+    name: 'Khadath Ahemusei',
+    title: 'Planar Department Alumnus',
+    sourcePackId: PACK_ID,
+    department: 'planar-studies',
+    timing: 'fast-action',
+    effectId: 'mancers.supporter.khadath-ahemusei',
+    description: 'Swap one of your Mages for a Planar Studies Mage from the supply.',
+  },
+  {
+    id: 'mancers.supporter.cindra-flama',
+    name: 'Cindra Flama',
+    title: "Vice Dean's Ward",
+    sourcePackId: PACK_ID,
+    department: 'divinity',
+    timing: 'fast-action',
+    effectId: 'mancers.supporter.cindra-flama',
+    description: 'Swap one of your Mages for a Divinity Mage from the supply.',
+  },
+  // -- Technomancy (orange) Supporters --
   {
     id: 'mancers.supporter.cin-atalar',
     name: 'Cin Atalar',
