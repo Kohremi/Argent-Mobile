@@ -3657,6 +3657,74 @@ registerEffect('mancers.vault.technomancers-top-hat', (ctx): EffectResult => {
   return { kind: 'done', patch: { ...researchPatch, ...delegate.patch } };
 });
 
+// Alkahest Potion — discard another Vault Card you own; gain its Gold cost +
+// 2 Mana. (Played as a Consumable, so this Potion is already in your discard
+// when the effect runs — the choice is over your remaining Vault Cards.)
+registerEffect('mancers.vault.alkahest-potion', (ctx): EffectResult => {
+  const playerId = ctx.triggeringPlayerId;
+  const player = ctx.state.players.find((p) => p.id === playerId);
+  if (!player) return { kind: 'done', patch: {} };
+  if (!ctx.resumeAnswer) {
+    if (player.vaultCards.length === 0) return { kind: 'done', patch: {} };
+    return {
+      kind: 'pause',
+      pending: {
+        responderId: playerId,
+        prompt: {
+          kind: 'choose-from-options',
+          options: player.vaultCards.map((v) => ({
+            id: v.cardId,
+            label: `${lookupVaultCardDef(ctx.state, v.cardId)?.name ?? v.cardId} (${
+              lookupVaultCardDef(ctx.state, v.cardId)?.goldCost ?? 0
+            } Gold)`,
+            payload: {},
+          })),
+        },
+        resume: { effectId: 'mancers.vault.alkahest-potion', context: {} },
+        source: ctx.source,
+      },
+    };
+  }
+  if (ctx.resumeAnswer.kind !== 'option-chosen') {
+    throw new Error('alkahest-potion expected option-chosen');
+  }
+  const cardId = ctx.resumeAnswer.optionId;
+  const def = lookupVaultCardDef(ctx.state, cardId);
+  if (!def || !player.vaultCards.some((v) => v.cardId === cardId)) {
+    return { kind: 'done', patch: {} };
+  }
+  const gold = def.goldCost;
+  return {
+    kind: 'done',
+    patch: {
+      players: ctx.state.players.map((p) => {
+        if (p.id !== playerId) return p;
+        let removed = false;
+        const vaultCards = p.vaultCards.filter((v) => {
+          if (!removed && v.cardId === cardId) {
+            removed = true;
+            return false;
+          }
+          return true;
+        });
+        return {
+          ...p,
+          vaultCards,
+          personalDiscard: [
+            ...p.personalDiscard,
+            { kind: 'consumable' as const, cardId },
+          ],
+          resources: {
+            ...p.resources,
+            gold: p.resources.gold + gold,
+            mana: p.resources.mana + 2,
+          },
+        };
+      }),
+    },
+  };
+});
+
 // Re-export to satisfy the module's existing `export {}` shape.
 export {};
 

@@ -1252,6 +1252,9 @@ export function buildReactionOptionsFor(
   // Sacred Shield (Mancers synthesis Treasure) never exhausts, so it's offered
   // whether or not it's been used this round — gated only by 1 Mana.
   const hasSacredShield = has('mancers.vault.sacred-shield');
+  // Diviner's Mitre (Mancers Treasure) — only vs. SPELL-source harm.
+  const hasDivinersMitre =
+    has('mancers.vault.diviners-mitre', true) && triggerSource?.kind === 'spell';
 
   // When this is a single-mage window we omit `forMageId` so the existing
   // single-event prompt continues to render with unadorned labels.
@@ -1337,6 +1340,18 @@ export function buildReactionOptionsFor(
         sourceId: 'base.vault.ancient-armor',
         effectId: 'base.vault.ancient-armor.react',
         label: `Use Ancient Armor${labelSuffix(mageId)}`,
+        requiresSlotPick: true,
+        ...(multi ? { forMageId: mageId } : {}),
+      });
+    }
+    // Diviner's Mitre — when a SPELL would wound/banish/move your Mage, place
+    // it in any open slot. Exhausts on use.
+    if (isWoundBanishOrMove && hasDivinersMitre) {
+      options.push({
+        sourceKind: 'vault-card',
+        sourceId: 'mancers.vault.diviners-mitre',
+        effectId: 'mancers.vault.diviners-mitre.react',
+        label: `Play Diviner's Mitre${labelSuffix(mageId)}`,
         requiresSlotPick: true,
         ...(multi ? { forMageId: mageId } : {}),
       });

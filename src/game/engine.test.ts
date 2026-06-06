@@ -12055,6 +12055,70 @@ describe('Mancers Vault cards (Mancers)', () => {
     const space = s.rooms.flatMap((r) => r.actionSpaces).find((x) => x.id === slot)!;
     expect(space.shadowOccupant?.mageId).toBe('cloak');
   });
+
+  it('Alkahest Potion: discards another Vault Card for its Gold cost + 2 Mana', () => {
+    let s = setup('mancers.vault.alkahest-potion');
+    s = addVaultCard(s, 'p1', 'mancers.vault.philosophers-stone'); // cost 4
+    s = play(s, 'mancers.vault.alkahest-potion');
+    s = opt(s, 'mancers.vault.philosophers-stone');
+    expect(p1(s).resources.gold).toBe(4);
+    expect(p1(s).resources.mana).toBe(2);
+    expect(p1(s).vaultCards.some((v) => v.cardId === 'mancers.vault.philosophers-stone')).toBe(false);
+  });
+
+  it("Diviner's Mitre: reacts to a spell wound, repositioning your Mage; exhausts", () => {
+    let s = initGame({ ...TWO_PLAYER_CONFIG, activePackIds: ['base', 'mancers'] });
+    s = zeroPlayerResources(s, 'p1');
+    s = zeroPlayerResources(s, 'p2');
+    s = addMage(s, 'p1', { id: 'alice', cardId: 'base.mage.divinity', color: 'blue' });
+    s = setMana(s, 'p1', 5);
+    s = addOwnedSpell(s, 'p1', 'base.spell.burn');
+    s = addMage(s, 'p2', { id: 'bob', cardId: 'base.mage.neutral', color: 'off-white' });
+    s = addVaultCard(s, 'p2', 'mancers.vault.diviners-mitre');
+    const [slotA, slotB] = (() => {
+      for (const r of s.rooms) {
+        if (r.cannotBePlacedInDirectly) continue;
+        const open = r.actionSpaces.filter((sp) => !sp.occupant).map((sp) => sp.id);
+        if (open.length >= 2) return [open[0]!, open[1]!];
+      }
+      throw new Error('no room with two open slots');
+    })();
+    s = placeMageOnSpace(s, 'p2', 'bob', slotA);
+    s = {
+      ...s,
+      firstPlayerIndex: 0,
+      phase: { kind: 'errands', round: 1, activePlayerIndex: 0, actionUsed: false, fastActionUsed: false },
+      bellTower: { ...s.bellTower, available: [] },
+    };
+    s = applyAction(s, { type: 'CAST_SPELL', playerId: 'p1', spellCardId: 'base.spell.burn', level: 1 });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'mage-chosen', mageId: 'bob' },
+    });
+    const rp = topPending(s);
+    expect(rp.prompt.kind).toBe('reaction-window');
+    if (rp.prompt.kind === 'reaction-window') {
+      expect(rp.prompt.reactionOptions.map((o) => o.sourceId)).toContain(
+        'mancers.vault.diviners-mitre',
+      );
+    }
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: rp.id,
+      answer: {
+        kind: 'reaction-played',
+        effectId: 'mancers.vault.diviners-mitre.react',
+        reactionContext: { destinationSpaceId: slotB },
+      },
+    });
+    const bob = s.players.find((p) => p.id === 'p2')!.mages.find((m) => m.id === 'bob')!;
+    expect(bob.isWounded).toBe(false);
+    expect(bob.location).toEqual({ kind: 'action-space', spaceId: slotB });
+    expect(
+      s.players.find((p) => p.id === 'p2')!.vaultCards.find((v) => v.cardId === 'mancers.vault.diviners-mitre')!.exhausted,
+    ).toBe(true);
+  });
 });
 
 // ============================================================================

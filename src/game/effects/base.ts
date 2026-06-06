@@ -1560,6 +1560,48 @@ registerEffect('mancers.vault.sacred-shield.react', (ctx): EffectResult => {
 });
 
 /**
+ * Diviner's Mitre (Mancers Treasure, reaction) — when one of your Mages would
+ * be wounded, banished, or moved BY A SPELL, place it in any empty slot (the
+ * spell-source gate lives in `buildReactionOptionsFor`). Mirrors Ancient
+ * Armor's reposition; the card exhausts on use.
+ */
+registerEffect('mancers.vault.diviners-mitre.react', (ctx): EffectResult => {
+  const raw = ctx.resumeContext?.['triggerEvent'];
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    throw new Error("Diviner's Mitre: missing triggerEvent");
+  }
+  const event = raw as unknown as ReactionTriggerEvent;
+  if (
+    event.kind !== 'mage-wounded' &&
+    event.kind !== 'mage-banished' &&
+    event.kind !== 'mage-moved'
+  ) {
+    throw new Error(`Diviner's Mitre cannot react to ${event.kind}`);
+  }
+  if (event.ownerId !== ctx.triggeringPlayerId) {
+    throw new Error("Diviner's Mitre: only protects your own Mage");
+  }
+  const destinationSpaceId = resolveReactionDestination(
+    ctx.state,
+    event,
+    ctx.resumeContext,
+  );
+  if (!destinationSpaceId) return { kind: 'done', patch: {} };
+  return {
+    kind: 'done',
+    patch: applyReactionReposition(ctx.state, {
+      mageId: event.mageId,
+      ownerId: event.ownerId,
+      reactorId: ctx.triggeringPlayerId,
+      destinationSpaceId,
+      asShadow: false,
+      cardId: 'mancers.vault.diviners-mitre',
+      disposal: 'exhaust',
+    }),
+  };
+});
+
+/**
  * Mystic Amulet (treasure, reaction) — "after" an opponent banishes or
  * shadows your Mage, move your Mage to any open slot on the board. UI
  * supplies the slot id via `requiresSlotPick`; falls back to original
