@@ -28709,3 +28709,90 @@ describe('The Laws of Thaumodynamics (Mancers)', () => {
     expect(findMage(s, 'p1', 'placer').location).toEqual({ kind: 'action-space', spaceId: slotId });
   });
 });
+
+// ============================================================================
+// Breath of Winter (Natural Magick, Mancers) — three single-target wounds.
+// ============================================================================
+describe('Breath of Winter (Mancers)', () => {
+  function setup(level: 1 | 2 | 3): GameState {
+    let s = initGame({ ...TWO_PLAYER_CONFIG, activePackIds: ['base', 'mancers'] });
+    s = zeroPlayerResources(s, 'p1');
+    s = setMana(s, 'p1', 2);
+    s = addOwnedSpell(s, 'p1', 'mancers.spell.breath-of-winter', {
+      intPlaced: true,
+      wisPlacedLevel2: level >= 2,
+      wisPlacedLevel3: level >= 3,
+    });
+    return {
+      ...s,
+      firstPlayerIndex: 0,
+      phase: { kind: 'errands', round: 1, activePlayerIndex: 0, actionUsed: false, fastActionUsed: false },
+    };
+  }
+  const cast = (s: GameState, level: 1 | 2 | 3) =>
+    applyAction(s, { type: 'CAST_SPELL', playerId: 'p1', spellCardId: 'mancers.spell.breath-of-winter', level });
+  const findMage = (s: GameState, owner: string, id: string) =>
+    s.players.find((p) => p.id === owner)!.mages.find((m) => m.id === id)!;
+  const settle = (s: GameState): GameState => {
+    let guard = 0;
+    while (s.pendingResolutionStack.length > 0 && guard++ < 12) {
+      const t = topPending(s);
+      if (t.prompt.kind === 'reaction-window') {
+        s = applyAction(s, { type: 'RESOLVE_PENDING', resolutionId: t.id, answer: { kind: 'reaction-passed' } });
+      } else if (t.prompt.kind === 'choose-from-options') {
+        s = applyAction(s, { type: 'RESOLVE_PENDING', resolutionId: t.id, answer: { kind: 'option-chosen', optionId: t.prompt.options[0]!.id, payload: {} } });
+      } else break;
+    }
+    return s;
+  };
+  const twoSlotRoom = (s: GameState) =>
+    s.rooms.find((r) => !r.cannotBePlacedInDirectly && r.actionSpaces.filter((sp) => !sp.occupant).length >= 2)!;
+
+  it('L1 Frost: only Mages sharing a room with one of yours are targetable', () => {
+    let s = setup(1);
+    const room = twoSlotRoom(s);
+    const other = s.rooms.find((r) => r.id !== room.id && !r.cannotBePlacedInDirectly && r.actionSpaces.some((sp) => !sp.occupant))!;
+    s = addMage(s, 'p1', { id: 'mine', cardId: 'base.mage.neutral', color: 'off-white' });
+    s = addMage(s, 'p2', { id: 'victim', cardId: 'base.mage.neutral', color: 'off-white' });
+    s = addMage(s, 'p2', { id: 'far', cardId: 'base.mage.neutral', color: 'off-white' });
+    s = placeMageOnSpace(s, 'p1', 'mine', room.actionSpaces[0]!.id);
+    s = placeMageOnSpace(s, 'p2', 'victim', room.actionSpaces[1]!.id);
+    s = placeMageOnSpace(s, 'p2', 'far', other.actionSpaces.find((sp) => !sp.occupant)!.id);
+    s = cast(s, 1);
+    const t = topPending(s);
+    if (t.prompt.kind !== 'choose-target-mage') throw new Error('x');
+    expect(t.prompt.eligibleMageIds).toContain('victim');
+    expect(t.prompt.eligibleMageIds).not.toContain('far');
+    s = applyAction(s, { type: 'RESOLVE_PENDING', resolutionId: t.id, answer: { kind: 'mage-chosen', mageId: 'victim' } });
+    s = settle(s);
+    expect(findMage(s, 'p2', 'victim').isWounded).toBe(true);
+    expect(findMage(s, 'p2', 'far').isWounded).toBe(false);
+  });
+
+  it('L2 Frost Bolt: wounds any placed Mage', () => {
+    let s = setup(2);
+    const room = twoSlotRoom(s);
+    s = addMage(s, 'p2', { id: 'v', cardId: 'base.mage.neutral', color: 'off-white' });
+    s = placeMageOnSpace(s, 'p2', 'v', room.actionSpaces[0]!.id);
+    s = cast(s, 2);
+    s = applyAction(s, { type: 'RESOLVE_PENDING', resolutionId: topPending(s).id, answer: { kind: 'mage-chosen', mageId: 'v' } });
+    s = settle(s);
+    expect(findMage(s, 'p2', 'v').isWounded).toBe(true);
+  });
+
+  it("L3 Freezing Bolt: wounds an opponent's office Mage (but not a green one)", () => {
+    let s = setup(3);
+    s = addMage(s, 'p2', { id: 'desk', cardId: 'base.mage.neutral', color: 'off-white' });
+    s = addMage(s, 'p2', { id: 'greenie', cardId: 'base.mage.natural-magick', color: 'green' });
+    s = cast(s, 3);
+    const t = topPending(s);
+    if (t.prompt.kind !== 'choose-target-mage') throw new Error('x');
+    // The off-white office Mage is targetable; the green one is wound-immune.
+    expect(t.prompt.eligibleMageIds).toContain('desk');
+    expect(t.prompt.eligibleMageIds).not.toContain('greenie');
+    s = applyAction(s, { type: 'RESOLVE_PENDING', resolutionId: t.id, answer: { kind: 'mage-chosen', mageId: 'desk' } });
+    s = settle(s);
+    expect(findMage(s, 'p2', 'desk').isWounded).toBe(true);
+    expect(findMage(s, 'p2', 'desk').location.kind).toBe('infirmary');
+  });
+});

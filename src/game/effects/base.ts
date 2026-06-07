@@ -54,6 +54,7 @@ import {
   lookupSpellCardDef,
   lookupVaultCardDef,
   MAGE_CARD_BY_COLOR,
+  magesLosePowers,
   moveMageToSpace,
   placeOfficeMageAsShadow,
   refreshOwnedSpellPatch,
@@ -12677,6 +12678,141 @@ registerEffect('mancers.spell.the-laws-of-thaumodynamics.l3', (ctx): EffectResul
     second: 'Wound a second Mage in the same room (or pass)',
   });
 });
+
+// ============================================================================
+// Breath of Winter (Natural Magick, Mancers) — three single-target wound
+// variants, all driven by the shared castSingleWound helper.
+//   L1 Frost        (Free): wound a Mage in a room with one of yours.
+//   L2 Frost Bolt   (1 Mana, Fast): wound any Mage.
+//   L3 Freezing Bolt(1 Mana, Fast): wound a Mage in an opponent's office.
+// ============================================================================
+
+/**
+ * Reusable "wound one chosen Mage" spell flow: prompt a target from
+ * `targets(state)`, wound it (opening the standard wound reaction window),
+ * then surface the victim's Infirmary bonus if applicable. Self-drives via
+ * `self` + the 'wound' / 'after-wound' / 'after-bonus' resume steps.
+ */
+function castSingleWound(
+  ctx: EffectContext,
+  self: string,
+  targets: (state: GameState) => string[],
+): EffectResult {
+  const step = ctx.resumeContext?.['step'];
+
+  if (step === 'after-wound') {
+    const event = readTriggerEvent(ctx);
+    if (event && checkInfirmaryBonusApplies(ctx.state, event)) {
+      return {
+        kind: 'pause',
+        pending: bonusPromptFor(ctx.state, event, ctx.triggeringPlayerId, {
+          effectId: self,
+          context: { step: 'after-bonus', recipientPlayerId: event.ownerId },
+        }),
+      };
+    }
+    return { kind: 'done', patch: {} };
+  }
+
+  if (step === 'after-bonus') {
+    if (ctx.resumeAnswer?.kind !== 'option-chosen') {
+      throw new Error(`${self} after-bonus expected option-chosen`);
+    }
+    const recipientId = ctx.resumeContext?.['recipientPlayerId'];
+    if (typeof recipientId !== 'string') {
+      throw new Error(`${self} after-bonus: missing recipientPlayerId`);
+    }
+    return {
+      kind: 'done',
+      patch: applyInfirmaryBonusFromCtx(ctx.state, recipientId, ctx.resumeAnswer, ctx.resumeContext),
+    };
+  }
+
+  if (step === 'wound') {
+    if (ctx.resumeAnswer?.kind !== 'mage-chosen') {
+      throw new Error(`${self} wound expected mage-chosen`);
+    }
+    const wound = woundMage(ctx.state, ctx.resumeAnswer.mageId, ctx.triggeringPlayerId);
+    return {
+      kind: 'open-reaction',
+      patch: wound.patch,
+      window: {
+        triggerEvents: [wound.triggerEvent],
+        pendingResponderIds: buildReactionQueue(ctx.state, ctx.triggeringPlayerId),
+        reactedPlayerIds: [],
+        afterResume: {
+          effectId: self,
+          context: { step: 'after-wound', triggerEvent: triggerEventToContext(wound.triggerEvent) },
+        },
+        source: ctx.source,
+      },
+    };
+  }
+
+  const eligible = targets(ctx.state);
+  if (eligible.length === 0) return { kind: 'done', patch: {} };
+  return {
+    kind: 'pause',
+    pending: {
+      responderId: ctx.triggeringPlayerId,
+      prompt: { kind: 'choose-target-mage', eligibleMageIds: eligible, label: 'Wound which Mage?' },
+      resume: { effectId: self, context: { step: 'wound' } },
+      source: ctx.source,
+    },
+  };
+}
+
+/** Woundable Mages sharing a room with one of the caster's own Mages. */
+function buildCoLocatedWoundTargets(state: GameState, casterId: string): string[] {
+  const casterRooms = new Set<string>();
+  for (const r of state.rooms) {
+    if (
+      r.actionSpaces.some(
+        (s) => s.occupant?.ownerId === casterId || s.shadowOccupant?.ownerId === casterId,
+      )
+    ) {
+      casterRooms.add(r.id);
+    }
+  }
+  return buildBurnTargets(state, casterId).filter((id) => {
+    const room = roomIdOfPlacedMage(state, id);
+    return room !== null && casterRooms.has(room);
+  });
+}
+
+/** Mages in an OPPONENT's office that a spell can wound — green (wound-immune)
+ *  and opposing-blue (spell-immune) are protected unless Mages have lost their
+ *  powers (Mesmerize), in which case green's protection drops. */
+function buildOpponentOfficeWoundTargets(state: GameState, casterId: string): string[] {
+  const powersLost = magesLosePowers(state);
+  const out: string[] = [];
+  for (const p of state.players) {
+    if (p.id === casterId) continue;
+    for (const m of p.mages) {
+      if (m.location.kind !== 'office' || m.isWounded) continue;
+      if (!powersLost && actsAsColor(m, 'green')) continue;
+      if (actsAsColor(m, 'blue')) continue;
+      out.push(m.id);
+    }
+  }
+  return out;
+}
+
+registerEffect('mancers.spell.breath-of-winter.l1', (ctx): EffectResult =>
+  castSingleWound(ctx, 'mancers.spell.breath-of-winter.l1', (state) =>
+    buildCoLocatedWoundTargets(state, ctx.triggeringPlayerId),
+  ),
+);
+registerEffect('mancers.spell.breath-of-winter.l2', (ctx): EffectResult =>
+  castSingleWound(ctx, 'mancers.spell.breath-of-winter.l2', (state) =>
+    buildBurnTargets(state, ctx.triggeringPlayerId),
+  ),
+);
+registerEffect('mancers.spell.breath-of-winter.l3', (ctx): EffectResult =>
+  castSingleWound(ctx, 'mancers.spell.breath-of-winter.l3', (state) =>
+    buildOpponentOfficeWoundTargets(state, ctx.triggeringPlayerId),
+  ),
+);
 
 // ----------------------------------------------------------------------------
 // batch-post-wound-bonus — fired as the afterResume continuation for batch

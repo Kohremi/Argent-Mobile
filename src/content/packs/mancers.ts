@@ -406,6 +406,40 @@ const artificiersCompanion: SpellCard = {
 
 const legendarySpells: SpellCard[] = [...leaderSpells, artificiersCompanion];
 
+// Breath of Winter (Natural Magick) — three single-target wound variants.
+const breathOfWinter: SpellCard = {
+  id: 'mancers.spell.breath-of-winter',
+  name: 'Breath of Winter',
+  sourcePackId: PACK_ID,
+  department: 'natural-magick',
+  levels: [
+    {
+      level: 1,
+      title: 'Frost',
+      manaCost: 0,
+      timing: 'action',
+      effectId: 'mancers.spell.breath-of-winter.l1',
+      description: 'Wound a Mage that is in a room with one of your Mages.',
+    },
+    {
+      level: 2,
+      title: 'Frost Bolt',
+      manaCost: 1,
+      timing: 'fast-action',
+      effectId: 'mancers.spell.breath-of-winter.l2',
+      description: 'Wound a Mage.',
+    },
+    {
+      level: 3,
+      title: 'Freezing Bolt',
+      manaCost: 1,
+      timing: 'fast-action',
+      effectId: 'mancers.spell.breath-of-winter.l3',
+      description: "Wound a Mage in an opponent's office.",
+    },
+  ],
+};
+
 // The Laws of Thaumodynamics (Technomancy) — three "bomb" effects that each
 // hit up to two Mages in a single room.
 const lawsOfThaumodynamics: SpellCard = {
@@ -1390,7 +1424,7 @@ export const mancersPack: ContentPack = {
     synthesisWorkshopA,
     synthesisWorkshopB,
   ],
-  spells: [devastationNow, divineCataclysm, lawsOfThaumodynamics],
+  spells: [devastationNow, divineCataclysm, lawsOfThaumodynamics, breathOfWinter],
   legendarySpells,
   vaultCards: [...stuffVaultCards, ...synthesisTreasures],
   supporters,
