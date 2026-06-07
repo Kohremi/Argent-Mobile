@@ -249,6 +249,14 @@ export interface Player {
    */
   nextVaultDiscardKept?: boolean;
   /**
+   * Buff flag: the next time this player would EXHAUST a Vault Card this turn
+   * (i.e. play a Treasure), it stays readied instead. Set by Arcane Copy
+   * (Metamorphic Remediaries L1), which keeps a card whether it would discard
+   * or exhaust — so Arcane Copy sets this alongside `nextVaultDiscardKept`.
+   * Cleared by the first Vault-card play and at turn end.
+   */
+  nextVaultExhaustKept?: boolean;
+  /**
    * Buff flag: the next Gold cost this player would pay is reduced to
    * zero. Set by Auric Catalyst's reaction. Consumed by the post-window
    * apply-buy step (or the equivalent paid acquisition). Does NOT

@@ -406,6 +406,42 @@ const artificiersCompanion: SpellCard = {
 
 const legendarySpells: SpellCard[] = [...leaderSpells, artificiersCompanion];
 
+// Metamorphic Remediaries (Technomancy) — Vault-card tricks.
+const metamorphicRemediaries: SpellCard = {
+  id: 'mancers.spell.metamorphic-remediaries',
+  name: 'Metamorphic Remediaries',
+  sourcePackId: PACK_ID,
+  department: 'technomancy',
+  levels: [
+    {
+      level: 1,
+      title: 'Arcane Copy',
+      manaCost: 2,
+      timing: 'fast-action',
+      effectId: 'mancers.spell.metamorphic-remediaries.l1',
+      description:
+        'The next time you would discard or exhaust a Vault Card this turn, keep it in your office or readied instead.',
+    },
+    {
+      level: 2,
+      title: 'Replicate',
+      manaCost: 3,
+      timing: 'action',
+      effectId: 'mancers.spell.metamorphic-remediaries.l2',
+      description:
+        'Use a Vault Card in an opponent’s office, but do not exhaust or discard it.',
+    },
+    {
+      level: 3,
+      title: 'Transmute',
+      manaCost: 3,
+      timing: 'fast-action',
+      effectId: 'mancers.spell.metamorphic-remediaries.l3',
+      description: 'Gain Gold equal to your INT, OR gain Mana equal to your WIS.',
+    },
+  ],
+};
+
 // The Black Chronicle, v13 (Mysticism) — shadow-pair manipulation.
 const blackChronicle: SpellCard = {
   id: 'mancers.spell.the-black-chronicle-v13',
@@ -1502,6 +1538,7 @@ export const mancersPack: ContentPack = {
     breathOfWinter,
     beyondTheBeyonds,
     blackChronicle,
+    metamorphicRemediaries,
   ],
   legendarySpells,
   vaultCards: [...stuffVaultCards, ...synthesisTreasures],

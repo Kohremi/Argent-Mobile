@@ -2230,6 +2230,19 @@ function handlePlayVaultCard(
     players: state.players.map((p) => {
       if (p.id !== action.playerId) return p;
       if (card.type === 'treasure') {
+        // Treasures normally exhaust in place. Arcane Copy (Metamorphic
+        // Remediaries L1) keeps the card readied instead — its "discard OR
+        // exhaust" buff covers the exhaust case. One-shot; clears both flags.
+        if (p.nextVaultExhaustKept) {
+          return {
+            ...p,
+            nextVaultDiscardKept: false,
+            nextVaultExhaustKept: false,
+            vaultCards: p.vaultCards.map((v, i) =>
+              i === ownedIdx ? { ...v, exhausted: false } : v,
+            ),
+          };
+        }
         return {
           ...p,
           vaultCards: p.vaultCards.map((v, i) =>
@@ -2237,13 +2250,14 @@ function handlePlayVaultCard(
           ),
         };
       }
-      // consumable: would go to discard — unless Clockwerk Replicator is
-      // active, which keeps it readied (unexhausted) in your vault instead.
-      // The buff is one-shot, consumed by this disposal.
+      // consumable: would go to discard — unless Clockwerk Replicator / Arcane
+      // Copy is active, which keeps it readied (unexhausted) in your vault
+      // instead. The buff is one-shot, consumed by this disposal.
       if (p.nextVaultDiscardKept) {
         return {
           ...p,
           nextVaultDiscardKept: false,
+          nextVaultExhaustKept: false,
           vaultCards: p.vaultCards.map((v, i) =>
             i === ownedIdx ? { ...v, exhausted: false } : v,
           ),
@@ -2951,6 +2965,7 @@ function processErrandsAdvance(state: GameState): GameState {
               nextSpellSkipsExhaust: false,
               nextSpellPlacesMage: false,
               nextVaultDiscardKept: false,
+              nextVaultExhaustKept: false,
             },
       )
     : state.players;

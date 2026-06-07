@@ -13363,6 +13363,100 @@ registerEffect('mancers.spell.the-black-chronicle-v13.l3', (ctx): EffectResult =
   };
 });
 
+// ============================================================================
+// Metamorphic Remediaries (Technomancy, Mancers) — Vault-card tricks.
+//   L1 Arcane Copy (2 Mana, Fast): keep the next Vault Card you'd discard OR
+//      exhaust this turn (sets both keep-flags; engine consumes one on play).
+//   L2 Replicate   (3 Mana): use a wired Vault Card in an opponent's office
+//      WITHOUT exhausting/discarding their copy.
+//   L3 Transmute   (3 Mana, Fast): gain Gold = your INT, OR Mana = your WIS.
+// ============================================================================
+
+registerEffect('mancers.spell.metamorphic-remediaries.l1', (ctx): EffectResult => ({
+  kind: 'done',
+  patch: {
+    players: ctx.state.players.map((p) =>
+      p.id === ctx.triggeringPlayerId
+        ? { ...p, nextVaultDiscardKept: true, nextVaultExhaustKept: true }
+        : p,
+    ),
+  },
+}));
+
+registerEffect('mancers.spell.metamorphic-remediaries.l2', (ctx): EffectResult => {
+  const self = 'mancers.spell.metamorphic-remediaries.l2';
+  if (ctx.resumeContext?.['step'] === 'apply') {
+    if (ctx.resumeAnswer?.kind !== 'option-chosen') {
+      throw new Error(`${self} apply expected option-chosen`);
+    }
+    const cardId = ctx.resumeAnswer.optionId.split('::')[1];
+    const def = cardId ? lookupVaultCardDef(ctx.state, cardId) : null;
+    if (!def || !hasEffect(def.effectId)) return { kind: 'done', patch: {} };
+    // Run the opponent's card AS the caster; their copy is untouched (not
+    // exhausted/discarded), so we never go through PLAY_VAULT_CARD.
+    return getEffect(def.effectId)({
+      state: ctx.state,
+      source: {
+        kind: 'vault-card',
+        id: def.id,
+        triggeringPlayerId: ctx.triggeringPlayerId,
+        description: def.name,
+      },
+      triggeringPlayerId: ctx.triggeringPlayerId,
+      allowReactions: ctx.allowReactions,
+    });
+  }
+  // Initial: list wired, non-reaction Vault Cards in opponents' offices.
+  const options: ChoiceOption[] = [];
+  for (const p of ctx.state.players) {
+    if (p.id === ctx.triggeringPlayerId) continue;
+    for (const v of p.vaultCards) {
+      const def = lookupVaultCardDef(ctx.state, v.cardId);
+      if (!def || def.timing === 'reaction' || !hasEffect(def.effectId)) continue;
+      options.push({ id: `${p.id}::${v.cardId}`, label: `${def.name} (${p.id})`, payload: {} });
+    }
+  }
+  if (options.length === 0) return { kind: 'done', patch: {} };
+  return {
+    kind: 'pause',
+    pending: {
+      responderId: ctx.triggeringPlayerId,
+      prompt: { kind: 'choose-from-options', options },
+      resume: { effectId: self, context: { step: 'apply' } },
+      source: ctx.source,
+    },
+  };
+});
+
+registerEffect('mancers.spell.metamorphic-remediaries.l3', (ctx): EffectResult => {
+  const self = 'mancers.spell.metamorphic-remediaries.l3';
+  const player = ctx.state.players.find((p) => p.id === ctx.triggeringPlayerId);
+  if (!player) return { kind: 'done', patch: {} };
+  if (ctx.resumeContext?.['step'] === 'apply') {
+    if (ctx.resumeAnswer?.kind !== 'option-chosen') {
+      throw new Error(`${self} apply expected option-chosen`);
+    }
+    return ctx.resumeAnswer.optionId === 'gold'
+      ? { kind: 'done', patch: gainResourcePatch(ctx.state, ctx.triggeringPlayerId, 'gold', player.resources.intelligence) }
+      : { kind: 'done', patch: gainResourcePatch(ctx.state, ctx.triggeringPlayerId, 'mana', player.resources.wisdom) };
+  }
+  return {
+    kind: 'pause',
+    pending: {
+      responderId: ctx.triggeringPlayerId,
+      prompt: {
+        kind: 'choose-from-options',
+        options: [
+          { id: 'gold', label: `Gain ${player.resources.intelligence} Gold (your INT)`, payload: {} },
+          { id: 'mana', label: `Gain ${player.resources.wisdom} Mana (your WIS)`, payload: {} },
+        ],
+      },
+      resume: { effectId: self, context: { step: 'apply' } },
+      source: ctx.source,
+    },
+  };
+});
+
 // ----------------------------------------------------------------------------
 // batch-post-wound-bonus — fired as the afterResume continuation for batch
 // wound spells (Plague, Pestilence, Fireball, Inferno) once the reaction

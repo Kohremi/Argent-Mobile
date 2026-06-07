@@ -29052,3 +29052,72 @@ describe('The Black Chronicle (Mancers)', () => {
     expect(s.mageDraftPool[color as keyof typeof s.mageDraftPool]).toBe(poolBefore - 1);
   });
 });
+
+// ============================================================================
+// Metamorphic Remediaries (Technomancy, Mancers) — Vault-card tricks.
+// ============================================================================
+describe('Metamorphic Remediaries (Mancers)', () => {
+  function setup(level: 1 | 2 | 3): GameState {
+    let s = initGame({ ...TWO_PLAYER_CONFIG, activePackIds: ['base', 'mancers'] });
+    s = zeroPlayerResources(s, 'p1');
+    s = setMana(s, 'p1', 3);
+    s = addOwnedSpell(s, 'p1', 'mancers.spell.metamorphic-remediaries', {
+      intPlaced: true,
+      wisPlacedLevel2: level >= 2,
+      wisPlacedLevel3: level >= 3,
+    });
+    return {
+      ...s,
+      firstPlayerIndex: 0,
+      phase: { kind: 'errands', round: 1, activePlayerIndex: 0, actionUsed: false, fastActionUsed: false },
+    };
+  }
+  const cast = (s: GameState, level: 1 | 2 | 3) =>
+    applyAction(s, { type: 'CAST_SPELL', playerId: 'p1', spellCardId: 'mancers.spell.metamorphic-remediaries', level });
+  const p1 = (s: GameState) => s.players.find((p) => p.id === 'p1')!;
+  const opt = (s: GameState, optionId: string) =>
+    applyAction(s, { type: 'RESOLVE_PENDING', resolutionId: topPending(s).id, answer: { kind: 'option-chosen', optionId, payload: {} } });
+
+  it('L1 Arcane Copy: the next Treasure you play stays readied instead of exhausting', () => {
+    let s = setup(1);
+    s = addVaultCard(s, 'p1', 'mancers.vault.philosophers-stone'); // Treasure, gain 4 Gold
+    s = cast(s, 1);
+    expect(p1(s).nextVaultExhaustKept).toBe(true);
+    s = applyAction(s, { type: 'PLAY_VAULT_CARD', playerId: 'p1', vaultCardId: 'mancers.vault.philosophers-stone' });
+    const card = p1(s).vaultCards.find((v) => v.cardId === 'mancers.vault.philosophers-stone');
+    expect(card).toBeDefined();
+    expect(card!.exhausted).toBe(false); // kept readied
+    expect(p1(s).resources.gold).toBe(4); // effect still ran
+    expect(p1(s).nextVaultExhaustKept).toBe(false); // one-shot, consumed
+  });
+
+  it("L2 Replicate: uses an opponent's Vault Card without spending their copy", () => {
+    let s = setup(2);
+    s = addVaultCard(s, 'p2', 'mancers.vault.philosophers-stone');
+    s = cast(s, 2);
+    const top = topPending(s);
+    if (top.prompt.kind !== 'choose-from-options') throw new Error('x');
+    const choice = top.prompt.options.find((o) => o.id.endsWith('mancers.vault.philosophers-stone'))!;
+    s = opt(s, choice.id);
+    // The caster reaped the effect (4 Gold)...
+    expect(p1(s).resources.gold).toBe(4);
+    // ...and the opponent's card is untouched (still owned, not exhausted).
+    const p2card = s.players.find((p) => p.id === 'p2')!.vaultCards.find((v) => v.cardId === 'mancers.vault.philosophers-stone');
+    expect(p2card).toBeDefined();
+    expect(p2card!.exhausted).toBe(false);
+  });
+
+  it('L3 Transmute: gain Gold equal to your INT, OR Mana equal to your WIS', () => {
+    let s = setup(3);
+    s = mapPlayer(s, 'p1', (p) => ({ ...p, resources: { ...p.resources, intelligence: 3, wisdom: 2 } }));
+    s = setMana(s, 'p1', 3);
+    // Gold branch → +INT (3) gold.
+    let g = cast(s, 3);
+    g = opt(g, 'gold');
+    expect(g.players.find((p) => p.id === 'p1')!.resources.gold).toBe(3);
+    // Mana branch → +WIS (2) mana (3 spent on the cast, then +2).
+    let m = cast(s, 3);
+    m = opt(m, 'mana');
+    expect(m.players.find((p) => p.id === 'p1')!.resources.mana).toBe(2);
+  });
+});
