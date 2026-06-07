@@ -363,6 +363,49 @@ const arcaneInvestigation: SpellCard = {
 // so these aren't draftable via Sealed Scroll either.
 const leaderSpells: SpellCard[] = [arcaneSurge, arcaneInvestigation];
 
+// Technomancy legendary book — researchable by anyone (e.g. via Sealed Scroll),
+// NOT a unique leader spell, so it lives in `legendarySpells` (out of the draft
+// pool) but is still offered by `unclaimedLegendaryBooks`. All three levels are
+// reactions to the last Bell Tower Offering being taken by another player; each
+// places one of your office Mages into a different slot type.
+const artificiersCompanion: SpellCard = {
+  id: 'mancers.spell.artificiers-companion-4th-ed',
+  name: "Artificier's Companion, 4th Ed.",
+  sourcePackId: PACK_ID,
+  department: 'technomancy',
+  levels: [
+    {
+      level: 1,
+      title: 'Iron Golem',
+      manaCost: 0,
+      timing: 'reaction',
+      effectId: 'mancers.spell.artificiers-companion-4th-ed.l1.react',
+      description:
+        'When the last Bell Tower Offering is taken by another player, you may place a Mage into any non-merit slot.',
+    },
+    {
+      level: 2,
+      title: 'Gilded Golem',
+      manaCost: 0,
+      timing: 'reaction',
+      effectId: 'mancers.spell.artificiers-companion-4th-ed.l2.react',
+      description:
+        'When the last Bell Tower Offering is taken by another player, you may place a Mage in a merit slot.',
+    },
+    {
+      level: 3,
+      title: 'Ehrlite Golem',
+      manaCost: 1,
+      timing: 'reaction',
+      effectId: 'mancers.spell.artificiers-companion-4th-ed.l3.react',
+      description:
+        'When the last Bell Tower Offering is taken by another player, you may place a Mage in any empty shadow slot.',
+    },
+  ],
+};
+
+const legendarySpells: SpellCard[] = [...leaderSpells, artificiersCompanion];
+
 // ============================================================================
 // Candidates — Mancers introduces ONLY the two Technomancy leaders.
 // Both are selectable in candidate-draft when the Mancers pack is seated.
@@ -1236,7 +1279,7 @@ export const mancersPack: ContentPack = {
     synthesisWorkshopB,
   ],
   spells: [],
-  legendarySpells: leaderSpells,
+  legendarySpells,
   vaultCards: [...stuffVaultCards, ...synthesisTreasures],
   supporters,
   voters,

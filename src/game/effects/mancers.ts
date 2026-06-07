@@ -2809,6 +2809,245 @@ registerEffect('mancers.vault.shadow-salve', (ctx): EffectResult =>
 );
 
 // ============================================================================
+// Artificier's Companion, 4th Ed. (Technomancy legendary) — a reaction to the
+// last Bell Tower Offering being taken by another player. Each researched level
+// places one of your office Mages into a different slot type, using Mage powers
+// (the orange Technomancy "upon placement" trigger fires; shadowing an
+// opponent's base Mage opens a mage-shadowed reaction window):
+//   L1 Iron Golem   (Free):   any non-merit (regular) base slot.
+//   L2 Gilded Golem  (Free):   a merit base slot.
+//   L3 Ehrlite Golem (1 Mana): any empty shadow slot.
+// ============================================================================
+type GolemSlotMode = 'regular' | 'merit' | 'shadow';
+
+function golemEligibleSlots(
+  state: GameState,
+  playerId: PlayerId,
+  mode: GolemSlotMode,
+): ActionSpaceId[] {
+  if (mode === 'shadow') return openShadowSlotsForGolem(state);
+  // Cap/lock-aware open base slots, narrowed to the requested slot type.
+  return listPlaceWithoutPowersSlots(state, playerId, undefined).filter((sid) => {
+    const s = state.rooms.flatMap((r) => r.actionSpaces).find((x) => x.id === sid);
+    return mode === 'merit' ? s?.slotType === 'merit' : s?.slotType === 'regular';
+  });
+}
+
+function artificierGolemPlace(
+  ctx: EffectContext,
+  self: string,
+  spellCardId: string,
+  manaCost: number,
+  mode: GolemSlotMode,
+): EffectResult {
+  const step = ctx.resumeContext?.['step'];
+  const playerId = ctx.triggeringPlayerId;
+  const player = ctx.state.players.find((p) => p.id === playerId);
+  if (!player) return { kind: 'done', patch: {} };
+
+  if (step === 'apply') {
+    if (ctx.resumeAnswer?.kind !== 'space-chosen') {
+      throw new Error(`${self} apply expected space-chosen`);
+    }
+    const spaceId = ctx.resumeAnswer.spaceId;
+    const mageId = ctx.resumeContext?.['mageId'];
+    if (typeof mageId !== 'string') return { kind: 'done', patch: {} };
+    const mage = player.mages.find((m) => m.id === mageId);
+    if (
+      !mage ||
+      mage.location.kind !== 'office' ||
+      player.resources.mana < manaCost ||
+      !golemEligibleSlots(ctx.state, playerId, mode).includes(spaceId)
+    ) {
+      return { kind: 'done', patch: {} };
+    }
+    // Commit: pay the Mana cost + exhaust the spell.
+    const paid: GameState = {
+      ...ctx.state,
+      players: ctx.state.players.map((p) =>
+        p.id !== playerId
+          ? p
+          : {
+              ...p,
+              resources: { ...p.resources, mana: p.resources.mana - manaCost },
+              ownedSpells: p.ownedSpells.map((s) =>
+                s.cardId === spellCardId ? { ...s, exhausted: true } : s,
+              ),
+            },
+      ),
+    };
+
+    if (mode === 'shadow') {
+      const space = paid.rooms
+        .flatMap((r) => r.actionSpaces)
+        .find((s) => s.id === spaceId);
+      const occ: WorkerOccupancy = { mageId, ownerId: playerId, isShadowing: true };
+      const working: GameState = {
+        ...paid,
+        players: paid.players.map((p) =>
+          p.id !== playerId
+            ? p
+            : {
+                ...p,
+                mages: p.mages.map((m) =>
+                  m.id !== mageId
+                    ? m
+                    : {
+                        ...m,
+                        location: { kind: 'action-space', spaceId },
+                        isShadowing: true,
+                      },
+                ),
+              },
+        ),
+        rooms: paid.rooms.map((r) => ({
+          ...r,
+          actionSpaces: r.actionSpaces.map((s) =>
+            s.id !== spaceId ? s : { ...s, shadowOccupant: occ },
+          ),
+        })),
+      };
+      const patch: GameStatePatch = {
+        players: working.players,
+        rooms: working.rooms,
+      };
+      // Shadowing an opponent's base Mage opens a mage-shadowed reaction window.
+      const baseOcc = space?.occupant;
+      if (baseOcc && baseOcc.ownerId !== playerId) {
+        const event: ReactionTriggerEvent = {
+          kind: 'mage-shadowed',
+          mageId: baseOcc.mageId,
+          ownerId: baseOcc.ownerId,
+          byPlayerId: playerId,
+          spaceId,
+        };
+        return {
+          kind: 'open-reaction',
+          patch,
+          window: {
+            triggerEvents: [event],
+            pendingResponderIds: buildReactionQueue(working, playerId),
+            reactedPlayerIds: [],
+            afterResume: { effectId: 'base.system.noop', context: {} },
+            source: ctx.source,
+          },
+        };
+      }
+      return { kind: 'done', patch };
+    }
+
+    // Base placement (regular / merit) into an empty slot, firing Mage powers.
+    const occ: WorkerOccupancy = { mageId, ownerId: playerId, isShadowing: false };
+    const working: GameState = {
+      ...paid,
+      players: paid.players.map((p) =>
+        p.id !== playerId
+          ? p
+          : {
+              ...p,
+              mages: p.mages.map((m) =>
+                m.id !== mageId
+                  ? m
+                  : {
+                      ...m,
+                      location: { kind: 'action-space', spaceId },
+                      isShadowing: false,
+                    },
+              ),
+            },
+      ),
+      rooms: paid.rooms.map((r) => ({
+        ...r,
+        actionSpaces: r.actionSpaces.map((s) =>
+          s.id !== spaceId ? s : { ...s, occupant: occ },
+        ),
+      })),
+    };
+    return {
+      kind: 'done',
+      patch: {
+        players: working.players,
+        rooms: working.rooms,
+        ...technomancyOnPlacePatch(working, playerId, mageId, spaceId),
+      },
+    };
+  }
+
+  if (step === 'slot') {
+    if (ctx.resumeAnswer?.kind === 'pass') return { kind: 'done', patch: {} };
+    if (ctx.resumeAnswer?.kind !== 'mage-chosen') {
+      throw new Error(`${self} slot expected mage-chosen`);
+    }
+    const mageId = ctx.resumeAnswer.mageId;
+    const slots = golemEligibleSlots(ctx.state, playerId, mode);
+    if (slots.length === 0) return { kind: 'done', patch: {} };
+    return {
+      kind: 'pause',
+      pending: {
+        responderId: playerId,
+        prompt: { kind: 'choose-target-action-space', eligibleSpaceIds: slots },
+        resume: { effectId: self, context: { step: 'apply', mageId } },
+        source: ctx.source,
+      },
+    };
+  }
+
+  // Reaction entry: need the Mana, an office Mage, and an eligible slot. The
+  // mage prompt is pass-able and the spell is only spent in 'apply', so backing
+  // out (or no legal slot) never wastes the cast.
+  if (player.resources.mana < manaCost) return { kind: 'done', patch: {} };
+  const office = player.mages
+    .filter((m) => m.location.kind === 'office')
+    .map((m) => m.id);
+  if (office.length === 0) return { kind: 'done', patch: {} };
+  if (golemEligibleSlots(ctx.state, playerId, mode).length === 0) {
+    return { kind: 'done', patch: {} };
+  }
+  return {
+    kind: 'pause',
+    pending: {
+      responderId: playerId,
+      prompt: {
+        kind: 'choose-target-mage',
+        eligibleMageIds: office,
+        canPass: true,
+        label: 'Place which of your Mages?',
+      },
+      resume: { effectId: self, context: { step: 'slot' } },
+      source: ctx.source,
+    },
+  };
+}
+
+registerEffect('mancers.spell.artificiers-companion-4th-ed.l1.react', (ctx): EffectResult =>
+  artificierGolemPlace(
+    ctx,
+    'mancers.spell.artificiers-companion-4th-ed.l1.react',
+    'mancers.spell.artificiers-companion-4th-ed',
+    0,
+    'regular',
+  ),
+);
+registerEffect('mancers.spell.artificiers-companion-4th-ed.l2.react', (ctx): EffectResult =>
+  artificierGolemPlace(
+    ctx,
+    'mancers.spell.artificiers-companion-4th-ed.l2.react',
+    'mancers.spell.artificiers-companion-4th-ed',
+    0,
+    'merit',
+  ),
+);
+registerEffect('mancers.spell.artificiers-companion-4th-ed.l3.react', (ctx): EffectResult =>
+  artificierGolemPlace(
+    ctx,
+    'mancers.spell.artificiers-companion-4th-ed.l3.react',
+    'mancers.spell.artificiers-companion-4th-ed',
+    1,
+    'shadow',
+  ),
+);
+
+// ============================================================================
 // Synthesis Treasure — Lightning Totem (Natural Magick): Fast Action, spend 1
 // Mana to wound up to 2 Mages in the same room. Wounds open a single batch
 // reaction window (each affected owner reacts once); Infirmary bonuses are

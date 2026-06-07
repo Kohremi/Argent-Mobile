@@ -1675,6 +1675,198 @@ describe('Bell Tower offerings', () => {
     expect(placedMage?.location).toEqual({ kind: 'action-space', spaceId: slotId });
   });
 
+  it("Artificier's Companion (Iron Golem) reaction places a Mage after an opponent's last claim", () => {
+    // Mancers-active errands, same 3-card tower trim as startErrands().
+    let s = initGame({ ...FOUR_PLAYER_CONFIG, activePackIds: ['base', 'mancers'] });
+    s = applyAction(s, { type: 'ADVANCE_PHASE' });
+    s = {
+      ...s,
+      bellTower: {
+        ...s.bellTower,
+        available: s.bellTower.available.filter((c) => ORIGINAL_BELL_IDS.has(c.id)),
+      },
+    };
+    const activeId = () => {
+      if (s.phase.kind !== 'errands') throw new Error('not errands');
+      const id = s.players[s.phase.activePlayerIndex]?.id;
+      if (!id) throw new Error('no active player');
+      return id;
+    };
+    const nonClaimerId =
+      s.players[(s.firstPlayerIndex + 3) % s.players.length]!.id;
+    s = mapPlayer(s, nonClaimerId, (p) => ({
+      ...p,
+      resources: { ...p.resources, mana: 1 },
+      mages: [
+        {
+          id: 'golem-mage',
+          cardId: 'base.mage.divinity',
+          color: 'blue',
+          location: { kind: 'office' as const, playerId: nonClaimerId },
+          isShadowing: false,
+          isWounded: false,
+        },
+      ],
+      ownedSpells: [
+        ...p.ownedSpells.filter(
+          (x) => x.cardId !== 'mancers.spell.artificiers-companion-4th-ed',
+        ),
+        {
+          cardId: 'mancers.spell.artificiers-companion-4th-ed',
+          intPlaced: true,
+          wisPlacedLevel2: true,
+          wisPlacedLevel3: true,
+          exhausted: false,
+        },
+      ],
+    }));
+    s = applyAction(s, {
+      type: 'CLAIM_BELL_TOWER',
+      playerId: activeId(),
+      bellTowerCardId: 'base.bell.gain-ip',
+    });
+    s = applyAction(s, {
+      type: 'CLAIM_BELL_TOWER',
+      playerId: activeId(),
+      bellTowerCardId: 'base.bell.first-player',
+    });
+    s = applyAction(s, {
+      type: 'CLAIM_BELL_TOWER',
+      playerId: activeId(),
+      bellTowerCardId: 'base.bell.gold-or-mana',
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'option-chosen', optionId: 'mana', payload: {} },
+    });
+    const reactionPrompt = topPending(s);
+    expect(reactionPrompt.responderId).toBe(nonClaimerId);
+    if (reactionPrompt.prompt.kind !== 'reaction-window') throw new Error('x');
+    // All three researched levels are offered.
+    const effectIds = reactionPrompt.prompt.reactionOptions.map((o) => o.effectId);
+    expect(effectIds).toContain('mancers.spell.artificiers-companion-4th-ed.l1.react');
+    expect(effectIds).toContain('mancers.spell.artificiers-companion-4th-ed.l2.react');
+    expect(effectIds).toContain('mancers.spell.artificiers-companion-4th-ed.l3.react');
+
+    // Play Iron Golem (L1, Free) → place into a non-merit slot.
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: reactionPrompt.id,
+      answer: {
+        kind: 'reaction-played',
+        effectId: 'mancers.spell.artificiers-companion-4th-ed.l1.react',
+        reactionContext: {},
+      },
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'mage-chosen', mageId: 'golem-mage' },
+    });
+    const slotPrompt = topPending(s);
+    if (slotPrompt.prompt.kind !== 'choose-target-action-space') throw new Error('x');
+    const slotId = slotPrompt.prompt.eligibleSpaceIds[0]!;
+    // The offered slot must be a regular (non-merit) slot.
+    const slotSpace = s.rooms.flatMap((r) => r.actionSpaces).find((x) => x.id === slotId)!;
+    expect(slotSpace.slotType).toBe('regular');
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: slotPrompt.id,
+      answer: { kind: 'space-chosen', spaceId: slotId },
+    });
+    const after = s.players.find((p) => p.id === nonClaimerId)!;
+    expect(after.mages.find((m) => m.id === 'golem-mage')!.location).toEqual({
+      kind: 'action-space',
+      spaceId: slotId,
+    });
+    expect(after.resources.mana).toBe(1); // Iron Golem is Free
+    expect(
+      after.ownedSpells.find(
+        (x) => x.cardId === 'mancers.spell.artificiers-companion-4th-ed',
+      )!.exhausted,
+    ).toBe(true);
+  });
+
+  it("Artificier's Companion (Ehrlite Golem, L3) shadows an empty slot for 1 Mana", () => {
+    let s = initGame({ ...FOUR_PLAYER_CONFIG, activePackIds: ['base', 'mancers'] });
+    s = applyAction(s, { type: 'ADVANCE_PHASE' });
+    s = {
+      ...s,
+      bellTower: {
+        ...s.bellTower,
+        available: s.bellTower.available.filter((c) => ORIGINAL_BELL_IDS.has(c.id)),
+      },
+    };
+    const activeId = () => {
+      if (s.phase.kind !== 'errands') throw new Error('not errands');
+      return s.players[s.phase.activePlayerIndex]!.id;
+    };
+    const nonClaimerId =
+      s.players[(s.firstPlayerIndex + 3) % s.players.length]!.id;
+    s = mapPlayer(s, nonClaimerId, (p) => ({
+      ...p,
+      resources: { ...p.resources, mana: 1 },
+      mages: [
+        {
+          id: 'shadow-golem',
+          cardId: 'base.mage.divinity',
+          color: 'blue',
+          location: { kind: 'office' as const, playerId: nonClaimerId },
+          isShadowing: false,
+          isWounded: false,
+        },
+      ],
+      ownedSpells: [
+        {
+          cardId: 'mancers.spell.artificiers-companion-4th-ed',
+          intPlaced: true,
+          wisPlacedLevel2: true,
+          wisPlacedLevel3: true,
+          exhausted: false,
+        },
+      ],
+    }));
+    for (const id of ['base.bell.gain-ip', 'base.bell.first-player', 'base.bell.gold-or-mana']) {
+      s = applyAction(s, { type: 'CLAIM_BELL_TOWER', playerId: activeId(), bellTowerCardId: id });
+    }
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'option-chosen', optionId: 'mana', payload: {} },
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: {
+        kind: 'reaction-played',
+        effectId: 'mancers.spell.artificiers-companion-4th-ed.l3.react',
+        reactionContext: {},
+      },
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'mage-chosen', mageId: 'shadow-golem' },
+    });
+    const slotPrompt = topPending(s);
+    if (slotPrompt.prompt.kind !== 'choose-target-action-space') throw new Error('x');
+    const slotId = slotPrompt.prompt.eligibleSpaceIds[0]!;
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: slotPrompt.id,
+      answer: { kind: 'space-chosen', spaceId: slotId },
+    });
+    const after = s.players.find((p) => p.id === nonClaimerId)!;
+    const placed = after.mages.find((m) => m.id === 'shadow-golem')!;
+    expect(placed.isShadowing).toBe(true);
+    expect(placed.location).toEqual({ kind: 'action-space', spaceId: slotId });
+    // The Mage occupies the shadow position of the chosen slot.
+    const space = s.rooms.flatMap((r) => r.actionSpaces).find((x) => x.id === slotId)!;
+    expect(space.shadowOccupant?.mageId).toBe('shadow-golem');
+    expect(after.resources.mana).toBe(0); // Ehrlite Golem costs 1 Mana
+  });
+
   it('Stop Time reaction places two mages after the last bell tower claim', () => {
     let s = startErrands();
     const activeId = () => {

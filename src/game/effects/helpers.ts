@@ -1224,6 +1224,42 @@ export function buildReactionOptionsFor(
         label: 'Play Hourglass of Fate (place a Mage with powers)',
       });
     }
+    // Artificier's Companion, 4th Ed. (Technomancy legendary) — each researched
+    // level offers a "place a Mage" reaction into a different slot type. Gated
+    // like Hourglass on having an office Mage to place. L1/L2 are Free; L3 costs
+    // 1 Mana.
+    const artificier = responder.ownedSpells.find(
+      (s) => s.cardId === 'mancers.spell.artificiers-companion-4th-ed',
+    );
+    const hasOfficeMage = responder.mages.some(
+      (m) => m.location.kind === 'office',
+    );
+    if (artificier && !artificier.exhausted && hasOfficeMage) {
+      if (artificier.intPlaced) {
+        options.push({
+          sourceKind: 'spell',
+          sourceId: 'mancers.spell.artificiers-companion-4th-ed',
+          effectId: 'mancers.spell.artificiers-companion-4th-ed.l1.react',
+          label: 'Cast Iron Golem (place a Mage in a non-merit slot)',
+        });
+      }
+      if (artificier.wisPlacedLevel2) {
+        options.push({
+          sourceKind: 'spell',
+          sourceId: 'mancers.spell.artificiers-companion-4th-ed',
+          effectId: 'mancers.spell.artificiers-companion-4th-ed.l2.react',
+          label: 'Cast Gilded Golem (place a Mage in a merit slot)',
+        });
+      }
+      if (artificier.wisPlacedLevel3 && responder.resources.mana >= 1) {
+        options.push({
+          sourceKind: 'spell',
+          sourceId: 'mancers.spell.artificiers-companion-4th-ed',
+          effectId: 'mancers.spell.artificiers-companion-4th-ed.l3.react',
+          label: 'Cast Ehrlite Golem (place a Mage in an empty shadow slot)',
+        });
+      }
+    }
     break; // single bell-tower-last-claimed event per window
   }
 
