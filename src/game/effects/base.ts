@@ -91,6 +91,7 @@ import type {
   ReactionTriggerEvent,
   ResolutionSource,
   ResumeContinuation,
+  Room,
   SerializableContext,
   SpellCardId,
   WorkerOccupancy,
@@ -12813,6 +12814,344 @@ registerEffect('mancers.spell.breath-of-winter.l3', (ctx): EffectResult =>
     buildOpponentOfficeWoundTargets(state, ctx.triggeringPlayerId),
   ),
 );
+
+// ============================================================================
+// Beyond the Beyonds (Planar Studies, Mancers) — room control.
+//   L1 Rift  (1 Mana, Fast): lock a room until the start of your next turn.
+//   L2 Shift (2 Mana):       swap two Mages in two different rooms.
+//   L3 Flux  (5 Mana):       flip a non-central room to its other side, then
+//      rearrange the Mages that were in it onto the new side.
+// ============================================================================
+
+/** A placed Mage's slot, position, and owner. */
+function placedAt(
+  state: GameState,
+  mageId: string,
+): { spaceId: string; position: 'base' | 'shadow'; ownerId: string } | null {
+  for (const r of state.rooms) {
+    for (const s of r.actionSpaces) {
+      if (s.occupant?.mageId === mageId) {
+        return { spaceId: s.id, position: 'base', ownerId: s.occupant.ownerId };
+      }
+      if (s.shadowOccupant?.mageId === mageId) {
+        return { spaceId: s.id, position: 'shadow', ownerId: s.shadowOccupant.ownerId };
+      }
+    }
+  }
+  return null;
+}
+
+registerEffect('mancers.spell.beyond-the-beyonds.l1', (ctx): EffectResult => {
+  const self = 'mancers.spell.beyond-the-beyonds.l1';
+  if (!ctx.resumeAnswer) {
+    const eligible = ctx.state.rooms
+      .filter(
+        (r) => !r.cannotBeLocked && !ctx.state.roomLocks.some((l) => l.roomId === r.id),
+      )
+      .map((r) => r.id);
+    if (eligible.length === 0) return { kind: 'done', patch: {} };
+    return {
+      kind: 'pause',
+      pending: {
+        responderId: ctx.triggeringPlayerId,
+        prompt: { kind: 'choose-from-options', options: roomOptions(ctx.state, eligible) },
+        resume: { effectId: self, context: { step: 'apply' } },
+        source: ctx.source,
+      },
+    };
+  }
+  if (ctx.resumeAnswer.kind !== 'option-chosen') {
+    throw new Error(`${self} expected option-chosen`);
+  }
+  // The lock clears at the start of the caster's next turn (or Resolution).
+  return {
+    kind: 'done',
+    patch: {
+      roomLocks: [
+        ...ctx.state.roomLocks,
+        { roomId: ctx.resumeAnswer.optionId, untilTurnStartOf: ctx.triggeringPlayerId },
+      ],
+    },
+  };
+});
+
+/** Swaps the slot positions of two placed Mages, emitting a mage-moved event
+ *  for each (so opponents may react to being moved). */
+function swapTwoPlacedMagesPatch(
+  state: GameState,
+  idA: string,
+  idB: string,
+  byPlayerId: string,
+): { patch: GameStatePatch; events: ReactionTriggerEvent[] } {
+  const a = placedAt(state, idA);
+  const b = placedAt(state, idB);
+  if (!a || !b) return { patch: {}, events: [] };
+  const occA = { mageId: idA, ownerId: a.ownerId, isShadowing: b.position === 'shadow' };
+  const occB = { mageId: idB, ownerId: b.ownerId, isShadowing: a.position === 'shadow' };
+  const rooms = state.rooms.map((r) => ({
+    ...r,
+    actionSpaces: r.actionSpaces.map((s) => {
+      let occupant = s.occupant;
+      let shadowOccupant: WorkerOccupancy | null = s.shadowOccupant ?? null;
+      if (s.id === a.spaceId) {
+        // A's old slot now holds B.
+        if (a.position === 'base') occupant = occB;
+        else shadowOccupant = occB;
+      }
+      if (s.id === b.spaceId) {
+        if (b.position === 'base') occupant = occA;
+        else shadowOccupant = occA;
+      }
+      return { ...s, occupant, shadowOccupant };
+    }),
+  }));
+  const players = state.players.map((p) => ({
+    ...p,
+    mages: p.mages.map((m) => {
+      if (m.id === idA) {
+        return { ...m, location: { kind: 'action-space' as const, spaceId: b.spaceId }, isShadowing: b.position === 'shadow' };
+      }
+      if (m.id === idB) {
+        return { ...m, location: { kind: 'action-space' as const, spaceId: a.spaceId }, isShadowing: a.position === 'shadow' };
+      }
+      return m;
+    }),
+  }));
+  const events: ReactionTriggerEvent[] = [
+    { kind: 'mage-moved', mageId: idA, ownerId: a.ownerId, fromSpaceId: a.spaceId, toSpaceId: b.spaceId, byPlayerId },
+    { kind: 'mage-moved', mageId: idB, ownerId: b.ownerId, fromSpaceId: b.spaceId, toSpaceId: a.spaceId, byPlayerId },
+  ];
+  return { patch: { players, rooms }, events };
+}
+
+registerEffect('mancers.spell.beyond-the-beyonds.l2', (ctx): EffectResult => {
+  const self = 'mancers.spell.beyond-the-beyonds.l2';
+  const step = ctx.resumeContext?.['step'];
+  const placedMoveable = (state: GameState): string[] =>
+    buildSpellMoveTargets(state, ctx.triggeringPlayerId).filter(
+      (id) => roomIdOfPlacedMage(state, id) !== null,
+    );
+
+  if (step === 'second') {
+    if (ctx.resumeAnswer?.kind !== 'mage-chosen') {
+      throw new Error(`${self} second expected mage-chosen`);
+    }
+    const firstId = ctx.resumeAnswer.mageId;
+    const firstRoom = roomIdOfPlacedMage(ctx.state, firstId);
+    const second = placedMoveable(ctx.state).filter(
+      (id) => id !== firstId && roomIdOfPlacedMage(ctx.state, id) !== firstRoom,
+    );
+    if (second.length === 0) return { kind: 'done', patch: {} };
+    return {
+      kind: 'pause',
+      pending: {
+        responderId: ctx.triggeringPlayerId,
+        prompt: { kind: 'choose-target-mage', eligibleMageIds: second, label: 'Swap with which Mage (in a different room)?' },
+        resume: { effectId: self, context: { step: 'apply', firstId } },
+        source: ctx.source,
+      },
+    };
+  }
+
+  if (step === 'apply') {
+    if (ctx.resumeAnswer?.kind !== 'mage-chosen') {
+      throw new Error(`${self} apply expected mage-chosen`);
+    }
+    const firstId = ctx.resumeContext?.['firstId'];
+    if (typeof firstId !== 'string') return { kind: 'done', patch: {} };
+    const { patch, events } = swapTwoPlacedMagesPatch(
+      ctx.state,
+      firstId,
+      ctx.resumeAnswer.mageId,
+      ctx.triggeringPlayerId,
+    );
+    if (events.length === 0) return { kind: 'done', patch: {} };
+    return {
+      kind: 'open-reaction',
+      patch,
+      window: {
+        triggerEvents: events,
+        pendingResponderIds: buildBatchReactorQueue(ctx.state, ctx.triggeringPlayerId, events),
+        reactedPlayerIds: [],
+        afterResume: { effectId: 'base.system.noop', context: {} },
+        source: ctx.source,
+      },
+    };
+  }
+
+  // Initial: need a placed Mage with at least one other placed Mage elsewhere.
+  const first = placedMoveable(ctx.state).filter((id) => {
+    const room = roomIdOfPlacedMage(ctx.state, id);
+    return placedMoveable(ctx.state).some((o) => o !== id && roomIdOfPlacedMage(ctx.state, o) !== room);
+  });
+  if (first.length === 0) return { kind: 'done', patch: {} };
+  return {
+    kind: 'pause',
+    pending: {
+      responderId: ctx.triggeringPlayerId,
+      prompt: { kind: 'choose-target-mage', eligibleMageIds: first, label: 'Swap which Mage?' },
+      resume: { effectId: self, context: { step: 'second' } },
+      source: ctx.source,
+    },
+  };
+});
+
+/** The room id of the opposite side (`.a` ↔ `.b`). */
+function oppositeSideRoomId(roomId: string): string {
+  if (roomId.endsWith('.a')) return `${roomId.slice(0, -2)}.b`;
+  if (roomId.endsWith('.b')) return `${roomId.slice(0, -2)}.a`;
+  return roomId;
+}
+
+/** Looks up a room definition (any side) from the active packs' content. */
+function lookupRoomDef(state: GameState, roomId: string): Room | null {
+  for (const pid of state.activePackIds) {
+    const pack = getPack(pid);
+    const found = pack?.rooms.find((r) => r.id === roomId);
+    if (found) return found;
+  }
+  return null;
+}
+
+/** Directly seats a Mage on a base slot (no powers, no reactions) — used by
+ *  Flux's rearrange step. */
+function placeMageDirect(state: GameState, mageId: string, spaceId: string): GameStatePatch {
+  const owner = state.players.find((p) => p.mages.some((m) => m.id === mageId));
+  if (!owner) return {};
+  return {
+    players: state.players.map((p) =>
+      p.id !== owner.id
+        ? p
+        : {
+            ...p,
+            mages: p.mages.map((m) =>
+              m.id !== mageId
+                ? m
+                : { ...m, location: { kind: 'action-space' as const, spaceId }, isShadowing: false },
+            ),
+          },
+    ),
+    rooms: state.rooms.map((r) => ({
+      ...r,
+      actionSpaces: r.actionSpaces.map((s) =>
+        s.id !== spaceId ? s : { ...s, occupant: { mageId, ownerId: owner.id, isShadowing: false } },
+      ),
+    })),
+  };
+}
+
+/** Flips a room to its opposite side: swaps in a fresh copy of the other-side
+ *  definition (empty slots), repoints the grid cell, drops any lock, and parks
+ *  the room's Mages in their owners' offices to be rearranged. */
+function flipRoomPatch(
+  state: GameState,
+  roomId: string,
+): { patch: GameStatePatch; newRoomId: string; queue: string[] } | null {
+  const oldRoom = state.rooms.find((r) => r.id === roomId);
+  if (!oldRoom) return null;
+  const newRoomId = oppositeSideRoomId(roomId);
+  const def = lookupRoomDef(state, newRoomId);
+  if (!def) return null;
+  const queue: string[] = [];
+  for (const s of oldRoom.actionSpaces) {
+    if (s.occupant) queue.push(s.occupant.mageId);
+    if (s.shadowOccupant) queue.push(s.shadowOccupant.mageId);
+  }
+  const fresh: Room = {
+    ...def,
+    actionSpaces: def.actionSpaces.map((s) => ({ ...s, occupant: null, shadowOccupant: null })),
+  };
+  const moved = new Set(queue);
+  const patch: GameStatePatch = {
+    rooms: state.rooms.map((r) => (r.id === roomId ? fresh : r)),
+    roomLayout: {
+      ...state.roomLayout,
+      grid: state.roomLayout.grid.map((row) => row.map((c) => (c === roomId ? newRoomId : c))),
+    },
+    players: state.players.map((p) => ({
+      ...p,
+      mages: p.mages.map((m) =>
+        moved.has(m.id)
+          ? { ...m, location: { kind: 'office' as const, playerId: p.id }, isShadowing: false }
+          : m,
+      ),
+    })),
+    roomLocks: state.roomLocks.filter((l) => l.roomId !== roomId),
+  };
+  return { patch, newRoomId, queue };
+}
+
+/** Surfaces the next "place a Mage onto the flipped room" prompt, or finishes
+ *  when the queue is empty / the room is full (leftover Mages stay in office). */
+function fluxNextPlacement(
+  ctx: EffectContext,
+  self: string,
+  deltaPatch: GameStatePatch,
+  newRoomId: string,
+  queue: string[],
+): EffectResult {
+  const working: GameState = { ...ctx.state, ...deltaPatch };
+  const open = openBaseSlotsInRoom(working, newRoomId);
+  if (queue.length === 0 || open.length === 0) {
+    return { kind: 'done', patch: deltaPatch };
+  }
+  return {
+    kind: 'pause',
+    patch: deltaPatch,
+    pending: {
+      responderId: ctx.triggeringPlayerId,
+      prompt: {
+        kind: 'choose-target-action-space',
+        eligibleSpaceIds: open,
+        label: 'Rearrange: place the next Mage onto a slot',
+      },
+      resume: { effectId: self, context: { step: 'flux-place', newRoomId, queue } },
+      source: ctx.source,
+    },
+  };
+}
+
+registerEffect('mancers.spell.beyond-the-beyonds.l3', (ctx): EffectResult => {
+  const self = 'mancers.spell.beyond-the-beyonds.l3';
+  const step = ctx.resumeContext?.['step'];
+
+  if (step === 'flux-place') {
+    if (ctx.resumeAnswer?.kind !== 'space-chosen') {
+      throw new Error(`${self} flux-place expected space-chosen`);
+    }
+    const newRoomId = ctx.resumeContext?.['newRoomId'];
+    const queue = ctx.resumeContext?.['queue'];
+    if (typeof newRoomId !== 'string' || !Array.isArray(queue) || queue.length === 0) {
+      return { kind: 'done', patch: {} };
+    }
+    const placePatch = placeMageDirect(ctx.state, queue[0] as string, ctx.resumeAnswer.spaceId);
+    return fluxNextPlacement(ctx, self, placePatch, newRoomId, (queue as string[]).slice(1));
+  }
+
+  if (step === 'flip') {
+    if (ctx.resumeAnswer?.kind !== 'option-chosen') {
+      throw new Error(`${self} flip expected option-chosen`);
+    }
+    const flip = flipRoomPatch(ctx.state, ctx.resumeAnswer.optionId);
+    if (!flip) return { kind: 'done', patch: {} };
+    return fluxNextPlacement(ctx, self, flip.patch, flip.newRoomId, flip.queue);
+  }
+
+  // Initial: choose a non-central room that has an opposite-side definition.
+  const eligible = ctx.state.rooms
+    .filter((r) => !r.isUniversityCentral && lookupRoomDef(ctx.state, oppositeSideRoomId(r.id)) !== null)
+    .map((r) => r.id);
+  if (eligible.length === 0) return { kind: 'done', patch: {} };
+  return {
+    kind: 'pause',
+    pending: {
+      responderId: ctx.triggeringPlayerId,
+      prompt: { kind: 'choose-from-options', options: roomOptions(ctx.state, eligible) },
+      resume: { effectId: self, context: { step: 'flip' } },
+      source: ctx.source,
+    },
+  };
+});
 
 // ----------------------------------------------------------------------------
 // batch-post-wound-bonus — fired as the afterResume continuation for batch

@@ -406,6 +406,42 @@ const artificiersCompanion: SpellCard = {
 
 const legendarySpells: SpellCard[] = [...leaderSpells, artificiersCompanion];
 
+// Beyond the Beyonds (Planar Studies) — room control: a timed lock, a
+// cross-room swap, and a room-tile flip.
+const beyondTheBeyonds: SpellCard = {
+  id: 'mancers.spell.beyond-the-beyonds',
+  name: 'Beyond the Beyonds',
+  sourcePackId: PACK_ID,
+  department: 'planar-studies',
+  levels: [
+    {
+      level: 1,
+      title: 'Rift',
+      manaCost: 1,
+      timing: 'fast-action',
+      effectId: 'mancers.spell.beyond-the-beyonds.l1',
+      description: 'Lock a room until the start of your next turn.',
+    },
+    {
+      level: 2,
+      title: 'Shift',
+      manaCost: 2,
+      timing: 'action',
+      effectId: 'mancers.spell.beyond-the-beyonds.l2',
+      description: 'Swap two Mages in two different rooms.',
+    },
+    {
+      level: 3,
+      title: 'Flux',
+      manaCost: 5,
+      timing: 'action',
+      effectId: 'mancers.spell.beyond-the-beyonds.l3',
+      description:
+        'Flip a room tile to its opposite side, then rearrange the Mages in the room as you wish. You cannot flip Central Campus rooms.',
+    },
+  ],
+};
+
 // Breath of Winter (Natural Magick) — three single-target wound variants.
 const breathOfWinter: SpellCard = {
   id: 'mancers.spell.breath-of-winter',
@@ -1424,7 +1460,13 @@ export const mancersPack: ContentPack = {
     synthesisWorkshopA,
     synthesisWorkshopB,
   ],
-  spells: [devastationNow, divineCataclysm, lawsOfThaumodynamics, breathOfWinter],
+  spells: [
+    devastationNow,
+    divineCataclysm,
+    lawsOfThaumodynamics,
+    breathOfWinter,
+    beyondTheBeyonds,
+  ],
   legendarySpells,
   vaultCards: [...stuffVaultCards, ...synthesisTreasures],
   supporters,

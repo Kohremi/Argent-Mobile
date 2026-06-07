@@ -2986,6 +2986,10 @@ function processErrandsAdvance(state: GameState): GameState {
     (b) =>
       !(b.expiresAt.kind === 'turn-start' && b.expiresAt.playerId === incomingId),
   );
+  // Rift locks ("until the start of your next turn") expire the same way.
+  const trimmedLocks = state.roomLocks.filter(
+    (l) => l.untilTurnStartOf !== incomingId,
+  );
   // Rebuild the phase from scratch so the Bend Time tracker doesn't bleed
   // across turns. (Spreading `...errandsPhase` would carry over a
   // `bendTimeUsedKinds` array; under exactOptionalPropertyTypes we can't
@@ -3002,6 +3006,7 @@ function processErrandsAdvance(state: GameState): GameState {
     ...state,
     players,
     activeBuffs: trimmedBuffs,
+    roomLocks: trimmedLocks,
     // Defensive: the Mysticism + Technomancy triggers should have
     // drained earlier in autoAdvanceIfTurnDone — but reset here so any
     // stray queue entries can't leak across turn boundaries.

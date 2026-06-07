@@ -28796,3 +28796,137 @@ describe('Breath of Winter (Mancers)', () => {
     expect(findMage(s, 'p2', 'desk').location.kind).toBe('infirmary');
   });
 });
+
+// ============================================================================
+// Beyond the Beyonds (Planar Studies, Mancers) — Rift / Shift / Flux.
+// ============================================================================
+describe('Beyond the Beyonds (Mancers)', () => {
+  function setup(level: 1 | 2 | 3): GameState {
+    let s = initGame({ ...TWO_PLAYER_CONFIG, activePackIds: ['base', 'mancers'] });
+    s = zeroPlayerResources(s, 'p1');
+    s = setMana(s, 'p1', 5);
+    s = addOwnedSpell(s, 'p1', 'mancers.spell.beyond-the-beyonds', {
+      intPlaced: true,
+      wisPlacedLevel2: level >= 2,
+      wisPlacedLevel3: level >= 3,
+    });
+    return {
+      ...s,
+      firstPlayerIndex: 0,
+      phase: { kind: 'errands', round: 1, activePlayerIndex: 0, actionUsed: false, fastActionUsed: false },
+    };
+  }
+  const cast = (s: GameState, level: 1 | 2 | 3) =>
+    applyAction(s, { type: 'CAST_SPELL', playerId: 'p1', spellCardId: 'mancers.spell.beyond-the-beyonds', level });
+  const chooseOpt = (s: GameState, optionId: string) =>
+    applyAction(s, { type: 'RESOLVE_PENDING', resolutionId: topPending(s).id, answer: { kind: 'option-chosen', optionId, payload: {} } });
+  const pickMage = (s: GameState, mageId: string) =>
+    applyAction(s, { type: 'RESOLVE_PENDING', resolutionId: topPending(s).id, answer: { kind: 'mage-chosen', mageId } });
+  const findMage = (s: GameState, owner: string, id: string) =>
+    s.players.find((p) => p.id === owner)!.mages.find((m) => m.id === id)!;
+  const nonUcRoom = (s: GameState, skipId?: string) =>
+    s.rooms.find(
+      (r) =>
+        !r.isUniversityCentral &&
+        r.id !== skipId &&
+        r.actionSpaces.filter((sp) => !sp.occupant).length >= 2,
+    )!;
+
+  it('L1 Rift: locks a room until the start of your next turn', () => {
+    let s = setup(1);
+    const room = nonUcRoom(s);
+    s = cast(s, 1);
+    const top = topPending(s);
+    if (top.prompt.kind !== 'choose-from-options') throw new Error('x');
+    s = chooseOpt(s, room.id);
+    const lock = s.roomLocks.find((l) => l.roomId === room.id);
+    expect(lock).toBeDefined();
+    expect(lock!.untilTurnStartOf).toBe('p1');
+  });
+
+  it("Rift lock clears when the caster's next turn begins", () => {
+    let s = initGame(TWO_PLAYER_CONFIG);
+    s = applyAction(s, { type: 'ADVANCE_PHASE' });
+    const card = s.bellTower.available.find((c) => c.id === 'base.bell.gain-ip') ?? s.bellTower.available[0]!;
+    // p2 is active and about to end their turn; p1 holds a Rift lock.
+    s = {
+      ...s,
+      firstPlayerIndex: 0,
+      phase: { kind: 'errands', round: 1, activePlayerIndex: 1, actionUsed: false, fastActionUsed: false },
+      roomLocks: [{ roomId: s.rooms[0]!.id, untilTurnStartOf: 'p1' }],
+    };
+    s = applyAction(s, { type: 'CLAIM_BELL_TOWER', playerId: 'p2', bellTowerCardId: card.id });
+    let guard = 0;
+    while (s.pendingResolutionStack.length > 0 && guard++ < 8) {
+      const t = topPending(s);
+      if (t.prompt.kind === 'choose-from-options') {
+        s = applyAction(s, { type: 'RESOLVE_PENDING', resolutionId: t.id, answer: { kind: 'option-chosen', optionId: t.prompt.options[0]!.id, payload: {} } });
+      } else if (t.prompt.kind === 'reaction-window') {
+        s = applyAction(s, { type: 'RESOLVE_PENDING', resolutionId: t.id, answer: { kind: 'reaction-passed' } });
+      } else break;
+    }
+    // The turn advanced to p1 → the Rift lock expired.
+    expect(s.roomLocks.some((l) => l.untilTurnStartOf === 'p1')).toBe(false);
+  });
+
+  it('L2 Shift: swaps two Mages in two different rooms', () => {
+    let s = setup(2);
+    const roomA = nonUcRoom(s);
+    const roomB = nonUcRoom(s, roomA.id);
+    const slotA = roomA.actionSpaces[0]!.id;
+    const slotB = roomB.actionSpaces[0]!.id;
+    s = addMage(s, 'p2', { id: 'a', cardId: 'base.mage.neutral', color: 'off-white' });
+    s = addMage(s, 'p2', { id: 'b', cardId: 'base.mage.neutral', color: 'off-white' });
+    s = placeMageOnSpace(s, 'p2', 'a', slotA);
+    s = placeMageOnSpace(s, 'p2', 'b', slotB);
+    s = cast(s, 2);
+    s = pickMage(s, 'a');
+    s = pickMage(s, 'b');
+    // Pass the move reaction window.
+    let guard = 0;
+    while (s.pendingResolutionStack.length > 0 && guard++ < 8) {
+      const t = topPending(s);
+      if (t.prompt.kind !== 'reaction-window') break;
+      s = applyAction(s, { type: 'RESOLVE_PENDING', resolutionId: t.id, answer: { kind: 'reaction-passed' } });
+    }
+    expect(findMage(s, 'p2', 'a').location).toEqual({ kind: 'action-space', spaceId: slotB });
+    expect(findMage(s, 'p2', 'b').location).toEqual({ kind: 'action-space', spaceId: slotA });
+  });
+
+  it('L3 Flux: flips a room to its other side and rearranges its Mages', () => {
+    let s = setup(3);
+    const room = nonUcRoom(s);
+    const oppId = room.id.endsWith('.a') ? `${room.id.slice(0, -2)}.b` : `${room.id.slice(0, -2)}.a`;
+    s = addMage(s, 'p1', { id: 'mine', cardId: 'base.mage.neutral', color: 'off-white' });
+    s = addMage(s, 'p2', { id: 'theirs', cardId: 'base.mage.neutral', color: 'off-white' });
+    s = placeMageOnSpace(s, 'p1', 'mine', room.actionSpaces[0]!.id);
+    s = placeMageOnSpace(s, 'p2', 'theirs', room.actionSpaces[1]!.id);
+    s = cast(s, 3);
+    s = chooseOpt(s, room.id);
+    let guard = 0;
+    while (s.pendingResolutionStack.length > 0 && guard++ < 6) {
+      const t = topPending(s);
+      if (t.prompt.kind !== 'choose-target-action-space') break;
+      s = applyAction(s, { type: 'RESOLVE_PENDING', resolutionId: t.id, answer: { kind: 'space-chosen', spaceId: t.prompt.eligibleSpaceIds[0]! } });
+    }
+    // The room tile is now the opposite side.
+    expect(s.rooms.some((r) => r.id === oppId)).toBe(true);
+    expect(s.rooms.some((r) => r.id === room.id)).toBe(false);
+    expect(s.roomLayout.grid.flat().includes(oppId)).toBe(true);
+    expect(s.roomLayout.grid.flat().includes(room.id)).toBe(false);
+    // Both Mages were rearranged onto the new side.
+    const newRoom = s.rooms.find((r) => r.id === oppId)!;
+    const occ = newRoom.actionSpaces.map((sp) => sp.occupant?.mageId).filter(Boolean);
+    expect(occ).toContain('mine');
+    expect(occ).toContain('theirs');
+  });
+
+  it('L3 Flux: central-campus rooms are never offered', () => {
+    let s = setup(3);
+    s = cast(s, 3);
+    const top = topPending(s);
+    if (top.prompt.kind !== 'choose-from-options') throw new Error('x');
+    const offered = new Set(top.prompt.options.map((o) => o.id));
+    for (const r of s.rooms) if (r.isUniversityCentral) expect(offered.has(r.id)).toBe(false);
+  });
+});

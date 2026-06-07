@@ -1323,7 +1323,12 @@ export interface GameState {
   };
 
   archmagesApprenticeOwner: PlayerId | null;
-  roomLocks: { roomId: RoomId }[];
+  /**
+   * Locked rooms. All locks clear at the start of the Resolution phase. A lock
+   * with `untilTurnStartOf` set ALSO clears the moment that player's next turn
+   * begins (Beyond the Beyonds L1 "Rift" — lock a room until your next turn).
+   */
+  roomLocks: { roomId: RoomId; untilTurnStartOf?: PlayerId }[];
 
   /**
    * Spell card ids whose `oncePerGame` level has already been cast this game.
