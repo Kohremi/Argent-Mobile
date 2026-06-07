@@ -15120,6 +15120,66 @@ describe('Technomancy (Mancers expansion)', () => {
     expect(prompt.prompt.options.map((o) => o.id).sort()).toEqual(['pay', 'skip']);
   });
 
+  it("a 'place without powers' bonus placement (Great Hall) does NOT trigger Technomancy", () => {
+    let s = initGame({ ...TWO_PLAYER_CONFIG, activePackIds: ['base', 'mancers'] });
+    s = forceRoomSide(s, 'Great Hall', 'A');
+    s = zeroPlayerResources(s, 'p1');
+    s = setGold(s, 'p1', 5);
+    s = setMeritBadges(s, 'p1', 5);
+    s = addMage(s, 'p1', { id: 'blue1', cardId: 'base.mage.divinity', color: 'blue' });
+    s = addMage(s, 'p1', {
+      id: 'orange1',
+      cardId: 'mancers.mage.technomancy',
+      color: 'orange',
+    });
+    s = {
+      ...s,
+      firstPlayerIndex: 0,
+      phase: {
+        kind: 'errands',
+        round: 1,
+        activePlayerIndex: 0,
+        actionUsed: false,
+        fastActionUsed: false,
+      },
+      bellTower: { ...s.bellTower, available: [] },
+    };
+    // First placement is a normal (powered) action — a blue Mage, so no
+    // Technomancy regardless. It sets up the Great Hall chain.
+    s = applyAction(s, {
+      type: 'PLACE_WORKER',
+      playerId: 'p1',
+      mageId: 'blue1',
+      actionSpaceId: 'base.room.great-hall.a.slot-1',
+    });
+    s = takeRewardAtResolution(s);
+    // Chain drains → place the ORANGE Mage as a "without powers" bonus.
+    let prompt = topPending(s);
+    if (prompt.prompt.kind !== 'choose-from-options') throw new Error('x');
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: prompt.id,
+      answer: { kind: 'option-chosen', optionId: 'orange1', payload: {} },
+    });
+    prompt = topPending(s);
+    if (prompt.prompt.kind !== 'choose-target-action-space') throw new Error('x');
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: prompt.id,
+      answer: { kind: 'space-chosen', spaceId: 'base.room.great-hall.a.slot-2' },
+    });
+    // No Technomancy trigger was queued, and no pay-3-Gold prompt ever surfaced.
+    expect(s.pendingTechnomancyTrigger).toEqual([]);
+    expect(
+      s.pendingResolutionStack.some(
+        (p) => p.resume.effectId === 'mancers.mage.technomancy.place-after',
+      ),
+    ).toBe(false);
+    // Sanity: the orange Mage really did get placed.
+    const gh = s.rooms.find((r) => r.id === 'base.room.great-hall.a')!;
+    expect(gh.actionSpaces[1]?.occupant?.mageId).toBe('orange1');
+  });
+
   it('Pay path: spends 3 Gold and surfaces a Research prompt', () => {
     let s = setupTechnomancyPlaceTest({ gold: 5 });
     s = applyAction(s, {

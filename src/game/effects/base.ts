@@ -4637,6 +4637,8 @@ function maybeSetGreatHallChain(
         remaining: 2,
         restrictRoomId: roomId,
         allowStop: true,
+        // Great Hall's extra placements don't use the spaces' powers.
+        suppressMagePowers: true,
       },
     },
   };
@@ -9216,6 +9218,9 @@ function placeOfficeMageOnSpace(
   playerId: PlayerId,
   mageId: string,
   spaceId: string,
+  // When true, this is a genuine "place without powers" placement (Slow / Stop
+  // Time, Great Hall) — the Technomancy "upon placement" Mage power is skipped.
+  suppressMagePowers = false,
 ): GameStatePatch {
   const player = state.players.find((p) => p.id === playerId);
   if (!player) throw new Error('placeOfficeMageOnSpace: player not found');
@@ -9260,7 +9265,9 @@ function placeOfficeMageOnSpace(
       spaceId as ActionSpaceId,
       playerId,
     ),
-    ...technomancyOnPlacePatch(state, playerId, mageId, spaceId as ActionSpaceId),
+    ...(suppressMagePowers
+      ? {}
+      : technomancyOnPlacePatch(state, playerId, mageId, spaceId as ActionSpaceId)),
   };
 }
 
@@ -13414,6 +13421,9 @@ registerEffect(
         : undefined;
     const allowStop =
       chain?.playerId === ctx.triggeringPlayerId && chain.allowStop === true;
+    const suppressMagePowers =
+      chain?.playerId === ctx.triggeringPlayerId &&
+      chain.suppressMagePowers === true;
 
     if (step === 'pick-mage') {
       const mages = listPlaceWithoutPowersMages(
@@ -13542,6 +13552,7 @@ registerEffect(
         ctx.triggeringPlayerId,
         placerMageId,
         spaceId,
+        suppressMagePowers,
       );
       return patchWithMaybeInstantReward(
         ctx.state,
@@ -13707,6 +13718,8 @@ registerEffect(
           remaining: 1,
           restrictRoomId: roomId,
           allowStop: true,
+          // Slow Time places Mages without using powers.
+          suppressMagePowers: true,
         },
       };
       const delegate = getEffect('base.system.place-mage-without-powers')({
@@ -13742,6 +13755,8 @@ registerEffect(
         playerId: ctx.triggeringPlayerId,
         source: ctx.source,
         remaining: 1,
+        // Stop Time places Mages without using powers.
+        suppressMagePowers: true,
       },
     };
     const delegate = getEffect('base.system.place-mage-without-powers')({

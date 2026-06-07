@@ -1196,6 +1196,15 @@ export interface GameState {
      * semantic. Absent / false = the placement is mandatory (Stop Time).
      */
     allowStop?: boolean;
+    /**
+     * When true, mages placed by this chain do NOT use Mage powers — these
+     * are genuine "place without powers" placements (Slow Time / Stop Time /
+     * Great Hall). This suppresses the Technomancy (orange) "upon placement"
+     * trigger for those placements. Absent / false = the placement is a
+     * normal "place a Mage" (Mystic Link, Mystic's Cowl) and DOES fire the
+     * orange ability.
+     */
+    suppressMagePowers?: boolean;
   } | null;
   /**
    * The Contract chain (3 Research, all locked to a single department of
