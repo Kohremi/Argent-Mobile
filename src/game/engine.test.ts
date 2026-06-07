@@ -28590,3 +28590,110 @@ describe('Divine Cataclysm (Mancers)', () => {
     expect(findMage(s, 'p2', 'theirs').location.kind).toBe('infirmary');
   });
 });
+
+// ============================================================================
+// The Laws of Thaumodynamics (Technomancy, Mancers) — up to two Mages in one
+// room: L1 move-to-shadow, L2 banish, L3 wound + optional place.
+// ============================================================================
+describe('The Laws of Thaumodynamics (Mancers)', () => {
+  function setup(level: 1 | 2 | 3): GameState {
+    let s = initGame({ ...TWO_PLAYER_CONFIG, activePackIds: ['base', 'mancers'] });
+    s = zeroPlayerResources(s, 'p1');
+    s = setMana(s, 'p1', 5);
+    s = addOwnedSpell(s, 'p1', 'mancers.spell.the-laws-of-thaumodynamics', {
+      intPlaced: true,
+      wisPlacedLevel2: level >= 2,
+      wisPlacedLevel3: level >= 3,
+    });
+    return {
+      ...s,
+      firstPlayerIndex: 0,
+      phase: { kind: 'errands', round: 1, activePlayerIndex: 0, actionUsed: false, fastActionUsed: false },
+    };
+  }
+  const cast = (s: GameState, level: 1 | 2 | 3) =>
+    applyAction(s, { type: 'CAST_SPELL', playerId: 'p1', spellCardId: 'mancers.spell.the-laws-of-thaumodynamics', level });
+  const pickMage = (s: GameState, mageId: string) =>
+    applyAction(s, { type: 'RESOLVE_PENDING', resolutionId: topPending(s).id, answer: { kind: 'mage-chosen', mageId } });
+  const findMage = (s: GameState, owner: string, id: string) =>
+    s.players.find((p) => p.id === owner)!.mages.find((m) => m.id === id)!;
+  const twoSlotRoom = (s: GameState) =>
+    s.rooms.find(
+      (r) =>
+        !r.cannotBePlacedInDirectly &&
+        !r.noShadowSlots &&
+        r.actionSpaces.filter((sp) => !sp.occupant).length >= 2,
+    )!;
+  const passReactions = (s: GameState): GameState => {
+    let guard = 0;
+    while (s.pendingResolutionStack.length > 0 && guard++ < 12) {
+      const t = topPending(s);
+      if (t.prompt.kind !== 'reaction-window') break;
+      s = applyAction(s, { type: 'RESOLVE_PENDING', resolutionId: t.id, answer: { kind: 'reaction-passed' } });
+    }
+    return s;
+  };
+
+  it('L1 Shadow Bomb: moves two base Mages in a room to their shadow slots', () => {
+    let s = setup(1);
+    const room = twoSlotRoom(s);
+    const [s1, s2] = [room.actionSpaces[0]!.id, room.actionSpaces[1]!.id];
+    s = addMage(s, 'p2', { id: 'm1', cardId: 'base.mage.neutral', color: 'off-white' });
+    s = addMage(s, 'p2', { id: 'm2', cardId: 'base.mage.neutral', color: 'off-white' });
+    s = placeMageOnSpace(s, 'p2', 'm1', s1);
+    s = placeMageOnSpace(s, 'p2', 'm2', s2);
+    s = cast(s, 1);
+    s = pickMage(s, 'm1');
+    s = pickMage(s, 'm2');
+    expect(findMage(s, 'p2', 'm1').isShadowing).toBe(true);
+    expect(findMage(s, 'p2', 'm2').isShadowing).toBe(true);
+    const a = s.rooms.flatMap((r) => r.actionSpaces).find((x) => x.id === s1)!;
+    const b = s.rooms.flatMap((r) => r.actionSpaces).find((x) => x.id === s2)!;
+    expect(a.occupant).toBeNull();
+    expect(a.shadowOccupant?.mageId).toBe('m1');
+    expect(b.shadowOccupant?.mageId).toBe('m2');
+  });
+
+  it('L2 Flash Bomb: banishes two Mages in the same room', () => {
+    let s = setup(2);
+    const room = twoSlotRoom(s);
+    s = addMage(s, 'p2', { id: 'a', cardId: 'base.mage.neutral', color: 'off-white' });
+    s = addMage(s, 'p2', { id: 'b', cardId: 'base.mage.neutral', color: 'off-white' });
+    s = placeMageOnSpace(s, 'p2', 'a', room.actionSpaces[0]!.id);
+    s = placeMageOnSpace(s, 'p2', 'b', room.actionSpaces[1]!.id);
+    s = cast(s, 2);
+    s = pickMage(s, 'a');
+    s = pickMage(s, 'b');
+    s = passReactions(s);
+    expect(findMage(s, 'p2', 'a').location.kind).toBe('office');
+    expect(findMage(s, 'p2', 'b').location.kind).toBe('office');
+  });
+
+  it('L3 Arcane Bomb: wounds two Mages in a room, then places a Mage into it', () => {
+    let s = setup(3);
+    const room = twoSlotRoom(s);
+    s = addMage(s, 'p1', { id: 'placer', cardId: 'base.mage.neutral', color: 'off-white' });
+    s = addMage(s, 'p2', { id: 'x', cardId: 'base.mage.neutral', color: 'off-white' });
+    s = addMage(s, 'p2', { id: 'y', cardId: 'base.mage.neutral', color: 'off-white' });
+    s = placeMageOnSpace(s, 'p2', 'x', room.actionSpaces[0]!.id);
+    s = placeMageOnSpace(s, 'p2', 'y', room.actionSpaces[1]!.id);
+    s = cast(s, 3);
+    s = pickMage(s, 'x');
+    s = pickMage(s, 'y');
+    s = passReactions(s);
+    // The optional place chain surfaces: choose the placer, then a slot in the room.
+    let t = topPending(s);
+    if (t.prompt.kind !== 'choose-from-options') throw new Error('want place-mage prompt');
+    expect(t.prompt.options.some((o) => o.id === 'placer')).toBe(true);
+    s = applyAction(s, { type: 'RESOLVE_PENDING', resolutionId: t.id, answer: { kind: 'option-chosen', optionId: 'placer', payload: {} } });
+    t = topPending(s);
+    if (t.prompt.kind !== 'choose-target-action-space') throw new Error('want slot prompt');
+    // Slots are restricted to the bombed room.
+    const slotId = t.prompt.eligibleSpaceIds[0]!;
+    expect(room.actionSpaces.some((sp) => sp.id === slotId)).toBe(true);
+    s = applyAction(s, { type: 'RESOLVE_PENDING', resolutionId: t.id, answer: { kind: 'space-chosen', spaceId: slotId } });
+    expect(findMage(s, 'p2', 'x').isWounded).toBe(true);
+    expect(findMage(s, 'p2', 'y').isWounded).toBe(true);
+    expect(findMage(s, 'p1', 'placer').location).toEqual({ kind: 'action-space', spaceId: slotId });
+  });
+});

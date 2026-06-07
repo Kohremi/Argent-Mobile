@@ -12420,6 +12420,237 @@ registerEffect('mancers.spell.divine-cataclysm.l3', (ctx): EffectResult => {
   throw new Error(`${self} unexpected step ${String(step)}`);
 });
 
+// ============================================================================
+// The Laws of Thaumodynamics (Technomancy, Mancers) — each level hits up to
+// two Mages in a single room. Registered here for the batch banish/wound
+// helpers and the place-chain primitive.
+// ============================================================================
+
+/** The id of the room a placed Mage occupies (base or shadow position). */
+function roomIdOfPlacedMage(state: GameState, mageId: string): string | null {
+  for (const r of state.rooms) {
+    for (const s of r.actionSpaces) {
+      if (s.occupant?.mageId === mageId || s.shadowOccupant?.mageId === mageId) {
+        return r.id;
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * Reusable "choose up to two Mages in a single room" selector. The first pick
+ * fixes the room; the second (optional, pass-able) is restricted to that same
+ * room. `eligible(state)` returns the candidate mage ids; once selection is
+ * done, `apply(ctx, mageIds)` runs. Self-drives via `self` + the
+ * 'two-in-room-*' resume steps.
+ */
+function chooseUpToTwoInRoom(
+  ctx: EffectContext,
+  self: string,
+  eligible: (state: GameState) => string[],
+  apply: (ctx: EffectContext, mageIds: string[]) => EffectResult,
+  labels: { first: string; second: string },
+): EffectResult {
+  const step = ctx.resumeContext?.['step'];
+
+  if (step === 'two-in-room-second') {
+    if (ctx.resumeAnswer?.kind !== 'mage-chosen') {
+      throw new Error(`${self} two-in-room-second expected mage-chosen`);
+    }
+    const firstId = ctx.resumeAnswer.mageId;
+    const room = roomIdOfPlacedMage(ctx.state, firstId);
+    const second = eligible(ctx.state).filter(
+      (id) => id !== firstId && roomIdOfPlacedMage(ctx.state, id) === room,
+    );
+    if (second.length === 0) return apply(ctx, [firstId]);
+    return {
+      kind: 'pause',
+      pending: {
+        responderId: ctx.triggeringPlayerId,
+        prompt: {
+          kind: 'choose-target-mage',
+          eligibleMageIds: second,
+          canPass: true,
+          label: labels.second,
+        },
+        resume: { effectId: self, context: { step: 'two-in-room-apply', firstId } },
+        source: ctx.source,
+      },
+    };
+  }
+
+  if (step === 'two-in-room-apply') {
+    const firstId = ctx.resumeContext?.['firstId'];
+    if (typeof firstId !== 'string') return { kind: 'done', patch: {} };
+    const ids = [firstId];
+    if (ctx.resumeAnswer?.kind === 'mage-chosen') ids.push(ctx.resumeAnswer.mageId);
+    return apply(ctx, ids);
+  }
+
+  // Initial: pick the first Mage (which fixes the room).
+  const first = eligible(ctx.state);
+  if (first.length === 0) return { kind: 'done', patch: {} };
+  return {
+    kind: 'pause',
+    pending: {
+      responderId: ctx.triggeringPlayerId,
+      prompt: { kind: 'choose-target-mage', eligibleMageIds: first, label: labels.first },
+      resume: { effectId: self, context: { step: 'two-in-room-second' } },
+      source: ctx.source,
+    },
+  };
+}
+
+/** Repositions a base-slot Mage into the SAME space's (empty) shadow position
+ *  — Shadow Bomb's "move from a normal slot to the corresponding shadow slot". */
+function moveMageBaseToShadowPatch(state: GameState, mageId: string): GameStatePatch {
+  const space = state.rooms
+    .flatMap((r) => r.actionSpaces)
+    .find((s) => s.occupant?.mageId === mageId && !s.shadowOccupant);
+  if (!space || !space.occupant) return {};
+  const ownerId = space.occupant.ownerId;
+  return {
+    players: state.players.map((p) =>
+      p.id !== ownerId
+        ? p
+        : {
+            ...p,
+            mages: p.mages.map((m) =>
+              m.id !== mageId ? m : { ...m, isShadowing: true },
+            ),
+          },
+    ),
+    rooms: state.rooms.map((r) => ({
+      ...r,
+      actionSpaces: r.actionSpaces.map((s) =>
+        s.id !== space.id
+          ? s
+          : {
+              ...s,
+              occupant: null,
+              shadowOccupant: { mageId, ownerId, isShadowing: true },
+            },
+      ),
+    })),
+  };
+}
+
+registerEffect('mancers.spell.the-laws-of-thaumodynamics.l1', (ctx): EffectResult => {
+  const self = 'mancers.spell.the-laws-of-thaumodynamics.l1';
+  // Eligible: move-targetable base-slot Mages whose space's shadow slot is open
+  // and whose room actually has shadow positions.
+  const eligible = (state: GameState): string[] => {
+    const moveable = new Set(buildSpellMoveTargets(state, ctx.triggeringPlayerId));
+    const out: string[] = [];
+    for (const r of state.rooms) {
+      if (r.cannotBePlacedInDirectly || r.noShadowSlots) continue;
+      for (const s of r.actionSpaces) {
+        if (s.occupant && !s.shadowOccupant && moveable.has(s.occupant.mageId)) {
+          out.push(s.occupant.mageId);
+        }
+      }
+    }
+    return out;
+  };
+  const apply = (c: EffectContext, ids: string[]): EffectResult => {
+    let working: GameState = c.state;
+    for (const id of ids) {
+      working = { ...working, ...moveMageBaseToShadowPatch(working, id) };
+    }
+    return { kind: 'done', patch: { players: working.players, rooms: working.rooms } };
+  };
+  return chooseUpToTwoInRoom(ctx, self, eligible, apply, {
+    first: 'Move which Mage to its shadow slot?',
+    second: 'Move a second Mage in the same room (or pass)',
+  });
+});
+
+registerEffect('mancers.spell.the-laws-of-thaumodynamics.l2', (ctx): EffectResult => {
+  const self = 'mancers.spell.the-laws-of-thaumodynamics.l2';
+  // Banishable Mages that are physically on a slot (banish can also reach the
+  // Infirmary, but "in the same room" means placed).
+  const eligible = (state: GameState): string[] => {
+    const set = new Set(buildBanishTargets(state, ctx.triggeringPlayerId));
+    return state.players
+      .flatMap((p) => p.mages)
+      .filter((m) => set.has(m.id) && m.location.kind === 'action-space')
+      .map((m) => m.id);
+  };
+  const apply = (c: EffectContext, ids: string[]): EffectResult => {
+    const banished = banishManyMages(c.state, ids, c.triggeringPlayerId);
+    return {
+      kind: 'open-reaction',
+      patch: banished.patch,
+      window: {
+        triggerEvents: banished.events,
+        pendingResponderIds: buildBatchReactorQueue(c.state, c.triggeringPlayerId, banished.events),
+        reactedPlayerIds: [],
+        afterResume: { effectId: 'base.system.noop', context: {} },
+        source: c.source,
+      },
+    };
+  };
+  return chooseUpToTwoInRoom(ctx, self, eligible, apply, {
+    first: 'Banish which Mage?',
+    second: 'Banish a second Mage in the same room (or pass)',
+  });
+});
+
+// "You may place a Mage into that room" — fires after Arcane Bomb's wound
+// reaction window settles. Sets a single optional, room-restricted placement.
+registerEffect('mancers.spell.the-laws-of-thaumodynamics.l3.place', (ctx): EffectResult => {
+  const roomId = ctx.resumeContext?.['roomId'];
+  if (typeof roomId !== 'string') return { kind: 'done', patch: {} };
+  const player = ctx.state.players.find((p) => p.id === ctx.triggeringPlayerId);
+  const hasOffice = player?.mages.some((m) => m.location.kind === 'office') ?? false;
+  if (!hasOffice) return { kind: 'done', patch: {} };
+  if (listPlaceWithoutPowersSlots(ctx.state, ctx.triggeringPlayerId, roomId).length === 0) {
+    return { kind: 'done', patch: {} };
+  }
+  return {
+    kind: 'done',
+    patch: {
+      pendingPlaceChain: {
+        playerId: ctx.triggeringPlayerId,
+        source: ctx.source,
+        remaining: 1,
+        restrictRoomId: roomId,
+        allowStop: true,
+      },
+    },
+  };
+});
+
+registerEffect('mancers.spell.the-laws-of-thaumodynamics.l3', (ctx): EffectResult => {
+  const self = 'mancers.spell.the-laws-of-thaumodynamics.l3';
+  const eligible = (state: GameState): string[] =>
+    buildBurnTargets(state, ctx.triggeringPlayerId);
+  const apply = (c: EffectContext, ids: string[]): EffectResult => {
+    const roomId = roomIdOfPlacedMage(c.state, ids[0]!);
+    const wounded = woundManyMages(c.state, ids, c.triggeringPlayerId);
+    return {
+      kind: 'open-reaction',
+      patch: wounded.patch,
+      window: {
+        triggerEvents: wounded.events,
+        pendingResponderIds: buildBatchReactorQueue(c.state, c.triggeringPlayerId, wounded.events),
+        reactedPlayerIds: [],
+        // After the wounds resolve, optionally place a Mage into that room.
+        afterResume: {
+          effectId: 'mancers.spell.the-laws-of-thaumodynamics.l3.place',
+          context: { roomId: roomId ?? '' },
+        },
+        source: c.source,
+      },
+    };
+  };
+  return chooseUpToTwoInRoom(ctx, self, eligible, apply, {
+    first: 'Wound which Mage?',
+    second: 'Wound a second Mage in the same room (or pass)',
+  });
+});
+
 // ----------------------------------------------------------------------------
 // batch-post-wound-bonus — fired as the afterResume continuation for batch
 // wound spells (Plague, Pestilence, Fireball, Inferno) once the reaction

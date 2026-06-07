@@ -406,6 +406,43 @@ const artificiersCompanion: SpellCard = {
 
 const legendarySpells: SpellCard[] = [...leaderSpells, artificiersCompanion];
 
+// The Laws of Thaumodynamics (Technomancy) — three "bomb" effects that each
+// hit up to two Mages in a single room.
+const lawsOfThaumodynamics: SpellCard = {
+  id: 'mancers.spell.the-laws-of-thaumodynamics',
+  name: 'The Laws of Thaumodynamics',
+  sourcePackId: PACK_ID,
+  department: 'technomancy',
+  levels: [
+    {
+      level: 1,
+      title: 'Shadow Bomb',
+      manaCost: 1,
+      timing: 'action',
+      effectId: 'mancers.spell.the-laws-of-thaumodynamics.l1',
+      description:
+        'Choose a room. Move up to two Mages in that room from normal slots to the corresponding Shadow slots.',
+    },
+    {
+      level: 2,
+      title: 'Flash Bomb',
+      manaCost: 3,
+      timing: 'action',
+      effectId: 'mancers.spell.the-laws-of-thaumodynamics.l2',
+      description: 'Banish up to two Mages in the same room.',
+    },
+    {
+      level: 3,
+      title: 'Arcane Bomb',
+      manaCost: 4,
+      timing: 'action',
+      effectId: 'mancers.spell.the-laws-of-thaumodynamics.l3',
+      description:
+        'Wound up to two Mages in the same room. You may place a Mage into that room.',
+    },
+  ],
+};
+
 // Divine Cataclysm (Divinity) — a draftable spell book pairing offense with
 // Infirmary recovery.
 const divineCataclysm: SpellCard = {
@@ -1353,7 +1390,7 @@ export const mancersPack: ContentPack = {
     synthesisWorkshopA,
     synthesisWorkshopB,
   ],
-  spells: [devastationNow, divineCataclysm],
+  spells: [devastationNow, divineCataclysm, lawsOfThaumodynamics],
   legendarySpells,
   vaultCards: [...stuffVaultCards, ...synthesisTreasures],
   supporters,
