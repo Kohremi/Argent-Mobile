@@ -406,6 +406,44 @@ const artificiersCompanion: SpellCard = {
 
 const legendarySpells: SpellCard[] = [...leaderSpells, artificiersCompanion];
 
+// Divine Cataclysm (Divinity) — a draftable spell book pairing offense with
+// Infirmary recovery.
+const divineCataclysm: SpellCard = {
+  id: 'mancers.spell.divine-cataclysm',
+  name: 'Divine Cataclysm',
+  sourcePackId: PACK_ID,
+  department: 'divinity',
+  levels: [
+    {
+      level: 1,
+      title: 'Holy Bolt',
+      manaCost: 1,
+      timing: 'action',
+      effectId: 'mancers.spell.divine-cataclysm.l1',
+      description:
+        "Wound a Mage, then return a Mage from the Infirmary to its owner's office.",
+    },
+    {
+      level: 2,
+      title: 'Holy Smite',
+      manaCost: 3,
+      timing: 'action',
+      effectId: 'mancers.spell.divine-cataclysm.l2',
+      description:
+        'Banish a Mage, then return all of your Mages in the Infirmary to your office.',
+    },
+    {
+      level: 3,
+      title: 'Holy Tempest',
+      manaCost: 5,
+      timing: 'action',
+      effectId: 'mancers.spell.divine-cataclysm.l3',
+      description:
+        'Wound all Mages in a room, then return all of your Mages in the Infirmary to your office.',
+    },
+  ],
+};
+
 // Devastation Now (Sorcery) — a draftable spell book. The L3 name is blank in
 // the source data; "Devastation" is used as a placeholder title.
 const devastationNow: SpellCard = {
@@ -1315,7 +1353,7 @@ export const mancersPack: ContentPack = {
     synthesisWorkshopA,
     synthesisWorkshopB,
   ],
-  spells: [devastationNow],
+  spells: [devastationNow, divineCataclysm],
   legendarySpells,
   vaultCards: [...stuffVaultCards, ...synthesisTreasures],
   supporters,

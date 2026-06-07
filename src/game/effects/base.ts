@@ -12173,6 +12173,253 @@ registerEffect('mancers.spell.devastation-now.l3', (ctx): EffectResult => {
   throw new Error(`${self} unexpected step ${String(step)}`);
 });
 
+// ============================================================================
+// Divine Cataclysm (Divinity, Mancers) — registered here for access to the
+// wound / banish / wound-all-in-room + Infirmary-bonus helpers.
+//   L1 Holy Bolt    (1 Mana): Wound a Mage, then return a Mage from the
+//      Infirmary to its owner's office.
+//   L2 Holy Smite   (3 Mana): Banish a Mage, then return ALL of your Mages in
+//      the Infirmary to your office.
+//   L3 Holy Tempest (5 Mana): Wound all Mages in a room, then return ALL of
+//      your Mages in the Infirmary to your office.
+// ============================================================================
+
+/** Returns every one of `playerId`'s Infirmary Mages to their office. */
+function returnAllOwnInfirmaryPatch(
+  state: GameState,
+  playerId: string,
+): GameStatePatch {
+  let working = state;
+  const player = state.players.find((p) => p.id === playerId);
+  const ids =
+    player?.mages
+      .filter((m) => m.location.kind === 'infirmary')
+      .map((m) => m.id) ?? [];
+  for (const id of ids) {
+    working = { ...working, ...returnMageToOfficePatch(working, id) };
+  }
+  if (ids.length === 0) return {};
+  return {
+    players: working.players,
+    ...(working.rooms !== state.rooms ? { rooms: working.rooms } : {}),
+  };
+}
+
+/** Prompt the caster to return one Mage from any Infirmary to its owner's
+ *  office (Holy Bolt's "then" clause). Returns done when none are present. */
+function holyBoltReturnStep(ctx: EffectContext, self: string): EffectResult {
+  const infirmary = ctx.state.players
+    .flatMap((p) => p.mages)
+    .filter((m) => m.location.kind === 'infirmary')
+    .map((m) => m.id);
+  if (infirmary.length === 0) return { kind: 'done', patch: {} };
+  return {
+    kind: 'pause',
+    pending: {
+      responderId: ctx.triggeringPlayerId,
+      prompt: {
+        kind: 'choose-target-mage',
+        eligibleMageIds: infirmary,
+        label: "Return which Mage from the Infirmary to its owner's office?",
+      },
+      resume: { effectId: self, context: { step: 'apply-return' } },
+      source: ctx.source,
+    },
+  };
+}
+
+registerEffect('mancers.spell.divine-cataclysm.l1', (ctx): EffectResult => {
+  const self = 'mancers.spell.divine-cataclysm.l1';
+  const step = ctx.resumeContext?.['step'];
+
+  if (step === 'after-wound') {
+    // Standard victim Infirmary bonus first (if applicable), then the return.
+    const event = readTriggerEvent(ctx);
+    if (event && checkInfirmaryBonusApplies(ctx.state, event)) {
+      return {
+        kind: 'pause',
+        pending: bonusPromptFor(ctx.state, event, ctx.triggeringPlayerId, {
+          effectId: self,
+          context: { step: 'after-bonus', recipientPlayerId: event.ownerId },
+        }),
+      };
+    }
+    return holyBoltReturnStep(ctx, self);
+  }
+
+  if (step === 'after-bonus') {
+    if (ctx.resumeAnswer?.kind !== 'option-chosen') {
+      throw new Error(`${self} after-bonus expected option-chosen`);
+    }
+    const recipientId = ctx.resumeContext?.['recipientPlayerId'];
+    if (typeof recipientId !== 'string') {
+      throw new Error(`${self} after-bonus: missing recipientPlayerId`);
+    }
+    const bonusPatch = applyInfirmaryBonusFromCtx(
+      ctx.state,
+      recipientId,
+      ctx.resumeAnswer,
+      ctx.resumeContext,
+    );
+    const next = holyBoltReturnStep({ ...ctx, state: { ...ctx.state, ...bonusPatch } }, self);
+    if (next.kind === 'pause') {
+      return { kind: 'pause', patch: bonusPatch, pending: next.pending };
+    }
+    return { kind: 'done', patch: { ...bonusPatch, ...(next.patch ?? {}) } };
+  }
+
+  if (step === 'apply-return') {
+    if (ctx.resumeAnswer?.kind !== 'mage-chosen') {
+      throw new Error(`${self} apply-return expected mage-chosen`);
+    }
+    return { kind: 'done', patch: returnMageToOfficePatch(ctx.state, ctx.resumeAnswer.mageId) };
+  }
+
+  if (step === 'wound') {
+    if (ctx.resumeAnswer?.kind !== 'mage-chosen') {
+      throw new Error(`${self} wound expected mage-chosen`);
+    }
+    const wound = woundMage(ctx.state, ctx.resumeAnswer.mageId, ctx.triggeringPlayerId);
+    return {
+      kind: 'open-reaction',
+      patch: wound.patch,
+      window: {
+        triggerEvents: [wound.triggerEvent],
+        pendingResponderIds: buildReactionQueue(ctx.state, ctx.triggeringPlayerId),
+        reactedPlayerIds: [],
+        afterResume: {
+          effectId: self,
+          context: {
+            step: 'after-wound',
+            triggerEvent: triggerEventToContext(wound.triggerEvent),
+          },
+        },
+        source: ctx.source,
+      },
+    };
+  }
+
+  // Initial: choose a Mage to wound. If none, the spell still tries the return.
+  const targets = buildBurnTargets(ctx.state, ctx.triggeringPlayerId);
+  if (targets.length === 0) return holyBoltReturnStep(ctx, self);
+  return {
+    kind: 'pause',
+    pending: {
+      responderId: ctx.triggeringPlayerId,
+      prompt: { kind: 'choose-target-mage', eligibleMageIds: targets, label: 'Wound which Mage?' },
+      resume: { effectId: self, context: { step: 'wound' } },
+      source: ctx.source,
+    },
+  };
+});
+
+registerEffect('mancers.spell.divine-cataclysm.l2', (ctx): EffectResult => {
+  const self = 'mancers.spell.divine-cataclysm.l2';
+  const step = ctx.resumeContext?.['step'];
+
+  if (step === 'after-banish') {
+    // The banish's reaction window has settled — return all your Infirmary Mages.
+    return { kind: 'done', patch: returnAllOwnInfirmaryPatch(ctx.state, ctx.triggeringPlayerId) };
+  }
+
+  if (step === 'banish') {
+    if (ctx.resumeAnswer?.kind !== 'mage-chosen') {
+      throw new Error(`${self} banish expected mage-chosen`);
+    }
+    const banished = banishMage(ctx.state, ctx.resumeAnswer.mageId, ctx.triggeringPlayerId);
+    return {
+      kind: 'open-reaction',
+      patch: banished.patch,
+      window: {
+        triggerEvents: [banished.triggerEvent],
+        pendingResponderIds: buildReactionQueue(ctx.state, ctx.triggeringPlayerId),
+        reactedPlayerIds: [],
+        afterResume: { effectId: self, context: { step: 'after-banish' } },
+        source: ctx.source,
+      },
+    };
+  }
+
+  // Initial: choose a Mage to banish. If none, still return your Infirmary Mages.
+  const targets = buildBanishTargets(ctx.state, ctx.triggeringPlayerId);
+  if (targets.length === 0) {
+    return { kind: 'done', patch: returnAllOwnInfirmaryPatch(ctx.state, ctx.triggeringPlayerId) };
+  }
+  return {
+    kind: 'pause',
+    pending: {
+      responderId: ctx.triggeringPlayerId,
+      prompt: { kind: 'choose-target-mage', eligibleMageIds: targets, label: 'Banish which Mage?' },
+      resume: { effectId: self, context: { step: 'banish' } },
+      source: ctx.source,
+    },
+  };
+});
+
+// Returns all the caster's Infirmary Mages once Holy Tempest's wound reaction
+// window has resolved.
+registerEffect('mancers.spell.divine-cataclysm.l3.return', (ctx): EffectResult => ({
+  kind: 'done',
+  patch: returnAllOwnInfirmaryPatch(ctx.state, ctx.triggeringPlayerId),
+}));
+
+registerEffect('mancers.spell.divine-cataclysm.l3', (ctx): EffectResult => {
+  const self = 'mancers.spell.divine-cataclysm.l3';
+  const step = ctx.resumeContext?.['step'];
+
+  if (!ctx.resumeAnswer) {
+    const eligible = ctx.state.rooms
+      .filter(
+        (r) =>
+          buildWoundableMagesInRoom(ctx.state, ctx.triggeringPlayerId, r.id).length > 0,
+      )
+      .map((r) => r.id);
+    // No woundable Mages anywhere — still return your Infirmary Mages.
+    if (eligible.length === 0) {
+      return { kind: 'done', patch: returnAllOwnInfirmaryPatch(ctx.state, ctx.triggeringPlayerId) };
+    }
+    return {
+      kind: 'pause',
+      pending: {
+        responderId: ctx.triggeringPlayerId,
+        prompt: { kind: 'choose-from-options', options: roomOptions(ctx.state, eligible) },
+        resume: { effectId: self, context: { step: 'apply' } },
+        source: ctx.source,
+      },
+    };
+  }
+  if (step === 'apply') {
+    if (ctx.resumeAnswer.kind !== 'option-chosen') {
+      throw new Error(`${self} apply expected option-chosen`);
+    }
+    const roomId = ctx.resumeAnswer.optionId;
+    const mageIds = buildWoundableMagesInRoom(ctx.state, ctx.triggeringPlayerId, roomId);
+    if (mageIds.length === 0) {
+      return { kind: 'done', patch: returnAllOwnInfirmaryPatch(ctx.state, ctx.triggeringPlayerId) };
+    }
+    const wounded = woundManyMages(ctx.state, mageIds, ctx.triggeringPlayerId);
+    const reactorQueue = buildBatchReactorQueue(
+      ctx.state,
+      ctx.triggeringPlayerId,
+      wounded.events,
+    );
+    // Like Nox, a room-wide wound grants no per-victim Infirmary bonus; the
+    // caster's own "return all" benefit fires after the reaction window.
+    return {
+      kind: 'open-reaction',
+      patch: wounded.patch,
+      window: {
+        triggerEvents: wounded.events,
+        pendingResponderIds: reactorQueue,
+        reactedPlayerIds: [],
+        afterResume: { effectId: 'mancers.spell.divine-cataclysm.l3.return', context: {} },
+        source: ctx.source,
+      },
+    };
+  }
+  throw new Error(`${self} unexpected step ${String(step)}`);
+});
+
 // ----------------------------------------------------------------------------
 // batch-post-wound-bonus — fired as the afterResume continuation for batch
 // wound spells (Plague, Pestilence, Fireball, Inferno) once the reaction

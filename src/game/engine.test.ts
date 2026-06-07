@@ -28445,3 +28445,148 @@ describe('Devastation Now (Mancers)', () => {
     }
   });
 });
+
+// ============================================================================
+// Divine Cataclysm (Divinity, Mancers) — wound/banish/wound-all paired with
+// Infirmary recovery.
+// ============================================================================
+describe('Divine Cataclysm (Mancers)', () => {
+  function setup(level: 1 | 2 | 3): GameState {
+    let s = initGame({ ...TWO_PLAYER_CONFIG, activePackIds: ['base', 'mancers'] });
+    s = zeroPlayerResources(s, 'p1');
+    s = setMana(s, 'p1', 5);
+    s = addOwnedSpell(s, 'p1', 'mancers.spell.divine-cataclysm', {
+      intPlaced: true,
+      wisPlacedLevel2: level >= 2,
+      wisPlacedLevel3: level >= 3,
+    });
+    return {
+      ...s,
+      firstPlayerIndex: 0,
+      phase: {
+        kind: 'errands',
+        round: 1,
+        activePlayerIndex: 0,
+        actionUsed: false,
+        fastActionUsed: false,
+      },
+    };
+  }
+  const cast = (s: GameState, level: 1 | 2 | 3) =>
+    applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'mancers.spell.divine-cataclysm',
+      level,
+    });
+  const resolveMage = (s: GameState, mageId: string) =>
+    applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'mage-chosen', mageId },
+    });
+  const infirmaryMage = (id: string): OwnedMage => ({
+    id,
+    cardId: 'base.mage.neutral',
+    color: 'off-white',
+    location: { kind: 'infirmary' },
+    isShadowing: false,
+    isWounded: true,
+  });
+  const openSlot = (s: GameState) =>
+    s.rooms.find((r) => !r.cannotBePlacedInDirectly && r.actionSpaces.some((sp) => !sp.occupant))!
+      .actionSpaces.find((sp) => !sp.occupant)!.id;
+  const findMage = (s: GameState, owner: string, id: string) =>
+    s.players.find((p) => p.id === owner)!.mages.find((m) => m.id === id)!;
+
+  it('L1 Holy Bolt: wounds a Mage, then returns a Mage from the Infirmary', () => {
+    let s = setup(1);
+    // p1 has a wounded Mage to rescue; p2 has a placed Mage to wound.
+    s = mapPlayer(s, 'p1', (p) => ({ ...p, mages: [...p.mages, infirmaryMage('heal-me')] }));
+    s = addMage(s, 'p2', { id: 'victim', cardId: 'base.mage.neutral', color: 'off-white' });
+    s = placeMageOnSpace(s, 'p2', 'victim', openSlot(s));
+    s = cast(s, 1);
+    // Wound prompt.
+    let t = topPending(s);
+    if (t.prompt.kind !== 'choose-target-mage') throw new Error('want wound prompt');
+    expect(t.prompt.eligibleMageIds).toContain('victim');
+    s = resolveMage(s, 'victim');
+    // Pass the wound reaction window + any victim Infirmary-bonus prompt.
+    let guard = 0;
+    while (s.pendingResolutionStack.length > 0 && guard++ < 12) {
+      t = topPending(s);
+      if (t.prompt.kind === 'reaction-window') {
+        s = applyAction(s, { type: 'RESOLVE_PENDING', resolutionId: t.id, answer: { kind: 'reaction-passed' } });
+      } else if (t.prompt.kind === 'choose-from-options') {
+        s = applyAction(s, { type: 'RESOLVE_PENDING', resolutionId: t.id, answer: { kind: 'option-chosen', optionId: t.prompt.options[0]!.id, payload: {} } });
+      } else break;
+    }
+    // The return prompt offers both Infirmary Mages; rescue our own.
+    t = topPending(s);
+    if (t.prompt.kind !== 'choose-target-mage') throw new Error('want return prompt');
+    expect(t.prompt.eligibleMageIds).toContain('heal-me');
+    s = resolveMage(s, 'heal-me');
+    expect(findMage(s, 'p1', 'heal-me').location.kind).toBe('office');
+    expect(findMage(s, 'p1', 'heal-me').isWounded).toBe(false);
+    expect(findMage(s, 'p2', 'victim').isWounded).toBe(true);
+  });
+
+  it('L2 Holy Smite: banishes a Mage, then returns ALL your Infirmary Mages', () => {
+    let s = setup(2);
+    s = mapPlayer(s, 'p1', (p) => ({
+      ...p,
+      mages: [...p.mages, infirmaryMage('w1'), infirmaryMage('w2')],
+    }));
+    s = addMage(s, 'p2', { id: 'target', cardId: 'base.mage.neutral', color: 'off-white' });
+    s = placeMageOnSpace(s, 'p2', 'target', openSlot(s));
+    s = cast(s, 2);
+    let t = topPending(s);
+    if (t.prompt.kind !== 'choose-target-mage') throw new Error('want banish prompt');
+    s = resolveMage(s, 'target');
+    let guard = 0;
+    while (s.pendingResolutionStack.length > 0 && guard++ < 12) {
+      t = topPending(s);
+      if (t.prompt.kind === 'reaction-window') {
+        s = applyAction(s, { type: 'RESOLVE_PENDING', resolutionId: t.id, answer: { kind: 'reaction-passed' } });
+      } else break;
+    }
+    // Both of p1's Infirmary Mages are back in the office.
+    expect(findMage(s, 'p1', 'w1').location.kind).toBe('office');
+    expect(findMage(s, 'p1', 'w2').location.kind).toBe('office');
+    expect(findMage(s, 'p1', 'w1').isWounded).toBe(false);
+    // The target was banished (returned to its owner's office, unwounded).
+    expect(findMage(s, 'p2', 'target').location.kind).toBe('office');
+  });
+
+  it('L3 Holy Tempest: wounds all in a room, then returns ALL your Infirmary Mages', () => {
+    let s = setup(3);
+    const room = s.rooms.find(
+      (r) => !r.cannotBePlacedInDirectly && r.actionSpaces.filter((sp) => !sp.occupant).length >= 2,
+    )!;
+    s = mapPlayer(s, 'p1', (p) => ({ ...p, mages: [...p.mages, infirmaryMage('old')] }));
+    s = addMage(s, 'p1', { id: 'mine', cardId: 'base.mage.neutral', color: 'off-white' });
+    s = addMage(s, 'p2', { id: 'theirs', cardId: 'base.mage.neutral', color: 'off-white' });
+    s = placeMageOnSpace(s, 'p1', 'mine', room.actionSpaces[0]!.id);
+    s = placeMageOnSpace(s, 'p2', 'theirs', room.actionSpaces[1]!.id);
+    s = cast(s, 3);
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'option-chosen', optionId: room.id, payload: {} },
+    });
+    let guard = 0;
+    while (s.pendingResolutionStack.length > 0 && guard++ < 12) {
+      const t = topPending(s);
+      if (t.prompt.kind === 'reaction-window') {
+        s = applyAction(s, { type: 'RESOLVE_PENDING', resolutionId: t.id, answer: { kind: 'reaction-passed' } });
+      } else break;
+    }
+    // p1's Mages (the one just wounded + the pre-wounded) are back in office.
+    expect(findMage(s, 'p1', 'mine').location.kind).toBe('office');
+    expect(findMage(s, 'p1', 'mine').isWounded).toBe(false);
+    expect(findMage(s, 'p1', 'old').location.kind).toBe('office');
+    // The opponent's Mage stays wounded in the Infirmary.
+    expect(findMage(s, 'p2', 'theirs').isWounded).toBe(true);
+    expect(findMage(s, 'p2', 'theirs').location.kind).toBe('infirmary');
+  });
+});
