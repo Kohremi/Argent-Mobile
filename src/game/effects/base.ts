@@ -13153,6 +13153,216 @@ registerEffect('mancers.spell.beyond-the-beyonds.l3', (ctx): EffectResult => {
   };
 });
 
+// ============================================================================
+// The Black Chronicle, v13 (Mysticism, Mancers) — shadow-pair manipulation.
+//   L1 Creep   (Free):   wound a Mage shadowed by one of yours.
+//   L2 Envelop (1 Mana):  swap a base Mage and the Mage shadowing it.
+//   L3 Death   (4 Mana):  remove a Mage shadowed by one of yours from the
+//      game, then put a supply Mage of your choice into its owner's office.
+// ============================================================================
+
+/** Base Mages whose slot is shadowed by one of `casterId`'s Mages. */
+function magesShadowedByCaster(state: GameState, casterId: string): string[] {
+  const out: string[] = [];
+  for (const r of state.rooms) {
+    for (const s of r.actionSpaces) {
+      if (s.occupant && s.shadowOccupant?.ownerId === casterId) {
+        out.push(s.occupant.mageId);
+      }
+    }
+  }
+  return out;
+}
+
+registerEffect('mancers.spell.the-black-chronicle-v13.l1', (ctx): EffectResult =>
+  castSingleWound(ctx, 'mancers.spell.the-black-chronicle-v13.l1', (state) => {
+    const shadowed = new Set(magesShadowedByCaster(state, ctx.triggeringPlayerId));
+    return buildBurnTargets(state, ctx.triggeringPlayerId).filter((id) => shadowed.has(id));
+  }),
+);
+
+/** Swaps a base Mage and the Mage shadowing its slot (positions flip in place),
+ *  emitting a mage-moved event for each so opponents may react. */
+function swapBaseAndShadowPatch(
+  state: GameState,
+  baseMageId: string,
+  byPlayerId: string,
+): { patch: GameStatePatch; events: ReactionTriggerEvent[] } {
+  const space = state.rooms
+    .flatMap((r) => r.actionSpaces)
+    .find((s) => s.occupant?.mageId === baseMageId && s.shadowOccupant);
+  if (!space?.occupant || !space.shadowOccupant) return { patch: {}, events: [] };
+  const baseOcc = space.occupant;
+  const shadowOcc = space.shadowOccupant;
+  const rooms = state.rooms.map((r) => ({
+    ...r,
+    actionSpaces: r.actionSpaces.map((s) =>
+      s.id !== space.id
+        ? s
+        : {
+            ...s,
+            occupant: { ...shadowOcc, isShadowing: false },
+            shadowOccupant: { ...baseOcc, isShadowing: true },
+          },
+    ),
+  }));
+  const players = state.players.map((p) => ({
+    ...p,
+    mages: p.mages.map((m) => {
+      if (m.id === baseOcc.mageId) return { ...m, isShadowing: true };
+      if (m.id === shadowOcc.mageId) return { ...m, isShadowing: false };
+      return m;
+    }),
+  }));
+  const events: ReactionTriggerEvent[] = [
+    { kind: 'mage-moved', mageId: baseOcc.mageId, ownerId: baseOcc.ownerId, fromSpaceId: space.id, toSpaceId: space.id, byPlayerId },
+    { kind: 'mage-moved', mageId: shadowOcc.mageId, ownerId: shadowOcc.ownerId, fromSpaceId: space.id, toSpaceId: space.id, byPlayerId },
+  ];
+  return { patch: { players, rooms }, events };
+}
+
+registerEffect('mancers.spell.the-black-chronicle-v13.l2', (ctx): EffectResult => {
+  const self = 'mancers.spell.the-black-chronicle-v13.l2';
+  // Any base Mage that currently has a Mage shadowing it.
+  const eligible = (state: GameState): string[] => {
+    const out: string[] = [];
+    for (const r of state.rooms) {
+      for (const s of r.actionSpaces) {
+        if (s.occupant && s.shadowOccupant) out.push(s.occupant.mageId);
+      }
+    }
+    return out;
+  };
+  if (ctx.resumeContext?.['step'] === 'apply') {
+    if (ctx.resumeAnswer?.kind !== 'mage-chosen') {
+      throw new Error(`${self} apply expected mage-chosen`);
+    }
+    const { patch, events } = swapBaseAndShadowPatch(ctx.state, ctx.resumeAnswer.mageId, ctx.triggeringPlayerId);
+    if (events.length === 0) return { kind: 'done', patch: {} };
+    return {
+      kind: 'open-reaction',
+      patch,
+      window: {
+        triggerEvents: events,
+        pendingResponderIds: buildBatchReactorQueue(ctx.state, ctx.triggeringPlayerId, events),
+        reactedPlayerIds: [],
+        afterResume: { effectId: 'base.system.noop', context: {} },
+        source: ctx.source,
+      },
+    };
+  }
+  const targets = eligible(ctx.state);
+  if (targets.length === 0) return { kind: 'done', patch: {} };
+  return {
+    kind: 'pause',
+    pending: {
+      responderId: ctx.triggeringPlayerId,
+      prompt: { kind: 'choose-target-mage', eligibleMageIds: targets, label: 'Swap which Mage with the one shadowing it?' },
+      resume: { effectId: self, context: { step: 'apply' } },
+      source: ctx.source,
+    },
+  };
+});
+
+/** Colours currently available in the supply pool (for Death's replacement). */
+const SUPPLY_MAGE_COLORS: MageColor[] = ['red', 'grey', 'green', 'purple', 'blue', 'orange', 'off-white'];
+
+/** Removes a Mage from the game (cleared from its slot AND its owner's roster —
+ *  it goes back to the box, NOT the supply) and, when a colour is given, seats
+ *  a fresh supply Mage of that colour in the removed Mage's owner's office. */
+function deathRemoveAndReplacePatch(
+  state: GameState,
+  targetMageId: string,
+  color: MageColor | null,
+): GameStatePatch {
+  const owner = state.players.find((p) => p.mages.some((m) => m.id === targetMageId));
+  if (!owner) return {};
+  const canAdd = color !== null && (state.mageDraftPool[color] ?? 0) > 0;
+  const seq = state.nextSequenceId;
+  const pool = { ...state.mageDraftPool };
+  if (canAdd) pool[color] = (pool[color] ?? 0) - 1;
+  const players = state.players.map((p) => {
+    if (p.id !== owner.id) return p;
+    const without = p.mages.filter((m) => m.id !== targetMageId);
+    if (!canAdd) return { ...p, mages: without };
+    return {
+      ...p,
+      mages: [
+        ...without,
+        {
+          id: `m-${seq}`,
+          cardId: MAGE_CARD_BY_COLOR[color],
+          color,
+          location: { kind: 'office' as const, playerId: p.id },
+          isShadowing: false,
+          isWounded: false,
+        },
+      ],
+    };
+  });
+  const rooms = state.rooms.map((r) => ({
+    ...r,
+    actionSpaces: r.actionSpaces.map((s) =>
+      s.occupant?.mageId === targetMageId ? { ...s, occupant: null } : s,
+    ),
+  }));
+  return { players, rooms, mageDraftPool: pool, ...(canAdd ? { nextSequenceId: seq + 1 } : {}) };
+}
+
+registerEffect('mancers.spell.the-black-chronicle-v13.l3', (ctx): EffectResult => {
+  const self = 'mancers.spell.the-black-chronicle-v13.l3';
+  const step = ctx.resumeContext?.['step'];
+
+  if (step === 'apply') {
+    if (ctx.resumeAnswer?.kind !== 'option-chosen') {
+      throw new Error(`${self} apply expected option-chosen`);
+    }
+    const targetMageId = ctx.resumeContext?.['targetMageId'];
+    if (typeof targetMageId !== 'string') return { kind: 'done', patch: {} };
+    return {
+      kind: 'done',
+      patch: deathRemoveAndReplacePatch(ctx.state, targetMageId, ctx.resumeAnswer.optionId as MageColor),
+    };
+  }
+
+  if (step === 'pick-color') {
+    if (ctx.resumeAnswer?.kind !== 'mage-chosen') {
+      throw new Error(`${self} pick-color expected mage-chosen`);
+    }
+    const targetMageId = ctx.resumeAnswer.mageId;
+    const avail = SUPPLY_MAGE_COLORS.filter((c) => (ctx.state.mageDraftPool[c] ?? 0) > 0);
+    // Supply empty for every colour — just remove the Mage from the game.
+    if (avail.length === 0) {
+      return { kind: 'done', patch: deathRemoveAndReplacePatch(ctx.state, targetMageId, null) };
+    }
+    return {
+      kind: 'pause',
+      pending: {
+        responderId: ctx.triggeringPlayerId,
+        prompt: {
+          kind: 'choose-from-options',
+          options: avail.map((c) => ({ id: c, label: `Supply: ${c} Mage`, payload: {} })),
+        },
+        resume: { effectId: self, context: { step: 'apply', targetMageId } },
+        source: ctx.source,
+      },
+    };
+  }
+
+  // Initial: choose a Mage shadowed by one of yours.
+  const targets = magesShadowedByCaster(ctx.state, ctx.triggeringPlayerId);
+  if (targets.length === 0) return { kind: 'done', patch: {} };
+  return {
+    kind: 'pause',
+    pending: {
+      responderId: ctx.triggeringPlayerId,
+      prompt: { kind: 'choose-target-mage', eligibleMageIds: targets, label: 'Remove which shadowed Mage from the game?' },
+      resume: { effectId: self, context: { step: 'pick-color' } },
+      source: ctx.source,
+    },
+  };
+});
+
 // ----------------------------------------------------------------------------
 // batch-post-wound-bonus — fired as the afterResume continuation for batch
 // wound spells (Plague, Pestilence, Fireball, Inferno) once the reaction

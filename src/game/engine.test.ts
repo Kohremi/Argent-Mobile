@@ -28930,3 +28930,125 @@ describe('Beyond the Beyonds (Mancers)', () => {
     for (const r of s.rooms) if (r.isUniversityCentral) expect(offered.has(r.id)).toBe(false);
   });
 });
+
+// ============================================================================
+// The Black Chronicle, v13 (Mysticism, Mancers) — shadow-pair manipulation.
+// ============================================================================
+describe('The Black Chronicle (Mancers)', () => {
+  function setup(level: 1 | 2 | 3): GameState {
+    let s = initGame({ ...TWO_PLAYER_CONFIG, activePackIds: ['base', 'mancers'] });
+    s = zeroPlayerResources(s, 'p1');
+    s = setMana(s, 'p1', 4);
+    s = addOwnedSpell(s, 'p1', 'mancers.spell.the-black-chronicle-v13', {
+      intPlaced: true,
+      wisPlacedLevel2: level >= 2,
+      wisPlacedLevel3: level >= 3,
+    });
+    return {
+      ...s,
+      firstPlayerIndex: 0,
+      phase: { kind: 'errands', round: 1, activePlayerIndex: 0, actionUsed: false, fastActionUsed: false },
+    };
+  }
+  const cast = (s: GameState, level: 1 | 2 | 3) =>
+    applyAction(s, { type: 'CAST_SPELL', playerId: 'p1', spellCardId: 'mancers.spell.the-black-chronicle-v13', level });
+  const findMage = (s: GameState, owner: string, id: string) =>
+    s.players.find((p) => p.id === owner)!.mages.find((m) => m.id === id);
+  const openSlot = (s: GameState) =>
+    s.rooms.find((r) => !r.cannotBePlacedInDirectly && r.actionSpaces.some((sp) => !sp.occupant))!
+      .actionSpaces.find((sp) => !sp.occupant)!.id;
+  // Seats `mageId` as the SHADOW occupant of `spaceId`.
+  const placeShadow = (s: GameState, playerId: string, mageId: string, spaceId: string): GameState => {
+    const u = mapPlayer(s, playerId, (p) => ({
+      ...p,
+      mages: p.mages.map((m) => (m.id !== mageId ? m : { ...m, location: { kind: 'action-space' as const, spaceId }, isShadowing: true })),
+    }));
+    return {
+      ...u,
+      rooms: u.rooms.map((r) => ({
+        ...r,
+        actionSpaces: r.actionSpaces.map((sp) => (sp.id !== spaceId ? sp : { ...sp, shadowOccupant: { mageId, ownerId: playerId, isShadowing: true } })),
+      })),
+    };
+  };
+  const settle = (s: GameState): GameState => {
+    let guard = 0;
+    while (s.pendingResolutionStack.length > 0 && guard++ < 10) {
+      const t = topPending(s);
+      if (t.prompt.kind === 'reaction-window') {
+        s = applyAction(s, { type: 'RESOLVE_PENDING', resolutionId: t.id, answer: { kind: 'reaction-passed' } });
+      } else if (t.prompt.kind === 'choose-from-options') {
+        s = applyAction(s, { type: 'RESOLVE_PENDING', resolutionId: t.id, answer: { kind: 'option-chosen', optionId: t.prompt.options[0]!.id, payload: {} } });
+      } else break;
+    }
+    return s;
+  };
+
+  it('L1 Creep: only Mages you are shadowing are targetable, and it wounds them', () => {
+    let s = setup(1);
+    const slot = openSlot(s);
+    s = addMage(s, 'p2', { id: 'victim', cardId: 'base.mage.neutral', color: 'off-white' });
+    s = addMage(s, 'p1', { id: 'mine', cardId: 'base.mage.neutral', color: 'off-white' });
+    s = placeMageOnSpace(s, 'p2', 'victim', slot);
+    s = placeShadow(s, 'p1', 'mine', slot);
+    // A second opponent Mage NOT shadowed by us is off-limits.
+    const slot2 = openSlot(s);
+    s = addMage(s, 'p2', { id: 'safe', cardId: 'base.mage.neutral', color: 'off-white' });
+    s = placeMageOnSpace(s, 'p2', 'safe', slot2);
+    s = cast(s, 1);
+    const t = topPending(s);
+    if (t.prompt.kind !== 'choose-target-mage') throw new Error('x');
+    expect(t.prompt.eligibleMageIds).toContain('victim');
+    expect(t.prompt.eligibleMageIds).not.toContain('safe');
+    s = applyAction(s, { type: 'RESOLVE_PENDING', resolutionId: t.id, answer: { kind: 'mage-chosen', mageId: 'victim' } });
+    s = settle(s);
+    expect(findMage(s, 'p2', 'victim')!.isWounded).toBe(true);
+    expect(findMage(s, 'p2', 'safe')!.isWounded).toBe(false);
+  });
+
+  it('L2 Envelop: swaps the base Mage and the Mage shadowing it', () => {
+    let s = setup(2);
+    const slot = openSlot(s);
+    s = addMage(s, 'p2', { id: 'b', cardId: 'base.mage.neutral', color: 'off-white' });
+    s = addMage(s, 'p1', { id: 's', cardId: 'base.mage.neutral', color: 'off-white' });
+    s = placeMageOnSpace(s, 'p2', 'b', slot);
+    s = placeShadow(s, 'p1', 's', slot);
+    s = cast(s, 2);
+    s = applyAction(s, { type: 'RESOLVE_PENDING', resolutionId: topPending(s).id, answer: { kind: 'mage-chosen', mageId: 'b' } });
+    s = settle(s);
+    const space = s.rooms.flatMap((r) => r.actionSpaces).find((x) => x.id === slot)!;
+    // Your Mage is now in the base position; the opponent's is now shadowing.
+    expect(space.occupant?.mageId).toBe('s');
+    expect(space.shadowOccupant?.mageId).toBe('b');
+    expect(findMage(s, 'p1', 's')!.isShadowing).toBe(false);
+    expect(findMage(s, 'p2', 'b')!.isShadowing).toBe(true);
+  });
+
+  it('L3 Death: removes the shadowed Mage from the game and gives its owner a supply Mage', () => {
+    let s = setup(3);
+    const slot = openSlot(s);
+    s = addMage(s, 'p2', { id: 'doomed', cardId: 'base.mage.neutral', color: 'off-white' });
+    s = addMage(s, 'p1', { id: 'mine', cardId: 'base.mage.neutral', color: 'off-white' });
+    s = placeMageOnSpace(s, 'p2', 'doomed', slot);
+    s = placeShadow(s, 'p1', 'mine', slot);
+    const p2CountBefore = s.players.find((p) => p.id === 'p2')!.mages.length;
+    s = cast(s, 3);
+    s = applyAction(s, { type: 'RESOLVE_PENDING', resolutionId: topPending(s).id, answer: { kind: 'mage-chosen', mageId: 'doomed' } });
+    // Choose the supply colour.
+    const colorPrompt = topPending(s);
+    if (colorPrompt.prompt.kind !== 'choose-from-options') throw new Error('x');
+    const color = colorPrompt.prompt.options[0]!.id;
+    const poolBefore = s.mageDraftPool[color as keyof typeof s.mageDraftPool];
+    s = applyAction(s, { type: 'RESOLVE_PENDING', resolutionId: colorPrompt.id, answer: { kind: 'option-chosen', optionId: color, payload: {} } });
+    // 'doomed' is gone from the game; the base slot is empty; our shadow remains.
+    expect(findMage(s, 'p2', 'doomed')).toBeUndefined();
+    const space = s.rooms.flatMap((r) => r.actionSpaces).find((x) => x.id === slot)!;
+    expect(space.occupant).toBeNull();
+    expect(space.shadowOccupant?.mageId).toBe('mine');
+    // p2 received a replacement supply Mage of the chosen colour (count unchanged).
+    const p2 = s.players.find((p) => p.id === 'p2')!;
+    expect(p2.mages.length).toBe(p2CountBefore);
+    expect(p2.mages.some((m) => m.color === color && m.location.kind === 'office')).toBe(true);
+    expect(s.mageDraftPool[color as keyof typeof s.mageDraftPool]).toBe(poolBefore - 1);
+  });
+});

@@ -406,6 +406,41 @@ const artificiersCompanion: SpellCard = {
 
 const legendarySpells: SpellCard[] = [...leaderSpells, artificiersCompanion];
 
+// The Black Chronicle, v13 (Mysticism) — shadow-pair manipulation.
+const blackChronicle: SpellCard = {
+  id: 'mancers.spell.the-black-chronicle-v13',
+  name: 'The Black Chronicle, v13',
+  sourcePackId: PACK_ID,
+  department: 'mysticism',
+  levels: [
+    {
+      level: 1,
+      title: 'Creep',
+      manaCost: 0,
+      timing: 'action',
+      effectId: 'mancers.spell.the-black-chronicle-v13.l1',
+      description: 'Wound a Mage shadowed by one of your Mages.',
+    },
+    {
+      level: 2,
+      title: 'Envelop',
+      manaCost: 1,
+      timing: 'action',
+      effectId: 'mancers.spell.the-black-chronicle-v13.l2',
+      description: 'Swap a Mage and the Mage shadowing it.',
+    },
+    {
+      level: 3,
+      title: 'Death',
+      manaCost: 4,
+      timing: 'action',
+      effectId: 'mancers.spell.the-black-chronicle-v13.l3',
+      description:
+        "Remove a Mage shadowed by one of your Mages from the game. Put a Mage of your choice from the supply into its owner's office.",
+    },
+  ],
+};
+
 // Beyond the Beyonds (Planar Studies) — room control: a timed lock, a
 // cross-room swap, and a room-tile flip.
 const beyondTheBeyonds: SpellCard = {
@@ -1466,6 +1501,7 @@ export const mancersPack: ContentPack = {
     lawsOfThaumodynamics,
     breathOfWinter,
     beyondTheBeyonds,
+    blackChronicle,
   ],
   legendarySpells,
   vaultCards: [...stuffVaultCards, ...synthesisTreasures],
