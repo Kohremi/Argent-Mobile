@@ -28634,7 +28634,7 @@ describe('The Laws of Thaumodynamics (Mancers)', () => {
     return s;
   };
 
-  it('L1 Shadow Bomb: moves two base Mages in a room to their shadow slots', () => {
+  it('L1 Shadow Bomb: moves two base Mages to shadow, opening a move-reaction window', () => {
     let s = setup(1);
     const room = twoSlotRoom(s);
     const [s1, s2] = [room.actionSpaces[0]!.id, room.actionSpaces[1]!.id];
@@ -28642,9 +28642,21 @@ describe('The Laws of Thaumodynamics (Mancers)', () => {
     s = addMage(s, 'p2', { id: 'm2', cardId: 'base.mage.neutral', color: 'off-white' });
     s = placeMageOnSpace(s, 'p2', 'm1', s1);
     s = placeMageOnSpace(s, 'p2', 'm2', s2);
+    // Give p2 a move-reactive spell so the window surfaces a real option.
+    s = setMana(s, 'p2', 1);
+    s = addOwnedSpell(s, 'p2', 'base.spell.wrath-of-heaven', { intPlaced: true });
     s = cast(s, 1);
     s = pickMage(s, 'm1');
     s = pickMage(s, 'm2');
+    // Moving p2's Mages opens a reaction window offering Wrath of Heaven.
+    const rw = topPending(s);
+    expect(rw.prompt.kind).toBe('reaction-window');
+    if (rw.prompt.kind === 'reaction-window') {
+      expect(rw.prompt.reactionOptions.map((o) => o.effectId)).toContain(
+        'base.spell.wrath-of-heaven.l1.react',
+      );
+    }
+    s = passReactions(s);
     expect(findMage(s, 'p2', 'm1').isShadowing).toBe(true);
     expect(findMage(s, 'p2', 'm2').isShadowing).toBe(true);
     const a = s.rooms.flatMap((r) => r.actionSpaces).find((x) => x.id === s1)!;

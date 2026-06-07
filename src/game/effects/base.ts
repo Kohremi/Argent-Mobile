@@ -12555,10 +12555,37 @@ registerEffect('mancers.spell.the-laws-of-thaumodynamics.l1', (ctx): EffectResul
   };
   const apply = (c: EffectContext, ids: string[]): EffectResult => {
     let working: GameState = c.state;
+    const events: ReactionTriggerEvent[] = [];
     for (const id of ids) {
+      const space = working.rooms
+        .flatMap((r) => r.actionSpaces)
+        .find((s) => s.occupant?.mageId === id && !s.shadowOccupant);
+      if (!space || !space.occupant) continue;
+      const ownerId = space.occupant.ownerId;
       working = { ...working, ...moveMageBaseToShadowPatch(working, id) };
+      // Moving a Mage (even base→shadow in place) is a move — opponents may
+      // react to it (Wrath of Heaven, Sacred Shield, Phase Steppers, …).
+      events.push({
+        kind: 'mage-moved',
+        mageId: id,
+        ownerId,
+        fromSpaceId: space.id,
+        toSpaceId: space.id,
+        byPlayerId: c.triggeringPlayerId,
+      });
     }
-    return { kind: 'done', patch: { players: working.players, rooms: working.rooms } };
+    if (events.length === 0) return { kind: 'done', patch: {} };
+    return {
+      kind: 'open-reaction',
+      patch: { players: working.players, rooms: working.rooms },
+      window: {
+        triggerEvents: events,
+        pendingResponderIds: buildBatchReactorQueue(c.state, c.triggeringPlayerId, events),
+        reactedPlayerIds: [],
+        afterResume: { effectId: 'base.system.noop', context: {} },
+        source: c.source,
+      },
+    };
   };
   return chooseUpToTwoInRoom(ctx, self, eligible, apply, {
     first: 'Move which Mage to its shadow slot?',
