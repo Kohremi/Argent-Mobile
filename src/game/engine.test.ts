@@ -15120,7 +15120,7 @@ describe('Technomancy (Mancers expansion)', () => {
     expect(prompt.prompt.options.map((o) => o.id).sort()).toEqual(['pay', 'skip']);
   });
 
-  it("a 'place without powers' bonus placement (Great Hall) does NOT trigger Technomancy", () => {
+  it('a Great Hall bonus placement of an orange Mage DOES trigger Technomancy', () => {
     let s = initGame({ ...TWO_PLAYER_CONFIG, activePackIds: ['base', 'mancers'] });
     s = forceRoomSide(s, 'Great Hall', 'A');
     s = zeroPlayerResources(s, 'p1');
@@ -15153,7 +15153,7 @@ describe('Technomancy (Mancers expansion)', () => {
       actionSpaceId: 'base.room.great-hall.a.slot-1',
     });
     s = takeRewardAtResolution(s);
-    // Chain drains → place the ORANGE Mage as a "without powers" bonus.
+    // Chain drains → place the ORANGE Mage as a bonus placement.
     let prompt = topPending(s);
     if (prompt.prompt.kind !== 'choose-from-options') throw new Error('x');
     s = applyAction(s, {
@@ -15168,13 +15168,14 @@ describe('Technomancy (Mancers expansion)', () => {
       resolutionId: prompt.id,
       answer: { kind: 'space-chosen', spaceId: 'base.room.great-hall.a.slot-2' },
     });
-    // No Technomancy trigger was queued, and no pay-3-Gold prompt ever surfaced.
-    expect(s.pendingTechnomancyTrigger).toEqual([]);
+    s = takeRewardAtResolution(s);
+    // The bonus placement of an orange Mage surfaces the Technomancy
+    // pay-3-Gold prompt (Great Hall placements are NOT "without powers").
     expect(
       s.pendingResolutionStack.some(
         (p) => p.resume.effectId === 'mancers.mage.technomancy.place-after',
       ),
-    ).toBe(false);
+    ).toBe(true);
     // Sanity: the orange Mage really did get placed.
     const gh = s.rooms.find((r) => r.id === 'base.room.great-hall.a')!;
     expect(gh.actionSpaces[1]?.occupant?.mageId).toBe('orange1');

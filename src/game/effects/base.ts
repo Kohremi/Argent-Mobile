@@ -4637,8 +4637,6 @@ function maybeSetGreatHallChain(
         remaining: 2,
         restrictRoomId: roomId,
         allowStop: true,
-        // Great Hall's extra placements don't use the spaces' powers.
-        suppressMagePowers: true,
       },
     },
   };

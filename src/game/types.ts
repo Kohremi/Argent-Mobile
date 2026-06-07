@@ -1198,11 +1198,11 @@ export interface GameState {
     allowStop?: boolean;
     /**
      * When true, mages placed by this chain do NOT use Mage powers — these
-     * are genuine "place without powers" placements (Slow Time / Stop Time /
-     * Great Hall). This suppresses the Technomancy (orange) "upon placement"
-     * trigger for those placements. Absent / false = the placement is a
-     * normal "place a Mage" (Mystic Link, Mystic's Cowl) and DOES fire the
-     * orange ability.
+     * are genuine "place without powers" placements (Slow Time / Stop Time).
+     * This suppresses the Technomancy (orange) "upon placement" trigger for
+     * those placements. Absent / false = the placement is a normal "place a
+     * Mage" (Great Hall bonus placements, Mystic Link, Mystic's Cowl) and
+     * DOES fire the orange ability.
      */
     suppressMagePowers?: boolean;
   } | null;
