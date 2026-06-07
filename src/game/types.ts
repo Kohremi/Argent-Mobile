@@ -289,6 +289,12 @@ export interface SpellLevel {
   timing: SpellTiming;
   /** Human-readable effect text for this level, copied from the card. */
   description?: string;
+  /**
+   * When true, this spell level may be cast at most once per game. The cast
+   * is recorded on `GameState.oncePerGameSpellsCast` (by spell card id) and
+   * CAST_SPELL rejects a second attempt. Used by Devastation Now L3.
+   */
+  oncePerGame?: boolean;
 }
 
 export interface SpellCard {
@@ -1318,6 +1324,13 @@ export interface GameState {
 
   archmagesApprenticeOwner: PlayerId | null;
   roomLocks: { roomId: RoomId }[];
+
+  /**
+   * Spell card ids whose `oncePerGame` level has already been cast this game.
+   * CAST_SPELL rejects a second cast of such a level. Currently only
+   * Devastation Now L3 (destroy a room) uses this.
+   */
+  oncePerGameSpellsCast: SpellCardId[];
 
   /**
    * Astronomy Tower marker position — an index into the room's reward

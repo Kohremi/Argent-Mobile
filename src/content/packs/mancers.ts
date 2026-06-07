@@ -406,6 +406,43 @@ const artificiersCompanion: SpellCard = {
 
 const legendarySpells: SpellCard[] = [...leaderSpells, artificiersCompanion];
 
+// Devastation Now (Sorcery) — a draftable spell book. The L3 name is blank in
+// the source data; "Devastation" is used as a placeholder title.
+const devastationNow: SpellCard = {
+  id: 'mancers.spell.devastation-now',
+  name: 'Devastation Now',
+  sourcePackId: PACK_ID,
+  department: 'sorcery',
+  levels: [
+    {
+      level: 1,
+      title: 'Conflagration',
+      manaCost: 3,
+      timing: 'action',
+      effectId: 'mancers.spell.devastation-now.l1',
+      description: 'Lock a room that currently has no Mages placed in it.',
+    },
+    {
+      level: 2,
+      title: 'Fire Storm',
+      manaCost: 4,
+      timing: 'action',
+      effectId: 'mancers.spell.devastation-now.l2',
+      description: 'Wound all Mages in a room, then lock that room.',
+    },
+    {
+      level: 3,
+      title: 'Devastation',
+      manaCost: 6,
+      timing: 'action',
+      effectId: 'mancers.spell.devastation-now.l3',
+      oncePerGame: true,
+      description:
+        'This can only be cast once per game. Wound all Mages in a non-central campus room, ignoring Mage powers. Destroy the room, returning it to the box.',
+    },
+  ],
+};
+
 // ============================================================================
 // Candidates — Mancers introduces ONLY the two Technomancy leaders.
 // Both are selectable in candidate-draft when the Mancers pack is seated.
@@ -1278,7 +1315,7 @@ export const mancersPack: ContentPack = {
     synthesisWorkshopA,
     synthesisWorkshopB,
   ],
-  spells: [],
+  spells: [devastationNow],
   legendarySpells,
   vaultCards: [...stuffVaultCards, ...synthesisTreasures],
   supporters,

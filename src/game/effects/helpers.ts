@@ -197,6 +197,14 @@ export function buildHarmfulMageTargets(
     source: 'spell' | 'non-spell';
     effect: HarmfulEffectKind;
     includesShadows?: boolean;
+    /**
+     * When true, colour-based Mage powers (green wound-immunity, blue
+     * spell-immunity) are ignored, so those mages are still targetable.
+     * Sustained buff immunities (Sanctification etc.) and locked rooms are
+     * still respected — those aren't Mage powers. Used by Devastation Now L3
+     * ("ignoring Mage powers").
+     */
+    ignorePowers?: boolean;
   },
 ): OwnedMageId[] {
   const targets: OwnedMageId[] = [];
@@ -214,6 +222,12 @@ export function buildHarmfulMageTargets(
       if (m.isShadowing) {
         if (!opts.includesShadows) continue;
         // Shadowing mage loses its colour ability — no protections apply.
+        targets.push(m.id);
+        continue;
+      }
+      // "Ignoring Mage powers" (Devastation Now L3) drops every colour-based
+      // protection — green and blue are both targetable.
+      if (opts.ignorePowers) {
         targets.push(m.id);
         continue;
       }

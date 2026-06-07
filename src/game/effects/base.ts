@@ -30,6 +30,7 @@ import {
   buildArsMagnaTargets,
   buildBanishTargets,
   buildBurnTargets,
+  buildHarmfulMageTargets,
   buildMageShadowedEvent,
   buildNonSpellHarmfulTargets,
   buildReactionQueue,
@@ -11796,13 +11797,23 @@ function buildBanishableMagesInRoom(
   return mages;
 }
 
-/** Spell-source woundable mages in a given room. */
+/** Spell-source woundable mages in a given room. When `ignorePowers` is set
+ *  (Devastation Now L3), colour-based protections are bypassed. */
 function buildWoundableMagesInRoom(
   state: GameState,
   casterId: string,
   roomId: string,
+  ignorePowers = false,
 ): string[] {
-  const eligible = new Set(buildBurnTargets(state, casterId));
+  const eligible = new Set(
+    ignorePowers
+      ? buildHarmfulMageTargets(state, casterId, {
+          source: 'spell',
+          effect: 'wound',
+          ignorePowers: true,
+        })
+      : buildBurnTargets(state, casterId),
+  );
   const room = state.rooms.find((r) => r.id === roomId);
   if (!room) return [];
   const mages: string[] = [];
@@ -11954,6 +11965,207 @@ registerEffect('base.spell.the-lamentations-of-sareth.l3', (ctx): EffectResult =
         pendingResponderIds: reactorQueue,
         reactedPlayerIds: [],
         afterResume: { effectId: 'base.system.noop', context: {} },
+        source: ctx.source,
+      },
+    };
+  }
+  throw new Error(`${self} unexpected step ${String(step)}`);
+});
+
+// ============================================================================
+// Devastation Now (Sorcery, Mancers) — registered here for access to the
+// wound-all-in-room / batch helpers above.
+//   L1 Conflagration (3 Mana): Lock a room that currently has no Mages in it.
+//   L2 Fire Storm   (4 Mana): Wound all Mages in a room, then lock that room.
+//   L3 Devastation  (6 Mana, once/game): Wound all Mages in a non-central
+//      campus room ignoring Mage powers, then destroy the room.
+// ============================================================================
+
+/** True when no Mage (base or shadow) occupies any slot of the room. */
+function roomHasNoMages(state: GameState, roomId: string): boolean {
+  const room = state.rooms.find((r) => r.id === roomId);
+  if (!room) return false;
+  return room.actionSpaces.every((s) => !s.occupant && !s.shadowOccupant);
+}
+
+/** Returns a room-name option list for a choose-from-options room picker. */
+function roomOptions(state: GameState, roomIds: string[]): ChoiceOption[] {
+  return roomIds.map((rid) => ({
+    id: rid,
+    label: state.rooms.find((r) => r.id === rid)?.name ?? rid,
+    payload: {},
+  }));
+}
+
+registerEffect('mancers.spell.devastation-now.l1', (ctx): EffectResult => {
+  const self = 'mancers.spell.devastation-now.l1';
+  if (!ctx.resumeAnswer) {
+    const eligible = ctx.state.rooms
+      .filter(
+        (r) =>
+          !r.cannotBeLocked &&
+          !ctx.state.roomLocks.some((l) => l.roomId === r.id) &&
+          roomHasNoMages(ctx.state, r.id),
+      )
+      .map((r) => r.id);
+    if (eligible.length === 0) return { kind: 'done', patch: {} };
+    return {
+      kind: 'pause',
+      pending: {
+        responderId: ctx.triggeringPlayerId,
+        prompt: { kind: 'choose-from-options', options: roomOptions(ctx.state, eligible) },
+        resume: { effectId: self, context: { step: 'apply' } },
+        source: ctx.source,
+      },
+    };
+  }
+  if (ctx.resumeAnswer.kind !== 'option-chosen') {
+    throw new Error(`${self} expected option-chosen`);
+  }
+  return { kind: 'done', patch: applyRoomLockPatch(ctx.state, ctx.resumeAnswer.optionId) };
+});
+
+registerEffect('mancers.spell.devastation-now.l2', (ctx): EffectResult => {
+  const self = 'mancers.spell.devastation-now.l2';
+  const step = ctx.resumeContext?.['step'];
+  if (!ctx.resumeAnswer) {
+    const eligible = ctx.state.rooms
+      .filter(
+        (r) =>
+          buildWoundableMagesInRoom(ctx.state, ctx.triggeringPlayerId, r.id).length > 0,
+      )
+      .map((r) => r.id);
+    if (eligible.length === 0) return { kind: 'done', patch: {} };
+    return {
+      kind: 'pause',
+      pending: {
+        responderId: ctx.triggeringPlayerId,
+        prompt: { kind: 'choose-from-options', options: roomOptions(ctx.state, eligible) },
+        resume: { effectId: self, context: { step: 'apply' } },
+        source: ctx.source,
+      },
+    };
+  }
+  if (step === 'apply') {
+    if (ctx.resumeAnswer.kind !== 'option-chosen') {
+      throw new Error(`${self} apply expected option-chosen`);
+    }
+    const roomId = ctx.resumeAnswer.optionId;
+    const mageIds = buildWoundableMagesInRoom(ctx.state, ctx.triggeringPlayerId, roomId);
+    if (mageIds.length === 0) return { kind: 'done', patch: {} };
+    const wounded = woundManyMages(ctx.state, mageIds, ctx.triggeringPlayerId);
+    const reactorQueue = buildBatchReactorQueue(
+      ctx.state,
+      ctx.triggeringPlayerId,
+      wounded.events,
+    );
+    // "then lock that room" — unconditional, applied alongside the wounds.
+    const lockPatch = ctx.state.rooms.find((r) => r.id === roomId)?.cannotBeLocked
+      ? {}
+      : applyRoomLockPatch(ctx.state, roomId);
+    return {
+      kind: 'open-reaction',
+      patch: { ...wounded.patch, ...lockPatch },
+      window: {
+        triggerEvents: wounded.events,
+        pendingResponderIds: reactorQueue,
+        reactedPlayerIds: [],
+        afterResume: { effectId: 'base.system.noop', context: {} },
+        source: ctx.source,
+      },
+    };
+  }
+  throw new Error(`${self} unexpected step ${String(step)}`);
+});
+
+/** Destroys a room: evicts any Mage still in it (a wound reaction may have
+ *  repositioned one back) to its owner's office, removes the room from the
+ *  board, and nulls its grid cell so adjacency treats it as a wall. */
+function destroyRoomPatch(state: GameState, roomId: string): GameStatePatch {
+  let working = state;
+  const room = state.rooms.find((r) => r.id === roomId);
+  const stragglers: string[] = [];
+  if (room) {
+    for (const s of room.actionSpaces) {
+      if (s.occupant) stragglers.push(s.occupant.mageId);
+      if (s.shadowOccupant) stragglers.push(s.shadowOccupant.mageId);
+    }
+  }
+  for (const mid of stragglers) {
+    working = { ...working, ...returnMageToOfficePatch(working, mid) };
+  }
+  const grid = working.roomLayout.grid.map((row) =>
+    row.map((cell) => (cell === roomId ? null : cell)),
+  );
+  return {
+    players: working.players,
+    rooms: working.rooms.filter((r) => r.id !== roomId),
+    roomLayout: { ...working.roomLayout, grid },
+    roomLocks: working.roomLocks.filter((l) => l.roomId !== roomId),
+  };
+}
+
+// Destroys the chosen room once the L3 wound's reaction window has resolved.
+registerEffect('mancers.spell.devastation-now.l3.destroy', (ctx): EffectResult => {
+  const roomId = ctx.resumeContext?.['roomId'];
+  if (typeof roomId !== 'string') return { kind: 'done', patch: {} };
+  return { kind: 'done', patch: destroyRoomPatch(ctx.state, roomId) };
+});
+
+registerEffect('mancers.spell.devastation-now.l3', (ctx): EffectResult => {
+  const self = 'mancers.spell.devastation-now.l3';
+  const step = ctx.resumeContext?.['step'];
+  if (!ctx.resumeAnswer) {
+    // Any non-central-campus room may be targeted (even an empty one — the
+    // destruction still happens, the wound simply hits nobody).
+    const eligible = ctx.state.rooms
+      .filter((r) => !r.isUniversityCentral)
+      .map((r) => r.id);
+    if (eligible.length === 0) return { kind: 'done', patch: {} };
+    return {
+      kind: 'pause',
+      pending: {
+        responderId: ctx.triggeringPlayerId,
+        prompt: { kind: 'choose-from-options', options: roomOptions(ctx.state, eligible) },
+        resume: { effectId: self, context: { step: 'apply' } },
+        source: ctx.source,
+      },
+    };
+  }
+  if (step === 'apply') {
+    if (ctx.resumeAnswer.kind !== 'option-chosen') {
+      throw new Error(`${self} apply expected option-chosen`);
+    }
+    const roomId = ctx.resumeAnswer.optionId;
+    const mageIds = buildWoundableMagesInRoom(
+      ctx.state,
+      ctx.triggeringPlayerId,
+      roomId,
+      true, // ignore Mage powers
+    );
+    if (mageIds.length === 0) {
+      // Nothing to wound — destroy the room outright.
+      return { kind: 'done', patch: destroyRoomPatch(ctx.state, roomId) };
+    }
+    const wounded = woundManyMages(ctx.state, mageIds, ctx.triggeringPlayerId);
+    const reactorQueue = buildBatchReactorQueue(
+      ctx.state,
+      ctx.triggeringPlayerId,
+      wounded.events,
+    );
+    // Wound all (ignoring powers) now; destroy the room AFTER the wound's
+    // reaction window settles (so reactions resolve before the room is gone).
+    return {
+      kind: 'open-reaction',
+      patch: wounded.patch,
+      window: {
+        triggerEvents: wounded.events,
+        pendingResponderIds: reactorQueue,
+        reactedPlayerIds: [],
+        afterResume: {
+          effectId: 'mancers.spell.devastation-now.l3.destroy',
+          context: { roomId },
+        },
         source: ctx.source,
       },
     };

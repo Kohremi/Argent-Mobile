@@ -15130,8 +15130,17 @@ describe('Technomancy (Mancers expansion)', () => {
 
   it('mancers pack exposes both leader starter spells in legendarySpells (unique, single-level; NOT in the draftable spells pool)', () => {
     // Leader spells must live in `legendarySpells`, never `spells` — the
-    // `spells` array is the draftable pool that seeds the spell deck.
-    expect(mancersPack.spells).toHaveLength(0);
+    // `spells` array is the draftable pool that seeds the spell deck. (The
+    // draftable pool itself holds the Mancers spell books, e.g. Devastation
+    // Now — just never the unique leader spells.)
+    expect(
+      mancersPack.spells.some((s) => s.id === 'mancers.spell.arcane-surge'),
+    ).toBe(false);
+    expect(
+      mancersPack.spells.some(
+        (s) => s.id === 'mancers.spell.arcane-investigation',
+      ),
+    ).toBe(false);
     const surge = mancersPack.legendarySpells.find(
       (s) => s.id === 'mancers.spell.arcane-surge',
     );
@@ -28297,5 +28306,142 @@ describe('Gold→Mage swap supporters (off-white fallback)', () => {
     s = setGold(s, 'p1', 2);
     const patch = await callSwap(s, 'red');
     expect(patch).toBeNull();
+  });
+});
+
+// ============================================================================
+// Devastation Now (Sorcery, Mancers) — L1 lock-empty-room, L2 wound-all + lock,
+// L3 once-per-game wound-all-ignoring-powers + destroy the room.
+// ============================================================================
+describe('Devastation Now (Mancers)', () => {
+  function setup(level: 2 | 3 | 1): GameState {
+    let s = initGame({ ...TWO_PLAYER_CONFIG, activePackIds: ['base', 'mancers'] });
+    s = zeroPlayerResources(s, 'p1');
+    s = setMana(s, 'p1', 6);
+    s = addOwnedSpell(s, 'p1', 'mancers.spell.devastation-now', {
+      intPlaced: true,
+      wisPlacedLevel2: level >= 2,
+      wisPlacedLevel3: level >= 3,
+    });
+    return {
+      ...s,
+      firstPlayerIndex: 0,
+      phase: {
+        kind: 'errands',
+        round: 1,
+        activePlayerIndex: 0,
+        actionUsed: false,
+        fastActionUsed: false,
+      },
+    };
+  }
+  const cast = (s: GameState, level: 1 | 2 | 3) =>
+    applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'mancers.spell.devastation-now',
+      level,
+    });
+  const chooseRoom = (s: GameState, roomId: string) =>
+    applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'option-chosen', optionId: roomId, payload: {} },
+    });
+  /** First non-central room with at least two empty base slots. */
+  const pickRoom = (s: GameState) =>
+    s.rooms.find(
+      (r) =>
+        !r.isUniversityCentral &&
+        !r.cannotBeLocked &&
+        r.actionSpaces.filter((sp) => !sp.occupant).length >= 2,
+    )!;
+
+  it('L1 Conflagration: locks an empty, unlocked room', () => {
+    let s = setup(1);
+    const room = pickRoom(s);
+    s = cast(s, 1);
+    const top = topPending(s);
+    if (top.prompt.kind !== 'choose-from-options') throw new Error('x');
+    // The chosen room must be empty and lockable; pick our target room.
+    expect(top.prompt.options.some((o) => o.id === room.id)).toBe(true);
+    s = chooseRoom(s, room.id);
+    expect(s.roomLocks.some((l) => l.roomId === room.id)).toBe(true);
+  });
+
+  it('L1 Conflagration: a room that has a Mage is NOT offered', () => {
+    let s = setup(1);
+    const room = pickRoom(s);
+    s = addMage(s, 'p2', { id: 'occ', cardId: 'base.mage.neutral', color: 'off-white' });
+    s = placeMageOnSpace(s, 'p2', 'occ', room.actionSpaces[0]!.id);
+    s = cast(s, 1);
+    const top = topPending(s);
+    if (top.prompt.kind !== 'choose-from-options') throw new Error('x');
+    expect(top.prompt.options.some((o) => o.id === room.id)).toBe(false);
+  });
+
+  it('L2 Fire Storm: wounds all Mages in a room, then locks it', () => {
+    let s = setup(2);
+    const room = pickRoom(s);
+    s = addMage(s, 'p2', { id: 'a', cardId: 'base.mage.neutral', color: 'off-white' });
+    s = addMage(s, 'p2', { id: 'b', cardId: 'base.mage.neutral', color: 'off-white' });
+    s = placeMageOnSpace(s, 'p2', 'a', room.actionSpaces[0]!.id);
+    s = placeMageOnSpace(s, 'p2', 'b', room.actionSpaces[1]!.id);
+    s = cast(s, 2);
+    s = chooseRoom(s, room.id);
+    // Pass the batch wound reaction window.
+    let guard = 0;
+    while (s.pendingResolutionStack.length > 0 && guard++ < 10) {
+      const t = topPending(s);
+      if (t.prompt.kind !== 'reaction-window') break;
+      s = applyAction(s, { type: 'RESOLVE_PENDING', resolutionId: t.id, answer: { kind: 'reaction-passed' } });
+    }
+    const p2 = s.players.find((p) => p.id === 'p2')!;
+    expect(p2.mages.find((m) => m.id === 'a')!.isWounded).toBe(true);
+    expect(p2.mages.find((m) => m.id === 'b')!.isWounded).toBe(true);
+    expect(s.roomLocks.some((l) => l.roomId === room.id)).toBe(true);
+  });
+
+  it('L3 Devastation: wounds a green (wound-immune) Mage ignoring powers, then destroys the room', () => {
+    let s = setup(3);
+    const room = pickRoom(s);
+    const roomCount = s.rooms.length;
+    // A green Mage is normally wound-immune — L3 ignores Mage powers.
+    s = addMage(s, 'p2', { id: 'greenie', cardId: 'base.mage.natural-magick', color: 'green' });
+    s = placeMageOnSpace(s, 'p2', 'greenie', room.actionSpaces[0]!.id);
+    s = cast(s, 3);
+    s = chooseRoom(s, room.id);
+    // Pass the wound reaction window → destruction continuation fires.
+    let guard = 0;
+    while (s.pendingResolutionStack.length > 0 && guard++ < 10) {
+      const t = topPending(s);
+      if (t.prompt.kind !== 'reaction-window') break;
+      s = applyAction(s, { type: 'RESOLVE_PENDING', resolutionId: t.id, answer: { kind: 'reaction-passed' } });
+    }
+    // The green Mage was wounded despite its colour immunity.
+    expect(s.players.find((p) => p.id === 'p2')!.mages.find((m) => m.id === 'greenie')!.isWounded).toBe(true);
+    // The room is gone from the board and its grid cell is nulled.
+    expect(s.rooms.some((r) => r.id === room.id)).toBe(false);
+    expect(s.rooms.length).toBe(roomCount - 1);
+    expect(s.roomLayout.grid.flat().some((c) => c === room.id)).toBe(false);
+    // Once-per-game cast was recorded.
+    expect(s.oncePerGameSpellsCast).toContain('mancers.spell.devastation-now');
+  });
+
+  it('L3 Devastation: cannot be cast a second time (once per game)', () => {
+    let s = setup(3);
+    s = { ...s, oncePerGameSpellsCast: ['mancers.spell.devastation-now'] };
+    expect(() => cast(s, 3)).toThrow(/once per game/);
+  });
+
+  it('L3 Devastation: central-campus rooms are never offered as targets', () => {
+    let s = setup(3);
+    s = cast(s, 3);
+    const top = topPending(s);
+    if (top.prompt.kind !== 'choose-from-options') throw new Error('x');
+    const offeredIds = new Set(top.prompt.options.map((o) => o.id));
+    for (const r of s.rooms) {
+      if (r.isUniversityCentral) expect(offeredIds.has(r.id)).toBe(false);
+    }
   });
 });

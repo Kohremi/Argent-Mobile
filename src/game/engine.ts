@@ -1521,6 +1521,16 @@ function handleCastSpell(state: GameState, action: CastSpellAction): GameState {
     }
   }
 
+  // Once-per-game levels (Devastation Now L3) may not be cast a second time.
+  if (
+    levelDef.oncePerGame &&
+    state.oncePerGameSpellsCast.includes(action.spellCardId)
+  ) {
+    throw new Error(
+      `CAST_SPELL: ${action.spellCardId} L${action.level} can only be cast once per game`,
+    );
+  }
+
   // Mana Elixir (and similar) waive the cost of the very next spell this
   // turn. If the flag is set, the mana check is skipped and the cost zeros.
   // Sustained "spells cheaper" buffs (Power bell tower offering) shave more
@@ -1573,6 +1583,10 @@ function handleCastSpell(state: GameState, action: CastSpellAction): GameState {
   }
   let next: GameState = {
     ...state,
+    // Record a once-per-game cast so it can't be repeated (Devastation Now L3).
+    oncePerGameSpellsCast: levelDef.oncePerGame
+      ? [...state.oncePerGameSpellsCast, action.spellCardId]
+      : state.oncePerGameSpellsCast,
     players: state.players.map((p) => {
       if (p.id === action.playerId) {
         return {
