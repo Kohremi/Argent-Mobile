@@ -29121,3 +29121,69 @@ describe('Metamorphic Remediaries (Mancers)', () => {
     expect(m.players.find((p) => p.id === 'p1')!.resources.mana).toBe(2);
   });
 });
+
+// ============================================================================
+// Applied Entropy (Technomancy, Mancers) — Treasure disruption.
+// ============================================================================
+describe('Applied Entropy (Mancers)', () => {
+  function setup(level: 1 | 2 | 3): GameState {
+    let s = initGame({ ...TWO_PLAYER_CONFIG, activePackIds: ['base', 'mancers'] });
+    s = zeroPlayerResources(s, 'p1');
+    s = setMana(s, 'p1', 3);
+    s = addOwnedSpell(s, 'p1', 'mancers.spell.applied-entropy', {
+      intPlaced: true,
+      wisPlacedLevel2: level >= 2,
+      wisPlacedLevel3: level >= 3,
+    });
+    return {
+      ...s,
+      firstPlayerIndex: 0,
+      phase: { kind: 'errands', round: 1, activePlayerIndex: 0, actionUsed: false, fastActionUsed: false },
+    };
+  }
+  const cast = (s: GameState, level: 1 | 2 | 3) =>
+    applyAction(s, { type: 'CAST_SPELL', playerId: 'p1', spellCardId: 'mancers.spell.applied-entropy', level });
+  const opt = (s: GameState, optionId: string) =>
+    applyAction(s, { type: 'RESOLVE_PENDING', resolutionId: topPending(s).id, answer: { kind: 'option-chosen', optionId, payload: {} } });
+  const p2card = (s: GameState, cardId: string) =>
+    s.players.find((p) => p.id === 'p2')!.vaultCards.find((v) => v.cardId === cardId);
+
+  it("L1 Sap: exhausts an opponent's Treasure (and never offers your own)", () => {
+    let s = setup(1);
+    s = addVaultCard(s, 'p1', 'mancers.vault.philosophers-stone'); // own — off-limits
+    s = addVaultCard(s, 'p2', 'mancers.vault.philosophers-stone');
+    s = cast(s, 1);
+    const top = topPending(s);
+    if (top.prompt.kind !== 'choose-from-options') throw new Error('x');
+    // Only p2's Treasure is offered.
+    expect(top.prompt.options.every((o) => o.id.startsWith('p2::'))).toBe(true);
+    s = opt(s, top.prompt.options[0]!.id);
+    expect(p2card(s, 'mancers.vault.philosophers-stone')!.exhausted).toBe(true);
+  });
+
+  it("L2 Disintegrate: discards a Treasure to its owner's discard pile", () => {
+    let s = setup(2);
+    s = addVaultCard(s, 'p2', 'mancers.vault.philosophers-stone');
+    s = cast(s, 2);
+    s = opt(s, 'p2::mancers.vault.philosophers-stone');
+    expect(p2card(s, 'mancers.vault.philosophers-stone')).toBeUndefined();
+    expect(
+      s.players.find((p) => p.id === 'p2')!.personalDiscard.some(
+        (e) => e.kind === 'consumable' && e.cardId === 'mancers.vault.philosophers-stone',
+      ),
+    ).toBe(true);
+  });
+
+  it("L3 Control: uses an opponent's Treasure, then exhausts their copy", () => {
+    let s = setup(3);
+    s = addVaultCard(s, 'p2', 'mancers.vault.philosophers-stone'); // gain 4 Gold
+    s = cast(s, 3);
+    s = opt(s, 'p2::mancers.vault.philosophers-stone');
+    // Caster got the benefit...
+    expect(s.players.find((p) => p.id === 'p1')!.resources.gold).toBe(4);
+    // ...and the opponent's copy is now exhausted (still owned).
+    const card = p2card(s, 'mancers.vault.philosophers-stone');
+    expect(card).toBeDefined();
+    expect(card!.exhausted).toBe(true);
+  });
+});

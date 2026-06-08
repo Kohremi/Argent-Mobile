@@ -13457,6 +13457,163 @@ registerEffect('mancers.spell.metamorphic-remediaries.l3', (ctx): EffectResult =
   };
 });
 
+// ============================================================================
+// Applied Entropy (Technomancy, Mancers) — Treasure disruption.
+//   L1 Sap          (Free, Fast): exhaust an opponent's Treasure.
+//   L2 Disintegrate (2 Mana): discard a Treasure to its owner's discard pile.
+//   L3 Control      (3 Mana): use an opponent's Treasure as the caster, then
+//      exhaust their copy.
+// ============================================================================
+
+/** `ownerId::cardId` option id used by the Treasure pickers. */
+function parseOwnerCard(optionId: string): { ownerId: string; cardId: string } {
+  const i = optionId.indexOf('::');
+  return { ownerId: optionId.slice(0, i), cardId: optionId.slice(i + 2) };
+}
+
+/** Treasure options across players, filtered. id = `ownerId::cardId`. */
+function treasureOptions(
+  state: GameState,
+  casterId: string,
+  opts: { opponentsOnly: boolean; unexhaustedOnly: boolean; wiredOnly: boolean },
+): ChoiceOption[] {
+  const out: ChoiceOption[] = [];
+  for (const p of state.players) {
+    if (opts.opponentsOnly && p.id === casterId) continue;
+    for (const v of p.vaultCards) {
+      const def = lookupVaultCardDef(state, v.cardId);
+      if (!def || def.type !== 'treasure') continue;
+      if (opts.unexhaustedOnly && v.exhausted) continue;
+      if (opts.wiredOnly && (def.timing === 'reaction' || !hasEffect(def.effectId))) continue;
+      out.push({ id: `${p.id}::${v.cardId}`, label: `${def.name} (${p.id})`, payload: {} });
+    }
+  }
+  return out;
+}
+
+/** Exhausts the first matching unexhausted Treasure copy in `ownerId`'s vault. */
+function exhaustTreasurePatch(state: GameState, ownerId: string, cardId: string): GameStatePatch {
+  return {
+    players: state.players.map((p) => {
+      if (p.id !== ownerId) return p;
+      let done = false;
+      return {
+        ...p,
+        vaultCards: p.vaultCards.map((v) => {
+          if (!done && v.cardId === cardId && !v.exhausted) {
+            done = true;
+            return { ...v, exhausted: true };
+          }
+          return v;
+        }),
+      };
+    }),
+  };
+}
+
+registerEffect('mancers.spell.applied-entropy.l1', (ctx): EffectResult => {
+  const self = 'mancers.spell.applied-entropy.l1';
+  if (ctx.resumeAnswer?.kind === 'option-chosen') {
+    const { ownerId, cardId } = parseOwnerCard(ctx.resumeAnswer.optionId);
+    return { kind: 'done', patch: exhaustTreasurePatch(ctx.state, ownerId, cardId) };
+  }
+  const options = treasureOptions(ctx.state, ctx.triggeringPlayerId, {
+    opponentsOnly: true,
+    unexhaustedOnly: true,
+    wiredOnly: false,
+  });
+  if (options.length === 0) return { kind: 'done', patch: {} };
+  return {
+    kind: 'pause',
+    pending: {
+      responderId: ctx.triggeringPlayerId,
+      prompt: { kind: 'choose-from-options', options },
+      resume: { effectId: self, context: { step: 'apply' } },
+      source: ctx.source,
+    },
+  };
+});
+
+registerEffect('mancers.spell.applied-entropy.l2', (ctx): EffectResult => {
+  const self = 'mancers.spell.applied-entropy.l2';
+  if (ctx.resumeAnswer?.kind === 'option-chosen') {
+    const { ownerId, cardId } = parseOwnerCard(ctx.resumeAnswer.optionId);
+    return {
+      kind: 'done',
+      patch: {
+        players: ctx.state.players.map((p) => {
+          if (p.id !== ownerId) return p;
+          let removed = false;
+          const vaultCards = p.vaultCards.filter((v) => {
+            if (!removed && v.cardId === cardId) {
+              removed = true;
+              return false;
+            }
+            return true;
+          });
+          if (!removed) return p;
+          return {
+            ...p,
+            vaultCards,
+            personalDiscard: [...p.personalDiscard, { kind: 'consumable' as const, cardId }],
+          };
+        }),
+      },
+    };
+  }
+  // Any Treasure (its owner's discard pile receives it).
+  const options = treasureOptions(ctx.state, ctx.triggeringPlayerId, {
+    opponentsOnly: false,
+    unexhaustedOnly: false,
+    wiredOnly: false,
+  });
+  if (options.length === 0) return { kind: 'done', patch: {} };
+  return {
+    kind: 'pause',
+    pending: {
+      responderId: ctx.triggeringPlayerId,
+      prompt: { kind: 'choose-from-options', options },
+      resume: { effectId: self, context: { step: 'apply' } },
+      source: ctx.source,
+    },
+  };
+});
+
+registerEffect('mancers.spell.applied-entropy.l3', (ctx): EffectResult => {
+  const self = 'mancers.spell.applied-entropy.l3';
+  if (ctx.resumeAnswer?.kind === 'option-chosen') {
+    const { ownerId, cardId } = parseOwnerCard(ctx.resumeAnswer.optionId);
+    const def = lookupVaultCardDef(ctx.state, cardId);
+    if (!def || !hasEffect(def.effectId)) return { kind: 'done', patch: {} };
+    // Exhaust their copy, then run its effect AS the caster on that state. The
+    // delegate's patches build on the exhausted state, so merging keeps it.
+    const exhaustPatch = exhaustTreasurePatch(ctx.state, ownerId, cardId);
+    const working: GameState = { ...ctx.state, ...exhaustPatch };
+    const result = getEffect(def.effectId)({
+      state: working,
+      source: { kind: 'vault-card', id: def.id, triggeringPlayerId: ctx.triggeringPlayerId, description: def.name },
+      triggeringPlayerId: ctx.triggeringPlayerId,
+      allowReactions: ctx.allowReactions,
+    });
+    return { ...result, patch: { ...exhaustPatch, ...(result.patch ?? {}) } } as EffectResult;
+  }
+  const options = treasureOptions(ctx.state, ctx.triggeringPlayerId, {
+    opponentsOnly: true,
+    unexhaustedOnly: true,
+    wiredOnly: true,
+  });
+  if (options.length === 0) return { kind: 'done', patch: {} };
+  return {
+    kind: 'pause',
+    pending: {
+      responderId: ctx.triggeringPlayerId,
+      prompt: { kind: 'choose-from-options', options },
+      resume: { effectId: self, context: { step: 'apply' } },
+      source: ctx.source,
+    },
+  };
+});
+
 // ----------------------------------------------------------------------------
 // batch-post-wound-bonus — fired as the afterResume continuation for batch
 // wound spells (Plague, Pestilence, Fireball, Inferno) once the reaction

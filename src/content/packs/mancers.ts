@@ -406,6 +406,40 @@ const artificiersCompanion: SpellCard = {
 
 const legendarySpells: SpellCard[] = [...leaderSpells, artificiersCompanion];
 
+// Applied Entropy (Technomancy) — Treasure disruption.
+const appliedEntropy: SpellCard = {
+  id: 'mancers.spell.applied-entropy',
+  name: 'Applied Entropy',
+  sourcePackId: PACK_ID,
+  department: 'technomancy',
+  levels: [
+    {
+      level: 1,
+      title: 'Sap',
+      manaCost: 0,
+      timing: 'fast-action',
+      effectId: 'mancers.spell.applied-entropy.l1',
+      description: "Exhaust an opponent's Treasure.",
+    },
+    {
+      level: 2,
+      title: 'Disintegrate',
+      manaCost: 2,
+      timing: 'action',
+      effectId: 'mancers.spell.applied-entropy.l2',
+      description: "Discard a Treasure to its owner's discard pile.",
+    },
+    {
+      level: 3,
+      title: 'Control',
+      manaCost: 3,
+      timing: 'action',
+      effectId: 'mancers.spell.applied-entropy.l3',
+      description: "Use an opponent's Treasure Card, exhausting it after use.",
+    },
+  ],
+};
+
 // Metamorphic Remediaries (Technomancy) — Vault-card tricks.
 const metamorphicRemediaries: SpellCard = {
   id: 'mancers.spell.metamorphic-remediaries',
@@ -1539,6 +1573,7 @@ export const mancersPack: ContentPack = {
     beyondTheBeyonds,
     blackChronicle,
     metamorphicRemediaries,
+    appliedEntropy,
   ],
   legendarySpells,
   vaultCards: [...stuffVaultCards, ...synthesisTreasures],
