@@ -13614,6 +13614,226 @@ registerEffect('mancers.spell.applied-entropy.l3', (ctx): EffectResult => {
   };
 });
 
+// ============================================================================
+// The Eternal Engine (Technomancy, Mancers) — recycle Vault Cards to the deck.
+//   L1 Extract  (Free): discard a ready Vault Card from office to the deck →
+//      gain 4 Mana.
+//   L2 Dissolve (1 Mana, Fast): discard a Vault Card from office to the deck →
+//      move two of your Mages to their corresponding shadow slots.
+//   L3 Absorb   (2 Mana): return a Vault Card from office or discard to the
+//      deck → gain 1 WIS, 1 INT, or 7 Mana.
+// ============================================================================
+
+/** Removes a Vault Card from `playerId`'s office (or discard) and appends it to
+ *  the bottom of the Vault Deck. Returns `{}` if the card wasn't found. */
+function returnVaultCardToDeckPatch(
+  state: GameState,
+  playerId: string,
+  cardId: string,
+  from: 'office' | 'discard',
+): GameStatePatch {
+  let removed = false;
+  const players = state.players.map((p) => {
+    if (p.id !== playerId) return p;
+    if (from === 'office') {
+      const vaultCards = p.vaultCards.filter((v) => {
+        if (!removed && v.cardId === cardId) {
+          removed = true;
+          return false;
+        }
+        return true;
+      });
+      return removed ? { ...p, vaultCards } : p;
+    }
+    const personalDiscard = p.personalDiscard.filter((e) => {
+      if (!removed && e.kind === 'consumable' && e.cardId === cardId) {
+        removed = true;
+        return false;
+      }
+      return true;
+    });
+    return removed ? { ...p, personalDiscard } : p;
+  });
+  if (!removed) return {};
+  return { players, vaultDeck: [...state.vaultDeck, cardId] };
+}
+
+/** The caster's base-slot Mages whose space's shadow slot is open. */
+function ownBaseMagesWithOpenShadow(state: GameState, playerId: string): string[] {
+  const out: string[] = [];
+  for (const r of state.rooms) {
+    if (r.noShadowSlots) continue;
+    for (const s of r.actionSpaces) {
+      if (s.occupant?.ownerId === playerId && !s.shadowOccupant) out.push(s.occupant.mageId);
+    }
+  }
+  return out;
+}
+
+const vaultName = (state: GameState, cardId: string): string =>
+  lookupVaultCardDef(state, cardId)?.name ?? cardId;
+
+registerEffect('mancers.spell.the-eternal-engine.l1', (ctx): EffectResult => {
+  const self = 'mancers.spell.the-eternal-engine.l1';
+  const player = ctx.state.players.find((p) => p.id === ctx.triggeringPlayerId);
+  if (!player) return { kind: 'done', patch: {} };
+  if (ctx.resumeAnswer?.kind === 'option-chosen') {
+    const ret = returnVaultCardToDeckPatch(ctx.state, ctx.triggeringPlayerId, ctx.resumeAnswer.optionId, 'office');
+    if (!ret.players) return { kind: 'done', patch: {} };
+    const after: GameState = { ...ctx.state, ...ret };
+    return {
+      kind: 'done',
+      patch: { vaultDeck: after.vaultDeck, ...gainResourcePatch(after, ctx.triggeringPlayerId, 'mana', 4) },
+    };
+  }
+  // Only READY (unexhausted) Vault Cards qualify for Extract.
+  const options: ChoiceOption[] = player.vaultCards
+    .filter((v) => !v.exhausted)
+    .map((v) => ({ id: v.cardId, label: vaultName(ctx.state, v.cardId), payload: {} }));
+  if (options.length === 0) return { kind: 'done', patch: {} };
+  return {
+    kind: 'pause',
+    pending: {
+      responderId: ctx.triggeringPlayerId,
+      prompt: { kind: 'choose-from-options', options },
+      resume: { effectId: self, context: { step: 'apply' } },
+      source: ctx.source,
+    },
+  };
+});
+
+registerEffect('mancers.spell.the-eternal-engine.l2', (ctx): EffectResult => {
+  const self = 'mancers.spell.the-eternal-engine.l2';
+  const step = ctx.resumeContext?.['step'];
+  const player = ctx.state.players.find((p) => p.id === ctx.triggeringPlayerId);
+  if (!player) return { kind: 'done', patch: {} };
+
+  // A second Mage move (or pass) — the discard already happened.
+  if (step === 'move2') {
+    if (ctx.resumeAnswer?.kind !== 'mage-chosen') return { kind: 'done', patch: {} };
+    return { kind: 'done', patch: moveMageBaseToShadowPatch(ctx.state, ctx.resumeAnswer.mageId) };
+  }
+  // First Mage move; then offer a same-effect second.
+  if (step === 'move1') {
+    if (ctx.resumeAnswer?.kind !== 'mage-chosen') return { kind: 'done', patch: {} };
+    const movePatch = moveMageBaseToShadowPatch(ctx.state, ctx.resumeAnswer.mageId);
+    const after: GameState = { ...ctx.state, ...movePatch };
+    const more = ownBaseMagesWithOpenShadow(after, ctx.triggeringPlayerId);
+    if (more.length === 0) return { kind: 'done', patch: movePatch };
+    return {
+      kind: 'pause',
+      patch: movePatch,
+      pending: {
+        responderId: ctx.triggeringPlayerId,
+        prompt: { kind: 'choose-target-mage', eligibleMageIds: more, canPass: true, label: 'Move a second Mage to its shadow slot (or pass)' },
+        resume: { effectId: self, context: { step: 'move2' } },
+        source: ctx.source,
+      },
+    };
+  }
+  // The Vault Card was chosen — discard it to the deck, then start moving.
+  if (step === 'discard') {
+    if (ctx.resumeAnswer?.kind !== 'option-chosen') {
+      throw new Error(`${self} discard expected option-chosen`);
+    }
+    const discardPatch = returnVaultCardToDeckPatch(ctx.state, ctx.triggeringPlayerId, ctx.resumeAnswer.optionId, 'office');
+    const after: GameState = { ...ctx.state, ...discardPatch };
+    const movable = ownBaseMagesWithOpenShadow(after, ctx.triggeringPlayerId);
+    if (movable.length === 0) return { kind: 'done', patch: discardPatch };
+    return {
+      kind: 'pause',
+      patch: discardPatch,
+      pending: {
+        responderId: ctx.triggeringPlayerId,
+        prompt: { kind: 'choose-target-mage', eligibleMageIds: movable, canPass: true, label: 'Move which Mage to its shadow slot?' },
+        resume: { effectId: self, context: { step: 'move1' } },
+        source: ctx.source,
+      },
+    };
+  }
+  // Initial: choose a Vault Card from your office to discard to the deck.
+  const options: ChoiceOption[] = player.vaultCards.map((v) => ({ id: v.cardId, label: vaultName(ctx.state, v.cardId), payload: {} }));
+  if (options.length === 0) return { kind: 'done', patch: {} };
+  return {
+    kind: 'pause',
+    pending: {
+      responderId: ctx.triggeringPlayerId,
+      prompt: { kind: 'choose-from-options', options },
+      resume: { effectId: self, context: { step: 'discard' } },
+      source: ctx.source,
+    },
+  };
+});
+
+registerEffect('mancers.spell.the-eternal-engine.l3', (ctx): EffectResult => {
+  const self = 'mancers.spell.the-eternal-engine.l3';
+  const step = ctx.resumeContext?.['step'];
+  const player = ctx.state.players.find((p) => p.id === ctx.triggeringPlayerId);
+  if (!player) return { kind: 'done', patch: {} };
+
+  if (step === 'apply') {
+    if (ctx.resumeAnswer?.kind !== 'option-chosen') {
+      throw new Error(`${self} apply expected option-chosen`);
+    }
+    const ref = ctx.resumeContext?.['cardRef'];
+    if (typeof ref !== 'string') return { kind: 'done', patch: {} };
+    const { ownerId: from, cardId } = parseOwnerCard(ref); // reuse "a::b" parser
+    const ret = returnVaultCardToDeckPatch(ctx.state, ctx.triggeringPlayerId, cardId, from === 'discard' ? 'discard' : 'office');
+    const after: GameState = { ...ctx.state, ...ret };
+    const reward =
+      ctx.resumeAnswer.optionId === 'wis'
+        ? gainResourcePatch(after, ctx.triggeringPlayerId, 'wisdom', 1)
+        : ctx.resumeAnswer.optionId === 'int'
+          ? gainResourcePatch(after, ctx.triggeringPlayerId, 'intelligence', 1)
+          : gainResourcePatch(after, ctx.triggeringPlayerId, 'mana', 7);
+    return { kind: 'done', patch: { ...ret, ...reward } };
+  }
+
+  if (step === 'reward') {
+    if (ctx.resumeAnswer?.kind !== 'option-chosen') {
+      throw new Error(`${self} reward expected option-chosen`);
+    }
+    return {
+      kind: 'pause',
+      pending: {
+        responderId: ctx.triggeringPlayerId,
+        prompt: {
+          kind: 'choose-from-options',
+          options: [
+            { id: 'wis', label: 'Gain 1 WIS', payload: {} },
+            { id: 'int', label: 'Gain 1 INT', payload: {} },
+            { id: 'mana', label: 'Gain 7 Mana', payload: {} },
+          ],
+        },
+        resume: { effectId: self, context: { step: 'apply', cardRef: ctx.resumeAnswer.optionId } },
+        source: ctx.source,
+      },
+    };
+  }
+
+  // Initial: choose a Vault Card from office OR discard. id = `office::id` /
+  // `discard::id`.
+  const options: ChoiceOption[] = [];
+  for (const v of player.vaultCards) {
+    options.push({ id: `office::${v.cardId}`, label: `${vaultName(ctx.state, v.cardId)} (office)`, payload: {} });
+  }
+  for (const e of player.personalDiscard) {
+    if (e.kind === 'consumable') {
+      options.push({ id: `discard::${e.cardId}`, label: `${vaultName(ctx.state, e.cardId)} (discard)`, payload: {} });
+    }
+  }
+  if (options.length === 0) return { kind: 'done', patch: {} };
+  return {
+    kind: 'pause',
+    pending: {
+      responderId: ctx.triggeringPlayerId,
+      prompt: { kind: 'choose-from-options', options },
+      resume: { effectId: self, context: { step: 'reward' } },
+      source: ctx.source,
+    },
+  };
+});
+
 // ----------------------------------------------------------------------------
 // batch-post-wound-bonus — fired as the afterResume continuation for batch
 // wound spells (Plague, Pestilence, Fireball, Inferno) once the reaction

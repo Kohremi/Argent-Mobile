@@ -29187,3 +29187,70 @@ describe('Applied Entropy (Mancers)', () => {
     expect(card!.exhausted).toBe(true);
   });
 });
+
+// ============================================================================
+// The Eternal Engine (Technomancy, Mancers) — recycle Vault Cards to the deck.
+// ============================================================================
+describe('The Eternal Engine (Mancers)', () => {
+  function setup(level: 1 | 2 | 3): GameState {
+    let s = initGame({ ...TWO_PLAYER_CONFIG, activePackIds: ['base', 'mancers'] });
+    s = zeroPlayerResources(s, 'p1');
+    s = setMana(s, 'p1', 2);
+    s = addOwnedSpell(s, 'p1', 'mancers.spell.the-eternal-engine', {
+      intPlaced: true,
+      wisPlacedLevel2: level >= 2,
+      wisPlacedLevel3: level >= 3,
+    });
+    return {
+      ...s,
+      firstPlayerIndex: 0,
+      phase: { kind: 'errands', round: 1, activePlayerIndex: 0, actionUsed: false, fastActionUsed: false },
+    };
+  }
+  const cast = (s: GameState, level: 1 | 2 | 3) =>
+    applyAction(s, { type: 'CAST_SPELL', playerId: 'p1', spellCardId: 'mancers.spell.the-eternal-engine', level });
+  const opt = (s: GameState, optionId: string) =>
+    applyAction(s, { type: 'RESOLVE_PENDING', resolutionId: topPending(s).id, answer: { kind: 'option-chosen', optionId, payload: {} } });
+  const pickMage = (s: GameState, mageId: string) =>
+    applyAction(s, { type: 'RESOLVE_PENDING', resolutionId: topPending(s).id, answer: { kind: 'mage-chosen', mageId } });
+  const p1 = (s: GameState) => s.players.find((p) => p.id === 'p1')!;
+
+  it('L1 Extract: recycles a ready Vault Card to the deck and gains 4 Mana', () => {
+    let s = setup(1);
+    s = addVaultCard(s, 'p1', 'mancers.vault.philosophers-stone');
+    s = cast(s, 1);
+    s = opt(s, 'mancers.vault.philosophers-stone');
+    expect(p1(s).vaultCards.some((v) => v.cardId === 'mancers.vault.philosophers-stone')).toBe(false);
+    expect(s.vaultDeck[s.vaultDeck.length - 1]).toBe('mancers.vault.philosophers-stone');
+    expect(p1(s).resources.mana).toBe(6); // started 2, Extract is free, +4
+  });
+
+  it('L2 Dissolve: discards a card to the deck and shadows two of your Mages', () => {
+    let s = setup(2);
+    const room = s.rooms.find((r) => !r.noShadowSlots && !r.cannotBePlacedInDirectly && r.actionSpaces.filter((sp) => !sp.occupant).length >= 2)!;
+    s = addVaultCard(s, 'p1', 'mancers.vault.philosophers-stone');
+    s = addMage(s, 'p1', { id: 'm1', cardId: 'base.mage.neutral', color: 'off-white' });
+    s = addMage(s, 'p1', { id: 'm2', cardId: 'base.mage.neutral', color: 'off-white' });
+    s = placeMageOnSpace(s, 'p1', 'm1', room.actionSpaces[0]!.id);
+    s = placeMageOnSpace(s, 'p1', 'm2', room.actionSpaces[1]!.id);
+    s = cast(s, 2);
+    s = opt(s, 'mancers.vault.philosophers-stone'); // discard
+    s = pickMage(s, 'm1');
+    s = pickMage(s, 'm2');
+    expect(s.vaultDeck[s.vaultDeck.length - 1]).toBe('mancers.vault.philosophers-stone');
+    expect(p1(s).mages.find((m) => m.id === 'm1')!.isShadowing).toBe(true);
+    expect(p1(s).mages.find((m) => m.id === 'm2')!.isShadowing).toBe(true);
+  });
+
+  it('L3 Absorb: returns a Vault Card (office or discard) to the deck for a reward', () => {
+    let s = setup(3);
+    s = mapPlayer(s, 'p1', (p) => ({ ...p, personalDiscard: [{ kind: 'consumable', cardId: 'mancers.vault.chrysopoeia-potion' }] }));
+    s = cast(s, 3);
+    // Return the discarded consumable to the deck.
+    s = opt(s, 'discard::mancers.vault.chrysopoeia-potion');
+    s = opt(s, 'mana'); // gain 7 Mana
+    expect(p1(s).personalDiscard.some((e) => e.kind === 'consumable' && e.cardId === 'mancers.vault.chrysopoeia-potion')).toBe(false);
+    expect(s.vaultDeck[s.vaultDeck.length - 1]).toBe('mancers.vault.chrysopoeia-potion');
+    expect(p1(s).resources.mana).toBe(7); // started 2, -2 cast, +7
+  });
+});

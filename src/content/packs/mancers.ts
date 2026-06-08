@@ -406,6 +406,42 @@ const artificiersCompanion: SpellCard = {
 
 const legendarySpells: SpellCard[] = [...leaderSpells, artificiersCompanion];
 
+// The Eternal Engine (Technomancy) — recycle Vault Cards back into the deck.
+const eternalEngine: SpellCard = {
+  id: 'mancers.spell.the-eternal-engine',
+  name: 'The Eternal Engine',
+  sourcePackId: PACK_ID,
+  department: 'technomancy',
+  levels: [
+    {
+      level: 1,
+      title: 'Extract',
+      manaCost: 0,
+      timing: 'action',
+      effectId: 'mancers.spell.the-eternal-engine.l1',
+      description: 'Discard a ready Vault Card from your office to the Vault Deck to gain 4 Mana.',
+    },
+    {
+      level: 2,
+      title: 'Dissolve',
+      manaCost: 1,
+      timing: 'fast-action',
+      effectId: 'mancers.spell.the-eternal-engine.l2',
+      description:
+        'Discard a Vault Card from your office to the Vault Deck to move two of your Mages to the corresponding shadow slots.',
+    },
+    {
+      level: 3,
+      title: 'Absorb',
+      manaCost: 2,
+      timing: 'action',
+      effectId: 'mancers.spell.the-eternal-engine.l3',
+      description:
+        'Return a Vault Card from your office or discard to the Vault Deck to gain 1 WIS, OR gain 1 INT, OR gain 7 Mana.',
+    },
+  ],
+};
+
 // Applied Entropy (Technomancy) — Treasure disruption.
 const appliedEntropy: SpellCard = {
   id: 'mancers.spell.applied-entropy',
@@ -1574,6 +1610,7 @@ export const mancersPack: ContentPack = {
     blackChronicle,
     metamorphicRemediaries,
     appliedEntropy,
+    eternalEngine,
   ],
   legendarySpells,
   vaultCards: [...stuffVaultCards, ...synthesisTreasures],
