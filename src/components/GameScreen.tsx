@@ -3,6 +3,7 @@ import clsx from 'clsx';
 import { useGameStore } from '../store/gameStore';
 import { useUiStore } from '../store/uiStore';
 import { TopBar } from './HUD/TopBar';
+import { TurnBanner } from './HUD/TurnBanner';
 import { CampusBoard } from './Board/CampusBoard';
 import { PlayerDock } from './Player/PlayerDock';
 import { OpponentRail } from './Player/OpponentRail';
@@ -87,6 +88,7 @@ export function GameScreen() {
       <PlayerDock />
 
       <PromptDirector />
+      <TurnBanner />
       <ErrorToast />
 
       {/* debug console drawer */}

@@ -1,4 +1,1 @@
-// Generic SpellCard / TreasureCard renderers.
-// TODO
-
-export {};
+export { HandFans } from './HandFans';

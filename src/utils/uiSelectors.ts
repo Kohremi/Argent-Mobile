@@ -60,3 +60,101 @@ export const PLAYER_AURA: Record<PlayerColor, string> = {
   purple: '#b388eb',
   orange: '#ff9f43',
 };
+
+/** Department → hue, following the engine's canonical color mapping
+ *  (sorcery=red, mysticism=grey, natural-magick=green, planar-studies=purple,
+ *  divinity=blue, technomancy=orange). */
+export const DEPT_HUE: Record<string, string> = {
+  sorcery: '#ff5d5d',
+  mysticism: '#9aa0b4',
+  'natural-magick': '#5fd068',
+  'planar-studies': '#b16cea',
+  divinity: '#5aa9e6',
+  technomancy: '#ff9f43',
+  students: '#e8e4da',
+  wild: '#ffd93d',
+};
+
+/** Spell levels castable right now, by spell card id (engine dry-run). */
+export function castableSpellLevels(
+  state: GameState,
+  playerId: string,
+): Map<string, Set<1 | 2 | 3>> {
+  const out = new Map<string, Set<1 | 2 | 3>>();
+  if (state.phase.kind !== 'errands') return out;
+  if (state.pendingResolutionStack.length > 0) return out;
+  const player = state.players.find((p) => p.id === playerId);
+  if (!player) return out;
+  for (const owned of player.ownedSpells) {
+    for (const level of [1, 2, 3] as const) {
+      try {
+        applyAction(state, {
+          type: 'CAST_SPELL',
+          playerId,
+          spellCardId: owned.cardId,
+          level,
+        });
+        const set = out.get(owned.cardId) ?? new Set<1 | 2 | 3>();
+        set.add(level);
+        out.set(owned.cardId, set);
+      } catch {
+        // not castable at this level right now
+      }
+    }
+  }
+  return out;
+}
+
+/** Vault cards playable right now (engine dry-run). */
+export function playableVaultCards(state: GameState, playerId: string): Set<string> {
+  const out = new Set<string>();
+  if (state.phase.kind !== 'errands') return out;
+  if (state.pendingResolutionStack.length > 0) return out;
+  const player = state.players.find((p) => p.id === playerId);
+  if (!player) return out;
+  for (const v of player.vaultCards) {
+    if (out.has(v.cardId)) continue;
+    try {
+      applyAction(state, { type: 'PLAY_VAULT_CARD', playerId, vaultCardId: v.cardId });
+      out.add(v.cardId);
+    } catch {
+      // not playable right now
+    }
+  }
+  return out;
+}
+
+/** Supporters playable right now (engine dry-run). */
+export function playableSupporters(state: GameState, playerId: string): Set<string> {
+  const out = new Set<string>();
+  if (state.phase.kind !== 'errands') return out;
+  if (state.pendingResolutionStack.length > 0) return out;
+  const player = state.players.find((p) => p.id === playerId);
+  if (!player) return out;
+  for (const cardId of player.supporters) {
+    if (out.has(cardId)) continue;
+    try {
+      applyAction(state, { type: 'PLAY_SUPPORTER', playerId, supporterCardId: cardId });
+      out.add(cardId);
+    } catch {
+      // not playable right now
+    }
+  }
+  return out;
+}
+
+/** Bell tower cards claimable right now (engine dry-run). */
+export function claimableBellCards(state: GameState, playerId: string): Set<string> {
+  const out = new Set<string>();
+  if (state.phase.kind !== 'errands') return out;
+  if (state.pendingResolutionStack.length > 0) return out;
+  for (const card of state.bellTower.available) {
+    try {
+      applyAction(state, { type: 'CLAIM_BELL_TOWER', playerId, bellTowerCardId: card.id });
+      out.add(card.id);
+    } catch {
+      // not claimable right now
+    }
+  }
+  return out;
+}

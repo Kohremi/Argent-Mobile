@@ -3,7 +3,7 @@
 // state (same technique as engine.test.ts), renders GameScreen, selects a
 // bench mage, and places it via a glowing slot.
 import { afterEach, describe, expect, it } from 'vitest';
-import { act, cleanup, render, screen, fireEvent } from '@testing-library/react';
+import { cleanup, render, screen, fireEvent } from '@testing-library/react';
 
 afterEach(cleanup);
 import { GameScreen } from './GameScreen';
@@ -135,15 +135,11 @@ describe('PromptDirector (step-2 smoke)', () => {
     useUiStore.setState({ selectedMageId: null, debugOpen: false, lastError: null, reactionSlotPick: null });
     render(<GameScreen />);
 
-    // Cast Burn L1 (engine pushes choose-target-mage).
-    act(() => {
-      useGameStore.getState().dispatch({
-        type: 'CAST_SPELL',
-        playerId: 'p1',
-        spellCardId: 'base.spell.burn',
-        level: 1,
-      });
-    });
+    // Cast Burn from the spellbook UI: open the tome, pick Level 1.
+    fireEvent.click(screen.getByTitle('Burn'));
+    const levelButton = screen.getByText(/^L1/).closest('button')!;
+    expect(levelButton.hasAttribute('disabled')).toBe(false);
+    fireEvent.click(levelButton);
 
     // TargetBanner appears and the victim is lit on the board.
     expect(screen.getAllByText(/decides/).length).toBeGreaterThan(0);
@@ -171,5 +167,41 @@ describe('PromptDirector (step-2 smoke)', () => {
     const victim = settled.players[1]!.mages.find((m) => m.id === 'm-victim')!;
     expect(victim.isWounded).toBe(true);
     expect(victim.location.kind).toBe('infirmary');
+  });
+});
+
+describe('Bell Tower + turn hand-off (step-3 smoke)', () => {
+  it('claims a bell from the TopBar popover; the turn passes and the banner shows', () => {
+    useGameStore.setState({ state: errandsState() });
+    useUiStore.setState({ selectedMageId: null, debugOpen: false, lastError: null, reactionSlotPick: null });
+    render(<GameScreen />);
+
+    const before = useGameStore.getState().state!;
+    const bellsBefore = before.bellTower.available.length;
+
+    // Open the bell popover and claim the first claimable offering.
+    fireEvent.click(screen.getByTitle('Bell Tower offerings remaining this round'));
+    const claim = document.querySelector(
+      '.absolute.left-0.top-10 button:not([disabled])',
+    );
+    expect(claim).toBeTruthy();
+    fireEvent.click(claim!);
+
+    let after = useGameStore.getState().state!;
+    // Some bell cards push a prompt (e.g. gain-resource choice) — settle it.
+    for (let i = 0; i < 4 && after.pendingResolutionStack.length > 0; i++) {
+      const sheetButton = document.querySelector('.pointer-events-auto button');
+      expect(sheetButton).toBeTruthy();
+      fireEvent.click(sheetButton!);
+      after = useGameStore.getState().state!;
+    }
+
+    expect(after.bellTower.available.length).toBe(bellsBefore - 1);
+    // Claiming ends the turn — the hand-off banner greets the next player.
+    if (after.phase.kind === 'errands') {
+      expect(after.phase.activePlayerIndex).toBe(1);
+      // Strip chip + hand-off banner both greet Diana.
+      expect(screen.getAllByText('Diana').length).toBeGreaterThanOrEqual(2);
+    }
   });
 });

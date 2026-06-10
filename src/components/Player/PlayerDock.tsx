@@ -5,6 +5,7 @@ import { useUiStore } from '../../store/uiStore';
 import { activePlayer, PLAYER_AURA } from '../../utils/uiSelectors';
 import { usePromptTargets } from '../Prompts/usePromptTargets';
 import { MageToken } from '../Board/MageToken';
+import { HandFans } from '../Cards/HandFans';
 
 /**
  * Bottom command center for the active player (docs/UI_DESIGN.md §8):
@@ -60,9 +61,13 @@ export function PlayerDock() {
 
   return (
     <footer
-      className="z-30 flex items-stretch gap-4 bg-night-800/95 px-4 py-2 ring-1 ring-white/10 backdrop-blur"
+      className="z-30 flex flex-col bg-night-800/95 px-4 py-1.5 ring-1 ring-white/10 backdrop-blur"
       style={{ boxShadow: `inset 0 3px 0 ${aura}` }}
     >
+      {/* row 2: hands (rendered first so popovers escape upward cleanly) */}
+      <HandFans state={state} player={player} />
+
+      <div className="flex items-stretch gap-4">
       {/* identity */}
       <div className="flex min-w-[120px] flex-col justify-center">
         <p className="font-display text-base font-bold" style={{ color: aura }}>
@@ -160,6 +165,7 @@ export function PlayerDock() {
         >
           End turn
         </button>
+      </div>
       </div>
     </footer>
   );
