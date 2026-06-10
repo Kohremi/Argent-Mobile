@@ -1,34 +1,18 @@
+import { useState } from 'react';
 import clsx from 'clsx';
 import { AnimatePresence, motion } from 'framer-motion';
 import type { GameState, OwnedMage, Player, Room } from '../../game/types';
 import { useUiStore } from '../../store/uiStore';
 import { ActionSlot } from './ActionSlot';
+import { ROOM_PX, roomArtFor } from './roomArt';
 
 /**
- * One campus building on its floating island (docs/UI_DESIGN.md §7.2).
- * Step-1 placeholder: a tinted panel with the room's identity hue, name in
- * display type, slot row, and the engine-driven state overlays (locked /
- * central-campus laurel / instant hint). Scene art lands in the art pass.
+ * One chamber of the university (docs/UI_DESIGN.md §7.2, hybrid art model).
+ * Bottom-anchored within its story so floors align; ceiling height varies by
+ * room (roomArt registry). Interior = name plaque, scene art (image override
+ * with procedural SVG fallback), and the slot floor. Engine-driven overlays:
+ * locked, eligibility ring, one-shot FX.
  */
-
-/** Identity hue per base room name; default neutral indigo. */
-const ROOM_HUE: Record<string, string> = {
-  Vault: '#ff9f43',
-  Library: '#5aa9e6',
-  Infirmary: '#ff8fab',
-  'Council Chamber': '#ffd166',
-  'Training Fields': '#ff5d5d',
-  Catacombs: '#b16cea',
-  Guilds: '#6bcb77',
-  Courtyard: '#5fd068',
-  Dormitory: '#b388eb',
-  'Great Hall': '#ffd166',
-  // Mancers (Technomancy annexes)
-  Laboratory: '#ff9f43',
-  'Research Archive': '#ffd166',
-  'Golem Lab': '#9aa0b4',
-  'Synthesis Workshop': '#ff7849',
-};
 
 export interface RoomSceneProps {
   room: Room;
@@ -36,84 +20,91 @@ export interface RoomSceneProps {
   eligible: Set<string>;
   onPlace: (spaceId: string) => void;
   mageIndex: Map<string, { mage: OwnedMage; owner: Player }>;
-  /** Stagger index for the ambient floaty drift. */
-  driftIndex: number;
 }
 
-export function RoomScene({
-  room,
-  state,
-  eligible,
-  onPlace,
-  mageIndex,
-  driftIndex,
-}: RoomSceneProps) {
+export function RoomScene({ room, state, eligible, onPlace, mageIndex }: RoomSceneProps) {
   const locked = state.roomLocks.some((l) => l.roomId === room.id);
-  const hue = ROOM_HUE[room.name] ?? '#7ee8fa';
+  const art = roomArtFor(room.name);
+  const height = ROOM_PX[art.height];
   const hasEligible = room.actionSpaces.some((s) => eligible.has(s.id));
+  const [artBroken, setArtBroken] = useState(false);
+  const showImage = art.artUrl && !artBroken;
 
   return (
     <div
       className={clsx(
-        'relative h-[220px] w-[264px] rounded-card transition-all duration-300 animate-floaty',
-        'bg-night-700/90 ring-1 backdrop-blur',
-        hasEligible ? 'ring-leyline/60' : 'ring-white/10',
-        locked && 'saturate-50 opacity-80',
+        'relative w-[264px] overflow-hidden rounded-lg transition-all duration-300',
+        'border-[3px] bg-night-800/95',
+        hasEligible ? 'border-leyline/70' : 'border-[#4d4458]',
+        locked && 'opacity-80 saturate-50',
       )}
       style={{
-        animationDelay: `${(driftIndex % 5) * 0.9}s`,
+        height,
         boxShadow: hasEligible
-          ? '0 16px 32px -8px #00000088, 0 0 18px 2px #7ee8fa33'
-          : '0 16px 32px -8px #00000088',
+          ? 'inset 0 0 26px #00000066, 0 0 18px 2px #7ee8fa33'
+          : 'inset 0 0 26px #00000066',
+        background:
+          'linear-gradient(180deg, #241f43 0%, #1f1b3f 70%, #2a2240 100%)',
       }}
     >
-      {/* identity rim-light */}
-      <span
-        className="pointer-events-none absolute inset-x-0 top-0 h-1.5 rounded-t-card"
-        style={{ background: `linear-gradient(90deg, transparent, ${hue}, transparent)` }}
-      />
-
-      {/* header */}
-      <div className="flex items-start justify-between px-3 pt-2">
-        <div>
-          <h3 className="font-display text-[17px] font-bold leading-tight" style={{ color: hue }}>
+      {/* name plaque */}
+      <div className="absolute inset-x-0 top-0 z-10 flex items-start justify-center">
+        <div
+          className="rounded-b-lg bg-[#3a2f24] px-3 py-0.5 text-center ring-1 ring-black/40"
+          style={{ boxShadow: '0 2px 4px #00000088' }}
+        >
+          <h3 className="font-display text-[14px] font-bold leading-tight" style={{ color: art.hue }}>
             {room.name}
           </h3>
-          <p className="text-[10px] uppercase tracking-widest text-white/40">
-            Side {room.side}
-            {room.isUniversityCentral && ' · ★ central'}
-            {room.isInstantRoom && ' · ⚡ instant'}
+          <p className="text-[8px] uppercase tracking-[0.2em] text-white/40">
+            side {room.side}
+            {room.isUniversityCentral && ' · ★'}
+            {room.isInstantRoom && ' · ⚡'}
           </p>
         </div>
       </div>
 
-      {/* placeholder scene block (art pass replaces this) */}
-      <div
-        className="mx-3 mt-1 h-[58px] rounded-lg opacity-60"
-        style={{
-          background: `radial-gradient(ellipse at 50% 120%, ${hue}33, transparent 70%), linear-gradient(180deg, #1f1b3f, #171430)`,
-        }}
-      />
-
-      {/* slots */}
-      <div className="absolute inset-x-2 bottom-2 flex items-end justify-center gap-1.5">
-        {room.actionSpaces.map((space) => (
-          <ActionSlot
-            key={space.id}
-            space={space}
-            available={eligible.has(space.id)}
-            onPlace={onPlace}
-            mageIndex={mageIndex}
+      {/* scene: image override or procedural vignette */}
+      <div className="absolute inset-x-1.5 top-9 bottom-[86px]">
+        {showImage ? (
+          <img
+            src={art.artUrl}
+            alt={room.name}
+            onError={() => setArtBroken(true)}
+            className="h-full w-full rounded object-cover"
           />
-        ))}
-        {room.actionSpaces.length === 0 && (
-          <p className="pb-4 text-[11px] italic text-white/35">No action spaces</p>
+        ) : (
+          <art.Scene hue={art.hue} />
         )}
+      </div>
+
+      {/* slot floor */}
+      <div
+        className="absolute inset-x-0 bottom-0 h-[84px]"
+        style={{
+          background: 'linear-gradient(180deg, #181430cc, #131027)',
+          boxShadow: 'inset 0 3px 6px #00000088',
+        }}
+      >
+        <div className="flex h-full items-end justify-center gap-1.5 px-2 pb-1.5">
+          {room.actionSpaces.map((space) => (
+            <ActionSlot
+              key={space.id}
+              space={space}
+              available={eligible.has(space.id)}
+              onPlace={onPlace}
+              mageIndex={mageIndex}
+            />
+          ))}
+          {room.actionSpaces.length === 0 && (
+            <p className="pb-6 text-[11px] italic text-white/35">No action spaces</p>
+          )}
+        </div>
       </div>
 
       {/* locked overlay */}
       {locked && (
-        <div className="absolute inset-0 z-20 flex items-center justify-center rounded-card bg-night-900/55">
+        <div className="absolute inset-0 z-20 flex items-center justify-center bg-night-900/55">
           <span className="rounded-full bg-night-800/95 px-3 py-1.5 font-display text-sm text-white/90 ring-1 ring-white/25">
             🔒 Locked
           </span>
@@ -137,7 +128,7 @@ function RoomFxOverlay({ roomId }: { roomId: string }) {
           return (
             <motion.div
               key={f.id}
-              className="pointer-events-none absolute inset-0 z-30 rounded-card"
+              className="pointer-events-none absolute inset-0 z-30 rounded-lg"
               style={{ background: 'radial-gradient(ellipse at 50% 70%, #ff5d7daa, transparent 65%)' }}
               initial={{ opacity: 0 }}
               animate={{ opacity: [0, 1, 0], x: [0, -3, 3, -2, 0] }}
@@ -162,11 +153,11 @@ function RoomFxOverlay({ roomId }: { roomId: string }) {
             </motion.div>
           );
         }
-        // flip — cyan sweep while the island swaps sides.
+        // flip — cyan sweep while the chamber swaps sides.
         return (
           <motion.div
             key={f.id}
-            className="pointer-events-none absolute inset-0 z-30 rounded-card"
+            className="pointer-events-none absolute inset-0 z-30 rounded-lg"
             style={{
               background:
                 'linear-gradient(110deg, transparent 20%, #7ee8fa66 50%, transparent 80%)',

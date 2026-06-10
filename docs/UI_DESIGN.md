@@ -235,6 +235,18 @@ get the smug face, being targeted gets the worried face. Cheap, huge charm.
 
 ## 7. The Campus (Board & Rooms)
 
+> **Revision (hybrid art pass):** the campus is rendered as **one unified
+> castle**, not separate floating islands. Each grid row is a *story* of the
+> university; rooms are chambers carved into shared masonry, bottom-anchored
+> so floors align, with ceiling heights varying per room (tall: Library /
+> Council / Great Hall; low: Vault / Catacombs / Dormitory). Adjacency is
+> drawn physically: floor-level **doorway arches** between horizontal
+> neighbors, **staircases** through the floor slab between stories. A
+> roofline of spires + battlements caps the building and a rock foundation
+> floats below; the whole castle drifts as a single mass. Room interiors are
+> procedural SVG vignettes (`roomArt.tsx`) with a per-room `artUrl` override
+> slot for real illustrations (drop files in `public/art/rooms/`).
+
 ### 7.1 Layout wireframe (desktop-first, 1440+)
 
 ```
