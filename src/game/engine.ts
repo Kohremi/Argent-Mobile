@@ -82,8 +82,39 @@ export function initGame(config: GameConfig): GameState {
   return buildInitialState(config);
 }
 
+/** Fresh-action types (not continuations) that Semaphore can make unreactable. */
+const FRESH_ACTION_TYPES = new Set<GameAction['type']>([
+  'PLACE_WORKER',
+  'CAST_SPELL',
+  'PLAY_VAULT_CARD',
+  'CLAIM_BELL_TOWER',
+  'USE_ABILITY',
+  'PLAY_SUPPORTER',
+  'BUY_VAULT_CARD',
+]);
+
+/** Codex Optimus "Semaphore": when the active player holds
+ *  `nextActionUnreactable` and begins a fresh action, consume the flag and
+ *  suppress reactions for that action's whole resolution. */
+function maybeArmUnreactableAction(state: GameState, action: GameAction): GameState {
+  if (!FRESH_ACTION_TYPES.has(action.type)) return state;
+  if (state.phase.kind !== 'errands') return state;
+  const activeId = state.players[state.phase.activePlayerIndex]?.id;
+  if (!activeId || !('playerId' in action) || action.playerId !== activeId) return state;
+  const player = state.players.find((p) => p.id === activeId);
+  if (!player?.nextActionUnreactable) return state;
+  return {
+    ...state,
+    suppressActionReactions: true,
+    players: state.players.map((p) =>
+      p.id === activeId ? { ...p, nextActionUnreactable: false } : p,
+    ),
+  };
+}
+
 export function applyAction(state: GameState, action: GameAction): GameState {
   validateAction(state, action);
+  state = maybeArmUnreactableAction(state, action);
 
   let next: GameState;
   switch (action.type) {
@@ -446,6 +477,15 @@ function drainRevivalCheckIfIdle(state: GameState): GameState {
  * each opportunity surfaced in sequence.
  */
 function autoAdvanceIfTurnDone(state: GameState): GameState {
+  // Codex Optimus "Semaphore": once the unreactable action's resolution has
+  // fully settled (no pending prompts or reaction windows), drop the suppress.
+  if (
+    state.suppressActionReactions &&
+    state.pendingResolutionStack.length === 0 &&
+    state.activeReactionWindows.length === 0
+  ) {
+    state = { ...state, suppressActionReactions: false };
+  }
   // Open the bell-tower-last-claimed reaction window first if pending —
   // it lets opponents react before the active player's regular action ends.
   state = drainBellTowerLastEventIfIdle(state);
@@ -553,10 +593,12 @@ function applyEffectResult(
     }
     case 'open-reaction': {
       const afterPatch = applyPatch(state, result.patch);
-      if (!ctx.allowReactions) {
+      if (!ctx.allowReactions || afterPatch.suppressActionReactions) {
         // Per rulebook: reactions cannot be reacted to. Skip the window and
         // fire afterResume immediately (with reactions re-enabled, since the
-        // afterResume runs in the original action's context).
+        // afterResume runs in the original action's context). Codex Optimus's
+        // `suppressActionReactions` collapses windows for the whole action —
+        // it lives on GameState, so afterResume chains stay suppressed too.
         return invokeContinuation(
           afterPatch,
           result.window.afterResume,
@@ -2966,6 +3008,7 @@ function processErrandsAdvance(state: GameState): GameState {
               nextSpellPlacesMage: false,
               nextVaultDiscardKept: false,
               nextVaultExhaustKept: false,
+              nextActionUnreactable: false,
             },
       )
     : state.players;

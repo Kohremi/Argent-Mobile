@@ -29254,3 +29254,99 @@ describe('The Eternal Engine (Mancers)', () => {
     expect(p1(s).resources.mana).toBe(7); // started 2, -2 cast, +7
   });
 });
+
+// ============================================================================
+// Codex Optimus (Technomancy, Mancers) — Spell/Treasure state control.
+// ============================================================================
+describe('Codex Optimus (Mancers)', () => {
+  function setup(level: 1 | 2 | 3): GameState {
+    let s = initGame({ ...TWO_PLAYER_CONFIG, activePackIds: ['base', 'mancers'] });
+    s = zeroPlayerResources(s, 'p1');
+    s = setMana(s, 'p1', 3);
+    s = addOwnedSpell(s, 'p1', 'mancers.spell.codex-optimus', {
+      intPlaced: true,
+      wisPlacedLevel2: level >= 2,
+      wisPlacedLevel3: level >= 3,
+    });
+    return {
+      ...s,
+      firstPlayerIndex: 0,
+      phase: { kind: 'errands', round: 1, activePlayerIndex: 0, actionUsed: false, fastActionUsed: false },
+    };
+  }
+  const cast = (s: GameState, spellCardId: string, level: 1 | 2 | 3) =>
+    applyAction(s, { type: 'CAST_SPELL', playerId: 'p1', spellCardId, level });
+  const opt = (s: GameState, optionId: string) =>
+    applyAction(s, { type: 'RESOLVE_PENDING', resolutionId: topPending(s).id, answer: { kind: 'option-chosen', optionId, payload: {} } });
+  const p1 = (s: GameState) => s.players.find((p) => p.id === 'p1')!;
+  const p2mage = (s: GameState, id: string) => s.players.find((p) => p.id === 'p2')!.mages.find((m) => m.id === id)!;
+  const openSlot = (s: GameState) =>
+    s.rooms.find((r) => !r.cannotBePlacedInDirectly && r.actionSpaces.some((sp) => !sp.occupant))!
+      .actionSpaces.find((sp) => !sp.occupant)!.id;
+
+  it('Baseline: Burn opens a reaction window when NOT under Semaphore', () => {
+    let s = setup(1);
+    s = addOwnedSpell(s, 'p1', 'base.spell.burn', { intPlaced: true });
+    s = addMage(s, 'p2', { id: 'v', cardId: 'base.mage.neutral', color: 'off-white' });
+    s = placeMageOnSpace(s, 'p2', 'v', openSlot(s));
+    s = cast(s, 'base.spell.burn', 1);
+    s = applyAction(s, { type: 'RESOLVE_PENDING', resolutionId: topPending(s).id, answer: { kind: 'mage-chosen', mageId: 'v' } });
+    expect(topPending(s).prompt.kind).toBe('reaction-window');
+  });
+
+  it('L1 Semaphore: your next action cannot be reacted to', () => {
+    let s = setup(1);
+    s = addOwnedSpell(s, 'p1', 'base.spell.burn', { intPlaced: true });
+    s = addMage(s, 'p2', { id: 'v', cardId: 'base.mage.neutral', color: 'off-white' });
+    s = placeMageOnSpace(s, 'p2', 'v', openSlot(s));
+    // Cast Semaphore (fast action) → arms the buff.
+    s = cast(s, 'mancers.spell.codex-optimus', 1);
+    expect(p1(s).nextActionUnreactable).toBe(true);
+    // Next action: Burn. Its wound must NOT open a reaction window.
+    s = cast(s, 'base.spell.burn', 1);
+    s = applyAction(s, { type: 'RESOLVE_PENDING', resolutionId: topPending(s).id, answer: { kind: 'mage-chosen', mageId: 'v' } });
+    // No reaction window opened, and the Mage was wounded directly.
+    expect(s.pendingResolutionStack.some((p) => p.prompt.kind === 'reaction-window')).toBe(false);
+    expect(p2mage(s, 'v').isWounded).toBe(true);
+    expect(p1(s).nextActionUnreactable).toBe(false); // buff consumed
+    // Settle any chained prompt (the victim's Infirmary bonus). Suppression
+    // persists across the whole action chain, then clears once it settles.
+    let guard = 0;
+    while (s.pendingResolutionStack.length > 0 && guard++ < 8) {
+      const t = topPending(s);
+      if (t.prompt.kind === 'choose-from-options') {
+        s = applyAction(s, { type: 'RESOLVE_PENDING', resolutionId: t.id, answer: { kind: 'option-chosen', optionId: t.prompt.options[0]!.id, payload: {} } });
+      } else if (t.prompt.kind === 'reaction-window') {
+        throw new Error('unexpected reaction window under Semaphore');
+      } else break;
+    }
+    expect(s.suppressActionReactions).toBeFalsy();
+  });
+
+  it("L2 Deactivate: exhausts an opponent's Spell or Treasure (never your own)", () => {
+    let s = setup(2);
+    s = addOwnedSpell(s, 'p1', 'base.spell.burn', { intPlaced: true }); // own — off-limits
+    s = addOwnedSpell(s, 'p2', 'base.spell.burn', { intPlaced: true });
+    s = addVaultCard(s, 'p2', 'mancers.vault.philosophers-stone');
+    s = cast(s, 'mancers.spell.codex-optimus', 2);
+    const top = topPending(s);
+    if (top.prompt.kind !== 'choose-from-options') throw new Error('x');
+    const ids = top.prompt.options.map((o) => o.id);
+    expect(ids).toContain('spell::p2::base.spell.burn');
+    expect(ids).toContain('treasure::p2::mancers.vault.philosophers-stone');
+    expect(ids.some((id) => id.includes('::p1::'))).toBe(false);
+    s = opt(s, 'spell::p2::base.spell.burn');
+    expect(s.players.find((p) => p.id === 'p2')!.ownedSpells.find((sp) => sp.cardId === 'base.spell.burn')!.exhausted).toBe(true);
+  });
+
+  it('L3 Reactivate: readies one of your exhausted Spells or Treasures', () => {
+    let s = setup(3);
+    s = addOwnedSpell(s, 'p1', 'base.spell.burn', { intPlaced: true, exhausted: true });
+    s = cast(s, 'mancers.spell.codex-optimus', 3);
+    const top = topPending(s);
+    if (top.prompt.kind !== 'choose-from-options') throw new Error('x');
+    expect(top.prompt.options.map((o) => o.id)).toContain('spell::p1::base.spell.burn');
+    s = opt(s, 'spell::p1::base.spell.burn');
+    expect(p1(s).ownedSpells.find((sp) => sp.cardId === 'base.spell.burn')!.exhausted).toBe(false);
+  });
+});

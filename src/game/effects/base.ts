@@ -13834,6 +13834,157 @@ registerEffect('mancers.spell.the-eternal-engine.l3', (ctx): EffectResult => {
   };
 });
 
+// ============================================================================
+// Codex Optimus (Technomancy, Mancers) — Spell/Treasure state control.
+//   L1 Semaphore   (Free, Fast): your next action this turn can't be reacted
+//      to (sets nextActionUnreactable; the engine arms suppression on the
+//      following fresh action).
+//   L2 Deactivate  (Free, Fast): exhaust an opponent's Spell or Treasure.
+//   L3 Reactivate  (2 Mana, Fast): ready one of your Spells or Treasures.
+// ============================================================================
+
+/** Sets the exhausted state of the first matching Spell in `ownerId`'s book. */
+function setSpellExhaustedPatch(
+  state: GameState,
+  ownerId: string,
+  spellCardId: string,
+  exhausted: boolean,
+): GameStatePatch {
+  return {
+    players: state.players.map((p) => {
+      if (p.id !== ownerId) return p;
+      let done = false;
+      return {
+        ...p,
+        ownedSpells: p.ownedSpells.map((s) => {
+          if (!done && s.cardId === spellCardId && s.exhausted !== exhausted) {
+            done = true;
+            return { ...s, exhausted };
+          }
+          return s;
+        }),
+      };
+    }),
+  };
+}
+
+/** Sets the exhausted state of the first matching Treasure in a vault. */
+function setTreasureExhaustedPatch(
+  state: GameState,
+  ownerId: string,
+  cardId: string,
+  exhausted: boolean,
+): GameStatePatch {
+  return {
+    players: state.players.map((p) => {
+      if (p.id !== ownerId) return p;
+      let done = false;
+      return {
+        ...p,
+        vaultCards: p.vaultCards.map((v) => {
+          if (!done && v.cardId === cardId && v.exhausted !== exhausted) {
+            done = true;
+            return { ...v, exhausted };
+          }
+          return v;
+        }),
+      };
+    }),
+  };
+}
+
+/** Spell + Treasure options across owners, by exhausted state. id is
+ *  `spell::owner::card` or `treasure::owner::card`. */
+function spellTreasureOptions(
+  state: GameState,
+  includeOwner: (pid: string) => boolean,
+  wantExhausted: boolean,
+): ChoiceOption[] {
+  const out: ChoiceOption[] = [];
+  for (const p of state.players) {
+    if (!includeOwner(p.id)) continue;
+    for (const s of p.ownedSpells) {
+      if (s.exhausted !== wantExhausted) continue;
+      out.push({
+        id: `spell::${p.id}::${s.cardId}`,
+        label: `${lookupSpellCardDef(state, s.cardId)?.name ?? s.cardId} (Spell, ${p.id})`,
+        payload: {},
+      });
+    }
+    for (const v of p.vaultCards) {
+      const def = lookupVaultCardDef(state, v.cardId);
+      if (!def || def.type !== 'treasure' || v.exhausted !== wantExhausted) continue;
+      out.push({
+        id: `treasure::${p.id}::${v.cardId}`,
+        label: `${def.name} (Treasure, ${p.id})`,
+        payload: {},
+      });
+    }
+  }
+  return out;
+}
+
+registerEffect('mancers.spell.codex-optimus.l1', (ctx): EffectResult => ({
+  kind: 'done',
+  patch: {
+    players: ctx.state.players.map((p) =>
+      p.id === ctx.triggeringPlayerId ? { ...p, nextActionUnreactable: true } : p,
+    ),
+  },
+}));
+
+registerEffect('mancers.spell.codex-optimus.l2', (ctx): EffectResult => {
+  const self = 'mancers.spell.codex-optimus.l2';
+  if (ctx.resumeAnswer?.kind === 'option-chosen') {
+    const [kind, ownerId, cardId] = ctx.resumeAnswer.optionId.split('::');
+    if (!kind || !ownerId || !cardId) return { kind: 'done', patch: {} };
+    return {
+      kind: 'done',
+      patch:
+        kind === 'spell'
+          ? setSpellExhaustedPatch(ctx.state, ownerId, cardId, true)
+          : setTreasureExhaustedPatch(ctx.state, ownerId, cardId, true),
+    };
+  }
+  const options = spellTreasureOptions(ctx.state, (pid) => pid !== ctx.triggeringPlayerId, false);
+  if (options.length === 0) return { kind: 'done', patch: {} };
+  return {
+    kind: 'pause',
+    pending: {
+      responderId: ctx.triggeringPlayerId,
+      prompt: { kind: 'choose-from-options', options },
+      resume: { effectId: self, context: { step: 'apply' } },
+      source: ctx.source,
+    },
+  };
+});
+
+registerEffect('mancers.spell.codex-optimus.l3', (ctx): EffectResult => {
+  const self = 'mancers.spell.codex-optimus.l3';
+  if (ctx.resumeAnswer?.kind === 'option-chosen') {
+    const [kind, ownerId, cardId] = ctx.resumeAnswer.optionId.split('::');
+    if (!kind || !ownerId || !cardId) return { kind: 'done', patch: {} };
+    return {
+      kind: 'done',
+      patch:
+        kind === 'spell'
+          ? setSpellExhaustedPatch(ctx.state, ownerId, cardId, false)
+          : setTreasureExhaustedPatch(ctx.state, ownerId, cardId, false),
+    };
+  }
+  const options = spellTreasureOptions(ctx.state, (pid) => pid === ctx.triggeringPlayerId, true);
+  if (options.length === 0) return { kind: 'done', patch: {} };
+  return {
+    kind: 'pause',
+    pending: {
+      responderId: ctx.triggeringPlayerId,
+      prompt: { kind: 'choose-from-options', options },
+      resume: { effectId: self, context: { step: 'apply' } },
+      source: ctx.source,
+    },
+  };
+});
+
 // ----------------------------------------------------------------------------
 // batch-post-wound-bonus — fired as the afterResume continuation for batch
 // wound spells (Plague, Pestilence, Fireball, Inferno) once the reaction

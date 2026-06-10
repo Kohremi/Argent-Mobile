@@ -406,6 +406,40 @@ const artificiersCompanion: SpellCard = {
 
 const legendarySpells: SpellCard[] = [...leaderSpells, artificiersCompanion];
 
+// Codex Optimus (Technomancy) — Spell/Treasure state control.
+const codexOptimus: SpellCard = {
+  id: 'mancers.spell.codex-optimus',
+  name: 'Codex Optimus',
+  sourcePackId: PACK_ID,
+  department: 'technomancy',
+  levels: [
+    {
+      level: 1,
+      title: 'Semaphore',
+      manaCost: 0,
+      timing: 'fast-action',
+      effectId: 'mancers.spell.codex-optimus.l1',
+      description: 'Your next action this turn cannot be reacted to.',
+    },
+    {
+      level: 2,
+      title: 'Deactivate',
+      manaCost: 0,
+      timing: 'fast-action',
+      effectId: 'mancers.spell.codex-optimus.l2',
+      description: "Exhaust an opponent's Spell or Treasure of your choice.",
+    },
+    {
+      level: 3,
+      title: 'Reactivate',
+      manaCost: 2,
+      timing: 'fast-action',
+      effectId: 'mancers.spell.codex-optimus.l3',
+      description: 'Ready a Spell or Treasure.',
+    },
+  ],
+};
+
 // The Eternal Engine (Technomancy) — recycle Vault Cards back into the deck.
 const eternalEngine: SpellCard = {
   id: 'mancers.spell.the-eternal-engine',
@@ -1611,6 +1645,7 @@ export const mancersPack: ContentPack = {
     metamorphicRemediaries,
     appliedEntropy,
     eternalEngine,
+    codexOptimus,
   ],
   legendarySpells,
   vaultCards: [...stuffVaultCards, ...synthesisTreasures],

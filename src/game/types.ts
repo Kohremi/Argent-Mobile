@@ -257,6 +257,13 @@ export interface Player {
    */
   nextVaultExhaustKept?: boolean;
   /**
+   * Buff flag: the player's next fresh action this turn cannot be reacted to
+   * (Codex Optimus L1 "Semaphore"). Consumed when that action starts — which
+   * sets `GameState.suppressActionReactions` for the duration of the action's
+   * resolution. Cleared at turn end.
+   */
+  nextActionUnreactable?: boolean;
+  /**
    * Buff flag: the next Gold cost this player would pay is reduced to
    * zero. Set by Auric Catalyst's reaction. Consumed by the post-window
    * apply-buy step (or the equivalent paid acquisition). Does NOT
@@ -1344,6 +1351,14 @@ export interface GameState {
    * Devastation Now L3 (destroy a room) uses this.
    */
   oncePerGameSpellsCast: SpellCardId[];
+
+  /**
+   * When true, `open-reaction` results collapse without opening a window for
+   * the rest of the current action's resolution (Codex Optimus "Semaphore").
+   * Armed when a player holding `nextActionUnreactable` starts a fresh action;
+   * cleared once that action's resolution settles.
+   */
+  suppressActionReactions?: boolean;
 
   /**
    * Astronomy Tower marker position — an index into the room's reward
