@@ -3,6 +3,7 @@ import { ResourceIcon, type ResourceKind } from '../icons';
 import { useGameStore } from '../../store/gameStore';
 import { useUiStore } from '../../store/uiStore';
 import { activePlayer, PLAYER_AURA } from '../../utils/uiSelectors';
+import { usePromptTargets } from '../Prompts/usePromptTargets';
 import { MageToken } from '../Board/MageToken';
 
 /**
@@ -28,6 +29,7 @@ export function PlayerDock() {
   const selectMage = useUiStore((s) => s.selectMage);
   const tryDispatch = useUiStore((s) => s.tryDispatch);
   const setDebugOpen = useUiStore((s) => s.setDebugOpen);
+  const { mageTargets, pickMage } = usePromptTargets();
   if (!state) return null;
 
   const player = activePlayer(state);
@@ -90,51 +92,66 @@ export function PlayerDock() {
         <p className="mr-1 shrink-0 text-[10px] uppercase tracking-widest text-white/40">
           bench
         </p>
-        {bench.map((m) => (
-          <button
-            key={m.id}
-            type="button"
-            onClick={() => selectMage(selectedMageId === m.id ? null : m.id)}
-            className={clsx(
-              'rounded-xl px-1 pt-1 transition-all duration-150',
-              selectedMageId === m.id
-                ? 'scale-110 bg-night-600 ring-2 ring-starlight shadow-glow-sm'
-                : 'hover:-translate-y-1 hover:bg-night-700',
-            )}
-            style={
-              selectedMageId === m.id
-                ? ({ '--glow': '#ffe9a866' } as React.CSSProperties)
-                : undefined
-            }
-            title={`${m.color} student${m.isWounded ? ' (wounded)' : ''}`}
-          >
-            <MageToken color={m.color} aura={aura} isWounded={m.isWounded} size={42} />
-          </button>
-        ))}
+        {bench.map((m) => {
+          const targeted = mageTargets.has(m.id);
+          return (
+            <button
+              key={m.id}
+              type="button"
+              onClick={() =>
+                targeted ? pickMage(m.id) : selectMage(selectedMageId === m.id ? null : m.id)
+              }
+              className={clsx(
+                'rounded-xl px-1 pt-1 transition-all duration-150',
+                targeted && 'animate-breathe',
+                selectedMageId === m.id
+                  ? 'scale-110 bg-night-600 ring-2 ring-starlight shadow-glow-sm'
+                  : 'hover:-translate-y-1 hover:bg-night-700',
+              )}
+              style={
+                targeted
+                  ? { filter: 'drop-shadow(0 0 7px #ff5d7d)' }
+                  : selectedMageId === m.id
+                    ? ({ '--glow': '#ffe9a866' } as React.CSSProperties)
+                    : undefined
+              }
+              title={`${m.color} student${m.isWounded ? ' (wounded)' : ''}`}
+            >
+              <MageToken color={m.color} aura={aura} isWounded={m.isWounded} size={42} />
+            </button>
+          );
+        })}
         {bench.length === 0 && (
           <p className="text-xs italic text-white/35">no students in the office</p>
         )}
         {infirmary.length > 0 && (
           <span className="ml-2 flex items-center gap-0.5 opacity-60" title="In the Infirmary">
             <span className="text-[10px] uppercase tracking-widest text-white/40">infirmary</span>
-            {infirmary.map((m) => (
-              <MageToken key={m.id} color={m.color} aura={aura} isWounded size={30} />
-            ))}
+            {infirmary.map((m) => {
+              const targeted = mageTargets.has(m.id);
+              const token = (
+                <MageToken key={m.id} color={m.color} aura={aura} isWounded size={30} />
+              );
+              return targeted ? (
+                <button
+                  key={m.id}
+                  type="button"
+                  onClick={() => pickMage(m.id)}
+                  className="animate-breathe cursor-pointer rounded-full hover:scale-110"
+                  style={{ filter: 'drop-shadow(0 0 7px #ff5d7d)' }}
+                >
+                  {token}
+                </button>
+              ) : (
+                token
+              );
+            })}
           </span>
         )}
       </div>
 
       {/* turn controls */}
       <div className="flex items-center gap-2">
-        {pendings > 0 && (
-          <button
-            type="button"
-            onClick={() => setDebugOpen(true)}
-            className="animate-breathe rounded-full bg-dept-mysticism px-3 py-1.5 text-xs font-bold text-white ring-1 ring-white/30"
-          >
-            ✨ Resolve prompt ({pendings})
-          </button>
-        )}
         <button
           type="button"
           disabled={pendings > 0}

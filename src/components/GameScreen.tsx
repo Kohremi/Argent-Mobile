@@ -5,6 +5,8 @@ import { useUiStore } from '../store/uiStore';
 import { TopBar } from './HUD/TopBar';
 import { CampusBoard } from './Board/CampusBoard';
 import { PlayerDock } from './Player/PlayerDock';
+import { OpponentRail } from './Player/OpponentRail';
+import { PromptDirector } from './Prompts/PromptDirector';
 import { DebugControls } from './DebugControls';
 
 /**
@@ -76,11 +78,15 @@ export function GameScreen() {
       />
 
       <TopBar />
-      <main className="min-h-0 flex-1">
-        <CampusBoard />
+      <main className="flex min-h-0 flex-1">
+        <OpponentRail />
+        <div className="min-w-0 flex-1">
+          <CampusBoard />
+        </div>
       </main>
       <PlayerDock />
 
+      <PromptDirector />
       <ErrorToast />
 
       {/* debug console drawer */}

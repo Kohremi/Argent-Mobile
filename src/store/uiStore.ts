@@ -20,6 +20,15 @@ interface UiStore {
   clearError: () => void;
 
   /**
+   * A chosen reaction that still needs a destination slot (Shield Potion /
+   * Ancient Armor / Mystic Amulet — `ReactionOption.requiresSlotPick`).
+   * While set, the board enters slot-targeting for the reaction instead of
+   * the prompt's own targeting.
+   */
+  reactionSlotPick: { resolutionId: string; effectId: string } | null;
+  setReactionSlotPick: (pick: { resolutionId: string; effectId: string } | null) => void;
+
+  /**
    * Dispatch wrapper for UI events: clears selection on success, converts
    * engine rejections into a toast instead of an uncaught throw.
    */
@@ -36,10 +45,13 @@ export const useUiStore = create<UiStore>((set) => ({
   lastError: null,
   clearError: () => set({ lastError: null }),
 
+  reactionSlotPick: null,
+  setReactionSlotPick: (pick) => set({ reactionSlotPick: pick }),
+
   tryDispatch: (action) => {
     try {
       useGameStore.getState().dispatch(action);
-      set({ selectedMageId: null, lastError: null });
+      set({ selectedMageId: null, lastError: null, reactionSlotPick: null });
       return true;
     } catch (e) {
       set({ lastError: e instanceof Error ? e.message : String(e) });
