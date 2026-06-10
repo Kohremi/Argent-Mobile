@@ -406,6 +406,40 @@ const artificiersCompanion: SpellCard = {
 
 const legendarySpells: SpellCard[] = [...leaderSpells, artificiersCompanion];
 
+// Insight Beyond Sight (Technomancy) — knowledge & resources.
+const insightBeyondSight: SpellCard = {
+  id: 'mancers.spell.insight-beyond-sight',
+  name: 'Insight Beyond Sight',
+  sourcePackId: PACK_ID,
+  department: 'technomancy',
+  levels: [
+    {
+      level: 1,
+      title: 'Arcane Knowledge',
+      manaCost: 0,
+      timing: 'action',
+      effectId: 'mancers.spell.insight-beyond-sight.l1',
+      description: 'Gain 1 Research.',
+    },
+    {
+      level: 2,
+      title: 'Arcane Insight',
+      manaCost: 0,
+      timing: 'fast-action',
+      effectId: 'mancers.spell.insight-beyond-sight.l2',
+      description: 'Look at the top 3 Cards of any Deck, OR gain a Mark.',
+    },
+    {
+      level: 3,
+      title: 'Arcane Inspiration',
+      manaCost: 4,
+      timing: 'action',
+      effectId: 'mancers.spell.insight-beyond-sight.l3',
+      description: 'Gain 1 WIS or 1 INT.',
+    },
+  ],
+};
+
 // Codex Optimus (Technomancy) — Spell/Treasure state control.
 const codexOptimus: SpellCard = {
   id: 'mancers.spell.codex-optimus',
@@ -1646,6 +1680,7 @@ export const mancersPack: ContentPack = {
     appliedEntropy,
     eternalEngine,
     codexOptimus,
+    insightBeyondSight,
   ],
   legendarySpells,
   vaultCards: [...stuffVaultCards, ...synthesisTreasures],

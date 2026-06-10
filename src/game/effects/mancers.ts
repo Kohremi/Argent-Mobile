@@ -853,6 +853,113 @@ registerEffect(
 );
 
 // ============================================================================
+// Insight Beyond Sight (Technomancy) — knowledge & resources.
+//   L1 Arcane Knowledge   (Free): gain 1 Research.
+//   L2 Arcane Insight     (Free, Fast): look at the top 3 of any Deck (purely
+//      informational), OR gain a Mark.
+//   L3 Arcane Inspiration (4 Mana): gain 1 WIS or 1 INT.
+// ============================================================================
+registerEffect('mancers.spell.insight-beyond-sight.l1', (ctx): EffectResult => ({
+  kind: 'done',
+  patch: appendResearchQueueInline(ctx.state, ctx.triggeringPlayerId, ctx.source, 1),
+}));
+
+registerEffect('mancers.spell.insight-beyond-sight.l2', (ctx): EffectResult => {
+  const self = 'mancers.spell.insight-beyond-sight.l2';
+  const step = ctx.resumeContext?.['step'];
+
+  if (step === 'after-voter') {
+    if (ctx.resumeAnswer?.kind !== 'voter-chosen') {
+      throw new Error(`${self} after-voter expected voter-chosen`);
+    }
+    return { kind: 'done', patch: applyGainMark(ctx.state, ctx.triggeringPlayerId, ctx.resumeAnswer.voterId) };
+  }
+
+  if (step === 'looked') {
+    // Looking is purely informational — no state change.
+    return { kind: 'done', patch: {} };
+  }
+
+  if (step === 'choose') {
+    if (ctx.resumeAnswer?.kind !== 'option-chosen') {
+      throw new Error(`${self} choose expected option-chosen`);
+    }
+    if (ctx.resumeAnswer.optionId === 'mark') {
+      const eligible = eligibleVotersForMark(ctx.state, ctx.triggeringPlayerId);
+      if (eligible.length === 0) return { kind: 'done', patch: {} };
+      return {
+        kind: 'pause',
+        pending: {
+          responderId: ctx.triggeringPlayerId,
+          prompt: { kind: 'choose-voter', eligibleVoterIds: eligible.map((v) => v.id) },
+          resume: { effectId: self, context: { step: 'after-voter' } },
+          source: ctx.source,
+        },
+      };
+    }
+    // 'look' → pick which non-empty Deck to peek (top 3, informational).
+    const decks: ChoiceOption[] = [];
+    if (ctx.state.spellDeck.length > 0) decks.push({ id: 'spell', label: 'Look at the Spell Deck (top 3)', payload: {} });
+    if (ctx.state.vaultDeck.length > 0) decks.push({ id: 'vault', label: 'Look at the Vault Deck (top 3)', payload: {} });
+    if (ctx.state.supporterDeck.length > 0) decks.push({ id: 'supporter', label: 'Look at the Supporter Deck (top 3)', payload: {} });
+    if (decks.length === 0) return { kind: 'done', patch: {} };
+    return {
+      kind: 'pause',
+      pending: {
+        responderId: ctx.triggeringPlayerId,
+        prompt: { kind: 'choose-from-options', options: decks },
+        resume: { effectId: self, context: { step: 'looked' } },
+        source: ctx.source,
+      },
+    };
+  }
+
+  return {
+    kind: 'pause',
+    pending: {
+      responderId: ctx.triggeringPlayerId,
+      prompt: {
+        kind: 'choose-from-options',
+        options: [
+          { id: 'look', label: 'Look at the top 3 Cards of a Deck', payload: {} },
+          { id: 'mark', label: 'Gain a Mark', payload: {} },
+        ],
+      },
+      resume: { effectId: self, context: { step: 'choose' } },
+      source: ctx.source,
+    },
+  };
+});
+
+registerEffect('mancers.spell.insight-beyond-sight.l3', (ctx): EffectResult => {
+  const self = 'mancers.spell.insight-beyond-sight.l3';
+  if (ctx.resumeAnswer?.kind === 'option-chosen') {
+    return {
+      kind: 'done',
+      patch:
+        ctx.resumeAnswer.optionId === 'wis'
+          ? gainResourcePatch(ctx.state, ctx.triggeringPlayerId, 'wisdom', 1)
+          : gainResourcePatch(ctx.state, ctx.triggeringPlayerId, 'intelligence', 1),
+    };
+  }
+  return {
+    kind: 'pause',
+    pending: {
+      responderId: ctx.triggeringPlayerId,
+      prompt: {
+        kind: 'choose-from-options',
+        options: [
+          { id: 'wis', label: 'Gain 1 WIS', payload: {} },
+          { id: 'int', label: 'Gain 1 INT', payload: {} },
+        ],
+      },
+      resume: { effectId: self, context: { step: 'apply' } },
+      source: ctx.source,
+    },
+  };
+});
+
+// ============================================================================
 // Research Archive Side A — Gain Research, then "move Research": relocate a WIS
 // token from one learned Spell (taking its top token — L3 first, else L2 —
 // which lowers that Spell's level) onto another learned Spell to unlock its

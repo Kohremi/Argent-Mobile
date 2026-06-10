@@ -29350,3 +29350,72 @@ describe('Codex Optimus (Mancers)', () => {
     expect(p1(s).ownedSpells.find((sp) => sp.cardId === 'base.spell.burn')!.exhausted).toBe(false);
   });
 });
+
+// ============================================================================
+// Insight Beyond Sight (Technomancy, Mancers) — knowledge & resources.
+// ============================================================================
+describe('Insight Beyond Sight (Mancers)', () => {
+  function setup(level: 1 | 2 | 3): GameState {
+    let s = initGame({ ...TWO_PLAYER_CONFIG, activePackIds: ['base', 'mancers'] });
+    s = zeroPlayerResources(s, 'p1');
+    s = setMana(s, 'p1', 4);
+    s = addOwnedSpell(s, 'p1', 'mancers.spell.insight-beyond-sight', {
+      intPlaced: true,
+      wisPlacedLevel2: level >= 2,
+      wisPlacedLevel3: level >= 3,
+    });
+    return {
+      ...s,
+      firstPlayerIndex: 0,
+      phase: { kind: 'errands', round: 1, activePlayerIndex: 0, actionUsed: false, fastActionUsed: false },
+    };
+  }
+  const cast = (s: GameState, level: 1 | 2 | 3) =>
+    applyAction(s, { type: 'CAST_SPELL', playerId: 'p1', spellCardId: 'mancers.spell.insight-beyond-sight', level });
+  const opt = (s: GameState, optionId: string) =>
+    applyAction(s, { type: 'RESOLVE_PENDING', resolutionId: topPending(s).id, answer: { kind: 'option-chosen', optionId, payload: {} } });
+  const p1 = (s: GameState) => s.players.find((p) => p.id === 'p1')!;
+
+  it('L1 Arcane Knowledge: gains a Research (surfaces a research prompt)', () => {
+    let s = setup(1);
+    s = cast(s, 1);
+    // The research opportunity is queued and drained into a prompt.
+    const pending = s.researchQueue.length >= 1 || topPending(s).resume.effectId === 'base.system.spend-research';
+    expect(pending).toBe(true);
+  });
+
+  it('L2 Arcane Insight: gain a Mark', () => {
+    let s = setup(2);
+    s = cast(s, 2);
+    s = opt(s, 'mark');
+    const vp = topPending(s);
+    if (vp.prompt.kind !== 'choose-voter') throw new Error('want voter pick');
+    const voterId = vp.prompt.eligibleVoterIds[0]!;
+    s = applyAction(s, { type: 'RESOLVE_PENDING', resolutionId: vp.id, answer: { kind: 'voter-chosen', voterId } });
+    expect(p1(s).resources.marks).toBe(1);
+  });
+
+  it('L2 Arcane Insight: look at a deck is informational (no state change)', () => {
+    let s = setup(2);
+    const beforeSpell = [...s.spellDeck];
+    const beforeVault = [...s.vaultDeck];
+    s = cast(s, 2);
+    s = opt(s, 'look');
+    const deckPrompt = topPending(s);
+    if (deckPrompt.prompt.kind !== 'choose-from-options') throw new Error('x');
+    s = opt(s, deckPrompt.prompt.options[0]!.id);
+    expect(s.spellDeck).toEqual(beforeSpell);
+    expect(s.vaultDeck).toEqual(beforeVault);
+    expect(p1(s).resources.marks).toBe(0);
+  });
+
+  it('L3 Arcane Inspiration: gain 1 WIS or 1 INT', () => {
+    let s = setup(3);
+    let w = cast(s, 3);
+    w = opt(w, 'wis');
+    expect(w.players.find((p) => p.id === 'p1')!.resources.wisdom).toBe(1);
+    let i = cast(s, 3);
+    i = opt(i, 'int');
+    expect(i.players.find((p) => p.id === 'p1')!.resources.intelligence).toBe(1);
+  });
+});
