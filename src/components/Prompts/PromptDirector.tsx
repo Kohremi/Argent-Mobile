@@ -1,4 +1,5 @@
 import clsx from 'clsx';
+import { motion } from 'framer-motion';
 import type {
   GameState,
   PendingResolution,
@@ -177,14 +178,41 @@ function ReactionCutIn({ state, pending }: { state: GameState; pending: PendingR
   const resolve = (answer: ResolutionAnswer) =>
     tryDispatch({ type: 'RESOLVE_PENDING', resolutionId: pending.id, answer });
 
+  const responder = state.players.find((p) => p.id === pending.responderId);
+  const responderAura = responder ? PLAYER_AURA[responder.color] : '#b16cea';
+
   return (
-    <div className="absolute inset-0 z-40 bg-night-900/55 backdrop-saturate-50">
+    <div className="absolute inset-0 z-40 overflow-hidden bg-night-900/55 backdrop-saturate-50">
+      {/* speed-lines vignette — time freezes */}
+      <motion.div
+        className="pointer-events-none absolute inset-0"
+        style={{
+          background: `repeating-conic-gradient(from 0deg at 85% 35%, transparent 0deg 9deg, ${responderAura}14 9deg 11deg)`,
+        }}
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        transition={{ duration: 0.25 }}
+      />
+      {/* impact flash on entry */}
+      <motion.div
+        className="pointer-events-none absolute inset-0 bg-white"
+        initial={{ opacity: 0.45 }}
+        animate={{ opacity: 0 }}
+        transition={{ duration: 0.18 }}
+      />
       <div className="absolute inset-x-0 top-1/4 flex justify-center px-4">
-        <div className="w-full max-w-xl animate-pop rounded-card border-l-4 bg-night-700/98 p-4 shadow-card-lift ring-1 ring-white/15"
-          style={{ borderLeftColor: '#b16cea' }}
+        <motion.div
+          className="w-full max-w-xl rounded-card border-l-8 bg-night-700/95 p-4 shadow-card-lift ring-1 ring-white/15"
+          style={{ borderLeftColor: responderAura, rotate: -1.5 }}
+          initial={{ x: 560, skewX: -14, opacity: 0 }}
+          animate={{ x: 0, skewX: 0, opacity: 1 }}
+          transition={{ type: 'spring', stiffness: 420, damping: 30 }}
         >
           <div className="mb-1 flex items-center justify-between gap-2">
-            <p className="font-display text-base font-extrabold text-dept-mysticism">
+            <p
+              className="font-display text-xl font-extrabold uppercase tracking-wide"
+              style={{ color: responderAura, textShadow: `0 0 18px ${responderAura}88` }}
+            >
               ⚡ Reaction!
             </p>
             <ResponderChip state={state} pending={pending} />
@@ -237,7 +265,7 @@ function ReactionCutIn({ state, pending }: { state: GameState; pending: PendingR
               {reactionOptions.length === 0 ? 'Continue' : 'Take the hit'}
             </button>
           </div>
-        </div>
+        </motion.div>
       </div>
     </div>
   );

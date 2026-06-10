@@ -205,3 +205,33 @@ describe('Bell Tower + turn hand-off (step-3 smoke)', () => {
     }
   });
 });
+
+describe('Scoring ceremony (step-6 smoke)', () => {
+  it('reveals voter awards and crowns the archmage on a completed game', () => {
+    // A finished game: force phase complete with revealed voters and give
+    // Akko a decisive resource lead so awards have a clear winner.
+    let s = errandsState();
+    s = {
+      ...s,
+      players: s.players.map((p, i) =>
+        i === 0 ? { ...p, resources: { ...p.resources, gold: 9, mana: 9, influence: 9 } } : p,
+      ),
+      voters: s.voters.map((v) => ({ ...v, revealed: true })),
+      phase: { kind: 'complete', archmage: 'p1' },
+    };
+    useGameStore.setState({ state: s });
+    useUiStore.setState({ selectedMageId: null, debugOpen: false, lastError: null, reactionSlotPick: null });
+    render(<GameScreen />);
+
+    expect(screen.getByText('The Election')).toBeTruthy();
+    // Skip the staged reveal straight to the finale.
+    fireEvent.click(screen.getByText('Skip to result'));
+    expect(screen.getByText('archmage-elect')).toBeTruthy();
+    expect(screen.getByText('New game')).toBeTruthy();
+    // Every voter's award row is on screen.
+    const state = useGameStore.getState().state!;
+    for (const v of state.voters) {
+      expect(screen.getAllByText(new RegExp(v.name)).length).toBeGreaterThan(0);
+    }
+  });
+});

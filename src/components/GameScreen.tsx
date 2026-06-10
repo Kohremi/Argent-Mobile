@@ -9,7 +9,9 @@ import { TurnBanner } from './HUD/TurnBanner';
 import { CampusBoard } from './Board/CampusBoard';
 import { PlayerDock } from './Player/PlayerDock';
 import { OpponentRail } from './Player/OpponentRail';
+import { CouncilTower } from './Council/CouncilTower';
 import { PromptDirector } from './Prompts/PromptDirector';
+import { ScoringCeremony } from './Modals/ScoringCeremony';
 import { DebugControls } from './DebugControls';
 
 /**
@@ -20,7 +22,9 @@ import { DebugControls } from './DebugControls';
 
 /** Sky phase from bell-tower depletion (§1 — the bell tower is the sun). */
 function skyPhase(bells: number, phaseKind: string): 'dawn' | 'day' | 'dusk' | 'night' {
-  if (phaseKind === 'resolution' || phaseKind === 'final-scoring') return 'night';
+  if (phaseKind === 'resolution' || phaseKind === 'final-scoring' || phaseKind === 'complete') {
+    return 'night';
+  }
   if (phaseKind === 'round-setup') return 'dawn';
   if (bells >= 7) return 'day';
   if (bells >= 4) return 'dusk';
@@ -88,11 +92,13 @@ export function GameScreen() {
         <div className="min-w-0 flex-1">
           <CampusBoard />
         </div>
+        <CouncilTower />
       </main>
       <PlayerDock />
 
       <PromptDirector />
       <TurnBanner />
+      <ScoringCeremony />
       <ErrorToast />
 
       {/* debug console drawer */}

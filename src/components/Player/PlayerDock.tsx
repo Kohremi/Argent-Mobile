@@ -40,7 +40,7 @@ export function PlayerDock() {
     return (
       <footer className="z-30 flex h-16 items-center justify-center gap-3 bg-night-800/95 ring-1 ring-white/10">
         <p className="text-sm text-white/60">
-          {state.phase.kind === 'final-scoring'
+          {state.phase.kind === 'final-scoring' || state.phase.kind === 'complete'
             ? 'The election is underway…'
             : 'Between turns — use the console to advance.'}
         </p>

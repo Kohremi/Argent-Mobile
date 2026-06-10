@@ -1,4 +1,5 @@
-import { useMemo } from 'react';
+import { useMemo, useRef } from 'react';
+import { AnimatePresence, motion } from 'framer-motion';
 import { useGameStore } from '../../store/gameStore';
 import { useUiStore } from '../../store/uiStore';
 import {
@@ -20,6 +21,43 @@ const CELL_H = 220;
 const GAP_X = 72;
 const GAP_Y = 56;
 
+type CellExit = 'flip' | 'destroy';
+
+/** Island enter/exit set-pieces (docs/UI_DESIGN.md §7.4): Flux flips the
+ *  tile in 3D; Devastation cracks it loose and drops it out of the sky. */
+const islandVariants = {
+  enter: (kind: CellExit | undefined) =>
+    kind === 'flip' ? { rotateY: -92, opacity: 0.4 } : { opacity: 0, scale: 0.92 },
+  idle: {
+    rotateY: 0,
+    opacity: 1,
+    scale: 1,
+    y: 0,
+    rotate: 0,
+    transition: { duration: 0.45, ease: 'easeOut' as const },
+  },
+  exit: (kind: CellExit | undefined) =>
+    kind === 'flip'
+      ? { rotateY: 92, opacity: 0.4, transition: { duration: 0.3, ease: 'easeIn' as const } }
+      : kind === 'destroy'
+        ? {
+            y: 140,
+            rotate: 7,
+            opacity: 0,
+            scale: 0.82,
+            filter: 'brightness(.5)',
+            transition: { duration: 0.9, ease: 'easeIn' as const },
+          }
+        : { opacity: 0 },
+};
+
+const oppositeOf = (roomId: string): string | null =>
+  roomId.endsWith('.a')
+    ? `${roomId.slice(0, -2)}.b`
+    : roomId.endsWith('.b')
+      ? `${roomId.slice(0, -2)}.a`
+      : null;
+
 export function CampusBoard() {
   const state = useGameStore((s) => s.state);
   const selectedMageId = useUiStore((s) => s.selectedMageId);
@@ -36,6 +74,11 @@ export function CampusBoard() {
     if (!player) return new Set<string>();
     return eligiblePlacementSlots(state, player.id, selectedMageId);
   }, [state, selectedMageId]);
+
+  // Previous grid cell contents, for choosing flip vs destroy exits.
+  // Synchronous (render-time) so the exit kind is correct the moment a
+  // tile leaves — effects/timeouts would race AnimatePresence.
+  const prevGridRef = useRef(new Map<string, string | null>());
 
   if (!state) return null;
   const { grid, cols, rows } = state.roomLayout;
@@ -95,29 +138,49 @@ export function CampusBoard() {
             ))}
           </svg>
 
-          {/* islands */}
+          {/* islands — one AnimatePresence per cell so flip/destroy exits
+              play per-tile (3D flips swap .a ↔ .b in place) */}
           {grid.map((row, r) =>
             row.map((roomId, c) => {
-              if (!roomId) return null;
-              const room = roomById.get(roomId);
-              if (!room) return null;
+              const cellKey = `${r}-${c}`;
+              const prevId = prevGridRef.current.get(cellKey);
+              let exitKind: CellExit | undefined;
+              if (prevId && prevId !== roomId) {
+                exitKind = roomId === oppositeOf(prevId) ? 'flip' : 'destroy';
+              }
+              prevGridRef.current.set(cellKey, roomId);
+              const room = roomId ? roomById.get(roomId) : undefined;
               return (
                 <div
-                  key={roomId}
+                  key={cellKey}
                   className="absolute"
                   style={{
                     left: c * (CELL_W + GAP_X),
                     top: r * (CELL_H + GAP_Y),
+                    perspective: 900,
                   }}
                 >
-                  <RoomScene
-                    room={room}
-                    state={state}
-                    eligible={eligible}
-                    onPlace={onPlace}
-                    mageIndex={mageIndex}
-                    driftIndex={driftIndex++}
-                  />
+                  <AnimatePresence custom={exitKind} initial={false}>
+                    {room && (
+                      <motion.div
+                        key={room.id}
+                        custom={exitKind}
+                        variants={islandVariants}
+                        initial="enter"
+                        animate="idle"
+                        exit="exit"
+                      >
+                        <RoomScene
+                          room={room}
+                          state={state}
+                          eligible={eligible}
+                          onPlace={onPlace}
+                          mageIndex={mageIndex}
+                          driftIndex={driftIndex++}
+                        />
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
                 </div>
               );
             }),

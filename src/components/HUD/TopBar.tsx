@@ -18,6 +18,7 @@ function phaseLabel(phase: GamePhase): string {
     case 'errands': return `Day ${phase.round} · Errands`;
     case 'resolution': return `Day ${phase.round} · Nightfall`;
     case 'final-scoring': return 'The Election';
+    case 'complete': return 'Game Over';
     default: return '…';
   }
 }
