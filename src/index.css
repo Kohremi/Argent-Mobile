@@ -7,3 +7,20 @@ body,
 #root {
   height: 100%;
 }
+
+body {
+  font-family: 'Nunito Sans', system-ui, sans-serif;
+}
+
+/* Thin, unobtrusive scrollbars for board panning / drawers. */
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+*::-webkit-scrollbar-thumb {
+  background: #38317099;
+  border-radius: 8px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}

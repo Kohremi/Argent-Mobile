@@ -1,4 +1,4 @@
-// Tower board, generic Room renderer, ActionSpace renderer.
-// TODO: implement once room action data is wired up in content packs.
-
-export {};
+export { CampusBoard } from './CampusBoard';
+export { RoomScene } from './RoomScene';
+export { ActionSlot } from './ActionSlot';
+export { MageToken } from './MageToken';

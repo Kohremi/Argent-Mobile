@@ -1,4 +1,1 @@
-// Player dashboards, mage portraits, resource displays.
-// TODO
-
-export {};
+export { PlayerDock } from './PlayerDock';
