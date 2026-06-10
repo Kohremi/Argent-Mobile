@@ -1,4 +1,5 @@
 import clsx from 'clsx';
+import { motion } from 'framer-motion';
 import type { MageColor } from '../../game/types';
 
 /**
@@ -108,6 +109,12 @@ export interface MageTokenProps {
   /** Pixel height of the token (width scales to 4:5). */
   size?: number;
   className?: string;
+  /**
+   * Shared-layout id (the mage's id). When set, the token GLIDES between
+   * its render sites — bench → slot → infirmary — via framer-motion
+   * layoutId (docs/UI_DESIGN.md §8 "shared layout animation").
+   */
+  glideId?: string;
 }
 
 export function MageToken({
@@ -117,9 +124,10 @@ export function MageToken({
   isShadowing = false,
   size = 44,
   className,
+  glideId,
 }: MageTokenProps) {
   const robe = ROBE[color];
-  return (
+  const svg = (
     <svg
       viewBox="0 0 64 80"
       width={(size * 64) / 80}
@@ -169,5 +177,17 @@ export function MageToken({
         </g>
       )}
     </svg>
+  );
+
+  if (!glideId) return svg;
+  return (
+    <motion.span
+      layoutId={glideId}
+      layout
+      transition={{ type: 'spring', stiffness: 420, damping: 26 }}
+      className="inline-block"
+    >
+      {svg}
+    </motion.span>
   );
 }

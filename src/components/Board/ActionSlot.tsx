@@ -61,6 +61,7 @@ function TargetableToken({
       isWounded={entry.mage.isWounded}
       isShadowing={entry.mage.isShadowing}
       size={size}
+      glideId={entry.mage.id}
     />
   );
   if (!targeted) return <span className={className}>{token}</span>;
@@ -136,7 +137,7 @@ export function ActionSlot({ space, available, onPlace, mageIndex }: ActionSlotP
 
       {/* base occupant */}
       {occ && (
-        <span className="absolute bottom-1.5 left-1/2 z-[1] -translate-x-1/2 animate-pop">
+        <span className="absolute bottom-1.5 left-1/2 z-[1] -translate-x-1/2">
           <TargetableToken entry={occ} size={44} />
         </span>
       )}

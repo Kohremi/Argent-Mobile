@@ -22,6 +22,7 @@ function RailToken({ player, mage }: { player: Player; mage: OwnedMage }) {
       aura={PLAYER_AURA[player.color]}
       isWounded={mage.isWounded}
       size={30}
+      glideId={mage.id}
     />
   );
   if (!targeted) return token;

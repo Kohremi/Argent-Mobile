@@ -29,6 +29,15 @@ interface UiStore {
   setReactionSlotPick: (pick: { resolutionId: string; effectId: string } | null) => void;
 
   /**
+   * One-shot room effects derived from GameState diffs (docs/UI_DESIGN.md §8
+   * "FX from state diffs") — wound flashes, banish rings, flip glows.
+   * RoomScene renders entries for its room; useStateDiffFx expires them.
+   */
+  roomFx: { id: number; roomId: string; kind: 'wound' | 'banish' | 'flip' }[];
+  pushRoomFx: (fx: { roomId: string; kind: 'wound' | 'banish' | 'flip' }[]) => void;
+  expireRoomFx: (ids: number[]) => void;
+
+  /**
    * Dispatch wrapper for UI events: clears selection on success, converts
    * engine rejections into a toast instead of an uncaught throw.
    */
@@ -47,6 +56,17 @@ export const useUiStore = create<UiStore>((set) => ({
 
   reactionSlotPick: null,
   setReactionSlotPick: (pick) => set({ reactionSlotPick: pick }),
+
+  roomFx: [],
+  pushRoomFx: (fx) =>
+    set((s) => ({
+      roomFx: [
+        ...s.roomFx,
+        ...fx.map((f, i) => ({ ...f, id: Date.now() * 100 + s.roomFx.length + i })),
+      ],
+    })),
+  expireRoomFx: (ids) =>
+    set((s) => ({ roomFx: s.roomFx.filter((f) => !ids.includes(f.id)) })),
 
   tryDispatch: (action) => {
     try {

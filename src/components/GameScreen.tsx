@@ -1,7 +1,9 @@
 import { useEffect } from 'react';
 import clsx from 'clsx';
+import { MotionConfig } from 'framer-motion';
 import { useGameStore } from '../store/gameStore';
 import { useUiStore } from '../store/uiStore';
+import { useStateDiffFx } from './FX/useStateDiffFx';
 import { TopBar } from './HUD/TopBar';
 import { TurnBanner } from './HUD/TurnBanner';
 import { CampusBoard } from './Board/CampusBoard';
@@ -55,11 +57,13 @@ export function GameScreen() {
   const state = useGameStore((s) => s.state);
   const debugOpen = useUiStore((s) => s.debugOpen);
   const setDebugOpen = useUiStore((s) => s.setDebugOpen);
+  useStateDiffFx();
   if (!state) return null;
 
   const sky = skyPhase(state.bellTower.available.length, state.phase.kind);
 
   return (
+    <MotionConfig reducedMotion="user">
     <div className="relative flex h-full flex-col overflow-hidden">
       {/* sky — crossfades as the bell tower depletes */}
       <div
@@ -110,5 +114,6 @@ export function GameScreen() {
         </div>
       )}
     </div>
+    </MotionConfig>
   );
 }

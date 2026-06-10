@@ -1,5 +1,7 @@
 import clsx from 'clsx';
+import { AnimatePresence, motion } from 'framer-motion';
 import type { GameState, OwnedMage, Player, Room } from '../../game/types';
+import { useUiStore } from '../../store/uiStore';
 import { ActionSlot } from './ActionSlot';
 
 /**
@@ -117,6 +119,65 @@ export function RoomScene({
           </span>
         </div>
       )}
+
+      <RoomFxOverlay roomId={room.id} />
     </div>
+  );
+}
+
+/** One-shot effect overlays for this room, fed by useStateDiffFx. */
+function RoomFxOverlay({ roomId }: { roomId: string }) {
+  const fx = useUiStore((s) => s.roomFx);
+  const mine = fx.filter((f) => f.roomId === roomId);
+  return (
+    <AnimatePresence>
+      {mine.map((f) => {
+        if (f.kind === 'wound') {
+          // Red impact flash — bad things hit.
+          return (
+            <motion.div
+              key={f.id}
+              className="pointer-events-none absolute inset-0 z-30 rounded-card"
+              style={{ background: 'radial-gradient(ellipse at 50% 70%, #ff5d7daa, transparent 65%)' }}
+              initial={{ opacity: 0 }}
+              animate={{ opacity: [0, 1, 0], x: [0, -3, 3, -2, 0] }}
+              exit={{ opacity: 0 }}
+              transition={{ duration: 0.5, ease: 'easeOut' }}
+            />
+          );
+        }
+        if (f.kind === 'banish') {
+          // Violet ring expands — the student is spirited away.
+          return (
+            <motion.div
+              key={f.id}
+              className="pointer-events-none absolute inset-0 z-30 flex items-center justify-center"
+            >
+              <motion.span
+                className="h-16 w-16 rounded-full border-4 border-dept-mysticism"
+                initial={{ scale: 0.3, opacity: 0.9 }}
+                animate={{ scale: 2.6, opacity: 0 }}
+                transition={{ duration: 0.7, ease: 'easeOut' }}
+              />
+            </motion.div>
+          );
+        }
+        // flip — cyan sweep while the island swaps sides.
+        return (
+          <motion.div
+            key={f.id}
+            className="pointer-events-none absolute inset-0 z-30 rounded-card"
+            style={{
+              background:
+                'linear-gradient(110deg, transparent 20%, #7ee8fa66 50%, transparent 80%)',
+              backgroundSize: '300% 100%',
+            }}
+            initial={{ opacity: 0, backgroundPosition: '120% 0' }}
+            animate={{ opacity: [0, 1, 0], backgroundPosition: '-20% 0' }}
+            transition={{ duration: 0.8, ease: 'easeInOut' }}
+          />
+        );
+      })}
+    </AnimatePresence>
   );
 }

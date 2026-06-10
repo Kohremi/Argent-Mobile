@@ -122,7 +122,7 @@ export function PlayerDock() {
               }
               title={`${m.color} student${m.isWounded ? ' (wounded)' : ''}`}
             >
-              <MageToken color={m.color} aura={aura} isWounded={m.isWounded} size={42} />
+              <MageToken color={m.color} aura={aura} isWounded={m.isWounded} size={42} glideId={m.id} />
             </button>
           );
         })}
@@ -135,7 +135,7 @@ export function PlayerDock() {
             {infirmary.map((m) => {
               const targeted = mageTargets.has(m.id);
               const token = (
-                <MageToken key={m.id} color={m.color} aura={aura} isWounded size={30} />
+                <MageToken key={m.id} color={m.color} aura={aura} isWounded size={30} glideId={m.id} />
               );
               return targeted ? (
                 <button
