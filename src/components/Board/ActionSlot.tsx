@@ -1,5 +1,6 @@
 import clsx from 'clsx';
 import type { ActionSpace, OwnedMage, Player } from '../../game/types';
+import { useUiStore } from '../../store/uiStore';
 import { PLAYER_AURA } from '../../utils/uiSelectors';
 import { usePromptTargets } from '../Prompts/usePromptTargets';
 import { MageToken } from './MageToken';
@@ -83,6 +84,7 @@ function TargetableToken({
 
 export function ActionSlot({ space, available, onPlace, mageIndex }: ActionSlotProps) {
   const { spaceTargets, pickSpace } = usePromptTargets();
+  const setHoveredSlot = useUiStore((s) => s.setHoveredSlot);
   const occ = space.occupant ? mageIndex.get(space.occupant.mageId) : undefined;
   const shadow = space.shadowOccupant
     ? mageIndex.get(space.shadowOccupant.mageId)
@@ -98,7 +100,14 @@ export function ActionSlot({ space, available, onPlace, mageIndex }: ActionSlotP
       : undefined;
 
   return (
-    <div className="relative h-[72px] w-[64px] shrink-0">
+    <div
+      className="relative h-[72px] w-[64px] shrink-0"
+      onPointerEnter={(e) => {
+        const r = e.currentTarget.getBoundingClientRect();
+        setHoveredSlot({ space, rect: { x: r.x, y: r.y, w: r.width } });
+      }}
+      onPointerLeave={() => setHoveredSlot(null)}
+    >
       <CostChips space={space} />
 
       {/* ground circle — placement / space-targeting click surface */}
@@ -107,7 +116,6 @@ export function ActionSlot({ space, available, onPlace, mageIndex }: ActionSlotP
         data-available={circleActive}
         disabled={!circleActive}
         onClick={onCircleClick}
-        title={space.description}
         className={clsx(
           'absolute bottom-0 left-1/2 h-[26px] w-[56px] -translate-x-1/2 rounded-slot border-2 transition-all duration-150',
           occ ? 'border-solid bg-night-900/40' : 'border-dashed bg-night-900/25',

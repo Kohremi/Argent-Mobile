@@ -20,9 +20,11 @@ export interface RoomSceneProps {
   eligible: Set<string>;
   onPlace: (spaceId: string) => void;
   mageIndex: Map<string, { mage: OwnedMage; owner: Player }>;
+  /** Chamber width — the column's width, sized to its widest room. */
+  width: number;
 }
 
-export function RoomScene({ room, state, eligible, onPlace, mageIndex }: RoomSceneProps) {
+export function RoomScene({ room, state, eligible, onPlace, mageIndex, width }: RoomSceneProps) {
   const locked = state.roomLocks.some((l) => l.roomId === room.id);
   const art = roomArtFor(room.name);
   const height = ROOM_PX[art.height];
@@ -33,12 +35,13 @@ export function RoomScene({ room, state, eligible, onPlace, mageIndex }: RoomSce
   return (
     <div
       className={clsx(
-        'relative w-[264px] overflow-hidden rounded-lg transition-all duration-300',
+        'relative overflow-hidden rounded-lg transition-all duration-300',
         'border-[3px] bg-night-800/95',
         hasEligible ? 'border-leyline/70' : 'border-[#4d4458]',
         locked && 'opacity-80 saturate-50',
       )}
       style={{
+        width,
         height,
         boxShadow: hasEligible
           ? 'inset 0 0 26px #00000066, 0 0 18px 2px #7ee8fa33'

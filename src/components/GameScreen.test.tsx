@@ -235,3 +235,26 @@ describe('Scoring ceremony (step-6 smoke)', () => {
     }
   });
 });
+
+describe('Slot tooltip (polish smoke)', () => {
+  it('shows the slot effect text on hover', () => {
+    useGameStore.setState({ state: errandsState() });
+    useUiStore.setState({ selectedMageId: null, debugOpen: false, lastError: null, reactionSlotPick: null, hoveredSlot: null });
+    render(<GameScreen />);
+
+    // Find a slot with a description and hover its wrapper.
+    const state = useGameStore.getState().state!;
+    const space = state.rooms
+      .flatMap((r) => r.actionSpaces)
+      .find((sp) => sp.description && sp.description.length > 0)!;
+    const circle = document.querySelector(`button[data-available]`)!.parentElement!;
+    fireEvent.pointerEnter(circle);
+    // The store-driven tooltip is up (any slot's description renders).
+    const hovered = useUiStore.getState().hoveredSlot;
+    expect(hovered).not.toBeNull();
+    expect(screen.getByText(hovered!.space.description ?? 'No effect text.')).toBeTruthy();
+    fireEvent.pointerLeave(circle);
+    expect(useUiStore.getState().hoveredSlot).toBeNull();
+    expect(space).toBeTruthy();
+  });
+});

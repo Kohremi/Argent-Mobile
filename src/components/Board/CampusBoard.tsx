@@ -20,10 +20,16 @@ import { ROOM_PX, roomArtFor } from './roomArt';
  * above a rock foundation, with spires along the roofline.
  */
 
-const CELL_W = 264;
+const CELL_W = 264; // minimum chamber width
 const CELL_H = 248; // tallest chamber; shorter rooms leave masonry above
 const GAP_X = 18; // shared wall thickness
 const GAP_Y = 46; // floor slab between stories
+
+/** Chamber width needed to seat a room's slot row (64px circles + gaps).
+ *  Great Hall's 10 slots makes it a genuinely WIDE hall. */
+function roomWidth(slotCount: number): number {
+  return Math.max(CELL_W, 28 + slotCount * 64 + (slotCount - 1) * 6);
+}
 
 type CellExit = 'flip' | 'destroy';
 
@@ -172,11 +178,57 @@ export function CampusBoard() {
   // tile leaves — effects/timeouts would race AnimatePresence.
   const prevGridRef = useRef(new Map<string, string | null>());
 
+  // Pan (drag the sky to scroll) + zoom (store-backed so it survives turns).
+  const zoom = useUiStore((s) => s.boardZoom);
+  const setBoardZoom = useUiStore((s) => s.setBoardZoom);
+  const scrollRef = useRef<HTMLDivElement | null>(null);
+  const onPanStart = (e: React.PointerEvent<HTMLDivElement>) => {
+    // Don't hijack clicks on slots/tokens/controls.
+    if ((e.target as HTMLElement).closest('button')) return;
+    const el = scrollRef.current;
+    if (!el) return;
+    el.dataset['panning'] = 'true';
+    const startX = e.clientX;
+    const startY = e.clientY;
+    const startLeft = el.scrollLeft;
+    const startTop = el.scrollTop;
+    const move = (ev: PointerEvent) => {
+      el.scrollLeft = startLeft - (ev.clientX - startX);
+      el.scrollTop = startTop - (ev.clientY - startY);
+    };
+    const up = () => {
+      delete el.dataset['panning'];
+      window.removeEventListener('pointermove', move);
+      window.removeEventListener('pointerup', up);
+    };
+    window.addEventListener('pointermove', move);
+    window.addEventListener('pointerup', up);
+  };
+
   if (!state) return null;
   const { grid, cols, rows } = state.roomLayout;
   const roomById = new Map(state.rooms.map((r) => [r.id, r] as const));
 
-  const stageW = cols * CELL_W + (cols - 1) * GAP_X;
+  // Per-column widths: a column is as wide as its widest room, and every
+  // room in it stretches to the column width — walls stay shared, doorways
+  // stay aligned, and slot-heavy rooms (Great Hall: 10) get the space they
+  // need. Adjacency is untouched; only geometry varies.
+  const colW: number[] = Array.from({ length: cols }, (_, c) => {
+    let w = CELL_W;
+    for (let r = 0; r < rows; r++) {
+      const id = grid[r]?.[c];
+      const room = id ? roomById.get(id) : undefined;
+      if (room) w = Math.max(w, roomWidth(room.actionSpaces.length));
+    }
+    return w;
+  });
+  const colX: number[] = [];
+  let acc = 0;
+  for (let c = 0; c < cols; c++) {
+    colX.push(acc);
+    acc += colW[c]! + GAP_X;
+  }
+  const stageW = acc - GAP_X;
   const stageH = rows * CELL_H + (rows - 1) * GAP_Y;
 
   // Connections between adjacent occupied cells: doorways within a story,
@@ -188,10 +240,10 @@ export function CampusBoard() {
       if (!grid[r]?.[c]) continue;
       const floorY = r * (CELL_H + GAP_Y) + CELL_H;
       if (grid[r]?.[c + 1]) {
-        doorways.push({ x: c * (CELL_W + GAP_X) + CELL_W + GAP_X / 2, floorY });
+        doorways.push({ x: colX[c]! + colW[c]! + GAP_X / 2, floorY });
       }
       if (grid[r + 1]?.[c]) {
-        stairs.push({ cx: c * (CELL_W + GAP_X) + CELL_W / 2, top: floorY });
+        stairs.push({ cx: colX[c]! + colW[c]! / 2, top: floorY });
       }
     }
   }
@@ -207,9 +259,26 @@ export function CampusBoard() {
     });
   };
 
+  const fitZoom = () => {
+    const el = scrollRef.current;
+    if (!el) return;
+    setBoardZoom(
+      Math.min((el.clientWidth - 90) / stageW, (el.clientHeight - 160) / stageH),
+    );
+  };
+
   return (
-    <div className="h-full w-full overflow-auto">
-      <div className="flex min-h-full min-w-full items-center justify-center px-12 py-20">
+    <div
+      ref={scrollRef}
+      className="relative h-full w-full cursor-grab overflow-auto data-[panning=true]:cursor-grabbing"
+      onPointerDown={onPanStart}
+    >
+      <div
+        className="flex min-h-full min-w-full items-center justify-center px-12 py-20"
+        style={{ width: stageW * zoom + 96, height: stageH * zoom + 200 }}
+      >
+        <div style={{ width: stageW * zoom, height: stageH * zoom }}>
+        <div style={{ transform: `scale(${zoom})`, transformOrigin: '0 0' }}>
         {/* the whole castle drifts as one */}
         <div className="relative animate-floaty" style={{ width: stageW, height: stageH }}>
           <Roofline width={stageW} />
@@ -242,7 +311,7 @@ export function CampusBoard() {
                   key={cellKey}
                   className="absolute z-10"
                   style={{
-                    left: c * (CELL_W + GAP_X),
+                    left: colX[c],
                     // Bottom-anchor: floors align along each story.
                     top: r * (CELL_H + GAP_Y) + (CELL_H - height),
                     perspective: 900,
@@ -264,6 +333,7 @@ export function CampusBoard() {
                           eligible={eligible}
                           onPlace={onPlace}
                           mageIndex={mageIndex}
+                          width={colW[c]!}
                         />
                       </motion.div>
                     )}
@@ -281,7 +351,87 @@ export function CampusBoard() {
             <Stairs key={`s-${i}`} {...s} />
           ))}
         </div>
+        </div>
+        </div>
       </div>
+
+      {/* zoom controls */}
+      <div className="fixed bottom-44 right-60 z-30 flex items-center gap-1 rounded-full bg-night-800/90 px-2 py-1 ring-1 ring-white/15 backdrop-blur">
+        <button
+          type="button"
+          onClick={() => setBoardZoom(zoom - 0.15)}
+          className="h-6 w-6 rounded-full text-sm font-bold text-white/80 hover:bg-night-600"
+          title="Zoom out"
+        >
+          −
+        </button>
+        <span className="w-10 text-center text-[11px] font-bold text-white/70">
+          {Math.round(zoom * 100)}%
+        </span>
+        <button
+          type="button"
+          onClick={() => setBoardZoom(zoom + 0.15)}
+          className="h-6 w-6 rounded-full text-sm font-bold text-white/80 hover:bg-night-600"
+          title="Zoom in"
+        >
+          +
+        </button>
+        <button
+          type="button"
+          onClick={fitZoom}
+          className="rounded-full px-2 py-0.5 text-[11px] font-bold text-white/70 hover:bg-night-600"
+          title="Fit the whole campus"
+        >
+          Fit
+        </button>
+      </div>
+
+      <SlotTooltip />
+    </div>
+  );
+}
+
+/** Rich hover card for action spaces — replaces the native title tooltip
+ *  (slot effects were invisible until a slow OS hover). */
+function SlotTooltip() {
+  const hovered = useUiStore((s) => s.hoveredSlot);
+  if (!hovered) return null;
+  const { space, rect } = hovered;
+  const cost = space.costToActivate;
+  const isMerit = space.slotType === 'merit' || space.slotType === 'shadow-merit';
+  return (
+    <div
+      className="pointer-events-none fixed z-50 w-56 -translate-x-1/2 -translate-y-full rounded-card bg-night-800/97 p-2.5 shadow-card-lift ring-1 ring-starlight/40"
+      style={{ left: rect.x + rect.w / 2, top: rect.y - 8 }}
+    >
+      <div className="mb-1 flex flex-wrap items-center gap-1">
+        <span className="rounded-full bg-night-600 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider text-white/70">
+          {space.slotType}
+        </span>
+        {isMerit && (
+          <span className="rounded-full bg-starlight/20 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider text-starlight">
+            🎖 merit
+          </span>
+        )}
+        {cost?.meritBadges ? (
+          <span className="rounded-full bg-night-600 px-1.5 py-0.5 text-[9px] font-bold text-starlight">
+            {cost.meritBadges} badge{cost.meritBadges > 1 ? 's' : ''}
+          </span>
+        ) : null}
+        {cost?.gold ? (
+          <span className="rounded-full bg-night-600 px-1.5 py-0.5 text-[9px] font-bold text-amber-300">
+            {cost.gold} gold
+          </span>
+        ) : null}
+        {cost?.mana ? (
+          <span className="rounded-full bg-night-600 px-1.5 py-0.5 text-[9px] font-bold text-cyan-300">
+            {cost.mana} mana
+          </span>
+        ) : null}
+      </div>
+      <p className="text-[12px] leading-snug text-white/90">
+        {space.description ?? 'No effect text.'}
+      </p>
     </div>
   );
 }

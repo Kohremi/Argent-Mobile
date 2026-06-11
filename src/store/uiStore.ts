@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { GameAction } from '../game/types';
+import type { ActionSpace, GameAction } from '../game/types';
 import { useGameStore } from './gameStore';
 
 /**
@@ -37,6 +37,16 @@ interface UiStore {
   pushRoomFx: (fx: { roomId: string; kind: 'wound' | 'banish' | 'flip' }[]) => void;
   expireRoomFx: (ids: number[]) => void;
 
+  /** Campus zoom factor (drag-to-pan uses native scroll). */
+  boardZoom: number;
+  setBoardZoom: (zoom: number) => void;
+
+  /** Hovered action space + its screen rect — drives the slot tooltip. */
+  hoveredSlot: { space: ActionSpace; rect: { x: number; y: number; w: number } } | null;
+  setHoveredSlot: (
+    hovered: { space: ActionSpace; rect: { x: number; y: number; w: number } } | null,
+  ) => void;
+
   /**
    * Dispatch wrapper for UI events: clears selection on success, converts
    * engine rejections into a toast instead of an uncaught throw.
@@ -68,10 +78,16 @@ export const useUiStore = create<UiStore>((set) => ({
   expireRoomFx: (ids) =>
     set((s) => ({ roomFx: s.roomFx.filter((f) => !ids.includes(f.id)) })),
 
+  boardZoom: 1,
+  setBoardZoom: (zoom) => set({ boardZoom: Math.min(1.4, Math.max(0.4, zoom)) }),
+
+  hoveredSlot: null,
+  setHoveredSlot: (hovered) => set({ hoveredSlot: hovered }),
+
   tryDispatch: (action) => {
     try {
       useGameStore.getState().dispatch(action);
-      set({ selectedMageId: null, lastError: null, reactionSlotPick: null });
+      set({ selectedMageId: null, lastError: null, reactionSlotPick: null, hoveredSlot: null });
       return true;
     } catch (e) {
       set({ lastError: e instanceof Error ? e.message : String(e) });
