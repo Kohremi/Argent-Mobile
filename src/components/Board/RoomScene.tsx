@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import clsx from 'clsx';
 import { AnimatePresence, motion } from 'framer-motion';
-import type { GameState, OwnedMage, Player, Room } from '../../game/types';
+import type { ActionSpace, GameState, OwnedMage, Player, Room } from '../../game/types';
 import { useUiStore } from '../../store/uiStore';
 import { ActionSlot } from './ActionSlot';
 import { ROOM_PX, roomArtFor } from './roomArt';
@@ -20,15 +20,25 @@ export interface RoomSceneProps {
   eligible: Set<string>;
   onPlace: (spaceId: string) => void;
   mageIndex: Map<string, { mage: OwnedMage; owner: Player }>;
-  /** Chamber width — the column's width, sized to its widest room. */
+  /** Chamber width — sized to this room's own visible slot row. */
   width: number;
+  /** The slots to render (pool rooms collapse to occupied + one open). */
+  spaces: ActionSpace[];
 }
 
-export function RoomScene({ room, state, eligible, onPlace, mageIndex, width }: RoomSceneProps) {
+export function RoomScene({
+  room,
+  state,
+  eligible,
+  onPlace,
+  mageIndex,
+  width,
+  spaces,
+}: RoomSceneProps) {
   const locked = state.roomLocks.some((l) => l.roomId === room.id);
   const art = roomArtFor(room.name);
   const height = ROOM_PX[art.height];
-  const hasEligible = room.actionSpaces.some((s) => eligible.has(s.id));
+  const hasEligible = spaces.some((s) => eligible.has(s.id));
   const [artBroken, setArtBroken] = useState(false);
   const showImage = art.artUrl && !artBroken;
 
@@ -90,7 +100,7 @@ export function RoomScene({ room, state, eligible, onPlace, mageIndex, width }: 
         }}
       >
         <div className="flex h-full items-end justify-center gap-1.5 px-2 pb-1.5">
-          {room.actionSpaces.map((space) => (
+          {spaces.map((space) => (
             <ActionSlot
               key={space.id}
               space={space}

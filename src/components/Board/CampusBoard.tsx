@@ -6,7 +6,9 @@ import {
   activePlayer,
   buildMageIndex,
   eligiblePlacementSlots,
+  visibleRoomSpaces,
 } from '../../utils/uiSelectors';
+import { usePromptTargets } from '../Prompts/usePromptTargets';
 
 import { RoomScene } from './RoomScene';
 import { ROOM_PX, roomArtFor } from './roomArt';
@@ -68,19 +70,35 @@ const oppositeOf = (roomId: string): string | null =>
       ? `${roomId.slice(0, -2)}.a`
       : null;
 
-/** A floor-level doorway arch punched through a shared wall. */
-function Doorway({ x, floorY }: { x: number; floorY: number }) {
+/** A floor-level passage between two rooms: a doorway arch when the rooms
+ *  share a wall, stretching into a corridor when their widths differ. */
+function Corridor({ x1, x2, floorY }: { x1: number; x2: number; floorY: number }) {
+  const w = Math.max(38, x2 - x1 + 12); // reach 6px into each room's wall
+  const left = x1 - 6;
   return (
     <svg
       className="pointer-events-none absolute z-20"
-      style={{ left: x - 19, top: floorY - 50 }}
-      width="38"
+      style={{ left, top: floorY - 50 }}
+      width={w}
       height="50"
-      viewBox="0 0 38 50"
+      viewBox={`0 0 ${w} 50`}
     >
-      <path d="M3 50 V20 a16 16 0 0 1 32 0 V50 Z" fill="#4d4458" />
-      <path d="M8 50 V22 a11 11 0 0 1 22 0 V50 Z" fill="#0e0b1d" />
-      <path d="M8 50 V22 a11 11 0 0 1 22 0 V50" fill="none" stroke="#7ee8fa" strokeOpacity=".25" strokeWidth="1.5" />
+      {/* masonry tube */}
+      <rect x="0" y="4" width={w} height="46" rx="8" fill="#4d4458" />
+      {/* dark interior */}
+      <path
+        d={`M5 50 V24 a14 14 0 0 1 14 -14 H${w - 19} a14 14 0 0 1 14 14 V50 Z`}
+        fill="#0e0b1d"
+      />
+      <path
+        d={`M5 50 V24 a14 14 0 0 1 14 -14 H${w - 19} a14 14 0 0 1 14 14 V50`}
+        fill="none"
+        stroke="#7ee8fa"
+        strokeOpacity=".22"
+        strokeWidth="1.5"
+      />
+      {/* corridor floor */}
+      <rect x="5" y="45" width={w - 10} height="5" fill="#241f43" />
     </svg>
   );
 }
@@ -182,6 +200,8 @@ export function CampusBoard() {
   const zoom = useUiStore((s) => s.boardZoom);
   const setBoardZoom = useUiStore((s) => s.setBoardZoom);
   const scrollRef = useRef<HTMLDivElement | null>(null);
+  // Prompt-targeted slots must stay visible even in collapsed pool rooms.
+  const { spaceTargets } = usePromptTargets();
   const onPanStart = (e: React.PointerEvent<HTMLDivElement>) => {
     // Don't hijack clicks on slots/tokens/controls.
     if ((e.target as HTMLElement).closest('button')) return;
@@ -209,16 +229,22 @@ export function CampusBoard() {
   const { grid, cols, rows } = state.roomLayout;
   const roomById = new Map(state.rooms.map((r) => [r.id, r] as const));
 
-  // Per-column widths: a column is as wide as its widest room, and every
-  // room in it stretches to the column width — walls stay shared, doorways
-  // stay aligned, and slot-heavy rooms (Great Hall: 10) get the space they
-  // need. Adjacency is untouched; only geometry varies.
+  // Each room owns its size: width follows its VISIBLE slot row (pool rooms
+  // like the Great Hall collapse to occupied + one open seat, so the hall
+  // grows as it fills). Columns reserve space for their widest room but
+  // rooms render centered at their own width — corridors bridge whatever
+  // gap remains, so adjacency stays intact while sizes vary freely.
+  const visibleByCell = new Map<string, ReturnType<typeof visibleRoomSpaces>>();
+  const geom = new Map<string, { left: number; width: number }>();
   const colW: number[] = Array.from({ length: cols }, (_, c) => {
     let w = CELL_W;
     for (let r = 0; r < rows; r++) {
       const id = grid[r]?.[c];
       const room = id ? roomById.get(id) : undefined;
-      if (room) w = Math.max(w, roomWidth(room.actionSpaces.length));
+      if (!room) continue;
+      const visible = visibleRoomSpaces(room, spaceTargets);
+      visibleByCell.set(`${r}-${c}`, visible);
+      w = Math.max(w, roomWidth(visible.length));
     }
     return w;
   });
@@ -231,19 +257,35 @@ export function CampusBoard() {
   const stageW = acc - GAP_X;
   const stageH = rows * CELL_H + (rows - 1) * GAP_Y;
 
-  // Connections between adjacent occupied cells: doorways within a story,
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      const visible = visibleByCell.get(`${r}-${c}`);
+      if (!visible) continue;
+      const width = roomWidth(visible.length);
+      // Centered within the column at the room's own width.
+      geom.set(`${r}-${c}`, { left: colX[c]! + (colW[c]! - width) / 2, width });
+    }
+  }
+
+  // Connections between adjacent occupied cells: corridors within a story,
   // staircases between stories. Adjacency is engine truth (the grid).
-  const doorways: { x: number; floorY: number }[] = [];
+  const corridors: { x1: number; x2: number; floorY: number }[] = [];
   const stairs: { cx: number; top: number }[] = [];
   for (let r = 0; r < rows; r++) {
     for (let c = 0; c < cols; c++) {
-      if (!grid[r]?.[c]) continue;
+      const here = geom.get(`${r}-${c}`);
+      if (!here) continue;
       const floorY = r * (CELL_H + GAP_Y) + CELL_H;
-      if (grid[r]?.[c + 1]) {
-        doorways.push({ x: colX[c]! + colW[c]! + GAP_X / 2, floorY });
+      const east = geom.get(`${r}-${c + 1}`);
+      if (east) {
+        corridors.push({ x1: here.left + here.width, x2: east.left, floorY });
       }
-      if (grid[r + 1]?.[c]) {
-        stairs.push({ cx: colX[c]! + colW[c]! / 2, top: floorY });
+      const south = geom.get(`${r + 1}-${c}`);
+      if (south) {
+        // Stairs sit on the x-overlap of the two stacked rooms.
+        const lo = Math.max(here.left, south.left);
+        const hi = Math.min(here.left + here.width, south.left + south.width);
+        stairs.push({ cx: (lo + hi) / 2, top: floorY });
       }
     }
   }
@@ -306,19 +348,20 @@ export function CampusBoard() {
               prevGridRef.current.set(cellKey, roomId);
               const room = roomId ? roomById.get(roomId) : undefined;
               const height = room ? ROOM_PX[roomArtFor(room.name).height] : CELL_H;
+              const g = geom.get(cellKey);
               return (
                 <div
                   key={cellKey}
                   className="absolute z-10"
                   style={{
-                    left: colX[c],
+                    left: g?.left ?? colX[c],
                     // Bottom-anchor: floors align along each story.
                     top: r * (CELL_H + GAP_Y) + (CELL_H - height),
                     perspective: 900,
                   }}
                 >
                   <AnimatePresence custom={exitKind} initial={false}>
-                    {room && (
+                    {room && g && (
                       <motion.div
                         key={room.id}
                         custom={exitKind}
@@ -333,7 +376,8 @@ export function CampusBoard() {
                           eligible={eligible}
                           onPlace={onPlace}
                           mageIndex={mageIndex}
-                          width={colW[c]!}
+                          width={g.width}
+                          spaces={visibleByCell.get(cellKey) ?? room.actionSpaces}
                         />
                       </motion.div>
                     )}
@@ -344,8 +388,8 @@ export function CampusBoard() {
           )}
 
           {/* connections */}
-          {doorways.map((d, i) => (
-            <Doorway key={`d-${i}`} {...d} />
+          {corridors.map((d, i) => (
+            <Corridor key={`d-${i}`} {...d} />
           ))}
           {stairs.map((s, i) => (
             <Stairs key={`s-${i}`} {...s} />

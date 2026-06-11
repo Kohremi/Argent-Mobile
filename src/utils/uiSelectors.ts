@@ -1,5 +1,12 @@
 import { applyAction } from '../game/engine';
-import type { GameState, OwnedMage, Player, PlayerColor } from '../game/types';
+import type {
+  ActionSpace,
+  GameState,
+  OwnedMage,
+  Player,
+  PlayerColor,
+  Room,
+} from '../game/types';
 
 /**
  * Read-model helpers for the presentation layer. Eligibility is derived by
@@ -38,6 +45,35 @@ export function eligiblePlacementSlots(
     }
   }
   return out;
+}
+
+/**
+ * The action spaces a room should RENDER. Pool rooms — many identical slots
+ * pre-allocated by the engine (Great Hall's 10) — collapse to the occupied
+ * slots plus one open spot, so the room reads as "always one open seat;
+ * seats appear as you fill them." `extraVisibleIds` (prompt-targeted slots)
+ * are always shown so targeting can never point at a hidden slot.
+ */
+export function visibleRoomSpaces(
+  room: Room,
+  extraVisibleIds?: Set<string>,
+): ActionSpace[] {
+  const all = room.actionSpaces;
+  if (all.length <= 5) return all;
+  const sig = (s: ActionSpace) =>
+    `${s.slotType}|${s.effectId}|${s.costToActivate?.gold ?? 0}|${s.costToActivate?.mana ?? 0}|${s.costToActivate?.meritBadges ?? 0}`;
+  const first = all[0]!;
+  if (!all.every((s) => sig(s) === sig(first))) return all;
+
+  const visible = all.filter(
+    (s) =>
+      s.occupant ||
+      s.shadowOccupant ||
+      (extraVisibleIds?.has(s.id) ?? false),
+  );
+  const firstOpen = all.find((s) => !s.occupant);
+  if (firstOpen && !visible.includes(firstOpen)) visible.push(firstOpen);
+  return visible.sort((a, b) => a.index - b.index);
 }
 
 /** Quick index from mage id → { mage, owner } across all players. */
