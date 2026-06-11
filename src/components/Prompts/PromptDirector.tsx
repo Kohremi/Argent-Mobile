@@ -13,6 +13,7 @@ import {
 import { useGameStore } from '../../store/gameStore';
 import { useUiStore } from '../../store/uiStore';
 import { PLAYER_AURA } from '../../utils/uiSelectors';
+import { PortraitBust } from '../Player/PortraitBust';
 import { describeTrigger, playerName, topPending } from './promptHelpers';
 
 /**
@@ -202,12 +203,29 @@ function ReactionCutIn({ state, pending }: { state: GameState; pending: PendingR
       />
       <div className="absolute inset-x-0 top-1/4 flex justify-center px-4">
         <motion.div
-          className="w-full max-w-xl rounded-card border-l-8 bg-night-700/95 p-4 shadow-card-lift ring-1 ring-white/15"
+          className="relative w-full max-w-xl rounded-card border-l-8 bg-night-700/95 p-4 pl-20 shadow-card-lift ring-1 ring-white/15"
           style={{ borderLeftColor: responderAura, rotate: -1.5 }}
           initial={{ x: 560, skewX: -14, opacity: 0 }}
           animate={{ x: 0, skewX: 0, opacity: 1 }}
           transition={{ type: 'spring', stiffness: 420, damping: 30 }}
         >
+          {/* responder portrait — worried under attack, determined when they
+              have an answer ready (docs/UI_DESIGN.md §13.5) */}
+          {responder && (
+            <motion.span
+              className="absolute -left-7 top-1/2"
+              initial={{ y: '-50%', scale: 0.6, rotate: -10 }}
+              animate={{ y: '-50%', scale: 1, rotate: -4 }}
+              transition={{ type: 'spring', stiffness: 380, damping: 20, delay: 0.06 }}
+            >
+              <PortraitBust
+                player={responder}
+                state={state}
+                expression={reactionOptions.length > 0 ? 'determined' : 'worried'}
+                size={84}
+              />
+            </motion.span>
+          )}
           <div className="mb-1 flex items-center justify-between gap-2">
             <p
               className="font-display text-xl font-extrabold uppercase tracking-wide"

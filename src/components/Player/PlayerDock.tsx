@@ -6,6 +6,7 @@ import { activePlayer, PLAYER_AURA } from '../../utils/uiSelectors';
 import { usePromptTargets } from '../Prompts/usePromptTargets';
 import { MageToken } from '../Board/MageToken';
 import { HandFans } from '../Cards/HandFans';
+import { PortraitBust } from './PortraitBust';
 
 /**
  * Bottom command center for the active player (docs/UI_DESIGN.md §8):
@@ -69,13 +70,16 @@ export function PlayerDock() {
 
       <div className="flex items-stretch gap-4">
       {/* identity */}
-      <div className="flex min-w-[120px] flex-col justify-center">
-        <p className="font-display text-base font-bold" style={{ color: aura }}>
-          {player.name}
-        </p>
-        <p className="text-[10px] uppercase tracking-widest text-white/40">
-          your move
-        </p>
+      <div className="flex min-w-[150px] items-center gap-2.5">
+        <PortraitBust player={player} state={state} expression="neutral" size={44} />
+        <div>
+          <p className="font-display text-base font-bold leading-tight" style={{ color: aura }}>
+            {player.name}
+          </p>
+          <p className="text-[10px] uppercase tracking-widest text-white/40">
+            your move
+          </p>
+        </div>
       </div>
 
       {/* resources */}

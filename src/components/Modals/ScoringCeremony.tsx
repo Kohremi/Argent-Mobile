@@ -4,6 +4,7 @@ import { motion } from 'framer-motion';
 import { computeFinalScoring } from '../../game/scoring';
 import { useGameStore } from '../../store/gameStore';
 import { PLAYER_AURA } from '../../utils/uiSelectors';
+import { PortraitBust } from '../Player/PortraitBust';
 
 /**
  * The Election (docs/UI_DESIGN.md §12.D): staged end-game ceremony. Voter
@@ -67,6 +68,13 @@ export function ScoringCeremony() {
               )}
               style={{ '--glow': isArchmage ? '#ffe9a866' : 'transparent' } as never}
             >
+              <PortraitBust
+                player={p}
+                state={state}
+                expression={isArchmage ? 'smug' : done ? 'worried' : 'neutral'}
+                size={40}
+                className="mb-1"
+              />
               <span className="font-display text-sm font-bold" style={{ color: aura }}>
                 {p.name}
               </span>
@@ -133,6 +141,13 @@ export function ScoringCeremony() {
         >
           {archmage ? (
             <>
+              <PortraitBust
+                player={archmage}
+                state={state}
+                expression="smug"
+                size={104}
+                className="mb-2"
+              />
               <p className="text-xs uppercase tracking-[0.4em] text-white/60">archmage-elect</p>
               <p
                 className="font-display text-5xl font-extrabold"

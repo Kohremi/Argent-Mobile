@@ -4,6 +4,7 @@ import { useGameStore } from '../../store/gameStore';
 import { activePlayer, PLAYER_AURA } from '../../utils/uiSelectors';
 import { usePromptTargets } from '../Prompts/usePromptTargets';
 import { MageToken } from '../Board/MageToken';
+import { PortraitBust } from './PortraitBust';
 import { ResourceIcon } from '../icons';
 
 /**
@@ -58,7 +59,8 @@ export function OpponentRail() {
             className="rounded-card bg-night-700/85 p-2 ring-1 ring-white/10 backdrop-blur"
             style={{ boxShadow: `inset 3px 0 0 ${aura}` }}
           >
-            <p className="font-display text-sm font-bold" style={{ color: aura }}>
+            <p className="flex items-center gap-1.5 font-display text-sm font-bold" style={{ color: aura }}>
+              <PortraitBust player={p} state={state} expression="neutral" size={26} />
               {p.name}
             </p>
             <p className="mb-1 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-[11px] font-semibold text-white/80">

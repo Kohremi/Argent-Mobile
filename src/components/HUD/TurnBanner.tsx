@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useGameStore } from '../../store/gameStore';
 import { activePlayer, PLAYER_AURA } from '../../utils/uiSelectors';
+import { PortraitBust } from '../Player/PortraitBust';
 
 /**
  * Hot-seat hand-off splash (docs/UI_DESIGN.md §9.5): when the active player
@@ -42,12 +43,17 @@ export function TurnBanner() {
         background: `linear-gradient(100deg, transparent 0%, ${aura}33 18%, #171430ee 38%, #171430ee 62%, ${aura}33 82%, transparent 100%)`,
       }}
     >
-      <span className="animate-pop text-center">
-        <span className="block font-display text-4xl font-extrabold" style={{ color: aura }}>
-          {active.name}
-        </span>
-        <span className="mt-1 block text-sm uppercase tracking-[0.3em] text-white/70">
-          {round ? `Day ${round} · ` : ''}your move
+      <span className="flex animate-pop items-center gap-5 text-center">
+        {state && (
+          <PortraitBust player={active} state={state} expression="determined" size={88} />
+        )}
+        <span>
+          <span className="block font-display text-4xl font-extrabold" style={{ color: aura }}>
+            {active.name}
+          </span>
+          <span className="mt-1 block text-sm uppercase tracking-[0.3em] text-white/70">
+            {round ? `Day ${round} · ` : ''}your move
+          </span>
         </span>
       </span>
     </button>
