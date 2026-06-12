@@ -2460,13 +2460,24 @@ function handleResolvePending(
 
   validateAnswerForPrompt(top, action.answer);
 
+  // Canonicalize option payloads from the prompt itself: the chosen
+  // option's payload is engine truth (e.g. Infirmary B's `buffed: true`
+  // marking the upgraded gold/mana branch), never something the answering
+  // client needs to echo back — or could forge.
+  let answer = action.answer;
+  if (top.prompt.kind === 'choose-from-options' && answer.kind === 'option-chosen') {
+    const optionId = answer.optionId;
+    const chosen = top.prompt.options.find((o) => o.id === optionId)!;
+    answer = { ...answer, payload: chosen.payload };
+  }
+
   // Pop the prompt before doing anything; effects only see the popped state.
   let curr = popPending(state);
 
   if (top.reactionWindowId !== undefined) {
-    curr = resolveReactionPrompt(curr, top, action.answer);
+    curr = resolveReactionPrompt(curr, top, answer);
   } else {
-    curr = resolveNormalPending(curr, top, action.answer);
+    curr = resolveNormalPending(curr, top, answer);
   }
 
   // If we landed back in resolution with no pending, complete the current

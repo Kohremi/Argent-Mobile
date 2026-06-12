@@ -342,6 +342,9 @@ export function PromptDirector() {
 
   const answer = (a: ResolutionAnswer) =>
     tryDispatch({ type: 'RESOLVE_PENDING', resolutionId: pending.id, answer: a });
+  // Payload is engine-filled: RESOLVE_PENDING canonicalizes it from the
+  // chosen option (e.g. Infirmary B's buffed-bed flag), so clients never
+  // need to echo it.
   const pickOption = (optionId: string) =>
     answer({ kind: 'option-chosen', optionId, payload: {} });
 

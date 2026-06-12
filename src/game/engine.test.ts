@@ -3713,8 +3713,13 @@ describe('Burn L1 + Phase Steppers vertical slice', () => {
     const bobMage = findMageById(s, 'bob-mage-1');
     expect(bobMage.isWounded).toBe(true);
     expect(bobMage.location.kind).toBe('infirmary');
-    // Bonus applied to Bob (the wounded player).
-    expect(s.players.find((p) => p.id === 'p2')?.resources.gold).toBe(2);
+    // Seed-7 games run Infirmary Side B: the gold option is the buffed
+    // 4-Gold bed, and taking it parks Bob's mage in the slot.
+    expect(s.players.find((p) => p.id === 'p2')?.resources.gold).toBe(4);
+    const goldBed = s.rooms
+      .find((r) => r.id === 'base.room.infirmary.b')
+      ?.actionSpaces.find((sp) => sp.id === 'base.room.infirmary.b.slot-1');
+    expect(goldBed?.occupant?.mageId).toBe('bob-mage-1');
   });
 
   it('Phase Steppers reverses the wound and discards the card', () => {
@@ -6822,7 +6827,8 @@ describe('PLAY_SUPPORTER', () => {
       answer: { kind: 'option-chosen', optionId: 'gold', payload: {} },
     });
     expect(s.pendingResolutionStack).toHaveLength(0);
-    expect(s.players.find((p) => p.id === 'p2')?.resources.gold).toBe(2);
+    // Side B (seed 7): gold is the buffed 4-Gold bed.
+    expect(s.players.find((p) => p.id === 'p2')?.resources.gold).toBe(4);
   });
 
   it('Letum Conspicere: Phase Steppers reverses the wound, suppressing the infirmary bonus', () => {
@@ -7659,8 +7665,9 @@ describe('Ars Magna (Sorcery Mage power)', () => {
       resolutionId: bonusPrompt.id,
       answer: { kind: 'option-chosen', optionId: 'mana', payload: {} },
     });
-    // Bonus applied; afterResume continues into the slot takeover.
-    expect(s.players.find((p) => p.id === 'p2')?.resources.mana).toBe(1);
+    // Bonus applied (Side B in seed-7 games: mana is the buffed 2-Mana
+    // bed); afterResume continues into the slot takeover.
+    expect(s.players.find((p) => p.id === 'p2')?.resources.mana).toBe(2);
 
     const bobMage = findMageById(s, 'bob-mage');
     expect(bobMage.isWounded).toBe(true);
@@ -22305,8 +22312,13 @@ describe('Spell wiring — Wave 8b (two adjacent rooms)', () => {
       resolutionId: bonus2.id,
       answer: { kind: 'option-chosen', optionId: 'gold', payload: {} },
     });
-    // 2 bonuses × 2 gold each = 4 gold total for Bob.
-    expect(s.players.find((p) => p.id === 'p2')?.resources.gold).toBe(4);
+    // Side B (seed 7): the FIRST gold pick claims the buffed 4-Gold bed;
+    // the second finds the bed taken and falls back to the standard 2.
+    expect(s.players.find((p) => p.id === 'p2')?.resources.gold).toBe(6);
+    const goldBed = s.rooms
+      .find((r) => r.id === 'base.room.infirmary.b')
+      ?.actionSpaces.find((sp) => sp.id === 'base.room.infirmary.b.slot-1');
+    expect(['bob-lib', 'bob-vault']).toContain(goldBed?.occupant?.mageId);
     expect(s.pendingResolutionStack).toHaveLength(0);
   });
 

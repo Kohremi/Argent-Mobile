@@ -2516,33 +2516,45 @@ export function applyInfirmaryBonusPatch(
     woundedMageId?: OwnedMageId;
   },
 ): GameStatePatch {
-  const buffed =
+  const buffedAsked =
     opts?.payload != null &&
     typeof opts.payload === 'object' &&
     !Array.isArray(opts.payload) &&
     (opts.payload as { buffed?: unknown }).buffed === true;
+  // The buffed rate is re-checked against the CURRENT state: prompt options
+  // are snapshotted when the prompt is built, but with simultaneous wounds
+  // (Plague) an earlier resolver may have claimed the bed in the meantime.
+  // First in the bed wins; everyone after gets the standard rate.
+  const claimBed = (slotId: ActionSpaceId): boolean =>
+    buffedAsked &&
+    !!opts?.woundedMageId &&
+    state.rooms
+      .find((r) => r.id === 'base.room.infirmary.b')
+      ?.actionSpaces.find((s) => s.id === slotId)?.occupant === null;
   switch (optionId) {
     case 'gold': {
-      const amount = buffed ? 4 : 2;
-      const resPatch = gainResourcePatch(state, recipientId, 'gold', amount);
-      if (!buffed || !opts?.woundedMageId) return resPatch;
+      const slotId = 'base.room.infirmary.b.slot-1' as ActionSpaceId;
+      const buffed = claimBed(slotId);
+      const resPatch = gainResourcePatch(state, recipientId, 'gold', buffed ? 4 : 2);
+      if (!buffed) return resPatch;
       const occupied = occupyInfirmaryBSlotPatch(
         { ...state, ...resPatch },
         recipientId,
-        opts.woundedMageId,
-        'base.room.infirmary.b.slot-1' as ActionSpaceId,
+        opts!.woundedMageId!,
+        slotId,
       );
       return { ...resPatch, ...occupied };
     }
     case 'mana': {
-      const amount = buffed ? 2 : 1;
-      const resPatch = gainResourcePatch(state, recipientId, 'mana', amount);
-      if (!buffed || !opts?.woundedMageId) return resPatch;
+      const slotId = 'base.room.infirmary.b.slot-2' as ActionSpaceId;
+      const buffed = claimBed(slotId);
+      const resPatch = gainResourcePatch(state, recipientId, 'mana', buffed ? 2 : 1);
+      if (!buffed) return resPatch;
       const occupied = occupyInfirmaryBSlotPatch(
         { ...state, ...resPatch },
         recipientId,
-        opts.woundedMageId,
-        'base.room.infirmary.b.slot-2' as ActionSpaceId,
+        opts!.woundedMageId!,
+        slotId,
       );
       return { ...resPatch, ...occupied };
     }
