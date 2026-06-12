@@ -252,7 +252,10 @@ describe('Slot tooltip (polish smoke)', () => {
     // The store-driven tooltip is up (any slot's description renders).
     const hovered = useUiStore.getState().hoveredSlot;
     expect(hovered).not.toBeNull();
-    expect(screen.getByText(hovered!.space.description ?? 'No effect text.')).toBeTruthy();
+    // The effect text shows on the room face AND in the hover tooltip.
+    expect(
+      screen.getAllByText(hovered!.space.description ?? 'No effect text.').length,
+    ).toBeGreaterThanOrEqual(2);
     fireEvent.pointerLeave(circle);
     expect(useUiStore.getState().hoveredSlot).toBeNull();
     expect(space).toBeTruthy();

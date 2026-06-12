@@ -1,30 +1,22 @@
 /**
- * Room art registry (docs/UI_DESIGN.md §7.2, hybrid model).
+ * Room art registry (docs/UI_DESIGN.md §7.2, function-first revision).
  *
- * Every room gets a procedural SVG vignette — the permanent fallback layer —
- * plus identity hue and a ceiling-height class (the campus reads as one
- * castle: rows are stories, rooms are chambers with varied ceilings).
+ * Every room gets a procedural SVG vignette and an identity hue. The
+ * vignette no longer paints the room interior — RoomScene renders it as a
+ * dimmed sprite FRIEZE in the room's top wall band, so flavor lives on the
+ * walls and the interior stays clear for the worker-placement column.
  *
- * To override a scene with real art: drop an image (ideally ~480×180 webp)
- * into `public/art/rooms/` and set `artUrl: '/art/rooms/<file>.webp'` on the
- * entry below. The procedural scene remains the fallback if the image is
- * missing or fails to load.
+ * To override a frieze with real art: drop an image (a wide strip, ~480×80
+ * webp, reads best) into `public/art/rooms/` and set
+ * `artUrl: '/art/rooms/<file>.webp'` on the entry below. The procedural
+ * scene remains the fallback if the image is missing or fails to load.
  */
-
-export type RoomHeight = 'tall' | 'standard' | 'low';
 
 export interface RoomArt {
   hue: string;
-  height: RoomHeight;
   artUrl?: string;
   Scene: (props: { hue: string }) => JSX.Element;
 }
-
-export const ROOM_PX: Record<RoomHeight, number> = {
-  tall: 248,
-  standard: 224,
-  low: 200,
-};
 
 /* ----------------------------- scene helpers ----------------------------- */
 
@@ -274,24 +266,24 @@ const DefaultScene = ({ hue }: { hue: string }) => (
 /* ------------------------------ the registry ----------------------------- */
 
 const REGISTRY: Record<string, RoomArt> = {
-  Vault: { hue: '#ff9f43', height: 'low', Scene: VaultScene },
-  Library: { hue: '#5aa9e6', height: 'tall', Scene: LibraryScene },
-  Infirmary: { hue: '#ff8fab', height: 'standard', Scene: InfirmaryScene },
-  'Council Chamber': { hue: '#ffd166', height: 'tall', Scene: CouncilScene },
-  'Training Fields': { hue: '#ff5d5d', height: 'standard', Scene: TrainingScene },
-  Catacombs: { hue: '#b16cea', height: 'low', Scene: CatacombsScene },
-  Guilds: { hue: '#6bcb77', height: 'standard', Scene: GuildsScene },
-  Courtyard: { hue: '#5fd068', height: 'standard', Scene: CourtyardScene },
-  Dormitory: { hue: '#b388eb', height: 'low', Scene: DormitoryScene },
-  'Great Hall': { hue: '#ffd166', height: 'tall', Scene: GreatHallScene },
-  'Bell Tower': { hue: '#ffe9a8', height: 'tall', Scene: BellTowerScene },
-  Laboratory: { hue: '#ff9f43', height: 'standard', Scene: LaboratoryScene },
-  'Research Archive': { hue: '#ffd166', height: 'standard', Scene: ArchiveScene },
-  'Golem Lab': { hue: '#9aa0b4', height: 'standard', Scene: GolemScene },
-  'Synthesis Workshop': { hue: '#ff7849', height: 'standard', Scene: SynthesisScene },
+  Vault: { hue: '#ff9f43', Scene: VaultScene },
+  Library: { hue: '#5aa9e6', Scene: LibraryScene },
+  Infirmary: { hue: '#ff8fab', Scene: InfirmaryScene },
+  'Council Chamber': { hue: '#ffd166', Scene: CouncilScene },
+  'Training Fields': { hue: '#ff5d5d', Scene: TrainingScene },
+  Catacombs: { hue: '#b16cea', Scene: CatacombsScene },
+  Guilds: { hue: '#6bcb77', Scene: GuildsScene },
+  Courtyard: { hue: '#5fd068', Scene: CourtyardScene },
+  Dormitory: { hue: '#b388eb', Scene: DormitoryScene },
+  'Great Hall': { hue: '#ffd166', Scene: GreatHallScene },
+  'Bell Tower': { hue: '#ffe9a8', Scene: BellTowerScene },
+  Laboratory: { hue: '#ff9f43', Scene: LaboratoryScene },
+  'Research Archive': { hue: '#ffd166', Scene: ArchiveScene },
+  'Golem Lab': { hue: '#9aa0b4', Scene: GolemScene },
+  'Synthesis Workshop': { hue: '#ff7849', Scene: SynthesisScene },
 };
 
-const FALLBACK: RoomArt = { hue: '#7ee8fa', height: 'standard', Scene: DefaultScene };
+const FALLBACK: RoomArt = { hue: '#7ee8fa', Scene: DefaultScene };
 
 export function roomArtFor(roomName: string): RoomArt {
   return REGISTRY[roomName] ?? FALLBACK;

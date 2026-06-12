@@ -296,6 +296,17 @@ it*. Visual identities:
 Department tint on the island's rim-light tells you the room's school
 affiliation at a glance.
 
+> **Revision (function-first rooms).** The scene art no longer paints the
+> room interior. Rooms are uniform-width panels whose **height follows their
+> visible slot count**: slots stack **vertically**, one row per slot, with
+> the slot's effect text always visible beside the circle (no hover needed
+> to learn a room). Flavor moved **onto the walls**: the top wall band is a
+> dimmed sprite frieze (procedural scene or `artUrl` override — wide strip,
+> ~480×80) under the name plaque, and the side walls carry the room's hue.
+> Stories reserve space for their tallest chamber; rooms bottom-anchor so
+> floors align and the floor-level corridors/stairs still trace adjacency.
+> Functionality beats aesthetic: the worker-placement column is the room.
+
 ### 7.3 Action slots as spell circles
 
 - Empty slot: faint dashed rune-circle on the ground (`rounded-slot` recipe).

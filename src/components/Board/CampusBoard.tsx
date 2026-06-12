@@ -10,29 +10,21 @@ import {
 } from '../../utils/uiSelectors';
 import { usePromptTargets } from '../Prompts/usePromptTargets';
 
-import { RoomScene } from './RoomScene';
-import { ROOM_PX, roomArtFor } from './roomArt';
+import { roomHeight, ROOM_W, RoomScene } from './RoomScene';
 import { SHELF_H, SHELF_MT, TableauShelf } from './TableauShelf';
 
 /**
- * The university as ONE floating castle (docs/UI_DESIGN.md §7, hybrid art):
- * each grid row is a story; rooms are chambers carved into shared masonry,
- * bottom-anchored so floors align (ceiling heights vary per room).
- * Horizontal neighbors connect through floor-level doorway arches; stories
- * connect by staircases. The whole building drifts gently as a single mass
- * above a rock foundation, with spires along the roofline.
+ * The university as ONE floating castle (docs/UI_DESIGN.md §7, function-first
+ * revision): each grid row is a story; rooms are uniform-width chambers whose
+ * HEIGHT follows their visible slot count (slots stack vertically with their
+ * effect text beside them). Stories reserve space for their tallest chamber;
+ * rooms bottom-anchor so floors align. Horizontal neighbors connect through
+ * floor-level doorway arches; stories connect by staircases. The whole
+ * building drifts gently as one mass above a rock foundation.
  */
 
-const CELL_W = 264; // minimum chamber width
-const CELL_H = 248; // tallest chamber; shorter rooms leave masonry above
 const GAP_X = 18; // shared wall thickness
 const GAP_Y = 46; // floor slab between stories
-
-/** Chamber width needed to seat a room's slot row (64px circles + gaps).
- *  Great Hall's 10 slots makes it a genuinely WIDE hall. */
-function roomWidth(slotCount: number): number {
-  return Math.max(CELL_W, 28 + slotCount * 64 + (slotCount - 1) * 6);
-}
 
 type CellExit = 'flip' | 'destroy';
 
@@ -230,45 +222,37 @@ export function CampusBoard() {
   const { grid, cols, rows } = state.roomLayout;
   const roomById = new Map(state.rooms.map((r) => [r.id, r] as const));
 
-  // Each room owns its size: width follows its VISIBLE slot row (pool rooms
-  // like the Great Hall collapse to occupied + one open seat, so the hall
-  // grows as it fills). Columns reserve space for their widest room but
-  // rooms render centered at their own width — corridors bridge whatever
-  // gap remains, so adjacency stays intact while sizes vary freely.
+  // Each room owns its size: HEIGHT follows its VISIBLE slot column (pool
+  // rooms like the Great Hall collapse to occupied + one open seat, so the
+  // hall grows as it fills). Stories reserve space for their tallest room;
+  // rooms bottom-anchor within the story so floors stay aligned and the
+  // floor-level corridors keep bridging actual edges.
   const visibleByCell = new Map<string, ReturnType<typeof visibleRoomSpaces>>();
-  const geom = new Map<string, { left: number; width: number }>();
-  const colW: number[] = Array.from({ length: cols }, (_, c) => {
-    let w = CELL_W;
-    for (let r = 0; r < rows; r++) {
+  const rowH: number[] = Array.from({ length: rows }, (_, r) => {
+    let h = roomHeight(1);
+    for (let c = 0; c < cols; c++) {
       const id = grid[r]?.[c];
       const room = id ? roomById.get(id) : undefined;
       if (!room) continue;
       const visible = visibleRoomSpaces(room, spaceTargets);
       visibleByCell.set(`${r}-${c}`, visible);
-      w = Math.max(w, roomWidth(visible.length));
+      h = Math.max(h, roomHeight(visible.length));
     }
-    return w;
+    return h;
   });
-  const colX: number[] = [];
+  const rowY: number[] = [];
   let acc = 0;
-  for (let c = 0; c < cols; c++) {
-    colX.push(acc);
-    acc += colW[c]! + GAP_X;
+  for (let r = 0; r < rows; r++) {
+    rowY.push(acc);
+    acc += rowH[r]! + GAP_Y;
   }
-  const stageW = acc - GAP_X;
-  const stageH = rows * CELL_H + (rows - 1) * GAP_Y;
+  const stageH = acc - GAP_Y;
+  const stageW = cols * ROOM_W + (cols - 1) * GAP_X;
   // Castle + the tableau shelf beneath it (pan/zoom treats them as one stage).
   const totalH = stageH + SHELF_MT + SHELF_H;
 
-  for (let r = 0; r < rows; r++) {
-    for (let c = 0; c < cols; c++) {
-      const visible = visibleByCell.get(`${r}-${c}`);
-      if (!visible) continue;
-      const width = roomWidth(visible.length);
-      // Centered within the column at the room's own width.
-      geom.set(`${r}-${c}`, { left: colX[c]! + (colW[c]! - width) / 2, width });
-    }
-  }
+  const colX = (c: number) => c * (ROOM_W + GAP_X);
+  const occupied = (r: number, c: number) => visibleByCell.has(`${r}-${c}`);
 
   // Connections between adjacent occupied cells: corridors within a story,
   // staircases between stories. Adjacency is engine truth (the grid).
@@ -276,19 +260,13 @@ export function CampusBoard() {
   const stairs: { cx: number; top: number }[] = [];
   for (let r = 0; r < rows; r++) {
     for (let c = 0; c < cols; c++) {
-      const here = geom.get(`${r}-${c}`);
-      if (!here) continue;
-      const floorY = r * (CELL_H + GAP_Y) + CELL_H;
-      const east = geom.get(`${r}-${c + 1}`);
-      if (east) {
-        corridors.push({ x1: here.left + here.width, x2: east.left, floorY });
+      if (!occupied(r, c)) continue;
+      const floorY = rowY[r]! + rowH[r]!;
+      if (occupied(r, c + 1)) {
+        corridors.push({ x1: colX(c) + ROOM_W, x2: colX(c + 1), floorY });
       }
-      const south = geom.get(`${r + 1}-${c}`);
-      if (south) {
-        // Stairs sit on the x-overlap of the two stacked rooms.
-        const lo = Math.max(here.left, south.left);
-        const hi = Math.min(here.left + here.width, south.left + south.width);
-        stairs.push({ cx: (lo + hi) / 2, top: floorY });
+      if (occupied(r + 1, c)) {
+        stairs.push({ cx: colX(c) + ROOM_W / 2, top: floorY });
       }
     }
   }
@@ -350,21 +328,21 @@ export function CampusBoard() {
               }
               prevGridRef.current.set(cellKey, roomId);
               const room = roomId ? roomById.get(roomId) : undefined;
-              const height = room ? ROOM_PX[roomArtFor(room.name).height] : CELL_H;
-              const g = geom.get(cellKey);
+              const visible = visibleByCell.get(cellKey);
+              const height = visible ? roomHeight(visible.length) : roomHeight(1);
               return (
                 <div
                   key={cellKey}
                   className="absolute z-10"
                   style={{
-                    left: g?.left ?? colX[c],
+                    left: colX(c),
                     // Bottom-anchor: floors align along each story.
-                    top: r * (CELL_H + GAP_Y) + (CELL_H - height),
+                    top: rowY[r]! + rowH[r]! - height,
                     perspective: 900,
                   }}
                 >
                   <AnimatePresence custom={exitKind} initial={false}>
-                    {room && g && (
+                    {room && visible && (
                       <motion.div
                         key={room.id}
                         custom={exitKind}
@@ -379,8 +357,8 @@ export function CampusBoard() {
                           eligible={eligible}
                           onPlace={onPlace}
                           mageIndex={mageIndex}
-                          width={g.width}
-                          spaces={visibleByCell.get(cellKey) ?? room.actionSpaces}
+                          width={ROOM_W}
+                          spaces={visible}
                         />
                       </motion.div>
                     )}

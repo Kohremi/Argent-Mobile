@@ -4,15 +4,31 @@ import { AnimatePresence, motion } from 'framer-motion';
 import type { ActionSpace, GameState, OwnedMage, Player, Room } from '../../game/types';
 import { useUiStore } from '../../store/uiStore';
 import { ActionSlot } from './ActionSlot';
-import { ROOM_PX, roomArtFor } from './roomArt';
+import { roomArtFor } from './roomArt';
 
 /**
- * One chamber of the university (docs/UI_DESIGN.md §7.2, hybrid art model).
- * Bottom-anchored within its story so floors align; ceiling height varies by
- * room (roomArt registry). Interior = name plaque, scene art (image override
- * with procedural SVG fallback), and the slot floor. Engine-driven overlays:
- * locked, eligibility ring, one-shot FX.
+ * One chamber of the university (docs/UI_DESIGN.md §7.2, function-first
+ * revision). The interior is the worker-placement column: one row per slot —
+ * circle on the left, the slot's effect text always visible beside it.
+ * Flavor lives ON THE WALLS: the top wall band is a sprite frieze (the
+ * procedural scene art, or an image override, dimmed behind the plaque) and
+ * the side walls carry the room's hue. Height follows the visible slot
+ * count; bottom-anchored within its story so floors align.
  */
+
+/** Uniform chamber width: 64px slot + always-visible effect text. */
+export const ROOM_W = 312;
+const TOP_WALL = 44; // frieze band + plaque
+const ROW_H = 72;
+const ROW_GAP = 4;
+const BOTTOM_WALL = 12;
+
+/** Chamber height for a visible slot count — CampusBoard sizes stories
+ *  with this same function, so geometry and render never drift. */
+export function roomHeight(slotCount: number): number {
+  if (slotCount === 0) return TOP_WALL + 34 + BOTTOM_WALL;
+  return TOP_WALL + slotCount * ROW_H + (slotCount - 1) * ROW_GAP + BOTTOM_WALL;
+}
 
 export interface RoomSceneProps {
   room: Room;
@@ -20,7 +36,7 @@ export interface RoomSceneProps {
   eligible: Set<string>;
   onPlace: (spaceId: string) => void;
   mageIndex: Map<string, { mage: OwnedMage; owner: Player }>;
-  /** Chamber width — sized to this room's own visible slot row. */
+  /** Chamber width (uniform across the castle). */
   width: number;
   /** The slots to render (pool rooms collapse to occupied + one open). */
   spaces: ActionSpace[];
@@ -37,7 +53,7 @@ export function RoomScene({
 }: RoomSceneProps) {
   const locked = state.roomLocks.some((l) => l.roomId === room.id);
   const art = roomArtFor(room.name);
-  const height = ROOM_PX[art.height];
+  const height = roomHeight(spaces.length);
   const hasEligible = spaces.some((s) => eligible.has(s.id));
   const [artBroken, setArtBroken] = useState(false);
   const showImage = art.artUrl && !artBroken;
@@ -45,74 +61,90 @@ export function RoomScene({
   return (
     <div
       className={clsx(
-        'relative overflow-hidden rounded-lg transition-all duration-300',
-        'border-[3px] bg-night-800/95',
-        hasEligible ? 'border-leyline/70' : 'border-[#4d4458]',
+        'relative rounded-lg border-[3px] bg-night-800/95 transition-all duration-300',
+        hasEligible ? 'border-leyline/70' : 'border-transparent',
         locked && 'opacity-80 saturate-50',
       )}
       style={{
         width,
         height,
+        // Side/bottom walls carry the room's identity hue.
+        borderColor: hasEligible ? undefined : `${art.hue}55`,
         boxShadow: hasEligible
-          ? 'inset 0 0 26px #00000066, 0 0 18px 2px #7ee8fa33'
-          : 'inset 0 0 26px #00000066',
-        background:
-          'linear-gradient(180deg, #241f43 0%, #1f1b3f 70%, #2a2240 100%)',
+          ? `inset 0 0 0 1px ${art.hue}33, inset 0 0 22px #00000066, 0 0 18px 2px #7ee8fa33`
+          : `inset 0 0 0 1px ${art.hue}33, inset 0 0 22px #00000066`,
+        background: 'linear-gradient(180deg, #1c1838 0%, #171430 70%, #1d1837 100%)',
       }}
     >
-      {/* name plaque */}
-      <div className="absolute inset-x-0 top-0 z-10 flex items-start justify-center">
+      {/* top wall: sprite frieze (the room's flavor) behind the plaque */}
+      <div
+        className="absolute inset-x-0 top-0 overflow-hidden rounded-t-[5px]"
+        style={{ height: TOP_WALL, background: '#2c2547', boxShadow: 'inset 0 -3px 6px #00000088' }}
+      >
+        <div className="absolute inset-0 opacity-50">
+          {showImage ? (
+            <img
+              src={art.artUrl}
+              alt=""
+              onError={() => setArtBroken(true)}
+              className="h-full w-full object-cover"
+            />
+          ) : (
+            <art.Scene hue={art.hue} />
+          )}
+        </div>
         <div
-          className="rounded-b-lg bg-[#3a2f24] px-3 py-0.5 text-center ring-1 ring-black/40"
-          style={{ boxShadow: '0 2px 4px #00000088' }}
-        >
-          <h3 className="font-display text-[14px] font-bold leading-tight" style={{ color: art.hue }}>
-            {room.name}
-          </h3>
-          <p className="text-[8px] uppercase tracking-[0.2em] text-white/40">
-            side {room.side}
-            {room.isUniversityCentral && ' · ★'}
-            {room.isInstantRoom && ' · ⚡'}
-          </p>
+          className="absolute inset-0"
+          style={{ background: 'linear-gradient(90deg, #2c2547ee, transparent 30%, transparent 70%, #2c2547ee)' }}
+        />
+        {/* hue accent line along the bottom of the wall band */}
+        <div className="absolute inset-x-0 bottom-0 h-[2px]" style={{ background: `${art.hue}99` }} />
+        {/* name plaque */}
+        <div className="absolute inset-0 z-10 flex items-center justify-center">
+          <div className="rounded bg-night-900/80 px-2.5 py-0.5 text-center ring-1 ring-black/40">
+            <h3 className="font-display text-[13px] font-bold leading-tight" style={{ color: art.hue }}>
+              {room.name}
+              <span className="ml-1.5 align-middle text-[8px] font-normal uppercase tracking-[0.2em] text-white/40">
+                side {room.side}
+                {room.isUniversityCentral && ' · ★'}
+                {room.isInstantRoom && ' · ⚡'}
+              </span>
+            </h3>
+          </div>
         </div>
       </div>
 
-      {/* scene: image override or procedural vignette */}
-      <div className="absolute inset-x-1.5 top-9 bottom-[86px]">
-        {showImage ? (
-          <img
-            src={art.artUrl}
-            alt={room.name}
-            onError={() => setArtBroken(true)}
-            className="h-full w-full rounded object-cover"
-          />
-        ) : (
-          <art.Scene hue={art.hue} />
-        )}
-      </div>
-
-      {/* slot floor */}
+      {/* the worker-placement column: slot + its effect text, one per row */}
       <div
-        className="absolute inset-x-0 bottom-0 h-[84px]"
-        style={{
-          background: 'linear-gradient(180deg, #181430cc, #131027)',
-          boxShadow: 'inset 0 3px 6px #00000088',
-        }}
+        className="absolute inset-x-1 flex flex-col"
+        style={{ top: TOP_WALL, bottom: BOTTOM_WALL - 4, gap: ROW_GAP, paddingTop: ROW_GAP }}
       >
-        <div className="flex h-full items-end justify-center gap-1.5 px-2 pb-1.5">
-          {spaces.map((space) => (
+        {spaces.map((space) => (
+          <div
+            key={space.id}
+            className="flex min-h-0 flex-1 items-center gap-1.5 rounded-md bg-night-900/45 px-1 ring-1 ring-white/5"
+          >
             <ActionSlot
-              key={space.id}
               space={space}
               available={eligible.has(space.id)}
               onPlace={onPlace}
               mageIndex={mageIndex}
             />
-          ))}
-          {room.actionSpaces.length === 0 && (
-            <p className="pb-6 text-[11px] italic text-white/35">No action spaces</p>
-          )}
-        </div>
+            <p className="line-clamp-3 min-w-0 flex-1 text-[10px] leading-snug text-white/75">
+              {(space.slotType === 'merit' || space.slotType === 'shadow-merit') && (
+                <span className="mr-1 inline-block rounded-full bg-starlight/20 px-1 align-middle text-[8px] font-bold uppercase tracking-wider text-starlight">
+                  🎖 merit
+                </span>
+              )}
+              {space.description ?? 'No effect text.'}
+            </p>
+          </div>
+        ))}
+        {spaces.length === 0 && (
+          <p className="flex flex-1 items-center justify-center text-[11px] italic text-white/35">
+            No action spaces
+          </p>
+        )}
       </div>
 
       {/* locked overlay */}
