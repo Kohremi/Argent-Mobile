@@ -12,7 +12,7 @@ import { PortraitBust } from './PortraitBust';
  * Bottom command center for the active player (docs/UI_DESIGN.md §8):
  * identity, resource chips, the mage bench (placement source — click a
  * student to pick them up, then click a glowing circle on the campus),
- * and turn controls. Hand fans/spellbook arrive in build step 3.
+ * the three hand fans (spells / vault / allies), and turn controls.
  */
 
 const RESOURCE_ORDER: { kind: ResourceKind; key: string }[] = [

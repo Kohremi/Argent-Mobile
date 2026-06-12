@@ -259,6 +259,45 @@ describe('Slot tooltip (polish smoke)', () => {
   });
 });
 
+describe('Hand fans (card-face smoke)', () => {
+  it('fans spells, vault items, and supporters with their function on the face', () => {
+    let s = errandsState();
+    s = {
+      ...s,
+      players: s.players.map((p, i) =>
+        i === 0
+          ? {
+              ...p,
+              ownedSpells: [
+                ...p.ownedSpells,
+                { cardId: 'base.spell.burn', intPlaced: true, wisPlacedLevel2: false, wisPlacedLevel3: false, exhausted: false },
+              ],
+              vaultCards: [...p.vaultCards, { cardId: 'base.vault.the-arcane-eye', exhausted: false }],
+              supporters: [...p.supporters, 'base.supporter.adelaide-chivers'],
+            }
+          : p,
+      ),
+    };
+    useGameStore.setState({ state: s });
+    useUiStore.setState({ selectedMageId: null, debugOpen: false, lastError: null });
+    render(<GameScreen />);
+
+    // All three fan groups render with the gained cards.
+    expect(screen.getByText('spells')).toBeTruthy();
+    expect(screen.getByText('vault')).toBeTruthy();
+    expect(screen.getByText('allies')).toBeTruthy();
+    expect(screen.getByTitle('Burn')).toBeTruthy();
+
+    // Function text is printed on the card faces, not hidden in tooltips.
+    expect(screen.getByText('Gain a Mark.')).toBeTruthy();
+    expect(screen.getByText(/Gain 2 Research/)).toBeTruthy();
+    // Spell tomes carry per-level rules text on the face (L1 gem + its text).
+    const tome = screen.getByTitle('Burn');
+    expect(tome.textContent).toMatch(/Burn/);
+    expect(tome.querySelectorAll('[title^="Level"]').length).toBeGreaterThan(0);
+  });
+});
+
 describe('Privacy flows (peek smoke)', () => {
   it('active player can hold-to-peek a voter they marked; others stay sealed', () => {
     let s = errandsState();
