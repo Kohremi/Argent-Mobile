@@ -262,6 +262,41 @@ describe('Slot tooltip (polish smoke)', () => {
   });
 });
 
+describe('Infirmary ward (board smoke)', () => {
+  it('renders beds: one open bed, plus a white bed per resting wounded mage', () => {
+    let s = errandsState();
+    // No wounded mages yet: the ward shows exactly one open bed
+    // (side A has no reward slots).
+    useGameStore.setState({ state: s });
+    useUiStore.setState({ selectedMageId: null, debugOpen: false, lastError: null });
+    const view = render(<GameScreen />);
+    expect(document.querySelectorAll('[data-bed="open"]').length).toBe(1);
+    expect(document.querySelectorAll('[data-bed="rest"]').length).toBe(0);
+    view.unmount();
+
+    // Wound a mage into the infirmary: a resting bed appears beside the open one.
+    s = {
+      ...s,
+      players: s.players.map((p, i) =>
+        i === 0
+          ? {
+              ...p,
+              mages: p.mages.map((m) =>
+                m.id === 'm-ui-1'
+                  ? { ...m, isWounded: true, location: { kind: 'infirmary' as const } }
+                  : m,
+              ),
+            }
+          : p,
+      ),
+    };
+    useGameStore.setState({ state: s });
+    render(<GameScreen />);
+    expect(document.querySelectorAll('[data-bed="rest"]').length).toBe(1);
+    expect(document.querySelectorAll('[data-bed="open"]').length).toBe(1);
+  });
+});
+
 describe('Tableau shelf (board smoke)', () => {
   it('shows the three standing tableaus and temporary reveals under the castle', () => {
     let s = errandsState();

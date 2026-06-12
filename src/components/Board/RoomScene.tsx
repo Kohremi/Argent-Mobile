@@ -3,7 +3,9 @@ import clsx from 'clsx';
 import { AnimatePresence, motion } from 'framer-motion';
 import type { ActionSpace, GameState, OwnedMage, Player, Room } from '../../game/types';
 import { useUiStore } from '../../store/uiStore';
-import { ActionSlot } from './ActionSlot';
+import { infirmaryBeds, type InfirmaryBed } from '../../utils/uiSelectors';
+import { usePromptTargets } from '../Prompts/usePromptTargets';
+import { ActionSlot, TargetableToken } from './ActionSlot';
 import { roomArtFor } from './roomArt';
 
 /**
@@ -30,6 +32,132 @@ export function roomHeight(slotCount: number): number {
   return TOP_WALL + slotCount * ROW_H + (slotCount - 1) * ROW_GAP + BOTTOM_WALL;
 }
 
+/* ------------------------- the Infirmary ward ---------------------------- */
+// Beds instead of slots: a 3-wide grid that grows as the ward fills
+// (Great-Hall style — always exactly one open bed on show). Side B's two
+// improved-reward beds (gold = Gold bonus, blue = Mana bonus) are always
+// visible; wounded students lie on their side in white beds.
+
+const BED_H = 64;
+const BED_GAP = 4;
+
+export function infirmaryRoomHeight(bedCount: number): number {
+  const bedRows = Math.max(1, Math.ceil(bedCount / 3));
+  return TOP_WALL + bedRows * BED_H + (bedRows - 1) * BED_GAP + BOTTOM_WALL;
+}
+
+/** Side-view hospital bed; the frame color is the bed's identity. */
+function BedSprite({ frame, blanket }: { frame: string; blanket: string }) {
+  return (
+    <svg
+      className="pointer-events-none absolute bottom-1 left-1/2 -translate-x-1/2"
+      width="86"
+      height="42"
+      viewBox="0 0 86 42"
+    >
+      {/* head/foot boards */}
+      <rect x="2" y="2" width="8" height="34" rx="3" fill={frame} />
+      <rect x="76" y="12" width="8" height="24" rx="3" fill={frame} />
+      {/* mattress */}
+      <rect x="8" y="22" width="70" height="10" rx="4" fill="#fdf8ec" />
+      {/* pillow */}
+      <rect x="11" y="17" width="17" height="9" rx="4" fill="#ffffff" />
+      {/* blanket */}
+      <rect x="30" y="18" width="46" height="11" rx="3" fill={blanket} />
+      {/* legs */}
+      <rect x="11" y="34" width="4" height="7" rx="1" fill={frame} />
+      <rect x="71" y="34" width="4" height="7" rx="1" fill={frame} />
+    </svg>
+  );
+}
+
+function BedCell({
+  bed,
+  mageIndex,
+}: {
+  bed: InfirmaryBed;
+  mageIndex: Map<string, { mage: OwnedMage; owner: Player }>;
+}) {
+  const { spaceTargets, pickSpace } = usePromptTargets();
+  const setHoveredSlot = useUiStore((s) => s.setHoveredSlot);
+
+  // Reward beds color themselves by their bonus: gold for Gold, blue for Mana.
+  let frame = '#e8e4da';
+  let blanket = '#f3e8cd';
+  let chip: string | null = null;
+  let chipColor = '#ffe9a8';
+  if (bed.kind === 'reward') {
+    const gold = bed.space.description?.match(/(\d+) Gold/i);
+    const mana = bed.space.description?.match(/(\d+) Mana/i);
+    if (gold) {
+      frame = '#ffd166';
+      blanket = '#ffd166';
+      chip = `${gold[1]}g`;
+      chipColor = '#ffd166';
+    } else if (mana) {
+      frame = '#5aa9e6';
+      blanket = '#5aa9e6';
+      chip = `${mana[1]}✦`;
+      chipColor = '#5aa9e6';
+    }
+  }
+
+  const entry =
+    bed.kind === 'rest'
+      ? bed.entry
+      : bed.kind === 'reward' && bed.space.occupant
+        ? mageIndex.get(bed.space.occupant.mageId)
+        : undefined;
+  const targeted = bed.kind === 'reward' && spaceTargets.has(bed.space.id);
+
+  return (
+    <div
+      data-bed={bed.kind}
+      className={clsx(
+        'relative h-[60px] rounded-md bg-night-900/45 ring-1',
+        targeted ? 'ring-leyline' : 'ring-white/5',
+      )}
+      onPointerEnter={
+        bed.kind === 'reward'
+          ? (e) => {
+              const r = e.currentTarget.getBoundingClientRect();
+              setHoveredSlot({ space: bed.space, rect: { x: r.x, y: r.y, w: r.width } });
+            }
+          : undefined
+      }
+      onPointerLeave={bed.kind === 'reward' ? () => setHoveredSlot(null) : undefined}
+    >
+      <BedSprite frame={frame} blanket={blanket} />
+      {chip && (
+        <span
+          className="absolute right-1 top-0.5 rounded-full bg-night-800/90 px-1.5 text-[9px] font-bold leading-4 ring-1"
+          style={{ color: chipColor, borderColor: chipColor, boxShadow: `0 0 0 1px ${chipColor}55` }}
+        >
+          {chip}
+        </span>
+      )}
+      {/* space-targeting click surface (engine dry-run truth, as everywhere) */}
+      {targeted && (
+        <button
+          type="button"
+          data-available="true"
+          onClick={() => pickSpace(bed.space.id)}
+          className="absolute inset-0 z-[2] animate-breathe cursor-pointer rounded-md border-2 border-leyline"
+          style={{ boxShadow: '0 0 12px #7ee8fa66' }}
+        />
+      )}
+      {/* the patient, lying on their side across the mattress */}
+      {entry && (
+        <TargetableToken
+          entry={entry}
+          size={36}
+          className="absolute bottom-2.5 left-1/2 z-[1] -translate-x-1/2 rotate-90"
+        />
+      )}
+    </div>
+  );
+}
+
 export interface RoomSceneProps {
   room: Room;
   state: GameState;
@@ -53,7 +181,9 @@ export function RoomScene({
 }: RoomSceneProps) {
   const locked = state.roomLocks.some((l) => l.roomId === room.id);
   const art = roomArtFor(room.name);
-  const height = roomHeight(spaces.length);
+  const isInfirmary = room.name === 'Infirmary';
+  const beds = isInfirmary ? infirmaryBeds(state, room) : null;
+  const height = beds ? infirmaryRoomHeight(beds.length) : roomHeight(spaces.length);
   const hasEligible = spaces.some((s) => eligible.has(s.id));
   const [artBroken, setArtBroken] = useState(false);
   const showImage = art.artUrl && !artBroken;
@@ -114,7 +244,24 @@ export function RoomScene({
         </div>
       </div>
 
+      {/* the Infirmary ward: a growing 3-wide grid of beds */}
+      {beds && (
+        <div
+          className="absolute inset-x-1 grid grid-cols-3 content-start"
+          style={{ top: TOP_WALL, bottom: BOTTOM_WALL - 4, gap: BED_GAP, paddingTop: BED_GAP }}
+        >
+          {beds.map((bed, i) => (
+            <BedCell
+              key={bed.kind === 'reward' ? bed.space.id : bed.kind === 'rest' ? bed.entry.mage.id : `open-${i}`}
+              bed={bed}
+              mageIndex={mageIndex}
+            />
+          ))}
+        </div>
+      )}
+
       {/* the worker-placement column: slot + its effect text, one per row */}
+      {!beds && (
       <div
         className="absolute inset-x-1 flex flex-col"
         style={{ top: TOP_WALL, bottom: BOTTOM_WALL - 4, gap: ROW_GAP, paddingTop: ROW_GAP }}
@@ -143,6 +290,7 @@ export function RoomScene({
           </p>
         )}
       </div>
+      )}
 
       {/* locked overlay */}
       {locked && (

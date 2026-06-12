@@ -76,6 +76,28 @@ export function visibleRoomSpaces(
   return visible.sort((a, b) => a.index - b.index);
 }
 
+/**
+ * The Infirmary's bed list (RoomScene renders it as a 3-wide bed grid that
+ * grows as it fills, Great-Hall style). Side B's reward slots come first —
+ * they're always on display — then a white bed per wounded mage resting in
+ * the player-level `infirmary` location, then exactly one open white bed.
+ */
+export type InfirmaryBed =
+  | { kind: 'reward'; space: ActionSpace }
+  | { kind: 'rest'; entry: { mage: OwnedMage; owner: Player } }
+  | { kind: 'open' };
+
+export function infirmaryBeds(state: GameState, room: Room): InfirmaryBed[] {
+  const beds: InfirmaryBed[] = room.actionSpaces.map((space) => ({ kind: 'reward', space }));
+  for (const owner of state.players) {
+    for (const mage of owner.mages) {
+      if (mage.location.kind === 'infirmary') beds.push({ kind: 'rest', entry: { mage, owner } });
+    }
+  }
+  beds.push({ kind: 'open' });
+  return beds;
+}
+
 /** Quick index from mage id → { mage, owner } across all players. */
 export function buildMageIndex(
   state: GameState,

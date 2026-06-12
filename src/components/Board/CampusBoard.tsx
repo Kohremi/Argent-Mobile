@@ -1,16 +1,18 @@
 import { useMemo, useRef } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
+import type { Room } from '../../game/types';
 import { useGameStore } from '../../store/gameStore';
 import { useUiStore } from '../../store/uiStore';
 import {
   activePlayer,
   buildMageIndex,
   eligiblePlacementSlots,
+  infirmaryBeds,
   visibleRoomSpaces,
 } from '../../utils/uiSelectors';
 import { usePromptTargets } from '../Prompts/usePromptTargets';
 
-import { roomHeight, ROOM_W, RoomScene } from './RoomScene';
+import { infirmaryRoomHeight, roomHeight, ROOM_W, RoomScene } from './RoomScene';
 import { SHELF_H, SHELF_MT, TableauShelf } from './TableauShelf';
 
 /**
@@ -228,6 +230,11 @@ export function CampusBoard() {
   // rooms bottom-anchor within the story so floors stay aligned and the
   // floor-level corridors keep bridging actual edges.
   const visibleByCell = new Map<string, ReturnType<typeof visibleRoomSpaces>>();
+  // The Infirmary sizes by its bed grid, every other room by its slot column.
+  const cellHeight = (room: Room, visibleCount: number) =>
+    room.name === 'Infirmary'
+      ? infirmaryRoomHeight(infirmaryBeds(state, room).length)
+      : roomHeight(visibleCount);
   const rowH: number[] = Array.from({ length: rows }, (_, r) => {
     let h = roomHeight(1);
     for (let c = 0; c < cols; c++) {
@@ -236,7 +243,7 @@ export function CampusBoard() {
       if (!room) continue;
       const visible = visibleRoomSpaces(room, spaceTargets);
       visibleByCell.set(`${r}-${c}`, visible);
-      h = Math.max(h, roomHeight(visible.length));
+      h = Math.max(h, cellHeight(room, visible.length));
     }
     return h;
   });
@@ -329,7 +336,8 @@ export function CampusBoard() {
               prevGridRef.current.set(cellKey, roomId);
               const room = roomId ? roomById.get(roomId) : undefined;
               const visible = visibleByCell.get(cellKey);
-              const height = visible ? roomHeight(visible.length) : roomHeight(1);
+              const height =
+                room && visible ? cellHeight(room, visible.length) : roomHeight(1);
               return (
                 <div
                   key={cellKey}

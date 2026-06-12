@@ -88,8 +88,9 @@ function MeritCrest({ badges, shadow }: { badges?: number | undefined; shadow: b
   );
 }
 
-/** A mage token that lights up rose + becomes clickable under targeting. */
-function TargetableToken({
+/** A mage token that lights up rose + becomes clickable under targeting.
+ *  (Also used by the Infirmary bed grid in RoomScene.) */
+export function TargetableToken({
   entry,
   size,
   className,
