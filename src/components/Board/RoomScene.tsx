@@ -130,7 +130,11 @@ function BedCell({
       <BedSprite frame={frame} blanket={blanket} />
       {chip && (
         <span
-          className="absolute right-1 top-0.5 rounded-full bg-night-800/90 px-1.5 text-[9px] font-bold leading-4 ring-1"
+          className={clsx(
+            'absolute right-1 top-0.5 rounded-full bg-night-800/90 px-1.5 text-[9px] font-bold leading-4 ring-1',
+            // Bed taken → the buffed rate is blocked until the heal sweep.
+            bed.kind === 'reward' && bed.space.occupant && 'opacity-40 line-through',
+          )}
           style={{ color: chipColor, borderColor: chipColor, boxShadow: `0 0 0 1px ${chipColor}55` }}
         >
           {chip}

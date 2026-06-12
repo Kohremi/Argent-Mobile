@@ -291,8 +291,47 @@ describe('Infirmary ward (board smoke)', () => {
       ),
     };
     useGameStore.setState({ state: s });
-    render(<GameScreen />);
+    const view2 = render(<GameScreen />);
     expect(document.querySelectorAll('[data-bed="rest"]').length).toBe(1);
+    expect(document.querySelectorAll('[data-bed="open"]').length).toBe(1);
+    view2.unmount();
+
+    // Side B buffed bonus taken: the mage occupies the REWARD bed (slot
+    // occupant set, location still 'infirmary') — no white bed for them.
+    s = {
+      ...s,
+      rooms: s.rooms.map((r) =>
+        r.name === 'Infirmary'
+          ? {
+              ...r,
+              actionSpaces: [
+                {
+                  id: 'base.room.infirmary.b.slot-1',
+                  roomId: r.id,
+                  index: 0,
+                  slotType: 'regular' as const,
+                  occupant: { mageId: 'm-ui-1', ownerId: s.players[0]!.id, isShadowing: false },
+                  effectId: 'base.system.noop',
+                  description: 'When wounded: gain 4 Gold and occupy this slot.',
+                },
+                {
+                  id: 'base.room.infirmary.b.slot-2',
+                  roomId: r.id,
+                  index: 1,
+                  slotType: 'regular' as const,
+                  occupant: null,
+                  effectId: 'base.system.noop',
+                  description: 'When wounded: gain 2 Mana and occupy this slot.',
+                },
+              ],
+            }
+          : r,
+      ),
+    };
+    useGameStore.setState({ state: s });
+    render(<GameScreen />);
+    expect(document.querySelectorAll('[data-bed="reward"]').length).toBe(2);
+    expect(document.querySelectorAll('[data-bed="rest"]').length).toBe(0);
     expect(document.querySelectorAll('[data-bed="open"]').length).toBe(1);
   });
 });

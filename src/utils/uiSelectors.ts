@@ -89,9 +89,17 @@ export type InfirmaryBed =
 
 export function infirmaryBeds(state: GameState, room: Room): InfirmaryBed[] {
   const beds: InfirmaryBed[] = room.actionSpaces.map((space) => ({ kind: 'reward', space }));
+  // A mage who took a buffed bonus occupies that reward bed (the slot's
+  // occupant flag) while its `location` STAYS 'infirmary' — engine design.
+  // Skip those here or the patient would also get a white bed.
+  const inRewardBeds = new Set(
+    room.actionSpaces.map((s) => s.occupant?.mageId).filter((id): id is string => !!id),
+  );
   for (const owner of state.players) {
     for (const mage of owner.mages) {
-      if (mage.location.kind === 'infirmary') beds.push({ kind: 'rest', entry: { mage, owner } });
+      if (mage.location.kind === 'infirmary' && !inRewardBeds.has(mage.id)) {
+        beds.push({ kind: 'rest', entry: { mage, owner } });
+      }
     }
   }
   beds.push({ kind: 'open' });
