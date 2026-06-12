@@ -1,17 +1,30 @@
+import { useState } from 'react';
 import clsx from 'clsx';
 import type { ConsortiumVoter, GameState } from '../../game/types';
 import { useGameStore } from '../../store/gameStore';
-import { PLAYER_AURA } from '../../utils/uiSelectors';
+import { activePlayer, PLAYER_AURA } from '../../utils/uiSelectors';
 
 /**
  * Right rail: the Consortium (docs/UI_DESIGN.md §9.4). One tile per voter —
  * rune-backed while face-down, name + criterion + votes once revealed —
  * with players' wax-seal marks stamped along the bottom edge.
+ *
+ * Privacy: marking a voter means you LOOKED at it, so the active player may
+ * privately re-check any voter they've marked. The peek is hold-to-view
+ * (press 👁, release to hide) — transient by design, so a glance over the
+ * shoulder never leaves it face-up.
  */
 
 function VoterTile({ state, voter }: { state: GameState; voter: ConsortiumVoter }) {
-  const faceUp = voter.revealed || voter.isAlwaysFaceUp;
   const marks = state.voterMarks.filter((m) => m.voterId === voter.id);
+  const active = activePlayer(state);
+  const canPeek =
+    !voter.revealed &&
+    !voter.isAlwaysFaceUp &&
+    active !== null &&
+    marks.some((m) => m.playerId === active.id);
+  const [peeking, setPeeking] = useState(false);
+  const faceUp = voter.revealed || voter.isAlwaysFaceUp || (canPeek && peeking);
 
   return (
     <div
@@ -20,6 +33,7 @@ function VoterTile({ state, voter }: { state: GameState; voter: ConsortiumVoter 
         faceUp
           ? 'bg-parchment-50 text-ink-900 ring-black/10'
           : 'bg-night-600/90 ring-white/15',
+        canPeek && peeking && 'ring-2 ring-starlight',
       )}
     >
       {faceUp ? (
@@ -45,6 +59,26 @@ function VoterTile({ state, voter }: { state: GameState; voter: ConsortiumVoter 
             sealed voter
           </span>
         </div>
+      )}
+
+      {/* hold-to-peek for voters the active player has marked */}
+      {canPeek && (
+        <button
+          type="button"
+          title="You marked this voter — hold to peek"
+          onPointerDown={() => setPeeking(true)}
+          onPointerUp={() => setPeeking(false)}
+          onPointerLeave={() => setPeeking(false)}
+          onContextMenu={(e) => e.preventDefault()}
+          className={clsx(
+            'absolute -top-1.5 left-2 select-none rounded-full px-1.5 py-0.5 text-[10px] font-bold ring-1 transition',
+            peeking
+              ? 'bg-starlight text-ink-900 ring-starlight'
+              : 'bg-night-800 text-starlight ring-starlight/50 hover:ring-starlight',
+          )}
+        >
+          👁 {peeking ? 'peeking' : 'hold'}
+        </button>
       )}
 
       {/* wax-seal marks */}

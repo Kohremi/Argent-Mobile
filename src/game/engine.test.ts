@@ -29402,8 +29402,8 @@ describe('Insight Beyond Sight (Mancers)', () => {
     s = cast(s, 2);
     s = opt(s, 'look');
     const deckPrompt = topPending(s);
-    if (deckPrompt.prompt.kind !== 'choose-from-options') throw new Error('x');
-    s = opt(s, deckPrompt.prompt.options[0]!.id);
+    if (deckPrompt.prompt.kind !== 'choose-deck') throw new Error('want choose-deck');
+    s = applyAction(s, { type: 'RESOLVE_PENDING', resolutionId: deckPrompt.id, answer: { kind: 'deck-chosen', deck: deckPrompt.prompt.eligibleDecks[0]! } });
     expect(s.spellDeck).toEqual(beforeSpell);
     expect(s.vaultDeck).toEqual(beforeVault);
     expect(p1(s).resources.marks).toBe(0);

@@ -258,3 +258,109 @@ describe('Slot tooltip (polish smoke)', () => {
     expect(space).toBeTruthy();
   });
 });
+
+describe('Privacy flows (peek smoke)', () => {
+  it('active player can hold-to-peek a voter they marked; others stay sealed', () => {
+    let s = errandsState();
+    const hidden = s.voters.filter((v) => !v.revealed && !v.isAlwaysFaceUp);
+    expect(hidden.length).toBeGreaterThan(1);
+    const mine = hidden[0]!;
+    const theirs = hidden[1]!;
+    s = {
+      ...s,
+      voterMarks: [
+        { voterId: mine.id, playerId: 'p1' },
+        { voterId: theirs.id, playerId: 'p2' },
+      ],
+    };
+    useGameStore.setState({ state: s });
+    useUiStore.setState({ selectedMageId: null, debugOpen: false, lastError: null });
+    render(<GameScreen />);
+
+    // Only the voter p1 marked offers the peek (it's p1's turn).
+    const peekButtons = screen.getAllByTitle('You marked this voter — hold to peek');
+    expect(peekButtons.length).toBe(1);
+    expect(screen.queryByText(mine.name)).toBeNull();
+
+    fireEvent.pointerDown(peekButtons[0]!);
+    expect(screen.getByText(mine.name)).toBeTruthy();
+    expect(screen.queryByText(theirs.name)).toBeNull(); // rival's stays sealed
+
+    fireEvent.pointerUp(peekButtons[0]!);
+    expect(screen.queryByText(mine.name)).toBeNull();
+  });
+
+  it('peeked-supporter prompts hide the cards behind the privacy curtain', () => {
+    let s = errandsState();
+    const cardIds = s.supporterDeck.slice(0, 2);
+    expect(cardIds.length).toBe(2);
+    s = {
+      ...s,
+      pendingResolutionStack: [
+        {
+          id: 'pr-peek-test',
+          responderId: 'p1',
+          prompt: { kind: 'choose-peeked-supporter', eligibleCardIds: cardIds },
+          resume: { effectId: 'base.system.noop', context: {} },
+          source: {
+            kind: 'vault-card',
+            id: 'test.lantern',
+            triggeringPlayerId: 'p1',
+            description: 'Mystic Lantern',
+          },
+        },
+      ],
+    };
+    useGameStore.setState({ state: s });
+    useUiStore.setState({ selectedMageId: null, debugOpen: false, lastError: null, privacyRevealedForId: null });
+    render(<GameScreen />);
+
+    // Curtain up: secret card names are NOT in the DOM.
+    expect(screen.getByText(/eyes away/)).toBeTruthy();
+    expect(document.body.textContent).not.toContain('choose a Supporter');
+
+    fireEvent.click(screen.getByText('👁 Reveal to me'));
+    // Now the sheet shows; picking a card resolves the pending.
+    expect(screen.getAllByText(/choose a Supporter/).length).toBeGreaterThan(0);
+    const sheetButtons = document.querySelectorAll('.pointer-events-auto button');
+    expect(sheetButtons.length).toBeGreaterThan(0);
+    fireEvent.click(sheetButtons[0]!);
+    expect(useGameStore.getState().state!.pendingResolutionStack.length).toBe(0);
+  });
+
+  it('choose-deck shows the top 3 behind a curtain, then hides on Done', () => {
+    let s = errandsState();
+    s = {
+      ...s,
+      pendingResolutionStack: [
+        {
+          id: 'pr-deck-test',
+          responderId: 'p1',
+          prompt: { kind: 'choose-deck', eligibleDecks: ['supporter'] },
+          resume: { effectId: 'base.system.noop', context: {} },
+          source: {
+            kind: 'spell',
+            id: 'test.insight',
+            triggeringPlayerId: 'p1',
+            description: 'Arcane Insight',
+          },
+        },
+      ],
+    };
+    const top3 = s.supporterDeck.slice(0, 3);
+    useGameStore.setState({ state: s });
+    useUiStore.setState({ selectedMageId: null, debugOpen: false, lastError: null, peek: null, peekRevealed: false });
+    render(<GameScreen />);
+
+    // Pick the supporter deck from the sheet.
+    fireEvent.click(screen.getByText('supporter deck'));
+    // Curtain first — the peeked names are not visible yet.
+    expect(screen.getByText('A private glimpse…')).toBeTruthy();
+    fireEvent.click(screen.getByText('👁 Reveal to me'));
+    // The top-3 names render.
+    expect(top3.length).toBe(3);
+    expect(screen.getByText(/Top 3 of the supporter deck/)).toBeTruthy();
+    fireEvent.click(screen.getByText('Done — hide it'));
+    expect(useUiStore.getState().peek).toBeNull();
+  });
+});

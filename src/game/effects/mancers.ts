@@ -898,16 +898,18 @@ registerEffect('mancers.spell.insight-beyond-sight.l2', (ctx): EffectResult => {
       };
     }
     // 'look' → pick which non-empty Deck to peek (top 3, informational).
-    const decks: ChoiceOption[] = [];
-    if (ctx.state.spellDeck.length > 0) decks.push({ id: 'spell', label: 'Look at the Spell Deck (top 3)', payload: {} });
-    if (ctx.state.vaultDeck.length > 0) decks.push({ id: 'vault', label: 'Look at the Vault Deck (top 3)', payload: {} });
-    if (ctx.state.supporterDeck.length > 0) decks.push({ id: 'supporter', label: 'Look at the Supporter Deck (top 3)', payload: {} });
-    if (decks.length === 0) return { kind: 'done', patch: {} };
+    // Uses the dedicated choose-deck prompt so the UI can show the peeked
+    // cards privately (hot-seat privacy flow).
+    const eligibleDecks: ('spell' | 'vault' | 'supporter')[] = [];
+    if (ctx.state.spellDeck.length > 0) eligibleDecks.push('spell');
+    if (ctx.state.vaultDeck.length > 0) eligibleDecks.push('vault');
+    if (ctx.state.supporterDeck.length > 0) eligibleDecks.push('supporter');
+    if (eligibleDecks.length === 0) return { kind: 'done', patch: {} };
     return {
       kind: 'pause',
       pending: {
         responderId: ctx.triggeringPlayerId,
-        prompt: { kind: 'choose-from-options', options: decks },
+        prompt: { kind: 'choose-deck', eligibleDecks },
         resume: { effectId: self, context: { step: 'looked' } },
         source: ctx.source,
       },

@@ -105,6 +105,46 @@ function ChoiceSheet({
   );
 }
 
+/**
+ * Hot-seat privacy curtain (docs/UI_DESIGN.md §9.4): secret content stays
+ * hidden behind a full-screen interstitial until the responder confirms
+ * everyone else has looked away.
+ */
+function PrivacyCurtain({
+  state,
+  responderId,
+  title,
+  onReveal,
+}: {
+  state: GameState;
+  responderId: string;
+  title: string;
+  onReveal: () => void;
+}) {
+  const responder = state.players.find((p) => p.id === responderId);
+  return (
+    <div className="absolute inset-0 z-50 flex flex-col items-center justify-center bg-night-900/97 backdrop-blur">
+      {responder && (
+        <PortraitBust player={responder} state={state} expression="determined" size={88} />
+      )}
+      <p className="mt-3 font-display text-2xl font-extrabold text-starlight">
+        {responder?.name ?? responderId} only!
+      </p>
+      <p className="mt-1 text-sm text-white/70">{title}</p>
+      <p className="mt-0.5 text-[11px] uppercase tracking-[0.3em] text-white/40">
+        everyone else — eyes away ✨
+      </p>
+      <button
+        type="button"
+        onClick={onReveal}
+        className="mt-5 rounded-full bg-gradient-to-b from-starlight to-amber-300 px-6 py-2 font-display text-sm font-bold text-ink-900 shadow-card transition hover:-translate-y-0.5"
+      >
+        👁 Reveal to me
+      </button>
+    </div>
+  );
+}
+
 /** Banner for board-targeting prompts (clicks happen on the lit board). */
 function TargetBanner({
   state,
@@ -292,6 +332,9 @@ function ReactionCutIn({ state, pending }: { state: GameState; pending: PendingR
 export function PromptDirector() {
   const state = useGameStore((s) => s.state);
   const tryDispatch = useUiStore((s) => s.tryDispatch);
+  const privacyRevealedForId = useUiStore((s) => s.privacyRevealedForId);
+  const setPrivacyRevealed = useUiStore((s) => s.setPrivacyRevealed);
+  const setPeek = useUiStore((s) => s.setPeek);
   if (!state) return null;
   const pending = topPending(state);
   if (!pending) return null;
@@ -344,7 +387,21 @@ export function PromptDirector() {
         />
       );
     case 'choose-supporter-card':
-    case 'choose-peeked-supporter':
+    case 'choose-peeked-supporter': {
+      // Peeked cards are SECRET (top of the supporter deck) — curtain first.
+      if (
+        prompt.kind === 'choose-peeked-supporter' &&
+        privacyRevealedForId !== pending.id
+      ) {
+        return (
+          <PrivacyCurtain
+            state={state}
+            responderId={pending.responderId}
+            title={`${pending.source.description ?? 'A peek'} — secret cards from the deck`}
+            onReveal={() => setPrivacyRevealed(pending.id)}
+          />
+        );
+      }
       return (
         <ChoiceSheet
           state={state}
@@ -357,6 +414,7 @@ export function PromptDirector() {
           onPick={(id) => answer({ kind: 'card-chosen', cardId: id })}
         />
       );
+    }
     case 'choose-spell-level': {
       const def = lookupSpellCardDef(state, prompt.spellId);
       return (
@@ -381,9 +439,33 @@ export function PromptDirector() {
         <ChoiceSheet
           state={state}
           pending={pending}
-          title="choose a deck"
+          title="choose a deck to look at"
           options={prompt.eligibleDecks.map((d) => ({ id: d, label: `${d} deck` }))}
-          onPick={(id) => answer({ kind: 'deck-chosen', deck: id as 'spell' | 'vault' | 'supporter' })}
+          onPick={(id) => {
+            const deck = id as 'spell' | 'vault' | 'supporter';
+            // Snapshot the top 3 BEFORE resolving (the effect may shuffle /
+            // consume), then show them behind the privacy curtain.
+            const ids =
+              deck === 'spell'
+                ? state.spellDeck.slice(0, 3)
+                : deck === 'vault'
+                  ? state.vaultDeck.slice(0, 3)
+                  : state.supporterDeck.slice(0, 3);
+            const cards = ids.map((cardId) => {
+              if (deck === 'spell') {
+                const def = lookupSpellCardDef(state, cardId);
+                return { name: def?.name ?? cardId, sub: def?.department };
+              }
+              const def =
+                deck === 'vault'
+                  ? lookupVaultCardDef(state, cardId)
+                  : lookupSupporterCardDef(state, cardId);
+              return { name: def?.name ?? cardId, sub: def?.description };
+            });
+            if (answer({ kind: 'deck-chosen', deck })) {
+              setPeek({ title: `Top ${cards.length} of the ${deck} deck`, cards });
+            }
+          }}
         />
       );
     case 'choose-voter':

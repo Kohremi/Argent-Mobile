@@ -39,6 +39,60 @@ const SKY: Record<ReturnType<typeof skyPhase>, string> = {
   night: 'linear-gradient(180deg, #0d0b22 0%, #171430 60%, #2a2554 100%)',
 };
 
+/** Private peek results (deck tops): curtain → reveal → Done. */
+function PeekModal() {
+  const state = useGameStore((s) => s.state);
+  const peek = useUiStore((s) => s.peek);
+  const peekRevealed = useUiStore((s) => s.peekRevealed);
+  const revealPeek = useUiStore((s) => s.revealPeek);
+  const clearPeek = useUiStore((s) => s.clearPeek);
+  if (!state || !peek) return null;
+
+  if (!peekRevealed) {
+    return (
+      <div className="absolute inset-0 z-50 flex flex-col items-center justify-center bg-night-900/97 backdrop-blur">
+        <p className="font-display text-2xl font-extrabold text-starlight">A private glimpse…</p>
+        <p className="mt-1 text-sm text-white/70">{peek.title}</p>
+        <p className="mt-0.5 text-[11px] uppercase tracking-[0.3em] text-white/40">
+          everyone else — eyes away ✨
+        </p>
+        <button
+          type="button"
+          onClick={revealPeek}
+          className="mt-5 rounded-full bg-gradient-to-b from-starlight to-amber-300 px-6 py-2 font-display text-sm font-bold text-ink-900 shadow-card transition hover:-translate-y-0.5"
+        >
+          👁 Reveal to me
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <div className="absolute inset-0 z-50 flex flex-col items-center justify-center bg-night-900/90 backdrop-blur">
+      <p className="mb-3 font-display text-xl font-extrabold text-starlight">{peek.title}</p>
+      <div className="flex max-w-2xl flex-wrap justify-center gap-2">
+        {peek.cards.map((c, i) => (
+          <div
+            key={i}
+            className="w-52 animate-pop rounded-card bg-parchment-50 p-2.5 text-ink-900 shadow-card-lift"
+            style={{ animationDelay: `${i * 90}ms` }}
+          >
+            <p className="text-sm font-bold leading-tight">{c.name}</p>
+            {c.sub && <p className="mt-0.5 text-[11px] leading-snug text-black/65">{c.sub}</p>}
+          </div>
+        ))}
+      </div>
+      <button
+        type="button"
+        onClick={clearPeek}
+        className="mt-5 rounded-full bg-night-700 px-5 py-1.5 font-display text-sm font-bold text-white/85 ring-1 ring-white/20 transition hover:text-white"
+      >
+        Done — hide it
+      </button>
+    </div>
+  );
+}
+
 function ErrorToast() {
   const lastError = useUiStore((s) => s.lastError);
   const clearError = useUiStore((s) => s.clearError);
@@ -97,6 +151,7 @@ export function GameScreen() {
       <PlayerDock />
 
       <PromptDirector />
+      <PeekModal />
       <TurnBanner />
       <ScoringCeremony />
       <ErrorToast />

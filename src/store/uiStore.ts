@@ -48,6 +48,24 @@ interface UiStore {
   ) => void;
 
   /**
+   * Hot-seat privacy (docs/UI_DESIGN.md §9.4): pending-resolution ids whose
+   * secret content the responder has confirmed revealing ("everyone else,
+   * eyes away"). Secret prompts render a curtain until their id is here.
+   */
+  privacyRevealedForId: string | null;
+  setPrivacyRevealed: (pendingId: string | null) => void;
+
+  /**
+   * A transient private peek (deck tops, etc.): shown behind its own
+   * curtain, dismissed with Done. Set AFTER the producing dispatch.
+   */
+  peek: { title: string; cards: { name: string; sub?: string | undefined }[] } | null;
+  peekRevealed: boolean;
+  setPeek: (peek: { title: string; cards: { name: string; sub?: string | undefined }[] }) => void;
+  revealPeek: () => void;
+  clearPeek: () => void;
+
+  /**
    * Dispatch wrapper for UI events: clears selection on success, converts
    * engine rejections into a toast instead of an uncaught throw.
    */
@@ -84,10 +102,25 @@ export const useUiStore = create<UiStore>((set) => ({
   hoveredSlot: null,
   setHoveredSlot: (hovered) => set({ hoveredSlot: hovered }),
 
+  privacyRevealedForId: null,
+  setPrivacyRevealed: (pendingId) => set({ privacyRevealedForId: pendingId }),
+
+  peek: null,
+  peekRevealed: false,
+  setPeek: (peek) => set({ peek, peekRevealed: false }),
+  revealPeek: () => set({ peekRevealed: true }),
+  clearPeek: () => set({ peek: null, peekRevealed: false }),
+
   tryDispatch: (action) => {
     try {
       useGameStore.getState().dispatch(action);
-      set({ selectedMageId: null, lastError: null, reactionSlotPick: null, hoveredSlot: null });
+      set({
+        selectedMageId: null,
+        lastError: null,
+        reactionSlotPick: null,
+        hoveredSlot: null,
+        privacyRevealedForId: null,
+      });
       return true;
     } catch (e) {
       set({ lastError: e instanceof Error ? e.message : String(e) });
