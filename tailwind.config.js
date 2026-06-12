@@ -39,6 +39,9 @@ export default {
         display: ['Grandstander', 'cursive'],
         body: ['"Nunito Sans"', 'system-ui', 'sans-serif'],
         arcane: ['"Cinzel Decorative"', 'serif'],
+        /* Rules/effect text on the board — a literature serif that stays
+           readable at tiny sizes and reads like a rulebook scroll. */
+        rules: ['Alegreya', 'Georgia', 'serif'],
       },
       borderRadius: { card: '14px', slot: '9999px' },
       boxShadow: {

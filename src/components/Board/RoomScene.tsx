@@ -122,7 +122,7 @@ export function RoomScene({
         {spaces.map((space) => (
           <div
             key={space.id}
-            className="flex min-h-0 flex-1 items-center gap-1.5 rounded-md bg-night-900/45 px-1 ring-1 ring-white/5"
+            className="flex min-h-0 flex-1 items-end gap-2 rounded-md bg-night-900/45 px-1 ring-1 ring-white/5"
           >
             <ActionSlot
               space={space}
@@ -130,7 +130,9 @@ export function RoomScene({
               onPlace={onPlace}
               mageIndex={mageIndex}
             />
-            <p className="line-clamp-3 min-w-0 flex-1 text-[10px] leading-snug text-white/75">
+            {/* bottom-anchored beside the circle, so the rules text reads
+                as flowing out of the slot itself */}
+            <p className="line-clamp-3 min-w-0 flex-1 pb-1 font-rules text-[11.5px] leading-[1.25] tracking-[0.01em] text-parchment-200/85">
               {space.description ?? 'No effect text.'}
             </p>
           </div>
