@@ -291,10 +291,15 @@ describe('Hand fans (card-face smoke)', () => {
     // Function text is printed on the card faces, not hidden in tooltips.
     expect(screen.getByText('Gain a Mark.')).toBeTruthy();
     expect(screen.getByText(/Gain 2 Research/)).toBeTruthy();
-    // Spell tomes carry per-level rules text on the face (L1 gem + its text).
+    // Spell tomes carry per-level rules text + timing stamps on the face.
     const tome = screen.getByTitle('Burn');
     expect(tome.textContent).toMatch(/Burn/);
     expect(tome.querySelectorAll('[title^="Level"]').length).toBeGreaterThan(0);
+    expect(tome.textContent).toMatch(/fast|action|reaction/);
+    // Vault/supporter faces stamp their timing next to the card type.
+    expect(screen.getByText('Gain a Mark.').closest('button')!.textContent).toMatch(
+      /treasure.*action/,
+    );
   });
 });
 

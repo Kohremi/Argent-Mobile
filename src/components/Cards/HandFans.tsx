@@ -25,6 +25,22 @@ import {
 
 const GEM_KEYS = ['intPlaced', 'wisPlacedLevel2', 'wisPlacedLevel3'] as const;
 
+/** Timing stamps: every spell level is a Fast Action, Action, or Reaction. */
+const TIMING_LABEL: Record<string, string> = {
+  'fast-action': 'fast',
+  action: 'action',
+  reaction: 'reaction',
+  passive: 'passive',
+  endgame: 'endgame',
+};
+const TIMING_HUE: Record<string, string> = {
+  'fast-action': '#b45309', // amber — squeeze it in any time on your turn
+  action: '#475569', // slate — your action for the turn
+  reaction: '#be185d', // rose — fires on an opponent's move
+  passive: '#15803d', // green — always on
+  endgame: '#6d28d9', // violet — scores at the election
+};
+
 /** Arc a card into its fan position (origin well below the card). */
 function fanStyle(i: number, n: number, flat: boolean): React.CSSProperties {
   const style: React.CSSProperties = { transformOrigin: '50% 140%' };
@@ -69,7 +85,7 @@ function SpellTome({
         onClick={() => setOpen((o) => !o)}
         title={def.name}
         className={clsx(
-          'flex h-[164px] w-[132px] flex-col rounded-xl border-l-4 bg-parchment-50 px-1.5 py-1.5 text-left shadow-card transition',
+          'flex h-[232px] w-[136px] flex-col rounded-xl border-l-4 bg-parchment-50 px-1.5 py-1.5 text-left shadow-card transition',
           owned.exhausted && 'opacity-60 saturate-50',
           anyCastable
             ? 'ring-1 ring-leyline/50 hover:-translate-y-5 hover:scale-105 hover:shadow-card-lift'
@@ -120,11 +136,16 @@ function SpellTome({
                     {lvl.manaCost > 0 ? `${lvl.manaCost}✦` : 'free'}
                   </span>
                 </span>
-                {lvl.description && (
-                  <span className="line-clamp-2 block text-[8.5px] leading-snug text-black/70">
-                    {lvl.description}
+                <span className="line-clamp-3 block text-[8.5px] leading-snug text-black/70">
+                  <span
+                    className="mr-1 font-bold uppercase tracking-wide"
+                    style={{ color: TIMING_HUE[lvl.timing] }}
+                  >
+                    {TIMING_LABEL[lvl.timing]}
+                    {lvl.description ? ' ·' : ''}
                   </span>
-                )}
+                  {lvl.description}
+                </span>
               </span>
             );
           })}
@@ -167,8 +188,11 @@ function SpellTome({
                   <span className="ml-1 text-starlight">
                     {lvl.manaCost > 0 ? `${lvl.manaCost}✦` : 'free'}
                   </span>
-                  <span className="ml-1 text-[10px] uppercase tracking-wide text-white/40">
-                    {lvl.timing === 'fast-action' ? 'fast' : 'action'}
+                  <span
+                    className="ml-1 text-[10px] font-bold uppercase tracking-wide brightness-150"
+                    style={{ color: TIMING_HUE[lvl.timing] }}
+                  >
+                    {TIMING_LABEL[lvl.timing]}
                   </span>
                   {lvl.description && (
                     <span className="block text-[11px] leading-snug text-white/65">
@@ -188,6 +212,7 @@ function SpellTome({
 function HandCard({
   name,
   sub,
+  timing,
   description,
   hue,
   playable,
@@ -198,6 +223,7 @@ function HandCard({
 }: {
   name: string;
   sub?: string | undefined;
+  timing?: string | undefined;
   description?: string | undefined;
   hue: string;
   playable: boolean;
@@ -228,9 +254,12 @@ function HandCard({
         <span className="line-clamp-2 text-[11px] font-bold leading-tight text-ink-900">
           {name}
         </span>
-        <span className="flex w-full items-center justify-between text-[8px] font-bold uppercase tracking-wide text-black/45">
+        <span className="flex w-full items-center gap-1 text-[8px] font-bold uppercase tracking-wide text-black/45">
           {sub}
-          {exhausted && <span>used</span>}
+          {timing && (
+            <span style={{ color: TIMING_HUE[timing] }}>· {TIMING_LABEL[timing] ?? timing}</span>
+          )}
+          {exhausted && <span className="ml-auto">used</span>}
         </span>
         {description && (
           <span className="mt-1 line-clamp-6 text-[9px] leading-snug text-black/70">
@@ -285,6 +314,7 @@ export function HandFans({ state, player }: { state: GameState; player: Player }
                 key={`${v.cardId}-${i}`}
                 name={def?.name ?? v.cardId}
                 sub={def?.type === 'treasure' ? 'treasure' : 'consumable'}
+                timing={def?.timing}
                 description={def?.description}
                 hue="#ff9f43"
                 playable={vaultOk.has(v.cardId) && !v.exhausted}
@@ -308,7 +338,8 @@ export function HandFans({ state, player }: { state: GameState; player: Player }
               <HandCard
                 key={`${cardId}-${i}`}
                 name={def?.name ?? cardId}
-                sub={def?.timing}
+                sub="supporter"
+                timing={def?.timing}
                 description={def?.description}
                 hue={hue}
                 playable={suppOk.has(cardId)}
