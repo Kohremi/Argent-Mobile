@@ -259,6 +259,36 @@ describe('Slot tooltip (polish smoke)', () => {
   });
 });
 
+describe('Tableau shelf (board smoke)', () => {
+  it('shows the three standing tableaus and temporary reveals under the castle', () => {
+    let s = errandsState();
+    s = {
+      ...s,
+      spellTableau: ['base.spell.burn'],
+      vaultTableau: ['base.vault.the-arcane-eye'],
+      supporterTableau: ['base.supporter.adelaide-chivers'],
+      vaultARevealed: ['base.vault.ancient-armor'],
+    };
+    useGameStore.setState({ state: s });
+    useUiStore.setState({ selectedMageId: null, debugOpen: false, lastError: null });
+    render(<GameScreen />);
+
+    expect(screen.getByText('Spells on offer')).toBeTruthy();
+    expect(screen.getByText('Vault on offer')).toBeTruthy();
+    expect(screen.getByText('Supporters on offer')).toBeTruthy();
+    // Card faces render with their function text (getAll: the active
+    // player's own hand may hold copies of the same cards).
+    expect(screen.getAllByText('Gain a Mark.').length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/Gain 2 Research/).length).toBeGreaterThan(0);
+    expect(screen.getAllByTitle('Burn').length).toBeGreaterThan(0);
+    // The temporary reveal stall is up while the engine holds cards there.
+    expect(screen.getByText('Vault reveal')).toBeTruthy();
+    expect(screen.getAllByTitle('Ancient Armor').length).toBeGreaterThan(0);
+    // No adventuring pool seeded — no stall.
+    expect(screen.queryByText('Adventuring pool')).toBeNull();
+  });
+});
+
 describe('Hand fans (card-face smoke)', () => {
   it('fans spells, vault items, and supporters with their function on the face', () => {
     let s = errandsState();
@@ -289,17 +319,22 @@ describe('Hand fans (card-face smoke)', () => {
     expect(screen.getByTitle('Burn')).toBeTruthy();
 
     // Function text is printed on the card faces, not hidden in tooltips.
-    expect(screen.getByText('Gain a Mark.')).toBeTruthy();
-    expect(screen.getByText(/Gain 2 Research/)).toBeTruthy();
+    // (getAll: the tableau shelf may legitimately offer copies of the same
+    // cards on the board below the castle.)
+    expect(screen.getAllByText('Gain a Mark.').length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/Gain 2 Research/).length).toBeGreaterThan(0);
     // Spell tomes carry per-level rules text + timing stamps on the face.
     const tome = screen.getByTitle('Burn');
     expect(tome.textContent).toMatch(/Burn/);
     expect(tome.querySelectorAll('[title^="Level"]').length).toBeGreaterThan(0);
     expect(tome.textContent).toMatch(/fast|action|reaction/);
-    // Vault/supporter faces stamp their timing next to the card type.
-    expect(screen.getByText('Gain a Mark.').closest('button')!.textContent).toMatch(
-      /treasure.*action/,
-    );
+    // Vault/supporter faces stamp their timing next to the card type
+    // (the hand card is a button; tableau-shelf copies are display divs).
+    const handFace = screen
+      .getAllByText('Gain a Mark.')
+      .map((el) => el.closest('button'))
+      .find(Boolean)!;
+    expect(handFace.textContent).toMatch(/treasure.*action/);
   });
 });
 

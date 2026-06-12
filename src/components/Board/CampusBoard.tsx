@@ -12,6 +12,7 @@ import { usePromptTargets } from '../Prompts/usePromptTargets';
 
 import { RoomScene } from './RoomScene';
 import { ROOM_PX, roomArtFor } from './roomArt';
+import { SHELF_H, SHELF_MT, TableauShelf } from './TableauShelf';
 
 /**
  * The university as ONE floating castle (docs/UI_DESIGN.md §7, hybrid art):
@@ -256,6 +257,8 @@ export function CampusBoard() {
   }
   const stageW = acc - GAP_X;
   const stageH = rows * CELL_H + (rows - 1) * GAP_Y;
+  // Castle + the tableau shelf beneath it (pan/zoom treats them as one stage).
+  const totalH = stageH + SHELF_MT + SHELF_H;
 
   for (let r = 0; r < rows; r++) {
     for (let c = 0; c < cols; c++) {
@@ -305,7 +308,7 @@ export function CampusBoard() {
     const el = scrollRef.current;
     if (!el) return;
     setBoardZoom(
-      Math.min((el.clientWidth - 90) / stageW, (el.clientHeight - 160) / stageH),
+      Math.min((el.clientWidth - 90) / stageW, (el.clientHeight - 160) / totalH),
     );
   };
 
@@ -317,9 +320,9 @@ export function CampusBoard() {
     >
       <div
         className="flex min-h-full min-w-full items-center justify-center px-12 py-20"
-        style={{ width: stageW * zoom + 96, height: stageH * zoom + 200 }}
+        style={{ width: stageW * zoom + 96, height: totalH * zoom + 200 }}
       >
-        <div style={{ width: stageW * zoom, height: stageH * zoom }}>
+        <div style={{ width: stageW * zoom, height: totalH * zoom }}>
         <div style={{ transform: `scale(${zoom})`, transformOrigin: '0 0' }}>
         {/* the whole castle drifts as one */}
         <div className="relative animate-floaty" style={{ width: stageW, height: stageH }}>
@@ -395,6 +398,9 @@ export function CampusBoard() {
             <Stairs key={`s-${i}`} {...s} />
           ))}
         </div>
+
+        {/* the round's card offers, laid out beneath the university */}
+        <TableauShelf state={state} width={stageW} />
         </div>
         </div>
       </div>

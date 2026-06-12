@@ -26,14 +26,14 @@ import {
 const GEM_KEYS = ['intPlaced', 'wisPlacedLevel2', 'wisPlacedLevel3'] as const;
 
 /** Timing stamps: every spell level is a Fast Action, Action, or Reaction. */
-const TIMING_LABEL: Record<string, string> = {
+export const TIMING_LABEL: Record<string, string> = {
   'fast-action': 'fast',
   action: 'action',
   reaction: 'reaction',
   passive: 'passive',
   endgame: 'endgame',
 };
-const TIMING_HUE: Record<string, string> = {
+export const TIMING_HUE: Record<string, string> = {
   'fast-action': '#b45309', // amber — squeeze it in any time on your turn
   action: '#475569', // slate — your action for the turn
   reaction: '#be185d', // rose — fires on an opponent's move
