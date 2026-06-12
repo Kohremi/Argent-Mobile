@@ -426,7 +426,6 @@ function SlotTooltip() {
   if (!hovered) return null;
   const { space, rect } = hovered;
   const cost = space.costToActivate;
-  const isMerit = space.slotType === 'merit' || space.slotType === 'shadow-merit';
   return (
     <div
       className="pointer-events-none fixed z-50 w-56 -translate-x-1/2 -translate-y-full rounded-card bg-night-800/97 p-2.5 shadow-card-lift ring-1 ring-starlight/40"
@@ -436,11 +435,6 @@ function SlotTooltip() {
         <span className="rounded-full bg-night-600 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider text-white/70">
           {space.slotType}
         </span>
-        {isMerit && (
-          <span className="rounded-full bg-starlight/20 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider text-starlight">
-            🎖 merit
-          </span>
-        )}
         {cost?.meritBadges ? (
           <span className="rounded-full bg-night-600 px-1.5 py-0.5 text-[9px] font-bold text-starlight">
             {cost.meritBadges} badge{cost.meritBadges > 1 ? 's' : ''}

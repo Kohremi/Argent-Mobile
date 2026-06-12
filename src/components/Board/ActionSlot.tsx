@@ -25,7 +25,7 @@ export interface ActionSlotProps {
 function CostChips({ space }: { space: ActionSpace }) {
   const cost = space.costToActivate;
   const chips: string[] = [];
-  if (cost?.meritBadges) chips.push(`${cost.meritBadges}🎖`);
+  // Merit-badge costs render on the crest, not as a floating chip.
   if (cost?.gold) chips.push(`${cost.gold}g`);
   if (cost?.mana) chips.push(`${cost.mana}✦`);
   if (chips.length === 0) return null;
@@ -40,6 +40,51 @@ function CostChips({ space }: { space: ActionSpace }) {
         </span>
       ))}
     </div>
+  );
+}
+
+/**
+ * The laurel crest that marks a merit slot, latched onto the right edge of
+ * the circle. Carries the badge cost when the slot has one (a star when
+ * free) — the slot IS visibly a merit slot, so no extra labels needed.
+ */
+function MeritCrest({ badges, shadow }: { badges?: number | undefined; shadow: boolean }) {
+  return (
+    <svg
+      className="pointer-events-none absolute -right-0.5 bottom-0 z-[2]"
+      width="20"
+      height="26"
+      viewBox="0 0 20 26"
+    >
+      {/* ribbon tails */}
+      <path d="M5 16 L2 25 L7 22 Z" fill="#b4533c" />
+      <path d="M15 16 L18 25 L13 22 Z" fill="#b4533c" />
+      {/* shield */}
+      <path
+        d="M10 1 L18 4 V11 Q18 18 10 22 Q2 18 2 11 V4 Z"
+        fill={shadow ? '#6c5a8e' : '#ffe9a8'}
+        stroke={shadow ? '#b388eb' : '#b48a3c'}
+        strokeWidth="1.5"
+      />
+      <path d="M10 3.2 L16 5.4 V11 Q16 16.4 10 19.8 Q4 16.4 4 11 V5.4 Z" fill="#00000022" />
+      {badges ? (
+        <text
+          x="10"
+          y="14.5"
+          textAnchor="middle"
+          fontSize="10"
+          fontWeight="800"
+          fill={shadow ? '#fff' : '#5d4a16'}
+        >
+          {badges}
+        </text>
+      ) : (
+        <path
+          d="M10 6.5 l1.5 3.1 3.4 .4 -2.5 2.3 .7 3.4 -3.1 -1.7 -3.1 1.7 .7 -3.4 -2.5 -2.3 3.4 -.4 Z"
+          fill={shadow ? '#fff' : '#b48a3c'}
+        />
+      )}
+    </svg>
   );
 }
 
@@ -119,10 +164,11 @@ export function ActionSlot({ space, available, onPlace, mageIndex }: ActionSlotP
         className={clsx(
           'absolute bottom-0 left-1/2 h-[26px] w-[56px] -translate-x-1/2 rounded-slot border-2 transition-all duration-150',
           occ ? 'border-solid bg-night-900/40' : 'border-dashed bg-night-900/25',
+          isMerit && !occ && 'border-solid bg-starlight/10',
           circleActive
             ? 'cursor-pointer border-leyline shadow-glow animate-breathe hover:scale-110 hover:border-starlight'
             : isMerit
-              ? 'border-starlight/60'
+              ? 'border-starlight'
               : 'border-white/25',
         )}
         style={
@@ -130,9 +176,19 @@ export function ActionSlot({ space, available, onPlace, mageIndex }: ActionSlotP
             ? ({ '--glow': '#7ee8fa88' } as React.CSSProperties)
             : occ
               ? { borderColor: PLAYER_AURA[occ.owner.color] }
-              : undefined
+              : isMerit
+                ? { boxShadow: 'inset 0 0 8px #ffe9a833' }
+                : undefined
         }
       />
+
+      {/* merit slots wear their crest — no labels needed */}
+      {isMerit && (
+        <MeritCrest
+          badges={space.costToActivate?.meritBadges}
+          shadow={space.slotType === 'shadow-merit'}
+        />
+      )}
 
       {/* spectral shadow occupant, floating behind/above */}
       {shadow && (

@@ -131,11 +131,6 @@ export function RoomScene({
               mageIndex={mageIndex}
             />
             <p className="line-clamp-3 min-w-0 flex-1 text-[10px] leading-snug text-white/75">
-              {(space.slotType === 'merit' || space.slotType === 'shadow-merit') && (
-                <span className="mr-1 inline-block rounded-full bg-starlight/20 px-1 align-middle text-[8px] font-bold uppercase tracking-wider text-starlight">
-                  🎖 merit
-                </span>
-              )}
               {space.description ?? 'No effect text.'}
             </p>
           </div>
