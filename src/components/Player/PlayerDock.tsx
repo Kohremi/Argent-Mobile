@@ -38,19 +38,43 @@ export function PlayerDock() {
   const pendings = state.pendingResolutionStack.length;
 
   if (!player) {
+    // Between turns (round-setup / resolution / mid-game-scoring) there's no
+    // active player, so the dock offers the engine's ADVANCE_PHASE directly
+    // instead of pointing at the console. The election phases drive
+    // themselves through the ScoringCeremony, so no Advance there.
+    const electionRunning =
+      state.phase.kind === 'final-scoring' || state.phase.kind === 'complete';
+    const betweenLabel =
+      state.phase.kind === 'round-setup'
+        ? `Round ${state.phase.round} — setup`
+        : state.phase.kind === 'resolution'
+          ? 'Resolution phase'
+          : state.phase.kind === 'mid-game-scoring'
+            ? 'Mid-game scoring'
+            : 'Between turns';
     return (
       <footer className="z-30 flex h-16 items-center justify-center gap-3 bg-night-800/95 ring-1 ring-white/10">
-        <p className="text-sm text-white/60">
-          {state.phase.kind === 'final-scoring' || state.phase.kind === 'complete'
-            ? 'The election is underway…'
-            : 'Between turns — use the console to advance.'}
-        </p>
+        {electionRunning ? (
+          <p className="text-sm text-white/60">The election is underway…</p>
+        ) : (
+          <>
+            <p className="text-sm text-white/60">{betweenLabel}</p>
+            <button
+              type="button"
+              disabled={pendings > 0}
+              onClick={() => tryDispatch({ type: 'ADVANCE_PHASE' })}
+              className="rounded-full bg-gradient-to-b from-starlight to-amber-300 px-5 py-1.5 font-display text-sm font-bold text-ink-900 shadow-card transition hover:-translate-y-0.5 hover:shadow-card-lift active:translate-y-0 disabled:opacity-40 disabled:hover:translate-y-0"
+            >
+              Advance ▸
+            </button>
+          </>
+        )}
         <button
           type="button"
           onClick={() => setDebugOpen(true)}
-          className="rounded-full bg-starlight px-3 py-1 text-xs font-bold text-ink-900"
+          className="rounded-full bg-night-700 px-3 py-1 text-xs text-white/70 ring-1 ring-white/15 transition hover:text-white"
         >
-          Open console
+          Console
         </button>
       </footer>
     );

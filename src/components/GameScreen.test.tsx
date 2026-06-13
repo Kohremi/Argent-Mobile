@@ -206,6 +206,27 @@ describe('Bell Tower + turn hand-off (step-3 smoke)', () => {
   });
 });
 
+describe('Advance button (between-turns smoke)', () => {
+  it('offers an Advance button between turns and advances the phase on click', () => {
+    // A fresh game sits in round-setup — no active player, so the dock shows
+    // the between-turns controls instead of a hand.
+    const s = initGame({ activePackIds: ['base'], playerNames: ['Akko', 'Diana'], rngSeed: 7 });
+    expect(s.phase.kind).toBe('round-setup');
+    useGameStore.setState({ state: s });
+    useUiStore.setState({ selectedMageId: null, debugOpen: false, lastError: null });
+    render(<GameScreen />);
+
+    // The old "use the console to advance" guidance is gone.
+    expect(screen.queryByText(/use the console to advance/i)).toBeNull();
+    const advance = screen.getByText(/Advance/).closest('button')!;
+    fireEvent.click(advance);
+
+    const after = useGameStore.getState().state!;
+    expect(after.phase.kind).toBe('errands');
+    expect(useUiStore.getState().lastError).toBeNull();
+  });
+});
+
 describe('Scoring ceremony (step-6 smoke)', () => {
   it('reveals voter awards and crowns the archmage on a completed game', () => {
     // A finished game: force phase complete with revealed voters and give
