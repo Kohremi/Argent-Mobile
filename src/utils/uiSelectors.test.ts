@@ -28,11 +28,36 @@ describe('visibleRoomSpaces', () => {
     expect(spaces[2]!.occupant).toBeNull();
   });
 
-  it('prompt-targeted hidden slots are forced visible', () => {
+  it('a prompt-targeted open slot is the one open seat shown', () => {
     const room = greatHall();
     const deepSlot = room.actionSpaces[7]!;
     const spaces = visibleRoomSpaces(room, new Set([deepSlot.id]));
-    expect(spaces.some((s) => s.id === deepSlot.id)).toBe(true);
+    // Exactly one open seat, and it's the targeted one (so it's clickable).
+    expect(spaces.length).toBe(1);
+    expect(spaces[0]!.id).toBe(deepSlot.id);
+  });
+
+  it('when many open slots are targeted, still shows only one open seat', () => {
+    // The bug: an effect offering every open Great Hall slot as a target
+    // used to expand the room to all of them. The pool slots are
+    // interchangeable, so only one open seat should ever be visible.
+    const room = greatHall();
+    const allOpenIds = room.actionSpaces.map((s) => s.id);
+    const spaces = visibleRoomSpaces(room, new Set(allOpenIds));
+    expect(spaces.length).toBe(1);
+    expect(spaces[0]!.occupant).toBeNull();
+  });
+
+  it('targeted open slots collapse to one even as the hall fills', () => {
+    const room = greatHall();
+    room.actionSpaces[0]!.occupant = { mageId: 'a', ownerId: 'p1', isShadowing: false };
+    room.actionSpaces[1]!.occupant = { mageId: 'b', ownerId: 'p2', isShadowing: false };
+    // Every remaining open slot is offered as a target.
+    const openIds = room.actionSpaces.filter((s) => !s.occupant).map((s) => s.id);
+    const spaces = visibleRoomSpaces(room, new Set(openIds));
+    // Two occupants + exactly one open seat.
+    expect(spaces.length).toBe(3);
+    expect(spaces.filter((s) => !s.occupant).length).toBe(1);
   });
 
   it('non-uniform rooms render every slot (Council Chamber keeps its 5)', () => {

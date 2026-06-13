@@ -51,9 +51,13 @@ export function eligiblePlacementSlots(
 /**
  * The action spaces a room should RENDER. Pool rooms — many identical slots
  * pre-allocated by the engine (Great Hall's 10) — collapse to the occupied
- * slots plus one open spot, so the room reads as "always one open seat;
- * seats appear as you fill them." `extraVisibleIds` (prompt-targeted slots)
- * are always shown so targeting can never point at a hidden slot.
+ * slots plus EXACTLY ONE open spot, so the room reads as "always one open
+ * seat; the next seat appears only once this one is filled." The slots are
+ * interchangeable, so even when a prompt offers several open slots as targets
+ * (`extraVisibleIds`) we still surface just one — preferring a targeted open
+ * slot so targeting always has a visible, clickable seat. Targeted *occupied*
+ * slots are shown regardless (they're occupied), so targeting never points at
+ * a hidden slot either way.
  */
 export function visibleRoomSpaces(
   room: Room,
@@ -66,14 +70,14 @@ export function visibleRoomSpaces(
   const first = all[0]!;
   if (!all.every((s) => sig(s) === sig(first))) return all;
 
-  const visible = all.filter(
-    (s) =>
-      s.occupant ||
-      s.shadowOccupant ||
-      (extraVisibleIds?.has(s.id) ?? false),
-  );
-  const firstOpen = all.find((s) => !s.occupant);
-  if (firstOpen && !visible.includes(firstOpen)) visible.push(firstOpen);
+  // Occupied (base or shadow) seats always show.
+  const occupied = all.filter((s) => s.occupant || s.shadowOccupant);
+  // Exactly one open seat: the first targeted open slot if a prompt is
+  // pointing at the pool, else the lowest-index open slot.
+  const openSlots = all.filter((s) => !s.occupant && !s.shadowOccupant);
+  const openToShow =
+    openSlots.find((s) => extraVisibleIds?.has(s.id)) ?? openSlots[0];
+  const visible = openToShow ? [...occupied, openToShow] : occupied;
   return visible.sort((a, b) => a.index - b.index);
 }
 
