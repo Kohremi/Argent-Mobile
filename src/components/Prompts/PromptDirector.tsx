@@ -13,6 +13,7 @@ import {
 import { useGameStore } from '../../store/gameStore';
 import { useUiStore } from '../../store/uiStore';
 import { DEPT_HUE, PLAYER_AURA } from '../../utils/uiSelectors';
+import { TIMING_HUE, TIMING_LABEL } from '../Cards/HandFans';
 import { PortraitBust } from '../Player/PortraitBust';
 import { describeTrigger, playerName, topPending } from './promptHelpers';
 
@@ -368,6 +369,8 @@ function ResearchSpellCard({
     if (lvl === 2) return owned.wisPlacedLevel2 ? 'have' : 'empty';
     return owned.wisPlacedLevel3 ? 'have' : 'empty';
   };
+  // Full card face: every level's title, cost, timing, and complete rules
+  // text — no truncation, so the player sees exactly what they're learning.
   return (
     <button
       type="button"
@@ -375,40 +378,69 @@ function ResearchSpellCard({
       onClick={onClick}
       title={def.name}
       className={clsx(
-        'flex h-[112px] w-[120px] shrink-0 flex-col rounded-lg border-l-4 bg-parchment-50 px-1.5 py-1 text-left shadow-card transition',
+        'flex w-[168px] shrink-0 flex-col self-start rounded-xl border-l-4 bg-parchment-50 px-2 py-1.5 text-left shadow-card transition',
         enabled
-          ? 'cursor-pointer ring-1 ring-leyline/50 hover:-translate-y-1 hover:shadow-card-lift'
+          ? 'cursor-pointer ring-1 ring-leyline/50 hover:-translate-y-1 hover:scale-[1.02] hover:shadow-card-lift'
           : 'opacity-45 ring-1 ring-black/10',
       )}
       style={{ borderLeftColor: hue }}
     >
-      <span className="line-clamp-2 text-[11px] font-bold leading-tight text-ink-900">
-        {def.name}
-      </span>
+      <span className="text-[12px] font-bold leading-tight text-ink-900">{def.name}</span>
       <span className="mt-0.5 text-[8px] font-bold uppercase tracking-wide text-black/45">
         {def.department}
       </span>
-      <span className="mt-auto flex gap-1">
+      <span className="mt-1 flex flex-col gap-1">
         {def.levels.map((lvl) => {
           const g = gemState(lvl.level);
           return (
             <span
               key={lvl.level}
               className={clsx(
-                'flex h-4 w-4 items-center justify-center rounded-full font-arcane text-[9px] font-bold',
-                g === 'target' && 'animate-breathe text-ink-900 shadow-glow-sm ring-2 ring-white',
-                g === 'have' && 'text-ink-900',
-                g === 'empty' && 'bg-black/15 text-black/35',
-              )}
-              style={
+                'rounded-md px-1 py-0.5',
                 g === 'target'
-                  ? ({ background: hue, '--glow': `${hue}aa` } as React.CSSProperties)
+                  ? 'bg-white/80 ring-1 ring-leyline/50'
                   : g === 'have'
-                    ? { background: hue }
-                    : undefined
-              }
+                    ? 'bg-black/[0.04]'
+                    : 'opacity-80',
+              )}
             >
-              {lvl.level}
+              <span className="flex items-center gap-1">
+                <span
+                  className={clsx(
+                    'flex h-4 w-4 shrink-0 items-center justify-center rounded-full font-arcane text-[8px] font-bold',
+                    g === 'target'
+                      ? 'animate-breathe text-ink-900 shadow-glow-sm ring-2 ring-white'
+                      : g === 'have'
+                        ? 'text-ink-900'
+                        : 'bg-black/15 text-black/35',
+                  )}
+                  style={
+                    g === 'target'
+                      ? ({ background: hue, '--glow': `${hue}aa` } as React.CSSProperties)
+                      : g === 'have'
+                        ? { background: hue }
+                        : undefined
+                  }
+                >
+                  {lvl.level}
+                </span>
+                <span className="truncate text-[9px] font-bold text-ink-900">
+                  {lvl.title ?? `Level ${lvl.level}`}
+                </span>
+                <span className="ml-auto shrink-0 text-[8px] font-bold text-black/55">
+                  {lvl.manaCost > 0 ? `${lvl.manaCost}✦` : 'free'}
+                </span>
+              </span>
+              <span className="block text-[8.5px] leading-snug text-black/70">
+                <span
+                  className="mr-1 font-bold uppercase tracking-wide"
+                  style={{ color: TIMING_HUE[lvl.timing] }}
+                >
+                  {TIMING_LABEL[lvl.timing]}
+                  {lvl.description ? ' ·' : ''}
+                </span>
+                {lvl.description}
+              </span>
             </span>
           );
         })}
@@ -495,10 +527,10 @@ function ResearchSheet({
   const showHand = level === RESEARCH_MENU || level === RESEARCH_ADD_WIS;
 
   return (
-    <div className="pointer-events-none absolute inset-x-0 bottom-24 z-40 flex justify-center px-4">
-      <div className="pointer-events-auto w-full max-w-3xl animate-pop rounded-card bg-night-700/95 p-3 ring-1 ring-white/15 shadow-card-lift backdrop-blur">
-        <div className="mb-2 flex items-center justify-between gap-2">
-          <p className="font-display text-sm font-bold text-starlight">
+    <div className="absolute inset-0 z-40 flex items-center justify-center bg-night-900/70 px-4 backdrop-blur-sm">
+      <div className="pointer-events-auto max-h-[88vh] w-full max-w-4xl animate-pop overflow-y-auto rounded-card bg-night-700/95 p-4 ring-1 ring-white/15 shadow-card-lift">
+        <div className="mb-3 flex items-center justify-between gap-2">
+          <p className="font-display text-base font-bold text-starlight">
             🔬 Research <span className="text-white/50">▸</span>{' '}
             <span className="text-white/90">
               {restrict ? `${restrict} only — ` : ''}draft a spell or advance one you own
@@ -508,11 +540,11 @@ function ResearchSheet({
         </div>
 
         {showTableau && (
-          <div className="mb-2">
-            <p className="mb-1 text-[10px] font-bold uppercase tracking-widest text-white/45">
+          <div className="mb-3">
+            <p className="mb-1.5 text-[11px] font-bold uppercase tracking-widest text-white/45">
               Draft from the tableau <span className="text-white/30">· spend 1 INT</span>
             </p>
-            <div className="flex flex-wrap gap-1.5">
+            <div className="flex flex-wrap gap-2">
               {state.spellTableau.map((cardId, i) => (
                 <ResearchSpellCard
                   key={`${cardId}-${i}`}
@@ -531,10 +563,10 @@ function ResearchSheet({
 
         {showHand && (
           <div>
-            <p className="mb-1 text-[10px] font-bold uppercase tracking-widest text-white/45">
+            <p className="mb-1.5 text-[11px] font-bold uppercase tracking-widest text-white/45">
               Advance an owned spell <span className="text-white/30">· spend 1 WIS</span>
             </p>
-            <div className="flex flex-wrap gap-1.5">
+            <div className="flex flex-wrap gap-2">
               {learned.map((s) => {
                 const target: 2 | 3 | undefined = !s.wisPlacedLevel2
                   ? 2
