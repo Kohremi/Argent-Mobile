@@ -13,6 +13,7 @@ import type {
   GameState,
   GameStatePatch,
   HarmfulEffectKind,
+  InfirmaryBedId,
   MageColor,
   OwnedMage,
   OwnedMageId,
@@ -491,10 +492,57 @@ function clearSpaceOccupant(
   }));
 }
 
+// ============================================================================
+// Infirmary beds (shared ward)
+// ============================================================================
+//
+// Every wounded mage gets an identifiable bed. Numbered beds form a shared
+// ward across all players; the two Side B reward beds have fixed ids. The
+// mage's `location.bed` is the single source of truth — bed occupancy and
+// reward-bed availability are both derived from it, so nothing else needs to
+// be cleared when a mage heals, banishes, or the round resets.
+
+export const INFIRMARY_GOLD_BED: InfirmaryBedId = '4goldbed';
+export const INFIRMARY_MANA_BED: InfirmaryBedId = '2manabed';
+
+/** Side B reward-bed action-space ids → their bed ids (UI + bonus apply). */
+export const INFIRMARY_REWARD_BEDS: Readonly<Record<string, InfirmaryBedId>> = {
+  'base.room.infirmary.b.slot-1': INFIRMARY_GOLD_BED,
+  'base.room.infirmary.b.slot-2': INFIRMARY_MANA_BED,
+};
+
+/** Bed ids currently held by wounded mages, across the shared ward. */
+function occupiedInfirmaryBeds(state: GameState): Set<InfirmaryBedId> {
+  const used = new Set<InfirmaryBedId>();
+  for (const p of state.players) {
+    for (const m of p.mages) {
+      if (m.location.kind === 'infirmary' && m.location.bed) used.add(m.location.bed);
+    }
+  }
+  return used;
+}
+
+/** Whether a given bed (e.g. a Side B reward bed) is currently claimed. */
+export function infirmaryBedTaken(state: GameState, bedId: InfirmaryBedId): boolean {
+  return occupiedInfirmaryBeds(state).has(bedId);
+}
+
+/**
+ * The bed a newly wounded mage lies in: the lowest-numbered free ward bed
+ * (`'bed-1'`, `'bed-2'`, …). A bed freed by a mid-round heal is reused
+ * before a higher-numbered bed is created.
+ */
+export function allocateInfirmaryBed(state: GameState): InfirmaryBedId {
+  const used = occupiedInfirmaryBeds(state);
+  let n = 1;
+  while (used.has(`bed-${n}`)) n++;
+  return `bed-${n}`;
+}
+
 /**
  * Computes a Burn L1 wound: returns the patch (mage moved to infirmary, slot
- * cleared, isWounded set) and the ReactionTriggerEvent to attach to the
- * window the engine will open.
+ * cleared, isWounded set, a ward bed allocated) and the ReactionTriggerEvent
+ * to attach to the window the engine will open.
  */
 export function woundMage(
   state: GameState,
@@ -508,6 +556,7 @@ export function woundMage(
   const slotLookup = findMageSlotPosition(state, targetMageId);
   const originalSpaceId =
     mage.location.kind === 'action-space' ? mage.location.spaceId : null;
+  const bed = allocateInfirmaryBed(state);
 
   const players = state.players.map((p) =>
     p.id !== owner.id
@@ -521,7 +570,7 @@ export function woundMage(
                   ...m,
                   isWounded: true,
                   isShadowing: false,
-                  location: { kind: 'infirmary' as const },
+                  location: { kind: 'infirmary' as const, bed },
                 },
           ),
         },
@@ -598,13 +647,12 @@ export function banishMage(
           ),
         },
   );
-  // Banish can pull a wounded mage out of the Infirmary — when that
-  // mage was occupying an Infirmary B buffed-bonus slot the slot must
-  // reopen so the next wound can claim the buff again.
-  const roomsAfterSlot: readonly Room[] = slotLookup
+  // Banish can pull a wounded mage out of the Infirmary; its bed frees
+  // automatically once its `location` leaves the ward (bed occupancy is
+  // derived from mage location), so only a placed mage's slot needs clearing.
+  const rooms: readonly Room[] = slotLookup
     ? clearSpaceOccupant(state.rooms, slotLookup.spaceId, slotLookup.position)
     : state.rooms;
-  const rooms = releaseInfirmaryBSlotForMage(roomsAfterSlot, targetMageId);
   return {
     patch: { players, rooms: rooms as Room[] },
     triggerEvent: {
@@ -751,7 +799,7 @@ export function returnMageToOfficePatch(
       `returnMageToOfficePatch: ${mageId} is not in the infirmary`,
     );
   }
-  const releasedRooms = releaseInfirmaryBSlotForMage(state.rooms, mageId);
+  // Leaving the ward (location → office) frees this mage's bed implicitly.
   return {
     players: state.players.map((p) =>
       p.id !== owner.id
@@ -770,9 +818,6 @@ export function returnMageToOfficePatch(
             ),
           },
     ),
-    ...(releasedRooms !== state.rooms
-      ? { rooms: releasedRooms as Room[] }
-      : {}),
   };
 }
 
@@ -796,10 +841,8 @@ export function healMageToSpace(
     ownerId: owner.id,
     isShadowing: false,
   };
-  // Release the Infirmary B buffed-bonus slot FIRST so the destination
-  // map below operates on a rooms array where this mage no longer
-  // occupies a buff slot. Then layer the destination occupancy on top.
-  const releasedRooms = releaseInfirmaryBSlotForMage(state.rooms, targetMageId);
+  // Moving to an action space frees this mage's ward bed implicitly (bed
+  // occupancy is derived from mage location), so we only seat the occupant.
   return {
     players: state.players.map((p) =>
       p.id !== owner.id
@@ -818,7 +861,7 @@ export function healMageToSpace(
             ),
           },
     ),
-    rooms: releasedRooms.map((r) => ({
+    rooms: state.rooms.map((r) => ({
       ...r,
       actionSpaces: r.actionSpaces.map((s) =>
         s.id === toSpaceId ? { ...s, occupant: occupancy } : s,
@@ -1093,10 +1136,9 @@ export function placeAnyMageAsShadow(
     ownerId,
     isShadowing: true,
   };
-  // Wound reverts (Phase Steppers / Invisibility Cloak) pull the mage
-  // out of the infirmary into a shadow slot. Release the buffed-bonus
-  // slot first so the next wound can claim it.
-  const releasedRooms = releaseInfirmaryBSlotForMage(state.rooms, mageId);
+  // Wound reverts (Phase Steppers / Invisibility Cloak) pull the mage out of
+  // the infirmary into a shadow slot; its ward bed frees implicitly once its
+  // location leaves the ward.
   return {
     players: state.players.map((p) =>
       p.id !== ownerId
@@ -1115,7 +1157,7 @@ export function placeAnyMageAsShadow(
             ),
           },
     ),
-    rooms: releasedRooms.map((r) => ({
+    rooms: state.rooms.map((r) => ({
       ...r,
       actionSpaces: r.actionSpaces.map((s) =>
         s.id !== spaceId ? s : { ...s, shadowOccupant: occupancy },
@@ -2524,45 +2566,64 @@ export function applyInfirmaryBonusPatch(
   // The buffed rate is re-checked against the CURRENT state: prompt options
   // are snapshotted when the prompt is built, but with simultaneous wounds
   // (Plague) an earlier resolver may have claimed the bed in the meantime.
-  // First in the bed wins; everyone after gets the standard rate.
-  const claimBed = (slotId: ActionSpaceId): boolean =>
-    buffedAsked &&
-    !!opts?.woundedMageId &&
-    state.rooms
-      .find((r) => r.id === 'base.room.infirmary.b')
-      ?.actionSpaces.find((s) => s.id === slotId)?.occupant === null;
+  // First into the reward bed wins; everyone after gets the standard rate.
+  const claimBed = (bedId: InfirmaryBedId): boolean =>
+    buffedAsked && !!opts?.woundedMageId && !infirmaryBedTaken(state, bedId);
   switch (optionId) {
     case 'gold': {
-      const slotId = 'base.room.infirmary.b.slot-1' as ActionSpaceId;
-      const buffed = claimBed(slotId);
+      const buffed = claimBed(INFIRMARY_GOLD_BED);
       const resPatch = gainResourcePatch(state, recipientId, 'gold', buffed ? 4 : 2);
       if (!buffed) return resPatch;
-      const occupied = occupyInfirmaryBSlotPatch(
+      // Move the wounded mage from its ward bed into the reward bed; this
+      // both records the claim and frees the numbered bed it vacated.
+      const bedPatch = moveMageToInfirmaryBedPatch(
         { ...state, ...resPatch },
         recipientId,
         opts!.woundedMageId!,
-        slotId,
+        INFIRMARY_GOLD_BED,
       );
-      return { ...resPatch, ...occupied };
+      return { ...resPatch, ...bedPatch };
     }
     case 'mana': {
-      const slotId = 'base.room.infirmary.b.slot-2' as ActionSpaceId;
-      const buffed = claimBed(slotId);
+      const buffed = claimBed(INFIRMARY_MANA_BED);
       const resPatch = gainResourcePatch(state, recipientId, 'mana', buffed ? 2 : 1);
       if (!buffed) return resPatch;
-      const occupied = occupyInfirmaryBSlotPatch(
+      const bedPatch = moveMageToInfirmaryBedPatch(
         { ...state, ...resPatch },
         recipientId,
         opts!.woundedMageId!,
-        slotId,
+        INFIRMARY_MANA_BED,
       );
-      return { ...resPatch, ...occupied };
+      return { ...resPatch, ...bedPatch };
     }
     case 'ip':
       return bumpInfluencePatch(state, recipientId, 1);
     default:
       throw new Error(`Infirmary bonus: unknown option "${optionId}"`);
   }
+}
+
+/** Reassigns a wounded mage to a specific Infirmary bed (e.g. a reward bed). */
+function moveMageToInfirmaryBedPatch(
+  state: GameState,
+  ownerId: PlayerId,
+  mageId: OwnedMageId,
+  bedId: InfirmaryBedId,
+): GameStatePatch {
+  return {
+    players: state.players.map((p) =>
+      p.id !== ownerId
+        ? p
+        : {
+            ...p,
+            mages: p.mages.map((m) =>
+              m.id !== mageId
+                ? m
+                : { ...m, location: { kind: 'infirmary' as const, bed: bedId } },
+            ),
+          },
+    ),
+  };
 }
 
 /**
@@ -2600,11 +2661,10 @@ export function applyInfirmaryBonusFromCtx(
 }
 
 /**
- * Returns the standard 3-option Infirmary bonus choice, buffed when
- * Side B is in play and the relevant unique slot is unoccupied. The
- * picked option's `payload` carries `buffed: true` when it's the
- * upgraded variant so the apply step can credit the extra reward + set
- * the slot occupant.
+ * Returns the standard 3-option Infirmary bonus choice, buffed when Side B
+ * is in play and the relevant reward bed is unclaimed. The picked option's
+ * `payload` carries `buffed: true` when it's the upgraded variant so the
+ * apply step can credit the extra reward + park the mage in the reward bed.
  */
 export function buildInfirmaryBonusOptions(state: GameState): Array<{
   id: string;
@@ -2613,18 +2673,8 @@ export function buildInfirmaryBonusOptions(state: GameState): Array<{
 }> {
   const infirmary = state.rooms.find((r) => r.name === 'Infirmary');
   const isSideB = infirmary?.side === 'B';
-  const fourGoldSlot = isSideB
-    ? infirmary!.actionSpaces.find(
-        (s) => s.id === 'base.room.infirmary.b.slot-1',
-      )
-    : undefined;
-  const twoManaSlot = isSideB
-    ? infirmary!.actionSpaces.find(
-        (s) => s.id === 'base.room.infirmary.b.slot-2',
-      )
-    : undefined;
-  const goldBuffed = fourGoldSlot !== undefined && fourGoldSlot.occupant === null;
-  const manaBuffed = twoManaSlot !== undefined && twoManaSlot.occupant === null;
+  const goldBuffed = isSideB && !infirmaryBedTaken(state, INFIRMARY_GOLD_BED);
+  const manaBuffed = isSideB && !infirmaryBedTaken(state, INFIRMARY_MANA_BED);
   return [
     {
       id: 'gold',
@@ -2638,101 +2688,6 @@ export function buildInfirmaryBonusOptions(state: GameState): Array<{
     },
     { id: 'ip', label: 'Gain 1 IP', payload: {} },
   ];
-}
-
-/**
- * Marks the given Infirmary B slot as occupied by the wounded mage.
- * The mage's own `location` stays `infirmary` (it's still wounded);
- * the slot's `occupant` is a "this slot is taken this round" flag
- * that `buildInfirmaryBonusOptions` reads. Cleared when the heal
- * sweep at round-setup empties the Infirmary.
- */
-function occupyInfirmaryBSlotPatch(
-  state: GameState,
-  ownerId: PlayerId,
-  woundedMageId: OwnedMageId,
-  slotId: ActionSpaceId,
-): GameStatePatch {
-  return {
-    rooms: state.rooms.map((r) =>
-      r.id !== 'base.room.infirmary.b'
-        ? r
-        : {
-            ...r,
-            actionSpaces: r.actionSpaces.map((s) =>
-              s.id !== slotId
-                ? s
-                : {
-                    ...s,
-                    occupant: {
-                      mageId: woundedMageId,
-                      ownerId,
-                      isShadowing: false,
-                    },
-                  },
-            ),
-          },
-    ),
-  };
-}
-
-/**
- * Returns a `rooms` array with Infirmary B's buffed-bonus slot cleared if
- * its occupant marker matches `mageId`. No-op if Infirmary B isn't in
- * play, or the mage doesn't currently occupy either of its slots. Used
- * by every heal/banish path so the slot reopens for the next wounded
- * mage the moment the marked one leaves the infirmary mid-round.
- *
- * Operates on the rooms array directly (not a patch) because callers
- * already build their own rooms patch — chaining the transform avoids
- * one map clobbering the other when both touch action spaces.
- */
-export function releaseInfirmaryBSlotForMage(
-  rooms: readonly Room[],
-  mageId: OwnedMageId,
-): readonly Room[] {
-  const infirmary = rooms.find((r) => r.id === 'base.room.infirmary.b');
-  if (!infirmary) return rooms;
-  const occupies = infirmary.actionSpaces.some(
-    (s) => s.occupant?.mageId === mageId,
-  );
-  if (!occupies) return rooms;
-  return rooms.map((r) =>
-    r.id !== 'base.room.infirmary.b'
-      ? r
-      : {
-          ...r,
-          actionSpaces: r.actionSpaces.map((s) =>
-            s.occupant?.mageId === mageId ? { ...s, occupant: null } : s,
-          ),
-        },
-  );
-}
-
-/**
- * Clears any occupants from Infirmary B's buffed-bonus slots. Run at
- * round-setup right after `healInfirmaryMages` so the slots reset
- * each round.
- */
-export function clearInfirmaryBSlots(state: GameState): GameStatePatch {
-  const infirmary = state.rooms.find(
-    (r) => r.id === 'base.room.infirmary.b',
-  );
-  if (!infirmary) return {};
-  const anyOccupied = infirmary.actionSpaces.some((s) => s.occupant !== null);
-  if (!anyOccupied) return {};
-  return {
-    rooms: state.rooms.map((r) =>
-      r.id !== 'base.room.infirmary.b'
-        ? r
-        : {
-            ...r,
-            actionSpaces: r.actionSpaces.map((s) =>
-              s.occupant === null ? s : { ...s, occupant: null },
-            ),
-          },
-    ),
-  };
 }
 
 // ============================================================================

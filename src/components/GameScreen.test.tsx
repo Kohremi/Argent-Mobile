@@ -274,43 +274,46 @@ describe('Infirmary ward (board smoke)', () => {
     expect(document.querySelectorAll('[data-bed="rest"]').length).toBe(0);
     view.unmount();
 
-    // Wound a mage into the infirmary: a resting bed appears beside the open one.
-    s = {
-      ...s,
-      players: s.players.map((p, i) =>
+    // Wound a mage into a numbered ward bed: a rest bed appears beside the
+    // open one.
+    const woundInto = (st: GameState, bed: string): GameState => ({
+      ...st,
+      players: st.players.map((p, i) =>
         i === 0
           ? {
               ...p,
               mages: p.mages.map((m) =>
                 m.id === 'm-ui-1'
-                  ? { ...m, isWounded: true, location: { kind: 'infirmary' as const } }
+                  ? { ...m, isWounded: true, location: { kind: 'infirmary' as const, bed } }
                   : m,
               ),
             }
           : p,
       ),
-    };
+    });
+    s = woundInto(s, 'bed-1');
     useGameStore.setState({ state: s });
     const view2 = render(<GameScreen />);
     expect(document.querySelectorAll('[data-bed="rest"]').length).toBe(1);
     expect(document.querySelectorAll('[data-bed="open"]').length).toBe(1);
     view2.unmount();
 
-    // Side B buffed bonus taken: the mage occupies the REWARD bed (slot
-    // occupant set, location still 'infirmary') — no white bed for them.
+    // Side B buffed bonus taken: the mage's bed is the reward bed id, so it
+    // occupies the gold reward bed — no separate white rest bed for them.
     s = {
-      ...s,
+      ...woundInto(s, '4goldbed'),
       rooms: s.rooms.map((r) =>
         r.name === 'Infirmary'
           ? {
               ...r,
+              side: 'B' as const,
               actionSpaces: [
                 {
                   id: 'base.room.infirmary.b.slot-1',
                   roomId: r.id,
                   index: 0,
                   slotType: 'regular' as const,
-                  occupant: { mageId: 'm-ui-1', ownerId: s.players[0]!.id, isShadowing: false },
+                  occupant: null,
                   effectId: 'base.system.noop',
                   description: 'When wounded: gain 4 Gold and occupy this slot.',
                 },

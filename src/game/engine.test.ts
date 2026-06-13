@@ -3712,14 +3712,10 @@ describe('Burn L1 + Phase Steppers vertical slice', () => {
     expect(s.pendingResolutionStack).toHaveLength(0);
     const bobMage = findMageById(s, 'bob-mage-1');
     expect(bobMage.isWounded).toBe(true);
-    expect(bobMage.location.kind).toBe('infirmary');
     // Seed-7 games run Infirmary Side B: the gold option is the buffed
-    // 4-Gold bed, and taking it parks Bob's mage in the slot.
+    // 4-Gold bed, and taking it parks Bob's mage in that bed.
     expect(s.players.find((p) => p.id === 'p2')?.resources.gold).toBe(4);
-    const goldBed = s.rooms
-      .find((r) => r.id === 'base.room.infirmary.b')
-      ?.actionSpaces.find((sp) => sp.id === 'base.room.infirmary.b.slot-1');
-    expect(goldBed?.occupant?.mageId).toBe('bob-mage-1');
+    expect(bobMage.location).toEqual({ kind: 'infirmary', bed: '4goldbed' });
   });
 
   it('Phase Steppers reverses the wound and discards the card', () => {
@@ -13082,17 +13078,19 @@ describe('Infirmary on-wound bonus', () => {
         answer: { kind: 'option-chosen', optionId: 'gold', payload: goldOpt.payload },
       });
       expect(s.players.find((p) => p.id === 'p2')?.resources.gold).toBe(4);
-      const infirmary = s.rooms.find((r) => r.id === 'base.room.infirmary.b')!;
-      const slot1 = infirmary.actionSpaces.find(
-        (sp) => sp.id === 'base.room.infirmary.b.slot-1',
-      )!;
-      expect(slot1.occupant?.mageId).toBe('bob-mage-1');
-      expect(slot1.occupant?.ownerId).toBe('p2');
-      // The mana slot is still empty.
-      const slot2 = infirmary.actionSpaces.find(
-        (sp) => sp.id === 'base.room.infirmary.b.slot-2',
-      )!;
-      expect(slot2.occupant).toBeNull();
+      // The wounded mage now lies in the 4-Gold reward bed (its location is
+      // the single source of truth for bed occupancy).
+      expect(findMageById(s, 'bob-mage-1').location).toEqual({
+        kind: 'infirmary',
+        bed: '4goldbed',
+      });
+      // The mana bed is still free (no mage holds it).
+      const inManaBed = s.players.some((p) =>
+        p.mages.some(
+          (m) => m.location.kind === 'infirmary' && m.location.bed === '2manabed',
+        ),
+      );
+      expect(inManaBed).toBe(false);
     });
 
     it('a second wound this round sees the 4-Gold slot taken and falls back to "Gain 2 Gold"', () => {
@@ -13250,27 +13248,17 @@ describe('Infirmary on-wound bonus', () => {
         resources: { ...p.resources, mana: 6 },
       }));
 
-      // bob-mage-1 takes the buffed 4-Gold and occupies slot 1.
+      // bob-mage-1 takes the buffed 4-Gold and lies in the gold reward bed.
       s = woundAndTakeBuffedBonus(s, 'bob-mage-1', 'gold');
-      const slot1Id = 'base.room.infirmary.b.slot-1';
-      const infirmaryBeforeHeal = s.rooms.find(
-        (r) => r.id === 'base.room.infirmary.b',
-      )!;
-      expect(
-        infirmaryBeforeHeal.actionSpaces.find((sp) => sp.id === slot1Id)
-          ?.occupant?.mageId,
-      ).toBe('bob-mage-1');
+      expect(findMageById(s, 'bob-mage-1').location).toEqual({
+        kind: 'infirmary',
+        bed: '4goldbed',
+      });
 
-      // Heal bob-mage-1 back to office — slot 1 must reopen.
+      // Heal bob-mage-1 back to office — leaving the ward frees the gold bed.
       const patch = returnMageToOfficePatch(s, 'bob-mage-1');
       s = { ...s, ...patch };
-      const infirmaryAfterHeal = s.rooms.find(
-        (r) => r.id === 'base.room.infirmary.b',
-      )!;
-      expect(
-        infirmaryAfterHeal.actionSpaces.find((sp) => sp.id === slot1Id)
-          ?.occupant,
-      ).toBeNull();
+      expect(findMageById(s, 'bob-mage-1').location.kind).toBe('office');
 
       // Reset action budget + refresh Burn for the second cast.
       s = mapPlayer(s, 'p1', (p) => ({
@@ -13331,25 +13319,29 @@ describe('Infirmary on-wound bonus', () => {
       }));
 
       s = woundAndTakeBuffedBonus(s, 'bob-mage-1', 'mana');
-      const slot2Id = 'base.room.infirmary.b.slot-2';
-      expect(
-        s.rooms
-          .find((r) => r.id === 'base.room.infirmary.b')!
-          .actionSpaces.find((sp) => sp.id === slot2Id)?.occupant?.mageId,
-      ).toBe('bob-mage-1');
+      expect(findMageById(s, 'bob-mage-1').location).toEqual({
+        kind: 'infirmary',
+        bed: '2manabed',
+      });
 
-      // Move bob-mage-1 from infirmary to an empty Library slot.
+      // Move bob-mage-1 from infirmary to an empty Library slot — leaving the
+      // ward frees the mana bed.
       const patch = healMageToSpace(
         s,
         'bob-mage-1',
         'base.room.library.a.slot-1' as never,
       );
       s = { ...s, ...patch };
-      expect(
-        s.rooms
-          .find((r) => r.id === 'base.room.infirmary.b')!
-          .actionSpaces.find((sp) => sp.id === slot2Id)?.occupant,
-      ).toBeNull();
+      expect(findMageById(s, 'bob-mage-1').location).toEqual({
+        kind: 'action-space',
+        spaceId: 'base.room.library.a.slot-1',
+      });
+      const stillInManaBed = s.players.some((p) =>
+        p.mages.some(
+          (m) => m.location.kind === 'infirmary' && m.location.bed === '2manabed',
+        ),
+      );
+      expect(stillInManaBed).toBe(false);
     });
 
     it('banishing the slot-1 occupant reopens the 4-Gold slot', async () => {
@@ -13360,20 +13352,21 @@ describe('Infirmary on-wound bonus', () => {
         resources: { ...p.resources, mana: 6 },
       }));
       s = woundAndTakeBuffedBonus(s, 'bob-mage-1', 'gold');
-      const slot1Id = 'base.room.infirmary.b.slot-1';
-      expect(
-        s.rooms
-          .find((r) => r.id === 'base.room.infirmary.b')!
-          .actionSpaces.find((sp) => sp.id === slot1Id)?.occupant?.mageId,
-      ).toBe('bob-mage-1');
+      expect(findMageById(s, 'bob-mage-1').location).toEqual({
+        kind: 'infirmary',
+        bed: '4goldbed',
+      });
 
       const { patch } = banishMage(s, 'bob-mage-1', 'p1');
       s = { ...s, ...patch };
-      expect(
-        s.rooms
-          .find((r) => r.id === 'base.room.infirmary.b')!
-          .actionSpaces.find((sp) => sp.id === slot1Id)?.occupant,
-      ).toBeNull();
+      // Banish returns the mage to its office, freeing the gold bed.
+      expect(findMageById(s, 'bob-mage-1').location.kind).toBe('office');
+      const stillInGoldBed = s.players.some((p) =>
+        p.mages.some(
+          (m) => m.location.kind === 'infirmary' && m.location.bed === '4goldbed',
+        ),
+      );
+      expect(stillInGoldBed).toBe(false);
     });
 
     it('Side A is unaffected — gold option stays at 2', () => {
@@ -13407,6 +13400,51 @@ describe('Infirmary on-wound bonus', () => {
       expect(
         bonusPrompt.prompt.options.find((o) => o.id === 'mana')?.label,
       ).toBe('Gain 1 Mana');
+    });
+  });
+
+  describe('ward bed allocation', () => {
+    /** Builds a state with wounded mages parked in the named beds. */
+    function wardWithBeds(beds: string[]): GameState {
+      let s = initGame(TWO_PLAYER_CONFIG);
+      s = mapPlayer(s, 'p1', (p) => ({
+        ...p,
+        mages: beds.map((bed, i) => ({
+          id: `w-${i}`,
+          cardId: 'base.mage.neutral',
+          color: 'off-white' as const,
+          location: { kind: 'infirmary' as const, bed },
+          isShadowing: false,
+          isWounded: true,
+        })),
+      }));
+      return s;
+    }
+
+    it('assigns the lowest-numbered free bed (reusing a bed freed by a heal)', async () => {
+      const { allocateInfirmaryBed } = await import('./effects/helpers');
+      // bed-2 is free (its prior occupant was healed); it gets reused before
+      // a higher bed is created.
+      expect(allocateInfirmaryBed(wardWithBeds(['bed-1', 'bed-3']))).toBe('bed-2');
+    });
+
+    it('creates the next bed when all current ones are full', async () => {
+      const { allocateInfirmaryBed } = await import('./effects/helpers');
+      expect(allocateInfirmaryBed(wardWithBeds(['bed-1', 'bed-2', 'bed-3']))).toBe('bed-4');
+    });
+
+    it('starts at bed-1 in an empty ward; reward beds do not consume numbers', async () => {
+      const { allocateInfirmaryBed } = await import('./effects/helpers');
+      expect(allocateInfirmaryBed(wardWithBeds([]))).toBe('bed-1');
+      // A mage in the 4-Gold reward bed doesn't take a numbered slot.
+      expect(allocateInfirmaryBed(wardWithBeds(['4goldbed']))).toBe('bed-1');
+    });
+
+    it('tracks reward-bed availability from mage location', async () => {
+      const { infirmaryBedTaken } = await import('./effects/helpers');
+      const s = wardWithBeds(['4goldbed', 'bed-1']);
+      expect(infirmaryBedTaken(s, '4goldbed')).toBe(true);
+      expect(infirmaryBedTaken(s, '2manabed')).toBe(false);
     });
   });
 });
@@ -14875,7 +14913,7 @@ describe("Archmage's Apprentice — all mage powers", () => {
       .find((p) => p.id === 'p2')!
       .mages.find((m) => m.id === 'bob-red')!;
     expect(bobRed.isWounded).toBe(true);
-    expect(bobRed.location).toEqual({ kind: 'infirmary' });
+    expect(bobRed.location.kind).toBe('infirmary');
   });
 });
 
@@ -15586,7 +15624,7 @@ describe('Technomancy (Mancers expansion)', () => {
     // Mage wounded + in the infirmary.
     const woundedMage = bob.mages.find((m) => m.id === 'bob-mage')!;
     expect(woundedMage.isWounded).toBe(true);
-    expect(woundedMage.location).toEqual({ kind: 'infirmary' });
+    expect(woundedMage.location.kind).toBe('infirmary');
   });
 
   it('Arcane Surge: fizzles when the opponent has no valid wound target', () => {
@@ -18288,9 +18326,8 @@ describe('Spell wiring — Wave 5a (place / move)', () => {
       cardId: 'base.mage.divinity',
       color: 'blue',
     });
-    // Park alice-w1 in the infirmary AND mark slot 1 of Infirmary B as
-    // occupied by her (mirrors the state after a previous wound where she
-    // took the buffed 4-Gold bonus).
+    // Park alice-w1 in the 4-Gold reward bed (mirrors the state after a
+    // previous wound where she took the buffed 4-Gold bonus).
     s = mapPlayer(s, 'p1', (p) => ({
       ...p,
       mages: p.mages.map((m) =>
@@ -18299,31 +18336,12 @@ describe('Spell wiring — Wave 5a (place / move)', () => {
           : {
               ...m,
               isWounded: true,
-              location: { kind: 'infirmary' as const },
+              location: { kind: 'infirmary' as const, bed: '4goldbed' },
             },
       ),
     }));
     s = {
       ...s,
-      rooms: s.rooms.map((r) =>
-        r.id !== 'base.room.infirmary.b'
-          ? r
-          : {
-              ...r,
-              actionSpaces: r.actionSpaces.map((sp) =>
-                sp.id !== 'base.room.infirmary.b.slot-1'
-                  ? sp
-                  : {
-                      ...sp,
-                      occupant: {
-                        mageId: 'alice-w1',
-                        ownerId: 'p1',
-                        isShadowing: false,
-                      },
-                    },
-              ),
-            },
-      ),
       firstPlayerIndex: 0,
       phase: {
         kind: 'errands',
@@ -18333,11 +18351,6 @@ describe('Spell wiring — Wave 5a (place / move)', () => {
         fastActionUsed: false,
       },
     };
-    // Sanity check the manual setup.
-    const slotBefore = s.rooms
-      .find((r) => r.id === 'base.room.infirmary.b')!
-      .actionSpaces.find((sp) => sp.id === 'base.room.infirmary.b.slot-1');
-    expect(slotBefore?.occupant?.mageId).toBe('alice-w1');
 
     s = applyAction(s, {
       type: 'CAST_SPELL',
@@ -18346,12 +18359,14 @@ describe('Spell wiring — Wave 5a (place / move)', () => {
       level: 2,
     });
     expect(findMageById(s, 'alice-w1').isWounded).toBe(false);
-    // The buff slot must reopen so the next wound this round sees the
-    // upgraded reward again.
-    const slotAfter = s.rooms
-      .find((r) => r.id === 'base.room.infirmary.b')!
-      .actionSpaces.find((sp) => sp.id === 'base.room.infirmary.b.slot-1');
-    expect(slotAfter?.occupant).toBeNull();
+    // Leaving the ward frees the gold bed, so the next wound this round sees
+    // the upgraded reward again.
+    const stillInGoldBed = s.players.some((p) =>
+      p.mages.some(
+        (m) => m.location.kind === 'infirmary' && m.location.bed === '4goldbed',
+      ),
+    );
+    expect(stillInGoldBed).toBe(false);
   });
 
   it('Flicker: shadows an opponent\'s placed mage with caster\'s office mage', () => {
@@ -22315,10 +22330,10 @@ describe('Spell wiring — Wave 8b (two adjacent rooms)', () => {
     // Side B (seed 7): the FIRST gold pick claims the buffed 4-Gold bed;
     // the second finds the bed taken and falls back to the standard 2.
     expect(s.players.find((p) => p.id === 'p2')?.resources.gold).toBe(6);
-    const goldBed = s.rooms
-      .find((r) => r.id === 'base.room.infirmary.b')
-      ?.actionSpaces.find((sp) => sp.id === 'base.room.infirmary.b.slot-1');
-    expect(['bob-lib', 'bob-vault']).toContain(goldBed?.occupant?.mageId);
+    const inGoldBed = s.players
+      .flatMap((p) => p.mages)
+      .find((m) => m.location.kind === 'infirmary' && m.location.bed === '4goldbed');
+    expect(['bob-lib', 'bob-vault']).toContain(inGoldBed?.id);
     expect(s.pendingResolutionStack).toHaveLength(0);
   });
 

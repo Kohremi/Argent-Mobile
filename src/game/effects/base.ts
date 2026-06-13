@@ -64,6 +64,7 @@ import {
   technomancyOnPlacePatch,
   unclaimedLegendaryBooks,
   woundMage,
+  allocateInfirmaryBed,
 } from './helpers';
 import type {
   ActionSpaceId,
@@ -15006,7 +15007,10 @@ registerEffect('base.spell.burnout.l1', (ctx): EffectResult => {
                     ...m,
                     isWounded: true,
                     isShadowing: false,
-                    location: { kind: 'infirmary' as const },
+                    location: {
+                      kind: 'infirmary' as const,
+                      bed: allocateInfirmaryBed(ctx.state),
+                    },
                   },
             ),
           },

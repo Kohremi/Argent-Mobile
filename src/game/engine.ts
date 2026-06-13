@@ -14,7 +14,6 @@ import {
   actsAsColor,
   buildSnakeDraftOrder,
   canArsMagnaTakeSpace,
-  clearInfirmaryBSlots,
   countPlayerMagesInRoom,
   describeSpaceSource,
   magesLosePowers,
@@ -2911,7 +2910,10 @@ function returnSummonedMagesToSupply(state: GameState): GameState {
  * start of each new round. Run as part of `processRoundSetup` for rounds 2+.
  */
 function healInfirmaryMages(state: GameState): GameState {
-  const healed: GameState = {
+  // Sending every wounded mage back to its office empties the ward; bed
+  // occupancy (numbered + Side B reward beds) is derived from mage
+  // location, so it all resets implicitly — nothing else to clear.
+  return {
     ...state,
     players: state.players.map((p) => ({
       ...p,
@@ -2927,10 +2929,6 @@ function healInfirmaryMages(state: GameState): GameState {
       ),
     })),
   };
-  // Reset Infirmary B's buffed-bonus slot occupants alongside the heal
-  // sweep — the slots track "claimed this round," and a new round
-  // starts now.
-  return { ...healed, ...clearInfirmaryBSlots(healed) };
 }
 
 function refreshPlayerCardsAndMerit(state: GameState): GameState {

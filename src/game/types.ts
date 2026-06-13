@@ -160,10 +160,22 @@ export interface OwnedMage {
   isTemporary?: boolean;
 }
 
+/**
+ * Which Infirmary bed a wounded mage occupies. Numbered beds (`'bed-1'`,
+ * `'bed-2'`, …) form a shared ward, allocated lowest-free when a mage is
+ * wounded and reused once a bed frees; the two Side B reward beds use the
+ * fixed ids `'4goldbed'` / `'2manabed'`. The mage is the single source of
+ * truth for its bed, so reward-bed availability is just "does any infirmary
+ * mage hold that bed id." Always set in production (woundMage / burnout /
+ * the buffed-bonus apply); optional only so fixtures that don't exercise
+ * beds need not specify one.
+ */
+export type InfirmaryBedId = string;
+
 export type MageLocation =
   | { kind: 'office'; playerId: PlayerId }
   | { kind: 'action-space'; spaceId: ActionSpaceId }
-  | { kind: 'infirmary'; slot?: number };
+  | { kind: 'infirmary'; bed?: InfirmaryBedId };
 
 /**
  * A Spell instance owned by a player. Research tokens (INT for level 1, WIS

@@ -71,13 +71,7 @@ function BedSprite({ frame, blanket }: { frame: string; blanket: string }) {
   );
 }
 
-function BedCell({
-  bed,
-  mageIndex,
-}: {
-  bed: InfirmaryBed;
-  mageIndex: Map<string, { mage: OwnedMage; owner: Player }>;
-}) {
+function BedCell({ bed }: { bed: InfirmaryBed }) {
   const { spaceTargets, pickSpace } = usePromptTargets();
   const setHoveredSlot = useUiStore((s) => s.setHoveredSlot);
 
@@ -102,12 +96,10 @@ function BedCell({
     }
   }
 
-  const entry =
-    bed.kind === 'rest'
-      ? bed.entry
-      : bed.kind === 'reward' && bed.space.occupant
-        ? mageIndex.get(bed.space.occupant.mageId)
-        : undefined;
+  // Reward + rest beds carry their occupant on the bed entry (derived from
+  // the mage's location.bed); 'open' beds have none.
+  const entry = bed.kind === 'open' ? undefined : bed.entry;
+  const rewardTaken = bed.kind === 'reward' && !!bed.entry;
   const targeted = bed.kind === 'reward' && spaceTargets.has(bed.space.id);
 
   return (
@@ -133,7 +125,7 @@ function BedCell({
           className={clsx(
             'absolute right-1 top-0.5 rounded-full bg-night-800/90 px-1.5 text-[9px] font-bold leading-4 ring-1',
             // Bed taken → the buffed rate is blocked until the heal sweep.
-            bed.kind === 'reward' && bed.space.occupant && 'opacity-40 line-through',
+            rewardTaken && 'opacity-40 line-through',
           )}
           style={{ color: chipColor, borderColor: chipColor, boxShadow: `0 0 0 1px ${chipColor}55` }}
         >
@@ -256,9 +248,8 @@ export function RoomScene({
         >
           {beds.map((bed, i) => (
             <BedCell
-              key={bed.kind === 'reward' ? bed.space.id : bed.kind === 'rest' ? bed.entry.mage.id : `open-${i}`}
+              key={bed.kind === 'reward' ? bed.space.id : bed.kind === 'rest' ? bed.bedId : `open-${i}`}
               bed={bed}
-              mageIndex={mageIndex}
             />
           ))}
         </div>

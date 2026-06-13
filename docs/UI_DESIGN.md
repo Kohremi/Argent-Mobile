@@ -337,6 +337,26 @@ affiliation at a glance.
 - **Bell Tower meter** in HUD: a vertical tower; each claimed bell card
   visibly removes a glowing bell; sky gradient binds to remaining count.
 
+### 7.5 The Infirmary ward (beds, not slots)
+
+The Infirmary renders as a hospital ward — a 3-wide grid of beds that grows
+as it fills, patients lying on their side. Every wounded mage carries its bed
+on `OwnedMage.location` (`{ kind: 'infirmary', bed }`), which is the **single
+source of truth** for bed occupancy:
+
+- **Numbered ward beds** (`'bed-1'`, `'bed-2'`, …) are a shared pool across
+  all players, allocated lowest-free on wound (`allocateInfirmaryBed`) and
+  reused once a heal frees one before a higher bed is created. The UI shows
+  the occupied beds plus exactly one open bed (Great-Hall collapse).
+- **Side B reward beds** use fixed ids `'4goldbed'` / `'2manabed'`, always on
+  display, tinted gold/blue. Taking the buffed wound bonus moves the mage's
+  `location.bed` to the reward bed (vacating its numbered bed); the bonus
+  builder/apply derive "is this reward still available" purely from whether
+  any infirmary mage holds that bed id (`infirmaryBedTaken`). A claimed
+  reward bed strikes through its rate chip until the round-setup heal sweep
+  empties the ward — which now needs no extra cleanup, since clearing every
+  mage's `infirmary` location frees all beds implicitly.
+
 ---
 
 ## 8. Component Architecture (React)

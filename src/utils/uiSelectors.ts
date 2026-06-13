@@ -1,4 +1,5 @@
 import { applyAction } from '../game/engine';
+import { INFIRMARY_REWARD_BEDS } from '../game/effects/helpers';
 import type {
   ActionSpace,
   GameState,
@@ -78,30 +79,40 @@ export function visibleRoomSpaces(
 
 /**
  * The Infirmary's bed list (RoomScene renders it as a 3-wide bed grid that
- * grows as it fills, Great-Hall style). Side B's reward slots come first —
- * they're always on display — then a white bed per wounded mage resting in
- * the player-level `infirmary` location, then exactly one open white bed.
+ * grows as it fills, Great-Hall style). Each wounded mage carries its bed id
+ * on `location.bed` (engine: shared ward, lowest-free numbered beds reused as
+ * they free; Side B's two reward beds use fixed ids). Render order: Side B's
+ * reward beds first (always shown, with their occupant if claimed), then one
+ * numbered rest bed per occupied ward bed (sorted), then one open bed.
  */
+type BedOccupant = { mage: OwnedMage; owner: Player };
+
 export type InfirmaryBed =
-  | { kind: 'reward'; space: ActionSpace }
-  | { kind: 'rest'; entry: { mage: OwnedMage; owner: Player } }
+  | { kind: 'reward'; space: ActionSpace; entry?: BedOccupant | undefined }
+  | { kind: 'rest'; bedId: string; entry: BedOccupant }
   | { kind: 'open' };
 
 export function infirmaryBeds(state: GameState, room: Room): InfirmaryBed[] {
-  const beds: InfirmaryBed[] = room.actionSpaces.map((space) => ({ kind: 'reward', space }));
-  // A mage who took a buffed bonus occupies that reward bed (the slot's
-  // occupant flag) while its `location` STAYS 'infirmary' — engine design.
-  // Skip those here or the patient would also get a white bed.
-  const inRewardBeds = new Set(
-    room.actionSpaces.map((s) => s.occupant?.mageId).filter((id): id is string => !!id),
-  );
+  // bed id → who's lying in it (the mage is the single source of truth).
+  const byBed = new Map<string, BedOccupant>();
   for (const owner of state.players) {
     for (const mage of owner.mages) {
-      if (mage.location.kind === 'infirmary' && !inRewardBeds.has(mage.id)) {
-        beds.push({ kind: 'rest', entry: { mage, owner } });
+      if (mage.location.kind === 'infirmary' && mage.location.bed) {
+        byBed.set(mage.location.bed, { mage, owner });
       }
     }
   }
+
+  const beds: InfirmaryBed[] = room.actionSpaces.map((space) => {
+    const bedId = INFIRMARY_REWARD_BEDS[space.id];
+    return { kind: 'reward', space, entry: bedId ? byBed.get(bedId) : undefined };
+  });
+
+  // Numbered rest beds, occupied ones in order, then exactly one open bed.
+  const numbered = [...byBed.entries()]
+    .filter(([id]) => /^bed-\d+$/.test(id))
+    .sort((a, b) => Number(a[0].slice(4)) - Number(b[0].slice(4)));
+  for (const [bedId, entry] of numbered) beds.push({ kind: 'rest', bedId, entry });
   beds.push({ kind: 'open' });
   return beds;
 }
