@@ -9,9 +9,12 @@ import { ResourceIcon } from '../icons';
 
 /**
  * Left rail: compact rival panels (docs/UI_DESIGN.md §8). Shows each
- * non-active player's resources and their off-board students (office +
- * infirmary) — which must be visible because prompts can target them
- * (Freezing Bolt wounds office Mages; Holy Bolt returns Infirmary Mages).
+ * non-active player's resources and their office students — which must be
+ * visible because prompts can target them (Freezing Bolt wounds office
+ * Mages). Wounded mages are NOT shown here: they live in the Infirmary ward
+ * on the board (RoomScene bed grid), which renders + targets them and owns
+ * their glide animation. Rendering them here too would duplicate the
+ * framer-motion layoutId and make the bed tokens flicker out.
  */
 
 function RailToken({ player, mage }: { player: Player; mage: OwnedMage }) {
@@ -52,7 +55,6 @@ export function OpponentRail() {
       {rivals.map((p) => {
         const aura = PLAYER_AURA[p.color];
         const office = p.mages.filter((m) => m.location.kind === 'office');
-        const infirmary = p.mages.filter((m) => m.location.kind === 'infirmary');
         return (
           <section
             key={p.id}
@@ -74,16 +76,6 @@ export function OpponentRail() {
                 <RailToken key={m.id} player={p} mage={m} />
               ))}
             </div>
-            {infirmary.length > 0 && (
-              <div className="mt-1 flex flex-wrap items-end gap-0.5 opacity-70">
-                <span className="w-full text-[9px] uppercase tracking-widest text-white/40">
-                  infirmary
-                </span>
-                {infirmary.map((m) => (
-                  <RailToken key={m.id} player={p} mage={m} />
-                ))}
-              </div>
-            )}
           </section>
         );
       })}

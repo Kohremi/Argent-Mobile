@@ -58,7 +58,10 @@ export function PlayerDock() {
 
   const aura = PLAYER_AURA[player.color];
   const bench = player.mages.filter((m) => m.location.kind === 'office');
-  const infirmary = player.mages.filter((m) => m.location.kind === 'infirmary');
+  // Wounded mages aren't shown here — they rest in the Infirmary ward on the
+  // board (RoomScene bed grid), which renders + targets them and owns their
+  // glide animation. Duplicating them here collided the framer-motion
+  // layoutId and made the bed tokens vanish until a targeting prompt opened.
 
   return (
     <footer
@@ -132,30 +135,6 @@ export function PlayerDock() {
         })}
         {bench.length === 0 && (
           <p className="text-xs italic text-white/35">no students in the office</p>
-        )}
-        {infirmary.length > 0 && (
-          <span className="ml-2 flex items-center gap-0.5 opacity-60" title="In the Infirmary">
-            <span className="text-[10px] uppercase tracking-widest text-white/40">infirmary</span>
-            {infirmary.map((m) => {
-              const targeted = mageTargets.has(m.id);
-              const token = (
-                <MageToken key={m.id} color={m.color} aura={aura} isWounded size={30} glideId={m.id} />
-              );
-              return targeted ? (
-                <button
-                  key={m.id}
-                  type="button"
-                  onClick={() => pickMage(m.id)}
-                  className="animate-breathe cursor-pointer rounded-full hover:scale-110"
-                  style={{ filter: 'drop-shadow(0 0 7px #ff5d7d)' }}
-                >
-                  {token}
-                </button>
-              ) : (
-                token
-              );
-            })}
-          </span>
         )}
       </div>
 
