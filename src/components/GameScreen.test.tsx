@@ -10,6 +10,7 @@ import { GameScreen } from './GameScreen';
 import { useGameStore } from '../store/gameStore';
 import { useUiStore } from '../store/uiStore';
 import { initGame } from '../game/engine';
+import { lookupSpellCardDef } from '../game/effects/helpers';
 import type { GameState, OwnedMage } from '../game/types';
 
 function errandsState(): GameState {
@@ -203,6 +204,142 @@ describe('Bell Tower + turn hand-off (step-3 smoke)', () => {
       // Strip chip + hand-off banner both greet Diana.
       expect(screen.getAllByText('Diana').length).toBeGreaterThanOrEqual(2);
     }
+  });
+});
+
+describe('Research sheet (visual research smoke)', () => {
+  it('renders the tableau + hand as spell cards and drafts on click', () => {
+    let s = errandsState();
+    const draftTarget = s.spellTableau[0]!;
+    const draftName = lookupSpellCardDef(s, draftTarget)!.name;
+    s = {
+      ...s,
+      players: s.players.map((p, i) =>
+        i === 0
+          ? {
+              ...p,
+              resources: { ...p.resources, intelligence: 1, wisdom: 1 },
+              ownedSpells: [
+                ...p.ownedSpells,
+                {
+                  cardId: 'base.spell.burn',
+                  intPlaced: true,
+                  wisPlacedLevel2: false,
+                  wisPlacedLevel3: false,
+                  exhausted: false,
+                },
+              ],
+            }
+          : p,
+      ),
+      pendingResolutionStack: [
+        {
+          id: 'pr-research',
+          responderId: 'p1',
+          prompt: {
+            kind: 'choose-from-options',
+            options: [
+              { id: 'draft', label: 'Draft a Spell from the tableau (spend 1 INT)', payload: {} },
+              { id: 'add-wis', label: 'Place 1 WIS to unlock the next level of an owned Spell', payload: {} },
+              { id: 'discard', label: 'Discard 1 Research', payload: {} },
+            ],
+          },
+          resume: { effectId: 'base.system.spend-research', context: {} },
+          source: {
+            kind: 'system',
+            id: 'base.system.spend-research',
+            triggeringPlayerId: 'p1',
+            description: 'Research',
+          },
+        },
+      ],
+    };
+    useGameStore.setState({ state: s });
+    useUiStore.setState({ selectedMageId: null, debugOpen: false, lastError: null });
+    render(<GameScreen />);
+
+    // Visual sheet: section headers + the actual spells as cards (not the
+    // old text options like "Draft a Spell from the tableau (spend 1 INT)").
+    expect(screen.getByText(/Draft from the tableau/)).toBeTruthy();
+    expect(screen.getByText(/Advance an owned spell/)).toBeTruthy();
+    expect(document.body.textContent).not.toContain('Draft a Spell from the tableau (spend 1 INT)');
+
+    // The tableau card is a clickable button (the board shelf renders the
+    // same spell as a non-interactive div); click it to draft in one go.
+    const draftButton = screen
+      .getAllByTitle(draftName)
+      .find((el) => el.tagName === 'BUTTON' && !(el as HTMLButtonElement).disabled)!;
+    expect(draftButton).toBeTruthy();
+    fireEvent.click(draftButton);
+
+    const after = useGameStore.getState().state!;
+    const p1 = after.players[0]!;
+    expect(p1.ownedSpells.some((sp) => sp.cardId === draftTarget)).toBe(true);
+    expect(p1.resources.intelligence).toBe(0);
+    expect(after.pendingResolutionStack.length).toBe(0);
+    expect(useUiStore.getState().lastError).toBeNull();
+  });
+
+  it('clicking an owned spell advances it to the next level (spend 1 WIS)', () => {
+    let s = errandsState();
+    s = {
+      ...s,
+      players: s.players.map((p, i) =>
+        i === 0
+          ? {
+              ...p,
+              resources: { ...p.resources, intelligence: 0, wisdom: 1 },
+              ownedSpells: [
+                ...p.ownedSpells,
+                {
+                  cardId: 'base.spell.burn',
+                  intPlaced: true,
+                  wisPlacedLevel2: false,
+                  wisPlacedLevel3: false,
+                  exhausted: false,
+                },
+              ],
+            }
+          : p,
+      ),
+      pendingResolutionStack: [
+        {
+          id: 'pr-research-wis',
+          responderId: 'p1',
+          prompt: {
+            kind: 'choose-from-options',
+            options: [
+              { id: 'add-wis', label: 'Place 1 WIS to unlock the next level of an owned Spell', payload: {} },
+              { id: 'discard', label: 'Discard 1 Research', payload: {} },
+            ],
+          },
+          resume: { effectId: 'base.system.spend-research', context: {} },
+          source: {
+            kind: 'system',
+            id: 'base.system.spend-research',
+            triggeringPlayerId: 'p1',
+            description: 'Research',
+          },
+        },
+      ],
+    };
+    useGameStore.setState({ state: s });
+    useUiStore.setState({ selectedMageId: null, debugOpen: false, lastError: null });
+    render(<GameScreen />);
+
+    // Scope to the research sheet (the dock also renders a 'Burn' tome).
+    const sheet = screen.getByText(/🔬 Research/).closest('.pointer-events-auto') as HTMLElement;
+    const burnInSheet = Array.from(sheet.querySelectorAll('button')).find(
+      (b) => b.getAttribute('title') === 'Burn' && !b.disabled,
+    )!;
+    expect(burnInSheet).toBeTruthy();
+    fireEvent.click(burnInSheet);
+
+    const after = useGameStore.getState().state!;
+    const burn = after.players[0]!.ownedSpells.find((sp) => sp.cardId === 'base.spell.burn')!;
+    expect(burn.wisPlacedLevel2).toBe(true);
+    expect(after.players[0]!.resources.wisdom).toBe(0);
+    expect(after.pendingResolutionStack.length).toBe(0);
   });
 });
 

@@ -12,9 +12,20 @@ import {
 } from '../../game/effects/helpers';
 import { useGameStore } from '../../store/gameStore';
 import { useUiStore } from '../../store/uiStore';
-import { PLAYER_AURA } from '../../utils/uiSelectors';
+import { DEPT_HUE, PLAYER_AURA } from '../../utils/uiSelectors';
 import { PortraitBust } from '../Player/PortraitBust';
 import { describeTrigger, playerName, topPending } from './promptHelpers';
+
+/**
+ * Research is a multi-step chain of generic `choose-from-options` prompts —
+ * detectable by the effect each resumes into. We render it as a visual sheet
+ * (spell tableau to draft from + the player's hand to advance) instead of
+ * text buttons. Because the store dispatches synchronously, a click on the
+ * top-level menu can pick the category and the specific card in one go.
+ */
+const RESEARCH_MENU = 'base.system.spend-research';
+const RESEARCH_DRAFT = 'base.system.research-draft';
+const RESEARCH_ADD_WIS = 'base.system.research-add-wis';
 
 /**
  * Routes the top of the engine's pendingResolutionStack to a visual
@@ -329,6 +340,242 @@ function ReactionCutIn({ state, pending }: { state: GameState; pending: PendingR
   );
 }
 
+/** One spell card in the research sheet (tableau draft or hand upgrade). */
+function ResearchSpellCard({
+  state,
+  cardId,
+  enabled,
+  targetLevel,
+  owned,
+  onClick,
+}: {
+  state: GameState;
+  cardId: string;
+  enabled: boolean;
+  /** For hand cards: the level this research would unlock (2 or 3). */
+  targetLevel?: 2 | 3 | undefined;
+  /** Owned research flags, for lighting gems on hand cards. */
+  owned?: { intPlaced: boolean; wisPlacedLevel2: boolean; wisPlacedLevel3: boolean } | undefined;
+  onClick: () => void;
+}) {
+  const def = lookupSpellCardDef(state, cardId);
+  if (!def) return null;
+  const hue = DEPT_HUE[def.department] ?? '#ffe9a8';
+  const gemState = (lvl: number): 'have' | 'target' | 'empty' => {
+    if (targetLevel === lvl) return 'target';
+    if (!owned) return 'empty';
+    if (lvl === 1) return owned.intPlaced ? 'have' : 'empty';
+    if (lvl === 2) return owned.wisPlacedLevel2 ? 'have' : 'empty';
+    return owned.wisPlacedLevel3 ? 'have' : 'empty';
+  };
+  return (
+    <button
+      type="button"
+      disabled={!enabled}
+      onClick={onClick}
+      title={def.name}
+      className={clsx(
+        'flex h-[112px] w-[120px] shrink-0 flex-col rounded-lg border-l-4 bg-parchment-50 px-1.5 py-1 text-left shadow-card transition',
+        enabled
+          ? 'cursor-pointer ring-1 ring-leyline/50 hover:-translate-y-1 hover:shadow-card-lift'
+          : 'opacity-45 ring-1 ring-black/10',
+      )}
+      style={{ borderLeftColor: hue }}
+    >
+      <span className="line-clamp-2 text-[11px] font-bold leading-tight text-ink-900">
+        {def.name}
+      </span>
+      <span className="mt-0.5 text-[8px] font-bold uppercase tracking-wide text-black/45">
+        {def.department}
+      </span>
+      <span className="mt-auto flex gap-1">
+        {def.levels.map((lvl) => {
+          const g = gemState(lvl.level);
+          return (
+            <span
+              key={lvl.level}
+              className={clsx(
+                'flex h-4 w-4 items-center justify-center rounded-full font-arcane text-[9px] font-bold',
+                g === 'target' && 'animate-breathe text-ink-900 shadow-glow-sm ring-2 ring-white',
+                g === 'have' && 'text-ink-900',
+                g === 'empty' && 'bg-black/15 text-black/35',
+              )}
+              style={
+                g === 'target'
+                  ? ({ background: hue, '--glow': `${hue}aa` } as React.CSSProperties)
+                  : g === 'have'
+                    ? { background: hue }
+                    : undefined
+              }
+            >
+              {lvl.level}
+            </span>
+          );
+        })}
+      </span>
+    </button>
+  );
+}
+
+/**
+ * Visual research sheet: drives the spend-research chain by clicking the
+ * actual spells. Tableau cards draft a new spell (spend 1 INT); hand cards
+ * advance an owned spell to its next level (spend 1 WIS). At the top-level
+ * menu a single click picks the category and the card together.
+ */
+function ResearchSheet({
+  state,
+  pending,
+}: {
+  state: GameState;
+  pending: PendingResolution;
+}) {
+  const tryDispatch = useUiStore((s) => s.tryDispatch);
+  const level = pending.resume.effectId;
+  const prompt = pending.prompt;
+  if (prompt.kind !== 'choose-from-options') return null;
+  const opts = prompt.options;
+  const player = state.players.find((p) => p.id === pending.responderId);
+
+  const restrictRaw = pending.resume.context?.['restrictDepartment'];
+  const restrict = typeof restrictRaw === 'string' ? restrictRaw : undefined;
+  const deptMatches = (cardId: string) =>
+    !restrict || lookupSpellCardDef(state, cardId)?.department === restrict;
+
+  const menuHasDraft = level === RESEARCH_MENU && opts.some((o) => o.id === 'draft');
+  const menuHasWis = level === RESEARCH_MENU && opts.some((o) => o.id === 'add-wis');
+  const canDiscard = level === RESEARCH_MENU && opts.some((o) => o.id === 'discard');
+
+  const dispatchOption = (resolutionId: string, optionId: string) =>
+    tryDispatch({
+      type: 'RESOLVE_PENDING',
+      resolutionId,
+      answer: { kind: 'option-chosen', optionId, payload: {} },
+    });
+
+  // Drive the two-step chain in one click: at the menu, pick the category
+  // then forward the specific card (the store updates synchronously, so the
+  // sub-prompt is already on top by the time we read it back).
+  const forward = (category: string, subEffect: string, cardId: string) => {
+    if (level !== RESEARCH_MENU) {
+      dispatchOption(pending.id, cardId);
+      return;
+    }
+    if (!dispatchOption(pending.id, category)) return;
+    const next = topPending(useGameStore.getState().state!);
+    if (
+      next &&
+      next.resume.effectId === subEffect &&
+      next.prompt.kind === 'choose-from-options' &&
+      next.prompt.options.some((o) => o.id === cardId)
+    ) {
+      dispatchOption(next.id, cardId);
+    }
+  };
+
+  const tableauDraftable = (cardId: string) =>
+    level === RESEARCH_DRAFT
+      ? opts.some((o) => o.id === cardId)
+      : menuHasDraft && deptMatches(cardId);
+
+  const learned = player?.ownedSpells.filter((s) => s.intPlaced) ?? [];
+  const ownedUpgradable = (s: {
+    cardId: string;
+    intPlaced: boolean;
+    wisPlacedLevel2: boolean;
+    wisPlacedLevel3: boolean;
+  }) => {
+    if (s.wisPlacedLevel2 && s.wisPlacedLevel3) return false; // maxed
+    return level === RESEARCH_ADD_WIS
+      ? opts.some((o) => o.id === s.cardId)
+      : menuHasWis && deptMatches(s.cardId);
+  };
+
+  const showTableau = level === RESEARCH_MENU || level === RESEARCH_DRAFT;
+  const showHand = level === RESEARCH_MENU || level === RESEARCH_ADD_WIS;
+
+  return (
+    <div className="pointer-events-none absolute inset-x-0 bottom-24 z-40 flex justify-center px-4">
+      <div className="pointer-events-auto w-full max-w-3xl animate-pop rounded-card bg-night-700/95 p-3 ring-1 ring-white/15 shadow-card-lift backdrop-blur">
+        <div className="mb-2 flex items-center justify-between gap-2">
+          <p className="font-display text-sm font-bold text-starlight">
+            🔬 Research <span className="text-white/50">▸</span>{' '}
+            <span className="text-white/90">
+              {restrict ? `${restrict} only — ` : ''}draft a spell or advance one you own
+            </span>
+          </p>
+          <ResponderChip state={state} pending={pending} />
+        </div>
+
+        {showTableau && (
+          <div className="mb-2">
+            <p className="mb-1 text-[10px] font-bold uppercase tracking-widest text-white/45">
+              Draft from the tableau <span className="text-white/30">· spend 1 INT</span>
+            </p>
+            <div className="flex flex-wrap gap-1.5">
+              {state.spellTableau.map((cardId, i) => (
+                <ResearchSpellCard
+                  key={`${cardId}-${i}`}
+                  state={state}
+                  cardId={cardId}
+                  enabled={tableauDraftable(cardId)}
+                  onClick={() => forward('draft', RESEARCH_DRAFT, cardId)}
+                />
+              ))}
+              {state.spellTableau.length === 0 && (
+                <p className="text-[11px] italic text-white/35">The tableau is empty.</p>
+              )}
+            </div>
+          </div>
+        )}
+
+        {showHand && (
+          <div>
+            <p className="mb-1 text-[10px] font-bold uppercase tracking-widest text-white/45">
+              Advance an owned spell <span className="text-white/30">· spend 1 WIS</span>
+            </p>
+            <div className="flex flex-wrap gap-1.5">
+              {learned.map((s) => {
+                const target: 2 | 3 | undefined = !s.wisPlacedLevel2
+                  ? 2
+                  : !s.wisPlacedLevel3
+                    ? 3
+                    : undefined;
+                return (
+                  <ResearchSpellCard
+                    key={s.cardId}
+                    state={state}
+                    cardId={s.cardId}
+                    enabled={ownedUpgradable(s)}
+                    targetLevel={ownedUpgradable(s) ? target : undefined}
+                    owned={s}
+                    onClick={() => forward('add-wis', RESEARCH_ADD_WIS, s.cardId)}
+                  />
+                );
+              })}
+              {learned.length === 0 && (
+                <p className="text-[11px] italic text-white/35">No learned spells yet.</p>
+              )}
+            </div>
+          </div>
+        )}
+
+        {canDiscard && (
+          <div className="mt-2 flex justify-end">
+            <button
+              type="button"
+              onClick={() => dispatchOption(pending.id, 'discard')}
+              className="rounded-full bg-night-800 px-4 py-1.5 text-xs font-bold text-white/70 ring-1 ring-white/15 transition hover:text-white"
+            >
+              Discard this Research
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export function PromptDirector() {
   const state = useGameStore((s) => s.state);
   const tryDispatch = useUiStore((s) => s.tryDispatch);
@@ -349,7 +596,19 @@ export function PromptDirector() {
     answer({ kind: 'option-chosen', optionId, payload: {} });
 
   switch (prompt.kind) {
-    case 'choose-from-options':
+    case 'choose-from-options': {
+      // The visual draft/advance sheet handles the standard research menu
+      // (offers draft / add-wis) and its two card-pick sub-prompts. The
+      // Research Archive's move-WIS / swap-spell menus reuse the same resume
+      // effect but offer different actions — those fall through to the
+      // generic option buttons.
+      const eid = pending.resume.effectId;
+      const isStandardResearchMenu =
+        eid === RESEARCH_MENU &&
+        prompt.options.some((o) => o.id === 'draft' || o.id === 'add-wis');
+      if (eid === RESEARCH_DRAFT || eid === RESEARCH_ADD_WIS || isStandardResearchMenu) {
+        return <ResearchSheet state={state} pending={pending} />;
+      }
       return (
         <ChoiceSheet
           state={state}
@@ -359,6 +618,7 @@ export function PromptDirector() {
           onPick={pickOption}
         />
       );
+    }
     case 'choose-target-mage':
       return (
         <TargetBanner
