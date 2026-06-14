@@ -121,6 +121,33 @@ export function infirmaryBeds(state: GameState, room: Room): InfirmaryBed[] {
   return beds;
 }
 
+/**
+ * Research standing for a player: INT/WIS still unspent in the pool
+ * ("remaining") versus that plus what's already been placed on spells
+ * ("total"). One INT is placed per learned spell; one WIS per unlocked
+ * level (L2, L3). Used by the dock and the rival rail.
+ */
+export function researchTotals(player: Player): {
+  intRemaining: number;
+  intTotal: number;
+  wisRemaining: number;
+  wisTotal: number;
+} {
+  const intRemaining = player.resources.intelligence;
+  const wisRemaining = player.resources.wisdom;
+  const intPlaced = player.ownedSpells.filter((s) => s.intPlaced).length;
+  const wisPlaced = player.ownedSpells.reduce(
+    (n, s) => n + (s.wisPlacedLevel2 ? 1 : 0) + (s.wisPlacedLevel3 ? 1 : 0),
+    0,
+  );
+  return {
+    intRemaining,
+    intTotal: intRemaining + intPlaced,
+    wisRemaining,
+    wisTotal: wisRemaining + wisPlaced,
+  };
+}
+
 /** Quick index from mage id → { mage, owner } across all players. */
 export function buildMageIndex(
   state: GameState,

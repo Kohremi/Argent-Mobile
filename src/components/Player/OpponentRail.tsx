@@ -1,7 +1,7 @@
 import clsx from 'clsx';
 import type { OwnedMage, Player } from '../../game/types';
 import { useGameStore } from '../../store/gameStore';
-import { activePlayer, PLAYER_AURA } from '../../utils/uiSelectors';
+import { activePlayer, PLAYER_AURA, researchTotals } from '../../utils/uiSelectors';
 import { usePromptTargets } from '../Prompts/usePromptTargets';
 import { MageToken } from '../Board/MageToken';
 import { PortraitBust } from './PortraitBust';
@@ -55,6 +55,7 @@ export function OpponentRail() {
       {rivals.map((p) => {
         const aura = PLAYER_AURA[p.color];
         const office = p.mages.filter((m) => m.location.kind === 'office');
+        const research = researchTotals(p);
         return (
           <section
             key={p.id}
@@ -70,6 +71,14 @@ export function OpponentRail() {
               <span><ResourceIcon kind="mana" size={11} /> {p.resources.mana}</span>
               <span><ResourceIcon kind="influence" size={11} /> {p.resources.influence}</span>
               <span><ResourceIcon kind="marks" size={11} /> {p.resources.marks}</span>
+              <span title={`INT — ${research.intRemaining} unspent of ${research.intTotal} total`}>
+                <ResourceIcon kind="intelligence" size={11} /> {research.intRemaining}
+                <span className="text-white/45">/{research.intTotal}</span>
+              </span>
+              <span title={`WIS — ${research.wisRemaining} unspent of ${research.wisTotal} total`}>
+                <ResourceIcon kind="wisdom" size={11} /> {research.wisRemaining}
+                <span className="text-white/45">/{research.wisTotal}</span>
+              </span>
             </p>
             <div className={clsx('flex flex-wrap items-end gap-0.5', office.length === 0 && 'hidden')}>
               {office.map((m) => (

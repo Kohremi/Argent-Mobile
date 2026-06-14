@@ -2,7 +2,7 @@ import clsx from 'clsx';
 import { ResourceIcon, type ResourceKind } from '../icons';
 import { useGameStore } from '../../store/gameStore';
 import { useUiStore } from '../../store/uiStore';
-import { activePlayer, PLAYER_AURA } from '../../utils/uiSelectors';
+import { activePlayer, PLAYER_AURA, researchTotals } from '../../utils/uiSelectors';
 import { usePromptTargets } from '../Prompts/usePromptTargets';
 import { MageToken } from '../Board/MageToken';
 import { HandFans } from '../Cards/HandFans';
@@ -81,6 +81,7 @@ export function PlayerDock() {
   }
 
   const aura = PLAYER_AURA[player.color];
+  const research0 = researchTotals(player);
   const bench = player.mages.filter((m) => m.location.kind === 'office');
   // Wounded mages aren't shown here — they rest in the Infirmary ward on the
   // board (RoomScene bed grid), which renders + targets them and owns their
@@ -109,18 +110,37 @@ export function PlayerDock() {
         </div>
       </div>
 
-      {/* resources */}
+      {/* resources — INT/WIS show remaining of total (unspent / earned) */}
       <div className="flex items-center gap-1.5">
-        {RESOURCE_ORDER.map(({ kind, key }) => (
-          <span
-            key={key}
-            className="flex items-center gap-1 rounded-full bg-night-700 px-2 py-1 text-xs font-bold ring-1 ring-white/10"
-            title={key}
-          >
-            <ResourceIcon kind={kind} className="h-3.5 w-3.5" />
-            {(player.resources as unknown as Record<string, number>)[key] ?? 0}
-          </span>
-        ))}
+        {RESOURCE_ORDER.map(({ kind, key }) => {
+          const research =
+            key === 'intelligence'
+              ? { rem: research0.intRemaining, total: research0.intTotal, label: 'INT' }
+              : key === 'wisdom'
+                ? { rem: research0.wisRemaining, total: research0.wisTotal, label: 'WIS' }
+                : null;
+          return (
+            <span
+              key={key}
+              className="flex items-center gap-1 rounded-full bg-night-700 px-2 py-1 text-xs font-bold ring-1 ring-white/10"
+              title={
+                research
+                  ? `${research.label} — ${research.rem} unspent of ${research.total} total`
+                  : key
+              }
+            >
+              <ResourceIcon kind={kind} className="h-3.5 w-3.5" />
+              {research ? (
+                <span>
+                  {research.rem}
+                  <span className="text-white/45">/{research.total}</span>
+                </span>
+              ) : (
+                (player.resources as unknown as Record<string, number>)[key] ?? 0
+              )}
+            </span>
+          );
+        })}
       </div>
 
       {/* bench */}

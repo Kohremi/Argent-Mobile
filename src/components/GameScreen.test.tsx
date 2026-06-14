@@ -402,6 +402,50 @@ describe('Research sheet (visual research smoke)', () => {
   });
 });
 
+describe('Research totals (INT/WIS remaining of total)', () => {
+  it('shows remaining/total INT and WIS in the dock and on rival cards', () => {
+    let s = errandsState();
+    const placed = (cardId: string, l2 = false) => ({
+      cardId,
+      intPlaced: true,
+      wisPlacedLevel2: l2,
+      wisPlacedLevel3: false,
+      exhausted: false,
+    });
+    s = {
+      ...s,
+      players: s.players.map((p, i) =>
+        i === 0
+          ? {
+              ...p,
+              resources: { ...p.resources, intelligence: 2, wisdom: 1 },
+              // 3 placed INT, 1 placed WIS → totals 5 INT / 2 WIS.
+              ownedSpells: [
+                placed('base.spell.burn', true),
+                placed('base.spell.wrath-of-heaven'),
+                placed('base.spell.will-of-the-divines'),
+              ],
+            }
+          : {
+              ...p,
+              resources: { ...p.resources, intelligence: 0, wisdom: 0 },
+              ownedSpells: [placed('base.spell.burn')], // 1 INT total, 0 WIS
+            },
+      ),
+    };
+    useGameStore.setState({ state: s });
+    useUiStore.setState({ selectedMageId: null, debugOpen: false, lastError: null });
+    render(<GameScreen />);
+
+    // Active player's dock: 2 unspent of 5 INT, 1 unspent of 2 WIS.
+    expect(screen.getByTitle('INT — 2 unspent of 5 total')).toBeTruthy();
+    expect(screen.getByTitle('WIS — 1 unspent of 2 total')).toBeTruthy();
+    // Rival card on the left: 0 of 1 INT, 0 of 0 WIS.
+    expect(screen.getByTitle('INT — 0 unspent of 1 total')).toBeTruthy();
+    expect(screen.getByTitle('WIS — 0 unspent of 0 total')).toBeTruthy();
+  });
+});
+
 describe('Mark a voter (Consortium targeting smoke)', () => {
   it('lights up eligible voters in the right panel and marks one on click', () => {
     let s = errandsState();
