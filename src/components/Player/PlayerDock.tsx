@@ -15,10 +15,12 @@ import { PortraitBust } from './PortraitBust';
  * the three hand fans (spells / vault / allies), and turn controls.
  */
 
-const RESOURCE_ORDER: { kind: ResourceKind; key: string }[] = [
+// Shared display order (dock + rival rail): influence, gold, mana, INT, WIS,
+// marks, merit badges.
+export const RESOURCE_ORDER: { kind: ResourceKind; key: string }[] = [
+  { kind: 'influence', key: 'influence' },
   { kind: 'gold', key: 'gold' },
   { kind: 'mana', key: 'mana' },
-  { kind: 'influence', key: 'influence' },
   { kind: 'intelligence', key: 'intelligence' },
   { kind: 'wisdom', key: 'wisdom' },
   { kind: 'marks', key: 'marks' },
