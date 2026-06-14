@@ -9,6 +9,41 @@ export function topPending(state: GameState): PendingResolution | null {
   return state.pendingResolutionStack[state.pendingResolutionStack.length - 1] ?? null;
 }
 
+/** Every card id currently shown on the board's tableau shelf (standing
+ *  tableaus + temporary reveals). Used to decide whether a draft prompt can
+ *  be answered by clicking a card on the board. */
+export function shelfCardIds(state: GameState): Set<string> {
+  const ids = new Set<string>();
+  for (const id of state.spellTableau) ids.add(id);
+  for (const id of state.vaultTableau) ids.add(id);
+  for (const id of state.supporterTableau) ids.add(id);
+  const adv = state.adventuringBPool;
+  if (adv) {
+    for (const id of adv.spells) ids.add(id);
+    for (const id of adv.vaultCards) ids.add(id);
+    for (const id of adv.supporters) ids.add(id);
+  }
+  for (const id of state.vaultARevealed ?? []) ids.add(id);
+  for (const id of state.tavernARevealed ?? []) ids.add(id);
+  return ids;
+}
+
+/**
+ * True when a vault/supporter card prompt can be resolved by clicking a card
+ * on the shelf — i.e. every eligible card is actually shown there. Secret
+ * peeks (choose-peeked-supporter, deck tops) are never shelf-draftable.
+ */
+export function promptDraftsFromShelf(
+  state: GameState,
+  pending: PendingResolution,
+): boolean {
+  const p = pending.prompt;
+  if (p.kind !== 'choose-vault-card' && p.kind !== 'choose-supporter-card') return false;
+  if (p.eligibleCardIds.length === 0) return false;
+  const shelf = shelfCardIds(state);
+  return p.eligibleCardIds.every((id) => shelf.has(id));
+}
+
 /** Player display name. */
 export function playerName(state: GameState, playerId: string): string {
   return state.players.find((p) => p.id === playerId)?.name ?? playerId;

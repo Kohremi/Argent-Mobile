@@ -7,6 +7,7 @@ import {
 } from '../../game/effects/helpers';
 import { DEPT_HUE } from '../../utils/uiSelectors';
 import { TIMING_HUE, TIMING_LABEL } from '../Cards/HandFans';
+import { usePromptTargets } from '../Prompts/usePromptTargets';
 
 /**
  * The market shelf beneath the university (docs/UI_DESIGN.md §7): the three
@@ -33,6 +34,7 @@ function MiniCard({
   hue,
   title,
   className,
+  cardId,
   children,
 }: {
   i: number;
@@ -40,20 +42,31 @@ function MiniCard({
   hue: string;
   title: string;
   className: string;
+  /** When set + draftable, the card becomes a clickable draft target. */
+  cardId?: string;
   children: React.ReactNode;
 }) {
+  const { cardTargets, pickCard } = usePromptTargets();
+  const targeted = cardId !== undefined && cardTargets.has(cardId);
   return (
     <div
       className="relative transition-transform duration-150 hover:z-40"
       style={{ marginLeft: fanMargin(i, n) }}
     >
       <div
-        title={title}
+        title={targeted ? `Draft ${title}` : title}
+        role={targeted ? 'button' : undefined}
+        onClick={targeted ? () => pickCard(cardId!) : undefined}
         className={clsx(
           'flex flex-col rounded-lg border-l-4 bg-parchment-50 px-1.5 py-1 text-left shadow-card transition hover:-translate-y-3 hover:shadow-card-lift',
+          targeted &&
+            'animate-breathe cursor-pointer ring-2 ring-leyline shadow-glow-sm hover:scale-[1.04]',
           className,
         )}
-        style={{ borderLeftColor: hue }}
+        style={{
+          borderLeftColor: hue,
+          ...(targeted ? ({ '--glow': '#7ee8fa88' } as React.CSSProperties) : {}),
+        }}
       >
         {children}
       </div>
@@ -66,7 +79,7 @@ function SpellMini({ state, cardId, i, n }: { state: GameState; cardId: string; 
   if (!def) return null;
   const hue = DEPT_HUE[def.department] ?? '#ffe9a8';
   return (
-    <MiniCard i={i} n={n} hue={hue} title={def.name} className="h-[186px] w-[128px]">
+    <MiniCard i={i} n={n} hue={hue} cardId={cardId} title={def.name} className="h-[186px] w-[128px]">
       <span className="line-clamp-1 text-[10.5px] font-bold leading-tight text-ink-900">
         {def.name}
       </span>
@@ -108,7 +121,7 @@ function VaultMini({ state, cardId, i, n }: { state: GameState; cardId: string; 
   const def = lookupVaultCardDef(state, cardId);
   if (!def) return null;
   return (
-    <MiniCard i={i} n={n} hue="#ff9f43" title={def.name} className="h-[150px] w-[118px]">
+    <MiniCard i={i} n={n} hue="#ff9f43" cardId={cardId} title={def.name} className="h-[150px] w-[118px]">
       <span className="line-clamp-2 text-[10.5px] font-bold leading-tight text-ink-900">
         {def.name}
       </span>
@@ -129,7 +142,7 @@ function SupporterMini({ state, cardId, i, n }: { state: GameState; cardId: stri
   if (!def) return null;
   const hue = DEPT_HUE[def.department] ?? '#e8e4da';
   return (
-    <MiniCard i={i} n={n} hue={hue} title={def.name} className="h-[150px] w-[118px]">
+    <MiniCard i={i} n={n} hue={hue} cardId={cardId} title={def.name} className="h-[150px] w-[118px]">
       <span className="line-clamp-2 text-[10.5px] font-bold leading-tight text-ink-900">
         {def.name}
       </span>

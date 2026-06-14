@@ -17,7 +17,7 @@ import { useUiStore } from '../../store/uiStore';
 import { DEPT_HUE, PLAYER_AURA } from '../../utils/uiSelectors';
 import { TIMING_HUE, TIMING_LABEL } from '../Cards/HandFans';
 import { PortraitBust } from '../Player/PortraitBust';
-import { describeTrigger, playerName, topPending } from './promptHelpers';
+import { describeTrigger, playerName, promptDraftsFromShelf, topPending } from './promptHelpers';
 
 /**
  * Research is a multi-step chain of generic `choose-from-options` prompts —
@@ -664,6 +664,17 @@ export function PromptDirector() {
         />
       );
     case 'choose-vault-card':
+      // If the eligible cards are on the board's shelf, click one there;
+      // otherwise fall back to the text sheet.
+      if (promptDraftsFromShelf(state, pending)) {
+        return (
+          <TargetBanner
+            state={state}
+            pending={pending}
+            text="Choose a Vault card on the board ↓"
+          />
+        );
+      }
       return (
         <ChoiceSheet
           state={state}
@@ -678,6 +689,16 @@ export function PromptDirector() {
       );
     case 'choose-supporter-card':
     case 'choose-peeked-supporter': {
+      // Open supporter drafts whose cards are on the shelf → click a card.
+      if (prompt.kind === 'choose-supporter-card' && promptDraftsFromShelf(state, pending)) {
+        return (
+          <TargetBanner
+            state={state}
+            pending={pending}
+            text="Choose a Supporter on the board ↓"
+          />
+        );
+      }
       // Peeked cards are SECRET (top of the supporter deck) — curtain first.
       if (
         prompt.kind === 'choose-peeked-supporter' &&

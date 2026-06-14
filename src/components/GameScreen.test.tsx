@@ -10,7 +10,7 @@ import { GameScreen } from './GameScreen';
 import { useGameStore } from '../store/gameStore';
 import { useUiStore } from '../store/uiStore';
 import { initGame } from '../game/engine';
-import { lookupSpellCardDef } from '../game/effects/helpers';
+import { lookupSpellCardDef, lookupVaultCardDef } from '../game/effects/helpers';
 import type { GameState, OwnedMage } from '../game/types';
 
 function errandsState(): GameState {
@@ -443,6 +443,43 @@ describe('Research totals (INT/WIS remaining of total)', () => {
     // Rival card on the left: 0 of 1 INT, 0 of 0 WIS.
     expect(screen.getByTitle('INT — 0 unspent of 1 total')).toBeTruthy();
     expect(screen.getByTitle('WIS — 0 unspent of 0 total')).toBeTruthy();
+  });
+});
+
+describe('Draft a card from the shelf (tableau targeting smoke)', () => {
+  it('clicks a vault tableau card to draft it instead of a text sheet', () => {
+    let s = errandsState();
+    const target = s.vaultTableau[0]!;
+    const targetName = lookupVaultCardDef(s, target)!.name;
+    s = {
+      ...s,
+      pendingResolutionStack: [
+        {
+          id: 'pr-vault-draft',
+          responderId: 'p1',
+          prompt: { kind: 'choose-vault-card', eligibleCardIds: [target] },
+          resume: { effectId: 'base.system.noop', context: {} },
+          source: {
+            kind: 'system',
+            id: 'base.system.draft-vault',
+            triggeringPlayerId: 'p1',
+            description: 'Draft a Vault Card',
+          },
+        },
+      ],
+    };
+    useGameStore.setState({ state: s });
+    useUiStore.setState({ selectedMageId: null, debugOpen: false, lastError: null });
+    render(<GameScreen />);
+
+    // Banner points at the board; no text option for the card name.
+    expect(screen.getByText(/Choose a Vault card on the board/)).toBeTruthy();
+
+    // The shelf card is the clickable draft target (title "Draft <name>").
+    const card = screen.getByTitle(`Draft ${targetName}`);
+    fireEvent.click(card);
+    expect(useGameStore.getState().state!.pendingResolutionStack.length).toBe(0);
+    expect(useUiStore.getState().lastError).toBeNull();
   });
 });
 

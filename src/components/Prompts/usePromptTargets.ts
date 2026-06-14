@@ -1,6 +1,6 @@
 import { useGameStore } from '../../store/gameStore';
 import { useUiStore } from '../../store/uiStore';
-import { reactionDestinationSlots, topPending } from './promptHelpers';
+import { promptDraftsFromShelf, reactionDestinationSlots, topPending } from './promptHelpers';
 
 /**
  * Targeting read-model for board/dock/rail components (docs/UI_DESIGN.md §8):
@@ -16,9 +16,13 @@ export interface PromptTargets {
   spaceTargets: Set<string>;
   /** Voter ids pickable right now (choose-voter — click the Consortium). */
   voterTargets: Set<string>;
+  /** Card ids draftable right now by clicking the board's tableau shelf
+   *  (choose-vault-card / choose-supporter-card whose cards are shown). */
+  cardTargets: Set<string>;
   pickMage: (mageId: string) => void;
   pickSpace: (spaceId: string) => void;
   pickVoter: (voterId: string) => void;
+  pickCard: (cardId: string) => void;
 }
 
 const EMPTY = new Set<string>();
@@ -26,9 +30,11 @@ const NONE: PromptTargets = {
   mageTargets: EMPTY,
   spaceTargets: EMPTY,
   voterTargets: EMPTY,
+  cardTargets: EMPTY,
   pickMage: () => {},
   pickSpace: () => {},
   pickVoter: () => {},
+  pickCard: () => {},
 };
 
 export function usePromptTargets(): PromptTargets {
@@ -85,6 +91,24 @@ export function usePromptTargets(): PromptTargets {
           type: 'RESOLVE_PENDING',
           resolutionId: pending.id,
           answer: { kind: 'voter-chosen', voterId },
+        }),
+    };
+  }
+
+  // Vault / supporter drafts whose cards are all on the shelf → click a card.
+  if (
+    (pending.prompt.kind === 'choose-vault-card' ||
+      pending.prompt.kind === 'choose-supporter-card') &&
+    promptDraftsFromShelf(state, pending)
+  ) {
+    return {
+      ...NONE,
+      cardTargets: new Set(pending.prompt.eligibleCardIds),
+      pickCard: (cardId) =>
+        tryDispatch({
+          type: 'RESOLVE_PENDING',
+          resolutionId: pending.id,
+          answer: { kind: 'card-chosen', cardId },
         }),
     };
   }

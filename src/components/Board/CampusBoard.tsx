@@ -198,8 +198,8 @@ export function CampusBoard() {
   // Prompt-targeted slots must stay visible even in collapsed pool rooms.
   const { spaceTargets } = usePromptTargets();
   const onPanStart = (e: React.PointerEvent<HTMLDivElement>) => {
-    // Don't hijack clicks on slots/tokens/controls.
-    if ((e.target as HTMLElement).closest('button')) return;
+    // Don't hijack clicks on slots/tokens/controls or draftable shelf cards.
+    if ((e.target as HTMLElement).closest('button, [role="button"]')) return;
     const el = scrollRef.current;
     if (!el) return;
     el.dataset['panning'] = 'true';
