@@ -26,7 +26,7 @@ function RailToken({ player, mage }: { player: Player; mage: OwnedMage }) {
       color={mage.color}
       aura={PLAYER_AURA[player.color]}
       isWounded={mage.isWounded}
-      size={26}
+      size={32}
       glideId={mage.id}
     />
   );
@@ -52,7 +52,7 @@ export function OpponentRail() {
   if (rivals.length === 0) return null;
 
   return (
-    <aside className="z-20 flex w-56 shrink-0 flex-col gap-2 overflow-y-auto p-2">
+    <aside className="z-20 flex w-64 shrink-0 flex-col gap-2 overflow-y-auto p-2">
       {rivals.map((p) => {
         const aura = PLAYER_AURA[p.color];
         const office = p.mages.filter((m) => m.location.kind === 'office');
@@ -67,7 +67,7 @@ export function OpponentRail() {
               <PortraitBust player={p} state={state} expression="neutral" size={26} />
               {p.name}
             </p>
-            <p className="mb-1 flex items-center gap-x-1 text-[10px] font-semibold text-white/80">
+            <p className="mb-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-[12px] font-semibold text-white/85">
               {RESOURCE_ORDER.map(({ kind, key }) => {
                 const isInt = key === 'intelligence';
                 const isWis = key === 'wisdom';
@@ -77,18 +77,18 @@ export function OpponentRail() {
                   return (
                     <span
                       key={key}
-                      className="flex items-center gap-px whitespace-nowrap"
+                      className="flex items-center gap-0.5 whitespace-nowrap"
                       title={`${isInt ? 'INT' : 'WIS'} — ${rem} unspent of ${total} total`}
                     >
-                      <ResourceIcon kind={kind} size={10} />
+                      <ResourceIcon kind={kind} size={13} />
                       {rem}
                       <span className="text-white/45">/{total}</span>
                     </span>
                   );
                 }
                 return (
-                  <span key={key} className="flex items-center gap-px whitespace-nowrap" title={key}>
-                    <ResourceIcon kind={kind} size={10} />
+                  <span key={key} className="flex items-center gap-0.5 whitespace-nowrap" title={key}>
+                    <ResourceIcon kind={kind} size={13} />
                     {(p.resources as unknown as Record<string, number>)[key] ?? 0}
                   </span>
                 );
