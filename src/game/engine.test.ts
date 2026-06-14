@@ -8580,21 +8580,24 @@ describe('Spell research actions', () => {
     let s = setupResearchTest({
       wisdom: 1,
       ownedSpells: [
-        // L1-only
+        // 3-level spell, only L1 placed → can advance to L2.
         { cardId: 'base.spell.burn', intPlaced: true },
-        // L2 already placed
+        // 3-level spell with L2 already placed → can advance to L3.
         {
-          cardId: 'base.spell.living-image',
+          cardId: 'base.spell.wrath-of-heaven',
           intPlaced: true,
           wisPlacedLevel2: true,
         },
-        // Fully upgraded — should NOT appear in the pick list
+        // Fully upgraded — should NOT appear in the pick list.
         {
-          cardId: 'base.spell.flash-of-light',
+          cardId: 'base.spell.will-of-the-divines',
           intPlaced: true,
           wisPlacedLevel2: true,
           wisPlacedLevel3: true,
         },
+        // Unique single-level "leader" spell — has no L2/L3, so it can
+        // never be advanced and must NOT appear in the pick list.
+        { cardId: 'base.spell.living-image', intPlaced: true },
       ],
     });
     s = driveToResearchSubPrompt(s);
@@ -8608,9 +8611,11 @@ describe('Spell research actions', () => {
     if (pickPrompt.prompt.kind === 'choose-from-options') {
       const ids = pickPrompt.prompt.options.map((o) => o.id);
       expect(ids).toContain('base.spell.burn');
-      expect(ids).toContain('base.spell.living-image');
+      expect(ids).toContain('base.spell.wrath-of-heaven');
       // Fully-upgraded spell must NOT be in the list.
-      expect(ids).not.toContain('base.spell.flash-of-light');
+      expect(ids).not.toContain('base.spell.will-of-the-divines');
+      // Single-level leader/unique spell must NOT be in the list.
+      expect(ids).not.toContain('base.spell.living-image');
     }
   });
 

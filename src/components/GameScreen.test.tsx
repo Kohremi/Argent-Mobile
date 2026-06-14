@@ -341,6 +341,65 @@ describe('Research sheet (visual research smoke)', () => {
     expect(after.players[0]!.resources.wisdom).toBe(0);
     expect(after.pendingResolutionStack.length).toBe(0);
   });
+
+  it('shows a unique single-level leader spell but disables advancing it', () => {
+    let s = errandsState();
+    s = {
+      ...s,
+      players: s.players.map((p, i) =>
+        i === 0
+          ? {
+              ...p,
+              resources: { ...p.resources, intelligence: 0, wisdom: 1 },
+              ownedSpells: [
+                ...p.ownedSpells,
+                // 3-level spell — advanceable.
+                { cardId: 'base.spell.burn', intPlaced: true, wisPlacedLevel2: false, wisPlacedLevel3: false, exhausted: false },
+                // Unique single-level leader spell — cannot be advanced.
+                { cardId: 'base.spell.living-image', intPlaced: true, wisPlacedLevel2: false, wisPlacedLevel3: false, exhausted: false },
+              ],
+            }
+          : p,
+      ),
+      pendingResolutionStack: [
+        {
+          id: 'pr-research-unique',
+          responderId: 'p1',
+          prompt: {
+            kind: 'choose-from-options',
+            options: [
+              { id: 'add-wis', label: 'Place 1 WIS to unlock the next level of an owned Spell', payload: {} },
+              { id: 'discard', label: 'Discard 1 Research', payload: {} },
+            ],
+          },
+          resume: { effectId: 'base.system.spend-research', context: {} },
+          source: {
+            kind: 'system',
+            id: 'base.system.spend-research',
+            triggeringPlayerId: 'p1',
+            description: 'Research',
+          },
+        },
+      ],
+    };
+    useGameStore.setState({ state: s });
+    useUiStore.setState({ selectedMageId: null, debugOpen: false, lastError: null });
+    render(<GameScreen />);
+
+    const sheet = screen.getByText(/🔬 Research/).closest('.pointer-events-auto') as HTMLElement;
+    const cardByName = (name: string) =>
+      Array.from(sheet.querySelectorAll('button')).find(
+        (b) => b.getAttribute('title') === name,
+      ) as HTMLButtonElement | undefined;
+
+    const living = cardByName('Living Image');
+    const burn = cardByName('Burn');
+    // The leader spell is visible but not clickable; the 3-level spell is.
+    expect(living).toBeTruthy();
+    expect(living!.disabled).toBe(true);
+    expect(burn).toBeTruthy();
+    expect(burn!.disabled).toBe(false);
+  });
 });
 
 describe('Advance button (between-turns smoke)', () => {

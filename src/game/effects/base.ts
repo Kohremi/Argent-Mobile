@@ -52,6 +52,7 @@ import {
   isRoomAtPlayerCap,
   isRoomLocked,
   lookupSpellCardDef,
+  nextResearchLevel,
   lookupVaultCardDef,
   MAGE_CARD_BY_COLOR,
   magesLosePowers,
@@ -369,8 +370,10 @@ function spawnResearchPrompt(
   const intPool = player?.resources.intelligence ?? 0;
   const wisPool = player?.resources.wisdom ?? 0;
   const learned = player?.ownedSpells.filter((s) => s.intPlaced) ?? [];
+  // Only spells with an actual next level to unlock — single-level leader /
+  // unique spells (no L2/L3) and maxed spells are never advanceable.
   const upgradable = learned.filter(
-    (s) => !(s.wisPlacedLevel2 && s.wisPlacedLevel3),
+    (s) => nextResearchLevel(state, s) !== undefined,
   );
   const matches = (cardId: string): boolean => {
     if (!restrictDepartment) return true;
@@ -623,10 +626,7 @@ registerEffect('base.system.spend-research', (ctx): EffectResult => {
   if (optionId === 'add-wis') {
     if (player.resources.wisdom < 1) return { kind: 'done', patch: {} };
     const upgradable = player.ownedSpells.filter(
-      (s) =>
-        s.intPlaced &&
-        !(s.wisPlacedLevel2 && s.wisPlacedLevel3) &&
-        matches(s.cardId),
+      (s) => nextResearchLevel(ctx.state, s) !== undefined && matches(s.cardId),
     );
     if (upgradable.length === 0) return { kind: 'done', patch: {} };
     return {

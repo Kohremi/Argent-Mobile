@@ -2,6 +2,7 @@ import clsx from 'clsx';
 import { motion } from 'framer-motion';
 import type {
   GameState,
+  OwnedSpell,
   PendingResolution,
   ResolutionAnswer,
 } from '../../game/types';
@@ -9,6 +10,7 @@ import {
   lookupSpellCardDef,
   lookupSupporterCardDef,
   lookupVaultCardDef,
+  nextResearchLevel,
 } from '../../game/effects/helpers';
 import { useGameStore } from '../../store/gameStore';
 import { useUiStore } from '../../store/uiStore';
@@ -511,13 +513,10 @@ function ResearchSheet({
       : menuHasDraft && deptMatches(cardId);
 
   const learned = player?.ownedSpells.filter((s) => s.intPlaced) ?? [];
-  const ownedUpgradable = (s: {
-    cardId: string;
-    intPlaced: boolean;
-    wisPlacedLevel2: boolean;
-    wisPlacedLevel3: boolean;
-  }) => {
-    if (s.wisPlacedLevel2 && s.wisPlacedLevel3) return false; // maxed
+  const ownedUpgradable = (s: OwnedSpell) => {
+    // No next level to unlock (single-level leader/unique spell, or maxed)
+    // → never advanceable, regardless of WIS on hand.
+    if (nextResearchLevel(state, s) === undefined) return false;
     return level === RESEARCH_ADD_WIS
       ? opts.some((o) => o.id === s.cardId)
       : menuHasWis && deptMatches(s.cardId);
@@ -568,18 +567,14 @@ function ResearchSheet({
             </p>
             <div className="flex flex-wrap gap-2">
               {learned.map((s) => {
-                const target: 2 | 3 | undefined = !s.wisPlacedLevel2
-                  ? 2
-                  : !s.wisPlacedLevel3
-                    ? 3
-                    : undefined;
+                const upgradable = ownedUpgradable(s);
                 return (
                   <ResearchSpellCard
                     key={s.cardId}
                     state={state}
                     cardId={s.cardId}
-                    enabled={ownedUpgradable(s)}
-                    targetLevel={ownedUpgradable(s) ? target : undefined}
+                    enabled={upgradable}
+                    targetLevel={upgradable ? nextResearchLevel(state, s) : undefined}
                     owned={s}
                     onClick={() => forward('add-wis', RESEARCH_ADD_WIS, s.cardId)}
                   />

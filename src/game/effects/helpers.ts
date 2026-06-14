@@ -17,6 +17,7 @@ import type {
   MageColor,
   OwnedMage,
   OwnedMageId,
+  OwnedSpell,
   PendingResolution,
   PendingResolutionInput,
   Player,
@@ -1698,6 +1699,27 @@ export function lookupSpellCardDef(
     if (found) return found;
   }
   return null;
+}
+
+/**
+ * The next level a WIS token could unlock on an owned, learned spell — `2`,
+ * `3`, or `undefined` when there's nothing to advance. Crucially this checks
+ * the spell's DEFINITION: single-level "leader"/unique spells (no L2/L3) and
+ * already-maxed spells return `undefined`, so research never wastes a WIS on
+ * a spell that can't be levelled. Shared by the engine's research prompts and
+ * the research UI so both agree on what's advanceable.
+ */
+export function nextResearchLevel(
+  state: GameState,
+  owned: OwnedSpell,
+): 2 | 3 | undefined {
+  if (!owned.intPlaced) return undefined;
+  const def = lookupSpellCardDef(state, owned.cardId);
+  if (!def) return undefined;
+  const has = (n: number) => def.levels.some((l) => l.level === n);
+  if (!owned.wisPlacedLevel2) return has(2) ? 2 : undefined;
+  if (!owned.wisPlacedLevel3) return has(3) ? 3 : undefined;
+  return undefined;
 }
 
 /** Returns true when `spellCardId` is in any active pack's
