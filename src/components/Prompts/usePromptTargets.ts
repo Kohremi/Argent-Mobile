@@ -14,24 +14,31 @@ export interface PromptTargets {
   /** Action-space ids pickable right now (choose-target-action-space or a
    *  reaction's destination slot pick). */
   spaceTargets: Set<string>;
+  /** Voter ids pickable right now (choose-voter — click the Consortium). */
+  voterTargets: Set<string>;
   pickMage: (mageId: string) => void;
   pickSpace: (spaceId: string) => void;
+  pickVoter: (voterId: string) => void;
 }
 
 const EMPTY = new Set<string>();
+const NONE: PromptTargets = {
+  mageTargets: EMPTY,
+  spaceTargets: EMPTY,
+  voterTargets: EMPTY,
+  pickMage: () => {},
+  pickSpace: () => {},
+  pickVoter: () => {},
+};
 
 export function usePromptTargets(): PromptTargets {
   const state = useGameStore((s) => s.state);
   const tryDispatch = useUiStore((s) => s.tryDispatch);
   const reactionSlotPick = useUiStore((s) => s.reactionSlotPick);
 
-  if (!state) {
-    return { mageTargets: EMPTY, spaceTargets: EMPTY, pickMage: () => {}, pickSpace: () => {} };
-  }
+  if (!state) return NONE;
   const pending = topPending(state);
-  if (!pending) {
-    return { mageTargets: EMPTY, spaceTargets: EMPTY, pickMage: () => {}, pickSpace: () => {} };
-  }
+  if (!pending) return NONE;
 
   // A chosen reaction that needs a destination slot overrides the prompt's
   // own targeting (the window is still the top pending).
@@ -41,9 +48,8 @@ export function usePromptTargets(): PromptTargets {
     pending.prompt.kind === 'reaction-window'
   ) {
     return {
-      mageTargets: EMPTY,
+      ...NONE,
       spaceTargets: reactionDestinationSlots(state, pending),
-      pickMage: () => {},
       pickSpace: (spaceId) =>
         tryDispatch({
           type: 'RESOLVE_PENDING',
@@ -59,23 +65,34 @@ export function usePromptTargets(): PromptTargets {
 
   if (pending.prompt.kind === 'choose-target-mage') {
     return {
+      ...NONE,
       mageTargets: new Set(pending.prompt.eligibleMageIds),
-      spaceTargets: EMPTY,
       pickMage: (mageId) =>
         tryDispatch({
           type: 'RESOLVE_PENDING',
           resolutionId: pending.id,
           answer: { kind: 'mage-chosen', mageId },
         }),
-      pickSpace: () => {},
+    };
+  }
+
+  if (pending.prompt.kind === 'choose-voter') {
+    return {
+      ...NONE,
+      voterTargets: new Set(pending.prompt.eligibleVoterIds),
+      pickVoter: (voterId) =>
+        tryDispatch({
+          type: 'RESOLVE_PENDING',
+          resolutionId: pending.id,
+          answer: { kind: 'voter-chosen', voterId },
+        }),
     };
   }
 
   if (pending.prompt.kind === 'choose-target-action-space') {
     return {
-      mageTargets: EMPTY,
+      ...NONE,
       spaceTargets: new Set(pending.prompt.eligibleSpaceIds),
-      pickMage: () => {},
       pickSpace: (spaceId) =>
         tryDispatch({
           type: 'RESOLVE_PENDING',
@@ -85,5 +102,5 @@ export function usePromptTargets(): PromptTargets {
     };
   }
 
-  return { mageTargets: EMPTY, spaceTargets: EMPTY, pickMage: () => {}, pickSpace: () => {} };
+  return NONE;
 }

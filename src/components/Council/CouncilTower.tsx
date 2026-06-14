@@ -3,6 +3,7 @@ import clsx from 'clsx';
 import type { ConsortiumVoter, GameState } from '../../game/types';
 import { useGameStore } from '../../store/gameStore';
 import { activePlayer, PLAYER_AURA } from '../../utils/uiSelectors';
+import { usePromptTargets } from '../Prompts/usePromptTargets';
 
 /**
  * Right rail: the Consortium (docs/UI_DESIGN.md §9.4). One tile per voter —
@@ -13,11 +14,17 @@ import { activePlayer, PLAYER_AURA } from '../../utils/uiSelectors';
  * privately re-check any voter they've marked. The peek is hold-to-view
  * (press 👁, release to hide) — transient by design, so a glance over the
  * shoulder never leaves it face-up.
+ *
+ * Targeting: when a choose-voter prompt is live (e.g. placing a Mark), the
+ * eligible voters glow and become clickable — pick one here on the panel
+ * instead of from a text sheet.
  */
 
 function VoterTile({ state, voter }: { state: GameState; voter: ConsortiumVoter }) {
   const marks = state.voterMarks.filter((m) => m.voterId === voter.id);
   const active = activePlayer(state);
+  const { voterTargets, pickVoter } = usePromptTargets();
+  const targeted = voterTargets.has(voter.id);
   const canPeek =
     !voter.revealed &&
     !voter.isAlwaysFaceUp &&
@@ -28,13 +35,19 @@ function VoterTile({ state, voter }: { state: GameState; voter: ConsortiumVoter 
 
   return (
     <div
+      role={targeted ? 'button' : undefined}
+      onClick={targeted ? () => pickVoter(voter.id) : undefined}
+      title={targeted ? `Mark ${voter.name}` : undefined}
       className={clsx(
         'relative rounded-card p-2 ring-1 transition',
         faceUp
           ? 'bg-parchment-50 text-ink-900 ring-black/10'
           : 'bg-night-600/90 ring-white/15',
         canPeek && peeking && 'ring-2 ring-starlight',
+        targeted &&
+          'animate-breathe cursor-pointer ring-2 ring-leyline shadow-glow-sm hover:scale-[1.03]',
       )}
+      style={targeted ? ({ '--glow': '#7ee8fa88' } as React.CSSProperties) : undefined}
     >
       {faceUp ? (
         <>
@@ -66,9 +79,13 @@ function VoterTile({ state, voter }: { state: GameState; voter: ConsortiumVoter 
         <button
           type="button"
           title="You marked this voter — hold to peek"
-          onPointerDown={() => setPeeking(true)}
+          onPointerDown={(e) => {
+            e.stopPropagation();
+            setPeeking(true);
+          }}
           onPointerUp={() => setPeeking(false)}
           onPointerLeave={() => setPeeking(false)}
+          onClick={(e) => e.stopPropagation()}
           onContextMenu={(e) => e.preventDefault()}
           className={clsx(
             'absolute -top-1.5 left-2 select-none rounded-full px-1.5 py-0.5 text-[10px] font-bold ring-1 transition',

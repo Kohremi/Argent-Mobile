@@ -759,20 +759,13 @@ export function PromptDirector() {
         />
       );
     case 'choose-voter':
+      // The Consortium panel lights up its eligible voters (usePromptTargets);
+      // the player clicks one there. We just show the banner here.
       return (
-        <ChoiceSheet
+        <TargetBanner
           state={state}
           pending={pending}
-          title="choose a voter to mark"
-          options={prompt.eligibleVoterIds.map((id) => {
-            const v = state.voters.find((vv) => vv.id === id);
-            return {
-              id,
-              label: v?.name ?? id,
-              sub: v?.revealed || v?.isAlwaysFaceUp ? v?.description : 'Face-down voter',
-            };
-          })}
-          onPick={(id) => answer({ kind: 'voter-chosen', voterId: id })}
+          text="Choose a voter in the Consortium →"
         />
       );
     case 'reaction-window':

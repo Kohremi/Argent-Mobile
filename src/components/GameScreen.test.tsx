@@ -402,6 +402,46 @@ describe('Research sheet (visual research smoke)', () => {
   });
 });
 
+describe('Mark a voter (Consortium targeting smoke)', () => {
+  it('lights up eligible voters in the right panel and marks one on click', () => {
+    let s = errandsState();
+    expect(s.voters.length).toBeGreaterThan(1);
+    const target = s.voters[0]!;
+    const other = s.voters[1]!;
+    s = {
+      ...s,
+      pendingResolutionStack: [
+        {
+          id: 'pr-mark',
+          responderId: 'p1',
+          prompt: { kind: 'choose-voter', eligibleVoterIds: [target.id] },
+          resume: { effectId: 'base.system.noop', context: {} },
+          source: {
+            kind: 'system',
+            id: 'base.system.gain-mark',
+            triggeringPlayerId: 'p1',
+            description: 'Gain a Mark',
+          },
+        },
+      ],
+    };
+    useGameStore.setState({ state: s });
+    useUiStore.setState({ selectedMageId: null, debugOpen: false, lastError: null });
+    render(<GameScreen />);
+
+    // Banner points at the panel instead of offering a text list.
+    expect(screen.getByText(/Choose a voter/)).toBeTruthy();
+
+    // The eligible voter is clickable; the other is not.
+    const targetTile = screen.getByTitle(`Mark ${target.name}`);
+    expect(screen.queryByTitle(`Mark ${other.name}`)).toBeNull();
+
+    fireEvent.click(targetTile);
+    expect(useGameStore.getState().state!.pendingResolutionStack.length).toBe(0);
+    expect(useUiStore.getState().lastError).toBeNull();
+  });
+});
+
 describe('Advance button (between-turns smoke)', () => {
   it('offers an Advance button between turns and advances the phase on click', () => {
     // A fresh game sits in round-setup — no active player, so the dock shows
