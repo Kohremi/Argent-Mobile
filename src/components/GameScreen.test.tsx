@@ -483,6 +483,51 @@ describe('Draft a card from the shelf (tableau targeting smoke)', () => {
   });
 });
 
+describe('Draft from the Adventuring pool (shelf targeting smoke)', () => {
+  it('clicks a card in the Adventuring pool to draft it', () => {
+    let s = errandsState();
+    const target = 'base.vault.the-arcane-eye';
+    const targetName = lookupVaultCardDef(s, target)!.name;
+    s = {
+      ...s,
+      adventuringBPool: { spells: [], vaultCards: [target], supporters: [] },
+      pendingResolutionStack: [
+        {
+          id: 'pr-adv-draft',
+          responderId: 'p1',
+          prompt: {
+            kind: 'choose-from-options',
+            options: [
+              { id: `vault::${target}`, label: `Vault: ${targetName}`, payload: {} },
+              { id: 'pass', label: 'Pass — forgo this draft', payload: {} },
+            ],
+          },
+          resume: { effectId: 'base.room.adventuring-b.draft', context: {} },
+          source: {
+            kind: 'system',
+            id: 'base.room.adventuring-b.draft',
+            triggeringPlayerId: 'p1',
+            description: 'Adventuring draft',
+          },
+        },
+      ],
+    };
+    useGameStore.setState({ state: s });
+    useUiStore.setState({ selectedMageId: null, debugOpen: false, lastError: null });
+    render(<GameScreen />);
+
+    // Banner points at the pool; the card is the clickable draft target.
+    expect(screen.getByText(/Choose a card from the Adventuring pool/)).toBeTruthy();
+    fireEvent.click(screen.getByTitle(`Draft ${targetName}`));
+
+    const after = useGameStore.getState().state!;
+    expect(after.players[0]!.vaultCards.some((v) => v.cardId === target)).toBe(true);
+    expect(after.adventuringBPool?.vaultCards ?? []).not.toContain(target);
+    expect(after.pendingResolutionStack.length).toBe(0);
+    expect(useUiStore.getState().lastError).toBeNull();
+  });
+});
+
 describe('Mark a voter (Consortium targeting smoke)', () => {
   it('lights up eligible voters in the right panel and marks one on click', () => {
     let s = errandsState();

@@ -29,6 +29,8 @@ import { describeTrigger, playerName, promptDraftsFromShelf, topPending } from '
 const RESEARCH_MENU = 'base.system.spend-research';
 const RESEARCH_DRAFT = 'base.system.research-draft';
 const RESEARCH_ADD_WIS = 'base.system.research-add-wis';
+/** Adventuring Side B's revealed-pool draft (composite `kind::cardId` options). */
+const ADVENTURING_B_DRAFT = 'base.room.adventuring-b.draft';
 
 /**
  * Routes the top of the engine's pendingResolutionStack to a visual
@@ -165,13 +167,20 @@ function TargetBanner({
   pending,
   text,
   canPass,
+  onPass,
+  passLabel = 'Skip',
 }: {
   state: GameState;
   pending: PendingResolution;
   text: string;
   canPass?: boolean | undefined;
+  /** Custom pass handler (e.g. an option-chosen 'pass'); defaults to a
+   *  `pass` answer. */
+  onPass?: (() => void) | undefined;
+  passLabel?: string;
 }) {
   const tryDispatch = useUiStore((s) => s.tryDispatch);
+  const showPass = canPass || onPass;
   return (
     <div className="pointer-events-none absolute inset-x-0 top-16 z-40 flex justify-center">
       <div className="pointer-events-auto flex animate-pop items-center gap-3 rounded-full bg-night-800/95 px-4 py-2 ring-1 ring-starlight/50 shadow-glow-sm"
@@ -182,19 +191,21 @@ function TargetBanner({
           <span className="text-white/95">{text}</span>
         </p>
         <ResponderChip state={state} pending={pending} />
-        {canPass && (
+        {showPass && (
           <button
             type="button"
             onClick={() =>
-              tryDispatch({
-                type: 'RESOLVE_PENDING',
-                resolutionId: pending.id,
-                answer: { kind: 'pass' },
-              })
+              onPass
+                ? onPass()
+                : tryDispatch({
+                    type: 'RESOLVE_PENDING',
+                    resolutionId: pending.id,
+                    answer: { kind: 'pass' },
+                  })
             }
             className="rounded-full bg-night-700 px-3 py-1 text-xs text-white/70 ring-1 ring-white/15 hover:text-white"
           >
-            Skip
+            {passLabel}
           </button>
         )}
       </div>
@@ -635,6 +646,24 @@ export function PromptDirector() {
         prompt.options.some((o) => o.id === 'draft' || o.id === 'add-wis');
       if (eid === RESEARCH_DRAFT || eid === RESEARCH_ADD_WIS || isStandardResearchMenu) {
         return <ResearchSheet state={state} pending={pending} />;
+      }
+      // Adventuring B pool draft → click a card in the pool on the board.
+      // (The pool's cards are shown on the shelf; usePromptTargets lights
+      // the affordable ones.) Pass is an option here, not a `pass` answer.
+      if (eid === ADVENTURING_B_DRAFT) {
+        return (
+          <TargetBanner
+            state={state}
+            pending={pending}
+            text="Choose a card from the Adventuring pool ↓"
+            onPass={
+              prompt.options.some((o) => o.id === 'pass')
+                ? () => pickOption('pass')
+                : undefined
+            }
+            passLabel="Pass"
+          />
+        );
       }
       return (
         <ChoiceSheet

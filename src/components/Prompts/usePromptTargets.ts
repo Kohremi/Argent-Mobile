@@ -113,6 +113,35 @@ export function usePromptTargets(): PromptTargets {
     };
   }
 
+  // Adventuring B pool draft: composite `kind::cardId` options (the pool is
+  // shown on the shelf). Map each AFFORDABLE option's cardId → its option id
+  // so a click dispatches the right option-chosen.
+  if (
+    pending.resume.effectId === 'base.room.adventuring-b.draft' &&
+    pending.prompt.kind === 'choose-from-options'
+  ) {
+    const byCard = new Map<string, string>();
+    for (const o of pending.prompt.options) {
+      const sep = o.id.indexOf('::');
+      if (sep < 0 || o.available === false) continue; // 'pass' / unaffordable
+      byCard.set(o.id.slice(sep + 2), o.id);
+    }
+    return {
+      ...NONE,
+      cardTargets: new Set(byCard.keys()),
+      pickCard: (cardId) => {
+        const optionId = byCard.get(cardId);
+        if (optionId) {
+          tryDispatch({
+            type: 'RESOLVE_PENDING',
+            resolutionId: pending.id,
+            answer: { kind: 'option-chosen', optionId, payload: {} },
+          });
+        }
+      },
+    };
+  }
+
   if (pending.prompt.kind === 'choose-target-action-space') {
     return {
       ...NONE,
