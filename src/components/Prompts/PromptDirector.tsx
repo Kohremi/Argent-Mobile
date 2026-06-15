@@ -7,6 +7,7 @@ import type {
   ResolutionAnswer,
 } from '../../game/types';
 import {
+  buildInfirmaryBonusOptions,
   lookupSpellCardDef,
   lookupSupporterCardDef,
   lookupVaultCardDef,
@@ -662,6 +663,26 @@ export function PromptDirector() {
                 : undefined
             }
             passLabel="Pass"
+          />
+        );
+      }
+      // Infirmary wound bonus: re-derive the options from LIVE state so a
+      // reward bed already claimed this round (e.g. by an earlier mage from
+      // the same multi-wound) is no longer offered as buffed — the prompt
+      // snapshot can predate the claim. The engine still re-checks at apply
+      // time; this keeps the displayed choice honest. Option ids are stable
+      // (gold/mana/ip), so dispatch + payload canonicalization are unchanged.
+      if (pending.source.id === 'base.system.infirmary-bonus') {
+        return (
+          <ChoiceSheet
+            state={state}
+            pending={pending}
+            title="choose your Infirmary reward"
+            options={buildInfirmaryBonusOptions(state).map((o) => ({
+              id: o.id,
+              label: o.label,
+            }))}
+            onPick={pickOption}
           />
         );
       }

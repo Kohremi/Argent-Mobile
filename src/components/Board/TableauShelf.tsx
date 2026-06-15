@@ -18,8 +18,7 @@ import { usePromptTargets } from '../Prompts/usePromptTargets';
  * clears them. Display-only: drafting happens through prompts/actions.
  */
 
-/** Reserved vertical space in the board stage (CampusBoard sizing). */
-export const SHELF_MT = 116; // clears the floating foundation + clouds
+/** Min height reserved for the offers shelf so it doesn't collapse. */
 export const SHELF_H = 230;
 
 function fanMargin(i: number, n: number): number {
@@ -191,13 +190,13 @@ function Stall({
   );
 }
 
-export function TableauShelf({ state, width }: { state: GameState; width: number }) {
+export function TableauShelf({ state, width }: { state: GameState; width?: number }) {
   const adv = state.adventuringBPool;
   const advCards = adv ? [...adv.spells, ...adv.vaultCards, ...adv.supporters] : [];
   return (
     <div
-      className="flex flex-wrap items-start justify-center gap-3"
-      style={{ width, marginTop: SHELF_MT, minHeight: SHELF_H }}
+      className="flex w-full flex-wrap items-start justify-center gap-3"
+      style={{ width: width ?? '100%', minHeight: SHELF_H }}
     >
       {state.spellTableau.length > 0 && (
         <Stall label="Spells on offer" deckCount={state.spellDeck.length}>

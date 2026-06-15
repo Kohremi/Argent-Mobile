@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { ActionSpace, GameAction } from '../game/types';
+import type { GameAction } from '../game/types';
 import { useGameStore } from './gameStore';
 
 /**
@@ -40,12 +40,6 @@ interface UiStore {
   /** Campus zoom factor (drag-to-pan uses native scroll). */
   boardZoom: number;
   setBoardZoom: (zoom: number) => void;
-
-  /** Hovered action space + its screen rect — drives the slot tooltip. */
-  hoveredSlot: { space: ActionSpace; rect: { x: number; y: number; w: number } } | null;
-  setHoveredSlot: (
-    hovered: { space: ActionSpace; rect: { x: number; y: number; w: number } } | null,
-  ) => void;
 
   /**
    * Hot-seat privacy (docs/UI_DESIGN.md §9.4): pending-resolution ids whose
@@ -99,9 +93,6 @@ export const useUiStore = create<UiStore>((set) => ({
   boardZoom: 1,
   setBoardZoom: (zoom) => set({ boardZoom: Math.min(1.4, Math.max(0.4, zoom)) }),
 
-  hoveredSlot: null,
-  setHoveredSlot: (hovered) => set({ hoveredSlot: hovered }),
-
   privacyRevealedForId: null,
   setPrivacyRevealed: (pendingId) => set({ privacyRevealedForId: pendingId }),
 
@@ -118,7 +109,6 @@ export const useUiStore = create<UiStore>((set) => ({
         selectedMageId: null,
         lastError: null,
         reactionSlotPick: null,
-        hoveredSlot: null,
         privacyRevealedForId: null,
       });
       return true;

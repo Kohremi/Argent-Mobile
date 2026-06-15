@@ -21,6 +21,59 @@ const ROBE: Record<MageColor, string> = {
 
 const SKIN = '#ffe8d6';
 
+/* Stone palette for conjured golems (Golem Lab temporary workers). */
+const GOLEM_STONE = '#8b909e';
+const GOLEM_STONE_DARK = '#696e7c';
+const GOLEM_STONE_LIGHT = '#abb0bd';
+const GOLEM_CRACK = '#3a3e48';
+
+/**
+ * Conjured-golem body — a broad, blocky stone construct that reads bigger and
+ * wider than the slim student chibi (it fills the token box edge-to-edge). A
+ * diagonal power sash and the glowing eyes are tinted with the golem's
+ * mage-colour so you can tell which power it carries at a glance.
+ */
+function GolemBody({ color }: { color: MageColor }) {
+  const power = ROBE[color];
+  return (
+    <g>
+      {/* chunky arms, wide stance (behind the torso). Kept short so the
+          owner aura ring at the feet stays visible below the body. */}
+      <rect x="1" y="38" width="13" height="25" rx="4" fill={GOLEM_STONE_DARK} stroke="#00000033" />
+      <rect x="50" y="38" width="13" height="25" rx="4" fill={GOLEM_STONE_DARK} stroke="#00000033" />
+      {/* broad boulder torso */}
+      <path
+        d="M9 67 L11 39 Q14 31 22 30 L42 30 Q50 31 53 39 L55 67 Z"
+        fill={GOLEM_STONE}
+        stroke="#00000044"
+        strokeWidth="1.2"
+      />
+      {/* shoulder highlight */}
+      <path
+        d="M22 30 L42 30 Q50 31 53 39 L49 40 Q45 33 40 33 L24 33 Q19 33 15 40 L11 39 Q14 31 22 30 Z"
+        fill={GOLEM_STONE_LIGHT}
+        opacity="0.5"
+      />
+      {/* colored power sash across the chest */}
+      <path d="M14 40 L52 53 L49 60 L12 47 Z" fill={power} opacity="0.9" stroke="#00000022" />
+      {/* cracks */}
+      <path d="M28 39 L31 48 L27 57" stroke={GOLEM_CRACK} strokeWidth="1.3" fill="none" strokeLinejoin="round" opacity="0.7" />
+      <path d="M44 41 L40 49 L44 58" stroke={GOLEM_CRACK} strokeWidth="1.3" fill="none" strokeLinejoin="round" opacity="0.6" />
+      {/* blocky head */}
+      <rect x="19" y="5" width="26" height="24" rx="5" fill={GOLEM_STONE} stroke="#00000044" strokeWidth="1.2" />
+      <rect x="22" y="7" width="20" height="6" rx="3" fill={GOLEM_STONE_LIGHT} opacity="0.45" />
+      {/* glowing eyes — the only glow on the golem: a soft haloed core
+          tinted by its power colour. */}
+      <circle cx="28" cy="18" r="6" fill={power} opacity="0.25" />
+      <circle cx="37" cy="18" r="6" fill={power} opacity="0.25" />
+      <circle cx="28" cy="18" r="3.4" fill={power} opacity="0.55" />
+      <circle cx="37" cy="18" r="3.4" fill={power} opacity="0.55" />
+      <circle cx="28" cy="18" r="1.9" fill="#fffdf0" />
+      <circle cx="37" cy="18" r="1.9" fill="#fffdf0" />
+    </g>
+  );
+}
+
 /** Archetype hair/prop overlay, keyed by mage color (distinct silhouettes). */
 function ArchetypeOverlay({ color }: { color: MageColor }) {
   switch (color) {
@@ -106,6 +159,9 @@ export interface MageTokenProps {
   aura?: string;
   isWounded?: boolean;
   isShadowing?: boolean;
+  /** Render a conjured Golem Lab temporary worker — a broad stone construct
+   *  with glowing eyes and a power-coloured sash — instead of a student. */
+  golem?: boolean;
   /** Pixel height of the token (width scales to 4:5). */
   size?: number;
   className?: string;
@@ -122,6 +178,7 @@ export function MageToken({
   aura,
   isWounded = false,
   isShadowing = false,
+  golem = false,
   size = 44,
   className,
   glideId,
@@ -142,7 +199,7 @@ export function MageToken({
           ? { filter: 'drop-shadow(0 0 5px #7ee8fa)' }
           : undefined
       }
-      aria-label={`${color} mage`}
+      aria-label={golem ? `${color} golem` : `${color} mage`}
     >
       <g style={isWounded ? { filter: 'grayscale(.55) brightness(.9)' } : undefined}>
         {/* player aura ring at the feet */}
@@ -152,21 +209,27 @@ export function MageToken({
         {aura && (
           <ellipse cx="32" cy="72" rx="13" ry="3.6" fill="#171430" opacity="0.45" />
         )}
-        {/* robe */}
-        <path
-          d="M32 28 C19 33 14 50 16 68 L48 68 C50 50 45 33 32 28 Z"
-          fill={robe}
-          stroke="#00000022"
-          strokeWidth="1"
-        />
-        {/* sash */}
-        <path d="M19 50 C26 54 38 54 45 50 L45 55 C38 59 26 59 19 55 Z" fill="#00000018" />
-        {/* head */}
-        <circle cx="32" cy="20" r="13" fill={SKIN} stroke="#00000018" strokeWidth="1" />
-        {/* eyes */}
-        <circle cx="27" cy="22" r="1.8" fill="#2b2438" />
-        <circle cx="37" cy="22" r="1.8" fill="#2b2438" />
-        <ArchetypeOverlay color={color} />
+        {golem ? (
+          <GolemBody color={color} />
+        ) : (
+          <>
+            {/* robe */}
+            <path
+              d="M32 28 C19 33 14 50 16 68 L48 68 C50 50 45 33 32 28 Z"
+              fill={robe}
+              stroke="#00000022"
+              strokeWidth="1"
+            />
+            {/* sash */}
+            <path d="M19 50 C26 54 38 54 45 50 L45 55 C38 59 26 59 19 55 Z" fill="#00000018" />
+            {/* head */}
+            <circle cx="32" cy="20" r="13" fill={SKIN} stroke="#00000018" strokeWidth="1" />
+            {/* eyes */}
+            <circle cx="27" cy="22" r="1.8" fill="#2b2438" />
+            <circle cx="37" cy="22" r="1.8" fill="#2b2438" />
+            <ArchetypeOverlay color={color} />
+          </>
+        )}
       </g>
       {/* wounded badge */}
       {isWounded && (

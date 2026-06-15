@@ -619,46 +619,26 @@ describe('Scoring ceremony (step-6 smoke)', () => {
   });
 });
 
-describe('Slot tooltip (polish smoke)', () => {
-  it('shows the slot effect text on hover', () => {
+describe('Slot effect text (always-visible smoke)', () => {
+  it('renders each slot effect text inline on the room face', () => {
     useGameStore.setState({ state: errandsState() });
-    useUiStore.setState({ selectedMageId: null, debugOpen: false, lastError: null, reactionSlotPick: null, hoveredSlot: null });
+    useUiStore.setState({ selectedMageId: null, debugOpen: false, lastError: null, reactionSlotPick: null });
     render(<GameScreen />);
 
-    // Find a slot with a description and hover its wrapper.
+    // A real slot in a placeable room shows its effect text on the room face
+    // (no hover needed — the debug-style rooms keep slot text always visible).
     const state = useGameStore.getState().state!;
-    const space = state.rooms
-      .flatMap((r) => r.actionSpaces)
-      .find((sp) => sp.description && sp.description.length > 0)!;
-    const circle = document.querySelector(`button[data-available]`)!.parentElement!;
-    fireEvent.pointerEnter(circle);
-    // The store-driven tooltip is up (any slot's description renders).
-    const hovered = useUiStore.getState().hoveredSlot;
-    expect(hovered).not.toBeNull();
-    // The effect text shows on the room face AND in the hover tooltip.
-    expect(
-      screen.getAllByText(hovered!.space.description ?? 'No effect text.').length,
-    ).toBeGreaterThanOrEqual(2);
-    fireEvent.pointerLeave(circle);
-    expect(useUiStore.getState().hoveredSlot).toBeNull();
+    const room = state.rooms.find(
+      (r) => !r.cannotBePlacedInDirectly && r.actionSpaces.some((sp) => sp.description),
+    )!;
+    const space = room.actionSpaces.find((sp) => sp.description)!;
     expect(space).toBeTruthy();
+    expect(screen.getAllByText(space.description!).length).toBeGreaterThan(0);
   });
 });
 
-describe('Infirmary ward (board smoke)', () => {
-  it('renders beds: one open bed, plus a white bed per resting wounded mage', () => {
-    let s = errandsState();
-    // No wounded mages yet: the ward shows exactly one open bed
-    // (side A has no reward slots).
-    useGameStore.setState({ state: s });
-    useUiStore.setState({ selectedMageId: null, debugOpen: false, lastError: null });
-    const view = render(<GameScreen />);
-    expect(document.querySelectorAll('[data-bed="open"]').length).toBe(1);
-    expect(document.querySelectorAll('[data-bed="rest"]').length).toBe(0);
-    view.unmount();
-
-    // Wound a mage into a numbered ward bed: a rest bed appears beside the
-    // open one.
+describe('Infirmary slots (board smoke)', () => {
+  it('grows a row of slots: reward labels, one slot per wounded mage, one open', () => {
     const woundInto = (st: GameState, bed: string): GameState => ({
       ...st,
       players: st.players.map((p, i) =>
@@ -674,17 +654,29 @@ describe('Infirmary ward (board smoke)', () => {
           : p,
       ),
     });
+
+    let s = errandsState();
+    // No wounded mages yet: exactly one open SLOT shows, no rest slots.
+    useGameStore.setState({ state: s });
+    useUiStore.setState({ selectedMageId: null, debugOpen: false, lastError: null });
+    const view = render(<GameScreen />);
+    expect(document.querySelectorAll('[data-islot="open"]').length).toBe(1);
+    expect(document.querySelectorAll('[data-islot="rest"]').length).toBe(0);
+    view.unmount();
+
+    // Wound a mage into a numbered ward bed: a rest slot joins the open one.
     s = woundInto(s, 'bed-1');
     useGameStore.setState({ state: s });
     const view2 = render(<GameScreen />);
-    expect(document.querySelectorAll('[data-bed="rest"]').length).toBe(1);
-    expect(document.querySelectorAll('[data-bed="open"]').length).toBe(1);
+    expect(document.querySelectorAll('[data-islot="rest"]').length).toBe(1);
+    expect(document.querySelectorAll('[data-islot="open"]').length).toBe(1);
     view2.unmount();
 
-    // Side B buffed bonus taken: the mage's bed is the reward bed id, so it
-    // occupies the gold reward bed — no separate white rest bed for them.
+    // Side B: the two buffed-bonus slots lead the row, labelled by reward.
+    // The wounded mage stays in a numbered bed, so both reward slots are
+    // empty and show their reward labels.
     s = {
-      ...woundInto(s, '4goldbed'),
+      ...woundInto(s, 'bed-1'),
       rooms: s.rooms.map((r) =>
         r.name === 'Infirmary'
           ? {
@@ -716,9 +708,12 @@ describe('Infirmary ward (board smoke)', () => {
     };
     useGameStore.setState({ state: s });
     render(<GameScreen />);
-    expect(document.querySelectorAll('[data-bed="reward"]').length).toBe(2);
-    expect(document.querySelectorAll('[data-bed="rest"]').length).toBe(0);
-    expect(document.querySelectorAll('[data-bed="open"]').length).toBe(1);
+    expect(document.querySelectorAll('[data-islot="reward"]').length).toBe(2);
+    expect(screen.getByText('4 Gold')).toBeTruthy();
+    expect(screen.getByText('2 Mana')).toBeTruthy();
+    // One numbered-bed mage → one rest slot, plus the ever-present open slot.
+    expect(document.querySelectorAll('[data-islot="rest"]').length).toBe(1);
+    expect(document.querySelectorAll('[data-islot="open"]').length).toBe(1);
   });
 });
 

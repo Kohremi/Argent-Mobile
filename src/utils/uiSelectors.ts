@@ -1,5 +1,4 @@
 import { applyAction } from '../game/engine';
-import { INFIRMARY_REWARD_BEDS } from '../game/effects/helpers';
 import type {
   ActionSpace,
   GameState,
@@ -79,46 +78,6 @@ export function visibleRoomSpaces(
     openSlots.find((s) => extraVisibleIds?.has(s.id)) ?? openSlots[0];
   const visible = openToShow ? [...occupied, openToShow] : occupied;
   return visible.sort((a, b) => a.index - b.index);
-}
-
-/**
- * The Infirmary's bed list (RoomScene renders it as a 3-wide bed grid that
- * grows as it fills, Great-Hall style). Each wounded mage carries its bed id
- * on `location.bed` (engine: shared ward, lowest-free numbered beds reused as
- * they free; Side B's two reward beds use fixed ids). Render order: Side B's
- * reward beds first (always shown, with their occupant if claimed), then one
- * numbered rest bed per occupied ward bed (sorted), then one open bed.
- */
-type BedOccupant = { mage: OwnedMage; owner: Player };
-
-export type InfirmaryBed =
-  | { kind: 'reward'; space: ActionSpace; entry?: BedOccupant | undefined }
-  | { kind: 'rest'; bedId: string; entry: BedOccupant }
-  | { kind: 'open' };
-
-export function infirmaryBeds(state: GameState, room: Room): InfirmaryBed[] {
-  // bed id → who's lying in it (the mage is the single source of truth).
-  const byBed = new Map<string, BedOccupant>();
-  for (const owner of state.players) {
-    for (const mage of owner.mages) {
-      if (mage.location.kind === 'infirmary' && mage.location.bed) {
-        byBed.set(mage.location.bed, { mage, owner });
-      }
-    }
-  }
-
-  const beds: InfirmaryBed[] = room.actionSpaces.map((space) => {
-    const bedId = INFIRMARY_REWARD_BEDS[space.id];
-    return { kind: 'reward', space, entry: bedId ? byBed.get(bedId) : undefined };
-  });
-
-  // Numbered rest beds, occupied ones in order, then exactly one open bed.
-  const numbered = [...byBed.entries()]
-    .filter(([id]) => /^bed-\d+$/.test(id))
-    .sort((a, b) => Number(a[0].slice(4)) - Number(b[0].slice(4)));
-  for (const [bedId, entry] of numbered) beds.push({ kind: 'rest', bedId, entry });
-  beds.push({ kind: 'open' });
-  return beds;
 }
 
 /**
