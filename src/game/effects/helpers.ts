@@ -10,10 +10,12 @@ import type {
   ChoiceOption,
   ConsortiumVoter,
   ConsortiumVoterId,
+  Department,
   GameState,
   GameStatePatch,
   HarmfulEffectKind,
   InfirmaryBedId,
+  MageAbilitySide,
   MageColor,
   OwnedMage,
   OwnedMageId,
@@ -253,12 +255,12 @@ export function buildHarmfulMageTargets(
       if (
         !powersLost &&
         opts.effect === 'wound' &&
-        actsAsColor(m, 'green')
+        colorAbilityActive(state, m, 'green')
       ) {
         continue;
       }
       if (
-        actsAsColor(m, 'blue') &&
+        colorAbilityActive(state, m, 'blue') &&
         opts.source === 'spell' &&
         p.id !== casterId
       ) {
@@ -697,7 +699,8 @@ export function buildBanishTargets(
     for (const m of p.mages) {
       if (m.location.kind !== 'infirmary') continue;
       // Apprentice acts as blue too — gets the same opposing-spell immunity.
-      if (actsAsColor(m, 'blue') && p.id !== casterId) continue;
+      // (Only when Divinity is on Side A.)
+      if (colorAbilityActive(state, m, 'blue') && p.id !== casterId) continue;
       targets.push(m.id);
     }
   }
@@ -2789,6 +2792,54 @@ export function actsAsColor(m: OwnedMage, color: MageColor): boolean {
 }
 
 /**
+ * Each ability-bearing Mage colour maps 1:1 to a Department. The two
+ * department-less colours (neutral off-white, rainbow apprentice) map to
+ * `null` — they carry no department-scoped power side of their own (the
+ * apprentice instead picks up each department's active side via `actsAsColor`).
+ */
+export const COLOR_TO_DEPARTMENT: Record<MageColor, Department | null> = {
+  red: 'sorcery',
+  grey: 'mysticism',
+  green: 'natural-magick',
+  purple: 'planar-studies',
+  blue: 'divinity',
+  orange: 'technomancy',
+  rainbow: null,
+  'off-white': null,
+};
+
+/**
+ * Which ability side (A or B) is in play for `color`'s department this game.
+ * Chosen before the game on the setup screen (`state.mageAbilitySides`).
+ * Department-less colours and any unset department default to `'A'`.
+ */
+export function sideForColor(state: GameState, color: MageColor): MageAbilitySide {
+  const dept = COLOR_TO_DEPARTMENT[color];
+  if (!dept) return 'A';
+  return state.mageAbilitySides[dept] ?? 'A';
+}
+
+/**
+ * True iff `mage` has the **Side A** power of `color` active — i.e. it acts as
+ * that colour AND that department is set to Side A this game. This is the gate
+ * every Side A power checks; flipping a department to Side B disables its Side A
+ * behaviour (wound/spell immunity, Ars Magna, fast-action, post-cast placement,
+ * Technomancy on-place). The apprentice follows each department's chosen side
+ * because `actsAsColor` already returns true for every colour.
+ *
+ * NOTE: this gates *abilities* only. Plain `actsAsColor` is still correct for
+ * colour-identity uses (scoring, diversity, apprentice colour matching) that
+ * are not modal powers.
+ */
+export function colorAbilityActive(
+  state: GameState,
+  mage: OwnedMage,
+  color: MageColor,
+): boolean {
+  return actsAsColor(mage, color) && sideForColor(state, color) === 'A';
+}
+
+/**
  * Technomancy (orange) "upon placement" hook. Whenever an orange Mage — or
  * the Archmage's Apprentice, which acts as every department colour — is
  * placed onto a slot by its owner while the Mancers pack is active, queue
@@ -2815,7 +2866,8 @@ export function technomancyOnPlacePatch(
   if (!state.activePackIds.includes('mancers')) return {};
   const player = state.players.find((p) => p.id === playerId);
   const mage = player?.mages.find((m) => m.id === mageId);
-  if (!mage || !actsAsColor(mage, 'orange')) return {};
+  // Side A only — Technomancy Side B (mark a Voter) has a different trigger.
+  if (!mage || !colorAbilityActive(state, mage, 'orange')) return {};
   const room = state.rooms.find((r) =>
     r.actionSpaces.some((s) => s.id === spaceId),
   );
@@ -2985,9 +3037,10 @@ export function buildArsMagnaTargets(
       // spell-only buffs don't.
       if (isMageImmuneByBuff(state, p.id, 'wound', 'non-spell')) continue;
       // Green wound-immunity / opposing-blue spell-immunity also pick
-      // up the apprentice via `actsAsColor`.
-      if (actsAsColor(m, 'green')) continue;
-      if (actsAsColor(m, 'blue')) continue; // Always opposing here.
+      // up the apprentice via `actsAsColor` — only while that department
+      // is on Side A.
+      if (colorAbilityActive(state, m, 'green')) continue;
+      if (colorAbilityActive(state, m, 'blue')) continue; // Always opposing here.
       targets.push(m.id);
     }
   }
@@ -3025,8 +3078,8 @@ export function canArsMagnaTakeSpace(
   if (target.isWounded) return false;
   // Green wound-immunity and opposing-blue spell-immunity protect the
   // target — including when the target IS the apprentice (acts as
-  // both green and blue).
-  if (actsAsColor(target, 'green')) return false;
-  if (actsAsColor(target, 'blue')) return false;
+  // both green and blue) — but only while that department is on Side A.
+  if (colorAbilityActive(state, target, 'green')) return false;
+  if (colorAbilityActive(state, target, 'blue')) return false;
   return true;
 }

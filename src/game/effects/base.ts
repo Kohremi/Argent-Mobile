@@ -7,6 +7,7 @@ import { getPack } from '../../content/registry';
 import { getOrthogonallyAdjacentRoomIds } from '../setup';
 import {
   actsAsColor,
+  colorAbilityActive,
   affordableVaultCards,
   ADVENTURING_B_CAP,
   adventuringBPlacementHookPatch,
@@ -5934,9 +5935,10 @@ registerEffect('base.mage.sorcery.ars-magna', (ctx: EffectContext): EffectResult
     if (!redMage) {
       throw new Error(`Ars Magna: source mage ${sourceMageId} not owned`);
     }
-    // The apprentice acts as red and may use Ars Magna.
-    if (!actsAsColor(redMage, 'red')) {
-      throw new Error('Ars Magna: source mage must be red (Sorcery)');
+    // The apprentice acts as red and may use Ars Magna — but only while
+    // Sorcery is on Side A (Side B is the mana-on-place power instead).
+    if (!colorAbilityActive(ctx.state, redMage, 'red')) {
+      throw new Error('Ars Magna: source mage must be red (Sorcery), Side A');
     }
     if (redMage.location.kind !== 'office') {
       throw new Error(
@@ -12796,8 +12798,8 @@ function buildOpponentOfficeWoundTargets(state: GameState, casterId: string): st
     if (p.id === casterId) continue;
     for (const m of p.mages) {
       if (m.location.kind !== 'office' || m.isWounded) continue;
-      if (!powersLost && actsAsColor(m, 'green')) continue;
-      if (actsAsColor(m, 'blue')) continue;
+      if (!powersLost && colorAbilityActive(state, m, 'green')) continue;
+      if (colorAbilityActive(state, m, 'blue')) continue;
       out.push(m.id);
     }
   }
@@ -18381,8 +18383,8 @@ function buildPossessionTargets(
   for (const p of state.players) {
     for (const m of p.mages) {
       if (m.location.kind !== 'action-space') continue;
-      // Opposing-blue spell-immunity (also picks up the apprentice).
-      if (actsAsColor(m, 'blue') && p.id !== casterId) continue;
+      // Opposing-blue spell-immunity (also picks up the apprentice) — Side A only.
+      if (colorAbilityActive(state, m, 'blue') && p.id !== casterId) continue;
       if (m.id === excludeMageId) continue;
       out.push(m.id);
     }
@@ -20221,8 +20223,8 @@ function listCutPlaneTargets(
       if (s.shadowOccupant) continue;
       const owner = state.players.find((p) => p.id === s.occupant!.ownerId);
       const mage = owner?.mages.find((m) => m.id === s.occupant!.mageId);
-      // Opposing-blue (and apprentice acting as blue) spell-immunity.
-      if (!mage || actsAsColor(mage, 'blue')) continue;
+      // Opposing-blue (and apprentice acting as blue) spell-immunity — Side A only.
+      if (!mage || colorAbilityActive(state, mage, 'blue')) continue;
       out.push({
         mageId: s.occupant.mageId,
         spaceId: s.id,
@@ -20369,8 +20371,9 @@ function listFadeRooms(state: GameState, casterId: string): string[] {
       const owner = state.players.find((p) => p.id === s.occupant!.ownerId);
       const mage = owner?.mages.find((m) => m.id === s.occupant!.mageId);
       if (!mage) continue;
-      // Opposing blue is spell-immune (apprentice acts as blue too).
-      if (actsAsColor(mage, 'blue') && s.occupant.ownerId !== casterId) continue;
+      // Opposing blue is spell-immune (apprentice acts as blue too) — Side A only.
+      if (colorAbilityActive(state, mage, 'blue') && s.occupant.ownerId !== casterId)
+        continue;
       eligibleInRoom++;
     }
     if (eligibleInRoom > 0) out.push(r.id);
@@ -20392,8 +20395,9 @@ function listFadeCandidates(
     const owner = state.players.find((p) => p.id === s.occupant!.ownerId);
     const mage = owner?.mages.find((m) => m.id === s.occupant!.mageId);
     if (!mage) continue;
-    // Opposing blue (apprentice acts as blue) is spell-immune.
-    if (actsAsColor(mage, 'blue') && s.occupant.ownerId !== casterId) continue;
+    // Opposing blue (apprentice acts as blue) is spell-immune — Side A only.
+    if (colorAbilityActive(state, mage, 'blue') && s.occupant.ownerId !== casterId)
+      continue;
     out.push({
       mageId: s.occupant.mageId,
       spaceId: s.id,

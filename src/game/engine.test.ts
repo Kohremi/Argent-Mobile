@@ -14924,6 +14924,157 @@ describe("Archmage's Apprentice — all mage powers", () => {
   });
 });
 
+describe('Modular mage powers — Side A gated by mageAbilitySides', () => {
+  /** First open base slot in a non-instant, directly-placeable room. */
+  function firstOpenSlot(state: GameState): string {
+    const sp = state.rooms
+      .flatMap((r) =>
+        r.cannotBePlacedInDirectly || r.isInstantRoom ? [] : r.actionSpaces,
+      )
+      .find((s) => !s.occupant);
+    if (!sp) throw new Error('test: no open non-instant slot');
+    return sp.id;
+  }
+  /** Any open slot (instant rooms allowed) — for tests that only need the mage
+   *  to sit on an action-space, not a clean placement. */
+  function anyOpenSlot(state: GameState): string {
+    const sp = state.rooms
+      .flatMap((r) => (r.cannotBePlacedInDirectly ? [] : r.actionSpaces))
+      .find((s) => !s.occupant);
+    if (!sp) throw new Error('test: no open slot');
+    return sp.id;
+  }
+  const errands = (s: GameState): GameState => ({
+    ...s,
+    firstPlayerIndex: 0,
+    phase: {
+      kind: 'errands',
+      round: 1,
+      activePlayerIndex: 0,
+      actionUsed: false,
+      fastActionUsed: false,
+    },
+  });
+
+  it('Natural Magick Side B: green mages are no longer wound-immune', async () => {
+    const { buildBurnTargets } = await import('./effects/helpers');
+    const place = (s: GameState): GameState => {
+      s = addMage(s, 'p2', {
+        id: 'g',
+        cardId: 'base.mage.natural-magick',
+        color: 'green',
+      });
+      return placeMageOnSpace(s, 'p2', 'g', anyOpenSlot(s));
+    };
+    const sideA = place(initGame(TWO_PLAYER_CONFIG));
+    expect(buildBurnTargets(sideA, 'p1')).not.toContain('g');
+
+    const sideB = place(
+      initGame({ ...TWO_PLAYER_CONFIG, mageAbilitySides: { 'natural-magick': 'B' } }),
+    );
+    expect(buildBurnTargets(sideB, 'p1')).toContain('g');
+  });
+
+  it('Divinity Side B: blue mages are targetable by opposing spells', async () => {
+    const { buildBurnTargets } = await import('./effects/helpers');
+    const place = (s: GameState): GameState => {
+      s = addMage(s, 'p2', {
+        id: 'b',
+        cardId: 'base.mage.divinity',
+        color: 'blue',
+      });
+      return placeMageOnSpace(s, 'p2', 'b', anyOpenSlot(s));
+    };
+    const sideA = place(initGame(TWO_PLAYER_CONFIG));
+    expect(buildBurnTargets(sideA, 'p1')).not.toContain('b');
+
+    const sideB = place(
+      initGame({ ...TWO_PLAYER_CONFIG, mageAbilitySides: { divinity: 'B' } }),
+    );
+    expect(buildBurnTargets(sideB, 'p1')).toContain('b');
+  });
+
+  it('Sorcery Side B: the Ars Magna ability is unavailable', () => {
+    let s = initGame({
+      ...TWO_PLAYER_CONFIG,
+      mageAbilitySides: { sorcery: 'B' },
+    });
+    s = addMage(s, 'p1', { id: 'r', cardId: 'base.mage.sorcery', color: 'red' });
+    s = mapPlayer(s, 'p1', (p) => ({
+      ...p,
+      resources: { ...p.resources, mana: 5 },
+    }));
+    s = errands(s);
+    expect(() =>
+      applyAction(s, {
+        type: 'USE_ABILITY',
+        playerId: 'p1',
+        abilityId: 'base.mage.sorcery.ars-magna',
+        sourceCardId: 'r',
+      }),
+    ).toThrow(/Side A/);
+  });
+
+  it('Planar Studies Side B: placement consumes the Action (not the Fast Action)', () => {
+    // Side A places as a Fast Action — the player keeps their Action, so the
+    // turn stays with p1. Side B places as a normal Action — once spent the
+    // turn passes to p2. Comparing the post-placement active player isolates
+    // the budget difference without depending on auto-advance internals.
+    const placePurple = (side: 'A' | 'B'): GameState => {
+      let s = initGame({
+        ...TWO_PLAYER_CONFIG,
+        mageAbilitySides: { 'planar-studies': side },
+      });
+      s = addMage(s, 'p1', {
+        id: 'pp',
+        cardId: 'base.mage.planar-studies',
+        color: 'purple',
+      });
+      s = errands(s);
+      return applyAction(s, {
+        type: 'PLACE_WORKER',
+        playerId: 'p1',
+        mageId: 'pp',
+        actionSpaceId: firstOpenSlot(s),
+      });
+    };
+    const sideA = placePurple('A');
+    if (sideA.phase.kind !== 'errands') throw new Error('expected errands');
+    // Fast action used; Action still available → still p1's turn.
+    expect(sideA.phase.activePlayerIndex).toBe(0);
+    expect(sideA.phase.fastActionUsed).toBe(true);
+
+    const sideB = placePurple('B');
+    if (sideB.phase.kind !== 'errands') throw new Error('expected errands');
+    // Regular Action consumed → turn advances to p2.
+    expect(sideB.phase.activePlayerIndex).toBe(1);
+  });
+
+  it('Technomancy Side B: the on-place Research trigger is not queued', async () => {
+    const { technomancyOnPlacePatch } = await import('./effects/helpers');
+    const setup = (side: 'A' | 'B'): { s: GameState; slot: string } => {
+      let s = initGame({
+        activePackIds: ['base', 'mancers'],
+        playerNames: ['Alice', 'Bob'],
+        rngSeed: 7777,
+        mageAbilitySides: { technomancy: side },
+      });
+      s = addMage(s, 'p1', {
+        id: 'o',
+        cardId: 'mancers.mage.technomancy',
+        color: 'orange',
+      });
+      const slot = anyOpenSlot(s);
+      s = placeMageOnSpace(s, 'p1', 'o', slot);
+      return { s, slot };
+    };
+    const a = setup('A');
+    expect(technomancyOnPlacePatch(a.s, 'p1', 'o', a.slot)).not.toEqual({});
+    const b = setup('B');
+    expect(technomancyOnPlacePatch(b.s, 'p1', 'o', b.slot)).toEqual({});
+  });
+});
+
 describe('Dormitory', () => {
   /**
    * Resolves the slot's colour prompt by picking `color` and returns the

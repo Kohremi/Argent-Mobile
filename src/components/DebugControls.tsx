@@ -14,7 +14,7 @@ import { listPacks } from '../content/registry';
 const SYNTHESIS_ID_SET = new Set<string>(ALL_SYNTHESIS_IDS);
 import { computeFinalScoring, type VoterAward } from '../game/scoring';
 import {
-  actsAsColor,
+  colorAbilityActive,
   countPlayerMagesInRoom,
   spellLevelBaseManaCost,
 } from '../game/effects/helpers';
@@ -353,8 +353,8 @@ function isArsMagnaPlacement(
   mage: OwnedMage,
   space: GameState['rooms'][number]['actionSpaces'][number],
 ): boolean {
-  // Red OR the Archmage's Apprentice (acts as red).
-  if (!actsAsColor(mage, 'red')) return false;
+  // Red OR the Archmage's Apprentice (acts as red) — only while Sorcery is Side A.
+  if (!colorAbilityActive(state, mage, 'red')) return false;
   if (!space.occupant) return false;
   const owner = state.players.find((p) =>
     p.mages.some((m) => m.id === mage.id),
@@ -368,9 +368,9 @@ function isArsMagnaPlacement(
   if (!occMage) return false;
   if (occMage.isWounded) return false;
   // Green wound-immunity / opposing-blue spell-immunity (apprentice
-  // target acts as both).
-  if (actsAsColor(occMage, 'green')) return false;
-  if (actsAsColor(occMage, 'blue')) return false;
+  // target acts as both) — only while that department is on Side A.
+  if (colorAbilityActive(state, occMage, 'green')) return false;
+  if (colorAbilityActive(state, occMage, 'blue')) return false;
   return true;
 }
 
@@ -425,7 +425,7 @@ function placementBlockedReason(
   // Bend Time) keep the Action budget open even after `actionUsed`.
   const bonus = state.phase.extraActions ?? 0;
   const actionOpen = !state.phase.actionUsed || bonus > 0;
-  if (actsAsColor(mage, 'purple')) {
+  if (colorAbilityActive(state, mage, 'purple')) {
     if (!actionOpen) return 'Action already used';
     if (state.phase.fastActionUsed && !actionOpen) {
       return 'no Actions left this turn';
@@ -482,7 +482,7 @@ function shadowPlacementBlockedReason(
   // even after `actionUsed`.
   const bonus = state.phase.extraActions ?? 0;
   const actionOpen = !state.phase.actionUsed || bonus > 0;
-  if (actsAsColor(mage, 'purple')) {
+  if (colorAbilityActive(state, mage, 'purple')) {
     if (!actionOpen) return 'Action already used';
   } else {
     if (!actionOpen) return 'Action already used';

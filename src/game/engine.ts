@@ -12,6 +12,8 @@ import {
   buildReactionOptionsFor,
   buildReactionQueue,
   actsAsColor,
+  colorAbilityActive,
+  sideForColor,
   buildSnakeDraftOrder,
   canArsMagnaTakeSpace,
   countPlayerMagesInRoom,
@@ -1028,7 +1030,7 @@ function handlePlaceWorker(state: GameState, action: PlaceWorkerAction): GameSta
   // slot.
   const isArsMagnaPlacement =
     !requestedShadow &&
-    actsAsColor(mage, 'red') &&
+    colorAbilityActive(state, mage, 'red') &&
     canArsMagnaTakeSpace(state, action.playerId, space);
   if (!requestedShadow && space.occupant && !isArsMagnaPlacement) {
     throw new Error(`PLACE_WORKER: space ${space.id} already occupied`);
@@ -1084,7 +1086,7 @@ function handlePlaceWorker(state: GameState, action: PlaceWorkerAction): GameSta
   // mage late, e.g. after another fast action). Everyone else always
   // consumes the Action budget.
   let budgetKind: ActionBudgetKind = 'action';
-  if (actsAsColor(mage, 'purple') && !magesLosePowers(state)) {
+  if (colorAbilityActive(state, mage, 'purple') && !magesLosePowers(state)) {
     // Mesmerize disables purple's fast-action placement; otherwise prefer
     // fast-action (falling back to the regular action if the fast was
     // already spent this turn).
@@ -1743,6 +1745,8 @@ function drainMysticismPostCastIfIdle(state: GameState): GameState {
   const [playerId, ...rest] = queue;
   if (playerId === undefined) return state;
   const cleared: GameState = { ...state, pendingMysticismPostCast: rest };
+  // Mysticism Side B (in-place spell discount) has no post-cast placement.
+  if (sideForColor(cleared, 'grey') !== 'A') return cleared;
   if (magesLosePowers(cleared)) return cleared;
   if (placementsBlocked(cleared)) return cleared;
   const caster = cleared.players.find((p) => p.id === playerId);
