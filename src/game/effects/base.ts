@@ -2925,12 +2925,14 @@ registerEffect('base.system.resolution-choice', (ctx: EffectContext): EffectResu
   const optionId = ctx.resumeAnswer.optionId;
   const innerEffectIdRaw = ctx.resumeContext?.['innerEffectId'];
   const meritCostRaw = ctx.resumeContext?.['meritCost'];
+  const goldCostRaw = ctx.resumeContext?.['goldCost'];
   if (
     typeof innerEffectIdRaw !== 'string' ||
     typeof meritCostRaw !== 'number'
   ) {
     throw new Error('resolution-choice: missing context fields');
   }
+  const goldCost = typeof goldCostRaw === 'number' ? goldCostRaw : 0;
   const playerId = ctx.triggeringPlayerId;
 
   if (optionId === 'forfeit') {
@@ -2939,22 +2941,33 @@ registerEffect('base.system.resolution-choice', (ctx: EffectContext): EffectResu
       patch: bumpInfluencePatch(ctx.state, playerId, 1),
     };
   }
-  if (optionId !== 'reward') {
+  // `reward` pays the slot's Merit cost (if any) with Merit Badges; `reward-gold`
+  // is Divinity Side B — pay 4 Gold to activate the Merit Slot instead. Both run
+  // the slot's real effect afterward; only the resource paid differs.
+  const payWithGold = optionId === 'reward-gold';
+  if (optionId !== 'reward' && !payWithGold) {
     throw new Error(`resolution-choice: unknown optionId ${optionId}`);
   }
 
-  // Deduct the merit cost up front, then run the slot's effect against the
+  // Deduct the slot's cost up front, then run the slot's effect against the
   // post-deduction state so the inner effect's player-patch already reflects
-  // the spent badges.
+  // the spend.
   let working: GameState = ctx.state;
-  if (meritCostRaw > 0) {
+  const meritToSpend = payWithGold ? 0 : meritCostRaw;
+  const goldToSpend = payWithGold ? goldCost : 0;
+  if (meritToSpend > 0 || goldToSpend > 0) {
     const player = working.players.find((p) => p.id === playerId);
     if (!player) throw new Error('resolution-choice: player not found');
-    if (player.resources.meritBadges < meritCostRaw) {
+    if (player.resources.meritBadges < meritToSpend) {
       // Should never happen — the prompt's "reward" option is unavailable in
       // this case. Belt-and-suspenders.
       throw new Error(
         'resolution-choice: cannot take reward without sufficient Merit Badges',
+      );
+    }
+    if (player.resources.gold < goldToSpend) {
+      throw new Error(
+        'resolution-choice: cannot take reward without sufficient Gold',
       );
     }
     working = {
@@ -2966,8 +2979,9 @@ registerEffect('base.system.resolution-choice', (ctx: EffectContext): EffectResu
               ...p,
               resources: {
                 ...p.resources,
-                meritBadges: p.resources.meritBadges - meritCostRaw,
-                meritBadgesSpent: p.resources.meritBadgesSpent + meritCostRaw,
+                meritBadges: p.resources.meritBadges - meritToSpend,
+                meritBadgesSpent: p.resources.meritBadgesSpent + meritToSpend,
+                gold: p.resources.gold - goldToSpend,
               },
             },
       ),
@@ -2983,10 +2997,10 @@ registerEffect('base.system.resolution-choice', (ctx: EffectContext): EffectResu
     triggeringPlayerId: ctx.triggeringPlayerId,
     allowReactions: ctx.allowReactions,
   });
-  const meritPatch: GameStatePatch =
-    meritCostRaw > 0 ? { players: working.players } : {};
+  const costPatch: GameStatePatch =
+    meritToSpend > 0 || goldToSpend > 0 ? { players: working.players } : {};
   const innerPatch = innerResult.patch ?? {};
-  const combined: GameStatePatch = { ...meritPatch, ...innerPatch };
+  const combined: GameStatePatch = { ...costPatch, ...innerPatch };
 
   switch (innerResult.kind) {
     case 'done':

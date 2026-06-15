@@ -354,6 +354,32 @@ export function spellManaDiscountFor(
 }
 
 /**
+ * Mysticism Side B ("In-Place"): while one of the player's grey Mages sits in
+ * a University slot other than the Infirmary, that player's Spells cost 1 less
+ * Mana (the engine applies the rulebook "minimum of one" floor at the cost
+ * site). Returns the flat 1-Mana discount (it does not stack across multiple
+ * placed grey Mages), or 0 when Mysticism is on Side A, the power is suppressed
+ * (Mesmerize), or no qualifying grey Mage is placed. Shadowing grey Mages lose
+ * their colour ability, so they don't qualify.
+ */
+export function mysticismInPlaceDiscount(
+  state: GameState,
+  playerId: PlayerId,
+): number {
+  if (sideForColor(state, 'grey') !== 'B') return 0;
+  if (magesLosePowers(state)) return 0;
+  const player = findPlayer(state, playerId);
+  if (!player) return 0;
+  const hasPlacedGrey = player.mages.some(
+    (m) =>
+      actsAsColor(m, 'grey') &&
+      m.location.kind === 'action-space' &&
+      !m.isShadowing,
+  );
+  return hasPlacedGrey ? 1 : 0;
+}
+
+/**
  * Base printed Mana cost of a spell level BEFORE discounts/surcharges. Most
  * levels are a fixed number; a level with `manaCostKind: 'opponents'` costs X,
  * the number of opponents in the game (total players − 1) — e.g. Energy Drain

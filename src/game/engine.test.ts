@@ -13,6 +13,7 @@ import { baseGamePack } from '../content/packs/base';
 import { mancersPack } from '../content/packs/mancers';
 import { listPacks } from '../content/registry';
 import type {
+  ActionSpace,
   Candidate,
   ConsortiumVoter,
   GameConfig,
@@ -15072,6 +15073,171 @@ describe('Modular mage powers — Side A gated by mageAbilitySides', () => {
     expect(technomancyOnPlacePatch(a.s, 'p1', 'o', a.slot)).not.toEqual({});
     const b = setup('B');
     expect(technomancyOnPlacePatch(b.s, 'p1', 'o', b.slot)).toEqual({});
+  });
+
+  // ---- Side B powers ----
+
+  it('Sorcery Side B: gain 1 Mana per other Mage in the room placed into', () => {
+    let s = initGame({
+      ...TWO_PLAYER_CONFIG,
+      mageAbilitySides: { sorcery: 'B' },
+    });
+    // A non-instant room with >= 3 base slots.
+    const room = s.rooms.find(
+      (r) =>
+        !r.cannotBePlacedInDirectly &&
+        !r.isInstantRoom &&
+        r.actionSpaces.filter(
+          (sp) => sp.slotType !== 'shadow' && sp.slotType !== 'shadow-merit',
+        ).length >= 3,
+    );
+    if (!room) throw new Error('test: no room with 3 base slots');
+    const slots = room.actionSpaces.filter(
+      (sp) => sp.slotType !== 'shadow' && sp.slotType !== 'shadow-merit',
+    );
+    // Seat two other Mages already in the room.
+    s = addMage(s, 'p2', { id: 'd1', cardId: 'base.mage.neutral', color: 'off-white' });
+    s = addMage(s, 'p2', { id: 'd2', cardId: 'base.mage.neutral', color: 'off-white' });
+    s = placeMageOnSpace(s, 'p2', 'd1', slots[0]!.id);
+    s = placeMageOnSpace(s, 'p2', 'd2', slots[1]!.id);
+    s = addMage(s, 'p1', { id: 'r', cardId: 'base.mage.sorcery', color: 'red' });
+    s = setMana(s, 'p1', 0);
+    s = errands(s);
+    s = applyAction(s, {
+      type: 'PLACE_WORKER',
+      playerId: 'p1',
+      mageId: 'r',
+      actionSpaceId: slots[2]!.id,
+    });
+    // Two other Mages in the room → +2 Mana.
+    expect(s.players.find((p) => p.id === 'p1')?.resources.mana).toBe(2);
+  });
+
+  it('Sorcery Side B: the Mana gain is capped at 3', () => {
+    let s = initGame({
+      ...TWO_PLAYER_CONFIG,
+      mageAbilitySides: { sorcery: 'B' },
+    });
+    const room = s.rooms.find(
+      (r) =>
+        !r.cannotBePlacedInDirectly &&
+        !r.isInstantRoom &&
+        !r.noShadowSlots &&
+        r.actionSpaces.filter(
+          (sp) => sp.slotType !== 'shadow' && sp.slotType !== 'shadow-merit',
+        ).length >= 3,
+    );
+    if (!room) throw new Error('test: no room with 3 base slots');
+    const baseSlots = room.actionSpaces.filter(
+      (sp) => sp.slotType !== 'shadow' && sp.slotType !== 'shadow-merit',
+    );
+    // Manually seat FOUR other Mages: base + shadow on the first two slots.
+    const seat = (sp: ActionSpace, i: number): ActionSpace => ({
+      ...sp,
+      occupant: { mageId: `x${i}b`, ownerId: 'p2', isShadowing: false },
+      shadowOccupant: { mageId: `x${i}s`, ownerId: 'p2', isShadowing: true },
+    });
+    s = {
+      ...s,
+      rooms: s.rooms.map((r) =>
+        r.id !== room.id
+          ? r
+          : {
+              ...r,
+              actionSpaces: r.actionSpaces.map((sp) =>
+                sp.id === baseSlots[0]!.id
+                  ? seat(sp, 0)
+                  : sp.id === baseSlots[1]!.id
+                    ? seat(sp, 1)
+                    : sp,
+              ),
+            },
+      ),
+    };
+    s = addMage(s, 'p1', { id: 'r', cardId: 'base.mage.sorcery', color: 'red' });
+    s = setMana(s, 'p1', 0);
+    s = errands(s);
+    s = applyAction(s, {
+      type: 'PLACE_WORKER',
+      playerId: 'p1',
+      mageId: 'r',
+      actionSpaceId: baseSlots[2]!.id,
+    });
+    // Four other Mages present → capped at +3 Mana.
+    expect(s.players.find((p) => p.id === 'p1')?.resources.mana).toBe(3);
+  });
+
+  it('Mysticism Side B: a placed grey Mage shaves 1 Mana off Spells (min 1)', () => {
+    const castIlluminate = (side: 'A' | 'B'): number => {
+      let s = initGame({
+        ...TWO_PLAYER_CONFIG,
+        mageAbilitySides: { mysticism: side },
+      });
+      s = addOwnedSpell(s, 'p1', 'base.spell.the-light-that-leads', {
+        intPlaced: true,
+      });
+      s = addMage(s, 'p1', {
+        id: 'grey',
+        cardId: 'base.mage.mysticism',
+        color: 'grey',
+      });
+      s = placeMageOnSpace(s, 'p1', 'grey', anyOpenSlot(s));
+      s = setMana(s, 'p1', 5);
+      s = errands(s);
+      s = applyAction(s, {
+        type: 'CAST_SPELL',
+        playerId: 'p1',
+        spellCardId: 'base.spell.the-light-that-leads',
+        level: 1,
+      });
+      return s.players.find((p) => p.id === 'p1')!.resources.mana;
+    };
+    // Illuminate (L1) costs 2 Mana. Side A: 5 - 2 = 3. Side B: 5 - 1 = 4.
+    expect(castIlluminate('A')).toBe(3);
+    expect(castIlluminate('B')).toBe(4);
+  });
+
+  it('Divinity Side B: pay 4 Gold to activate a Merit Slot instead of a Merit Badge', () => {
+    let s = initGame({
+      ...TWO_PLAYER_CONFIG,
+      mageAbilitySides: { divinity: 'B' },
+    });
+    s = forceRoomSide(s, 'Library', 'A');
+    s = addMage(s, 'p1', {
+      id: 'blue',
+      cardId: 'base.mage.divinity',
+      color: 'blue',
+    });
+    s = placeMageOnSpace(s, 'p1', 'blue', 'base.room.library.a.slot-1');
+    s = zeroPlayerResources(s, 'p1');
+    // No Merit Badges, but enough Gold — the gold path is the only way to
+    // take the merit-slot reward.
+    s = mapPlayer(s, 'p1', (p) => ({
+      ...p,
+      resources: { ...p.resources, gold: 6, meritBadges: 0 },
+    }));
+    s = { ...s, bellTower: { ...s.bellTower, available: [] } };
+    s = applyAction(s, { type: 'ADVANCE_PHASE' }); // round-setup → errands
+    s = applyAction(s, { type: 'ADVANCE_PHASE' }); // errands → resolution
+    s = applyAction(s, { type: 'ADVANCE_PHASE' }); // pump → forfeit-or-reward prompt
+    const top = topPending(s);
+    if (top.prompt.kind !== 'choose-from-options') {
+      throw new Error('expected choose-from-options');
+    }
+    const optionIds = top.prompt.options.map((o) => o.id);
+    expect(optionIds).toContain('reward-gold');
+    // The merit-badge 'reward' is unavailable (0 MB); gold is the path.
+    expect(
+      top.prompt.options.find((o) => o.id === 'reward')?.available,
+    ).toBe(false);
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: top.id,
+      answer: { kind: 'option-chosen', optionId: 'reward-gold', payload: {} },
+    });
+    const p1 = s.players.find((p) => p.id === 'p1')!;
+    expect(p1.resources.gold).toBe(2); // 6 - 4
+    expect(p1.resources.meritBadges).toBe(0); // no badge spent
   });
 });
 

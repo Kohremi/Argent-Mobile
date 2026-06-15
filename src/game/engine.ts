@@ -19,6 +19,7 @@ import {
   countPlayerMagesInRoom,
   describeSpaceSource,
   magesLosePowers,
+  mysticismInPlaceDiscount,
   lookupCandidate,
   MAGE_CARD_BY_COLOR,
   placementsBlocked,
@@ -38,6 +39,7 @@ import type {
   BuyVaultCardAction,
   DiscardBonusActionsAction,
   CastSpellAction,
+  ChoiceOption,
   ChooseCandidateAction,
   ChooseDraftFirstAction,
   ClaimBellTowerAction,
@@ -1281,10 +1283,31 @@ function handlePlaceWorker(state: GameState, action: PlaceWorkerAction): GameSta
           ),
         },
   );
+  // Sorcery Side B: "Gain 1 Mana for each other Mage in the room you place
+  // into (maximum of 3)." Counts every Mage (base or shadow, any owner)
+  // already in the destination room before this placement. Disabled under
+  // Mesmerize, and only when Sorcery is on Side B.
+  const sorceryBManaGain =
+    actsAsColor(mage, 'red') &&
+    sideForColor(state, 'red') === 'B' &&
+    !magesLosePowers(state)
+      ? Math.min(
+          3,
+          room.actionSpaces.reduce(
+            (n, sp) => n + (sp.occupant ? 1 : 0) + (sp.shadowOccupant ? 1 : 0),
+            0,
+          ),
+        )
+      : 0;
+
   const updatedPlayers = state.players.map((p): Player => {
     if (p.id !== action.playerId) return p;
     return {
       ...p,
+      resources:
+        sorceryBManaGain > 0
+          ? { ...p.resources, mana: p.resources.mana + sorceryBManaGain }
+          : p.resources,
       mages: p.mages.map((m) =>
         m.id !== action.mageId
           ? m
@@ -1353,6 +1376,22 @@ function pushResolutionChoicePrompt(
   const canAffordReward =
     meritCost === 0 || player.resources.meritBadges >= meritCost;
 
+  // Divinity Side B ("Resolution"): a blue Mage may pay 4 Gold to activate a
+  // Merit Slot it occupies, instead of spending a Merit Badge. Offered only on
+  // a base-position merit slot whose occupant acts as blue while Divinity is on
+  // Side B.
+  const DIVINITY_B_GOLD = 4;
+  const occupantMage =
+    position === 'base' && space.occupant
+      ? player.mages.find((m) => m.id === space.occupant!.mageId)
+      : undefined;
+  const divinityGoldOption =
+    meritCost > 0 &&
+    occupantMage !== undefined &&
+    actsAsColor(occupantMage, 'blue') &&
+    sideForColor(state, 'blue') === 'B';
+  const canAffordGold = player.resources.gold >= DIVINITY_B_GOLD;
+
   const source: ResolutionSource = describeSpaceSource(
     space.id,
     room.name,
@@ -1360,37 +1399,50 @@ function pushResolutionChoicePrompt(
     space.index,
     playerId,
   );
+  const options: ChoiceOption[] = [
+    canAffordReward
+      ? {
+          id: 'reward',
+          label:
+            meritCost > 0
+              ? `Take reward (spend ${meritCost} MB)`
+              : 'Take reward',
+          payload: {},
+          available: true,
+        }
+      : {
+          id: 'reward',
+          label: `Take reward (spend ${meritCost} MB)`,
+          payload: {},
+          available: false,
+          unavailableReason: `requires ${meritCost} Merit Badge${meritCost === 1 ? '' : 's'} (you have ${player.resources.meritBadges})`,
+        },
+  ];
+  if (divinityGoldOption) {
+    options.push({
+      id: 'reward-gold',
+      label: `Take reward (pay ${DIVINITY_B_GOLD} Gold — Divinity)`,
+      payload: {},
+      available: canAffordGold,
+      ...(canAffordGold
+        ? {}
+        : {
+            unavailableReason: `requires ${DIVINITY_B_GOLD} Gold (you have ${player.resources.gold})`,
+          }),
+    });
+  }
+  options.push({ id: 'forfeit', label: 'Forfeit for 1 IP', payload: {} });
+
   const promptInput: PendingResolutionInput = {
     responderId: playerId,
-    prompt: {
-      kind: 'choose-from-options',
-      options: [
-        canAffordReward
-          ? {
-              id: 'reward',
-              label:
-                meritCost > 0
-                  ? `Take reward (spend ${meritCost} MB)`
-                  : 'Take reward',
-              payload: {},
-              available: true,
-            }
-          : {
-              id: 'reward',
-              label: `Take reward (spend ${meritCost} MB)`,
-              payload: {},
-              available: false,
-              unavailableReason: `requires ${meritCost} Merit Badge${meritCost === 1 ? '' : 's'} (you have ${player.resources.meritBadges})`,
-            },
-        { id: 'forfeit', label: 'Forfeit for 1 IP', payload: {} },
-      ],
-    },
+    prompt: { kind: 'choose-from-options', options },
     resume: {
       effectId: 'base.system.resolution-choice',
       context: {
         spaceId: space.id,
         innerEffectId: space.effectId,
         meritCost,
+        goldCost: divinityGoldOption ? DIVINITY_B_GOLD : 0,
       },
     },
     source,
@@ -1584,7 +1636,14 @@ function handleCastSpell(state: GameState, action: CastSpellAction): GameState {
   // Energy Drain (L3) costs X = number of opponents, resolved here against the
   // live player count; other levels use the printed cost.
   const printedCost = spellLevelBaseManaCost(state, levelDef);
-  const discountedCost = Math.max(0, printedCost - discount);
+  let discountedCost = Math.max(0, printedCost - discount);
+  // Mysticism Side B in-place discount — shaves 1 more Mana, but never below
+  // 1 (rulebook "minimum of one"). Only meaningful when the spell still costs
+  // something after other discounts; a free / already-zeroed spell stays free.
+  const mysticismDiscount = mysticismInPlaceDiscount(state, action.playerId);
+  if (mysticismDiscount > 0 && discountedCost >= 1) {
+    discountedCost = Math.max(1, discountedCost - mysticismDiscount);
+  }
   const surcharges = spellManaSurchargesAgainst(state, action.playerId);
   const surchargeTotal = surcharges.reduce((sum, s) => sum + s.amount, 0);
   const placeAfterCast = player.nextSpellPlacesMage === true;
