@@ -1006,6 +1006,15 @@ function handlePlaceWorker(state: GameState, action: PlaceWorkerAction): GameSta
       b.kind === 'shadow-on-place' && b.casterPlayerId === action.playerId,
   );
   const requestedShadow = action.isShadowing === true;
+  // Planar Studies Side B: "Pay 1 Mana when placing to shadow an opponent's
+  // Mage instead." A purple-B Mage can shadow-place over an opposing base
+  // occupant without any shadow-on-place buff, paying 1 Mana.
+  const planarBShadow =
+    requestedShadow &&
+    !shadowBuff &&
+    actsAsColor(mage, 'purple') &&
+    sideForColor(state, 'purple') === 'B' &&
+    !magesLosePowers(state);
   if (
     shadowBuff?.mode === 'mandatory' &&
     !requestedShadow &&
@@ -1020,9 +1029,9 @@ function handlePlaceWorker(state: GameState, action: PlaceWorkerAction): GameSta
       `PLACE_WORKER: ${room.name} has no shadow position`,
     );
   }
-  if (requestedShadow && !shadowBuff) {
+  if (requestedShadow && !shadowBuff && !planarBShadow) {
     throw new Error(
-      'PLACE_WORKER: shadow placement requires a shadow-on-place buff (Zero Hour / Inversion)',
+      'PLACE_WORKER: shadow placement requires a shadow-on-place buff (Zero Hour / Inversion) or a Planar Studies (Side B) Mage',
     );
   }
 
@@ -1055,12 +1064,24 @@ function handlePlaceWorker(state: GameState, action: PlaceWorkerAction): GameSta
         `PLACE_WORKER: shadow position of ${space.id} already occupied`,
       );
     }
-    // Zero Hour (optional mode) requires an opposing mage at the base
-    // position. Inversion (mandatory) allows any shadow placement.
-    if (shadowBuff!.mode === 'optional') {
+    // Zero Hour (optional mode) and Planar Studies Side B both require an
+    // opposing Mage at the base position. Inversion (mandatory) allows any
+    // shadow placement.
+    if (planarBShadow || shadowBuff?.mode === 'optional') {
       if (!space.occupant || space.occupant.ownerId === action.playerId) {
+        const label = planarBShadow
+          ? 'Planar Studies (Side B)'
+          : shadowBuff!.label;
         throw new Error(
-          `PLACE_WORKER: ${shadowBuff!.label} requires an opposing Mage at the base position`,
+          `PLACE_WORKER: ${label} requires an opposing Mage at the base position`,
+        );
+      }
+    }
+    if (planarBShadow) {
+      const placer = state.players.find((p) => p.id === action.playerId);
+      if (!placer || placer.resources.mana < 1) {
+        throw new Error(
+          'PLACE_WORKER: Planar Studies (Side B) shadow placement requires 1 Mana',
         );
       }
     }
@@ -1131,6 +1152,10 @@ function handlePlaceWorker(state: GameState, action: PlaceWorkerAction): GameSta
       if (p.id !== action.playerId) return p;
       return {
         ...p,
+        // Planar Studies Side B costs 1 Mana to shadow.
+        resources: planarBShadow
+          ? { ...p.resources, mana: p.resources.mana - 1 }
+          : p.resources,
         mages: p.mages.map((m) =>
           m.id !== action.mageId
             ? m
@@ -1177,12 +1202,19 @@ function handlePlaceWorker(state: GameState, action: PlaceWorkerAction): GameSta
       byPlayerId: action.playerId,
       spaceId: space.id,
     };
-    const source: ResolutionSource = {
-      kind: 'spell',
-      id: shadowBuff!.spellCardId,
-      triggeringPlayerId: action.playerId,
-      description: shadowBuff!.label,
-    };
+    const source: ResolutionSource = planarBShadow
+      ? {
+          kind: 'mage-power',
+          id: action.mageId,
+          triggeringPlayerId: action.playerId,
+          description: 'Planar Studies (Side B) — shadow on place',
+        }
+      : {
+          kind: 'spell',
+          id: shadowBuff!.spellCardId,
+          triggeringPlayerId: action.playerId,
+          description: shadowBuff!.label,
+        };
     const ctx: EffectContext = {
       state: withAdventuring,
       source,

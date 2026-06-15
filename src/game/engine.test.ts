@@ -15305,6 +15305,86 @@ describe('Modular mage powers — Side A gated by mageAbilitySides', () => {
       s.voterMarks.some((m) => m.voterId === voterId && m.playerId === 'p1'),
     ).toBe(true);
   });
+
+  it('Planar Studies Side B: pay 1 Mana to shadow an opponent on place', () => {
+    let s = initGame({
+      ...TWO_PLAYER_CONFIG,
+      mageAbilitySides: { 'planar-studies': 'B' },
+    });
+    // A directly-placeable room WITH shadow positions.
+    const room = s.rooms.find(
+      (r) =>
+        !r.cannotBePlacedInDirectly &&
+        !r.isInstantRoom &&
+        !r.noShadowSlots &&
+        r.actionSpaces.some(
+          (sp) => sp.slotType !== 'shadow' && sp.slotType !== 'shadow-merit',
+        ),
+    );
+    if (!room) throw new Error('test: no shadowable room');
+    const slot = room.actionSpaces.find(
+      (sp) => sp.slotType !== 'shadow' && sp.slotType !== 'shadow-merit',
+    )!;
+    s = addMage(s, 'p2', { id: 'bob', cardId: 'base.mage.neutral', color: 'off-white' });
+    s = placeMageOnSpace(s, 'p2', 'bob', slot.id);
+    s = addMage(s, 'p1', {
+      id: 'pp',
+      cardId: 'base.mage.planar-studies',
+      color: 'purple',
+    });
+    s = setMana(s, 'p1', 3);
+    s = errands(s);
+    s = applyAction(s, {
+      type: 'PLACE_WORKER',
+      playerId: 'p1',
+      mageId: 'pp',
+      actionSpaceId: slot.id,
+      isShadowing: true,
+    });
+    // Bob still holds the base; the purple Mage shadows it; 1 Mana paid.
+    const space = s.rooms
+      .flatMap((r) => r.actionSpaces)
+      .find((sp) => sp.id === slot.id)!;
+    expect(space.occupant?.mageId).toBe('bob');
+    expect(space.shadowOccupant?.mageId).toBe('pp');
+    expect(s.players.find((p) => p.id === 'p1')!.resources.mana).toBe(2);
+    // Shadowing an opponent opens a mage-shadowed reaction window.
+    expect(s.activeReactionWindows).toHaveLength(1);
+  });
+
+  it('Planar Studies Side A: cannot shadow on place (no buff)', () => {
+    let s = initGame(TWO_PLAYER_CONFIG); // default Side A
+    const room = s.rooms.find(
+      (r) =>
+        !r.cannotBePlacedInDirectly &&
+        !r.isInstantRoom &&
+        !r.noShadowSlots &&
+        r.actionSpaces.some(
+          (sp) => sp.slotType !== 'shadow' && sp.slotType !== 'shadow-merit',
+        ),
+    )!;
+    const slot = room.actionSpaces.find(
+      (sp) => sp.slotType !== 'shadow' && sp.slotType !== 'shadow-merit',
+    )!;
+    s = addMage(s, 'p2', { id: 'bob', cardId: 'base.mage.neutral', color: 'off-white' });
+    s = placeMageOnSpace(s, 'p2', 'bob', slot.id);
+    s = addMage(s, 'p1', {
+      id: 'pp',
+      cardId: 'base.mage.planar-studies',
+      color: 'purple',
+    });
+    s = setMana(s, 'p1', 3);
+    s = errands(s);
+    expect(() =>
+      applyAction(s, {
+        type: 'PLACE_WORKER',
+        playerId: 'p1',
+        mageId: 'pp',
+        actionSpaceId: slot.id,
+        isShadowing: true,
+      }),
+    ).toThrow(/shadow placement requires/);
+  });
 });
 
 describe('Dormitory', () => {
