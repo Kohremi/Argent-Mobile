@@ -15239,6 +15239,72 @@ describe('Modular mage powers — Side A gated by mageAbilitySides', () => {
     expect(p1.resources.gold).toBe(2); // 6 - 4
     expect(p1.resources.meritBadges).toBe(0); // no badge spent
   });
+
+  it('Technomancy Side B: pay 3 Gold to Mark a Voter an opponent in the room has marked', () => {
+    let s = initGame({
+      activePackIds: ['base', 'mancers'],
+      playerNames: ['Alice', 'Bob'],
+      rngSeed: 7777,
+      mageAbilitySides: { technomancy: 'B' },
+    });
+    // A non-instant room with >= 2 base slots: p2 sits in it, p1 places there.
+    const room = s.rooms.find(
+      (r) =>
+        !r.cannotBePlacedInDirectly &&
+        !r.isInstantRoom &&
+        r.actionSpaces.filter(
+          (sp) => sp.slotType !== 'shadow' && sp.slotType !== 'shadow-merit',
+        ).length >= 2,
+    );
+    if (!room) throw new Error('test: no room with 2 base slots');
+    const baseSlots = room.actionSpaces.filter(
+      (sp) => sp.slotType !== 'shadow' && sp.slotType !== 'shadow-merit',
+    );
+    s = addMage(s, 'p2', { id: 'bob', cardId: 'base.mage.neutral', color: 'off-white' });
+    s = placeMageOnSpace(s, 'p2', 'bob', baseSlots[0]!.id);
+    // Bob has a Mark on a Voter.
+    const voterId = s.voters[0]!.id;
+    s = { ...s, voterMarks: [...s.voterMarks, { voterId, playerId: 'p2' }] };
+
+    s = addMage(s, 'p1', {
+      id: 'o',
+      cardId: 'mancers.mage.technomancy',
+      color: 'orange',
+    });
+    s = mapPlayer(s, 'p1', (p) => ({
+      ...p,
+      resources: { ...p.resources, gold: 5, marks: 0 },
+    }));
+    s = errands(s);
+    s = applyAction(s, {
+      type: 'PLACE_WORKER',
+      playerId: 'p1',
+      mageId: 'o',
+      actionSpaceId: baseSlots[1]!.id,
+    });
+    // Pay/skip prompt surfaced by the post-placement drain.
+    let top = topPending(s);
+    expect(top.resume.effectId).toBe('mancers.mage.technomancy.mark-voter');
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: top.id,
+      answer: { kind: 'option-chosen', optionId: 'pay', payload: {} },
+    });
+    // Voter choice — only Bob's marked Voter is eligible.
+    top = topPending(s);
+    if (top.prompt.kind !== 'choose-voter') throw new Error('expected choose-voter');
+    expect(top.prompt.eligibleVoterIds).toEqual([voterId]);
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: top.id,
+      answer: { kind: 'voter-chosen', voterId },
+    });
+    const p1 = s.players.find((p) => p.id === 'p1')!;
+    expect(p1.resources.gold).toBe(2); // 5 - 3
+    expect(
+      s.voterMarks.some((m) => m.voterId === voterId && m.playerId === 'p1'),
+    ).toBe(true);
+  });
 });
 
 describe('Dormitory', () => {

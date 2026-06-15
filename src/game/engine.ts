@@ -1880,9 +1880,67 @@ function drainTechnomancyTriggerIfIdle(state: GameState): GameState {
   if (placementsBlocked(cleared)) return cleared;
   const player = cleared.players.find((p) => p.id === entry.playerId);
   if (!player) return cleared;
-  // The Side A power costs 3 Gold. If the player can't afford it, the
+  // Both Side A and Side B cost 3 Gold. If the player can't afford it the
   // trigger fizzles silently — no point opening a prompt with only Skip.
   if (player.resources.gold < 3) return cleared;
+
+  if (entry.side === 'B') {
+    // Side B — "Mark a Voter that an opponent in this room has marked." The
+    // placer's Mage is now in the room (post-placement); gather every Voter
+    // marked by another player who also has a Mage there, minus Voters the
+    // placer already marked. If none, fizzle.
+    const room = cleared.rooms.find((r) => r.id === entry.roomId);
+    if (!room) return cleared;
+    const opponentsInRoom = new Set<string>();
+    for (const sp of room.actionSpaces) {
+      if (sp.occupant && sp.occupant.ownerId !== entry.playerId) {
+        opponentsInRoom.add(sp.occupant.ownerId);
+      }
+      if (sp.shadowOccupant && sp.shadowOccupant.ownerId !== entry.playerId) {
+        opponentsInRoom.add(sp.shadowOccupant.ownerId);
+      }
+    }
+    const eligibleVoterIds = Array.from(
+      new Set(
+        cleared.voterMarks
+          .filter((m) => opponentsInRoom.has(m.playerId))
+          .map((m) => m.voterId),
+      ),
+    ).filter(
+      (voterId) =>
+        !cleared.voterMarks.some(
+          (m) => m.voterId === voterId && m.playerId === entry.playerId,
+        ),
+    );
+    if (eligibleVoterIds.length === 0) return cleared;
+    const minted = mintId(cleared, 'r');
+    const pending: PendingResolution = {
+      id: minted.id,
+      responderId: entry.playerId,
+      prompt: {
+        kind: 'choose-from-options',
+        options: [
+          { id: 'pay', label: 'Pay 3 Gold → Mark a Voter', payload: {} },
+          { id: 'skip', label: 'Skip', payload: {} },
+        ],
+      },
+      resume: {
+        effectId: 'mancers.mage.technomancy.mark-voter',
+        context: { eligibleVoterIds },
+      },
+      source: {
+        kind: 'mage-power',
+        id: 'mancers.mage.technomancy.mark-voter',
+        triggeringPlayerId: entry.playerId,
+        description: 'Technomancer — post-placement (Side B)',
+      },
+    };
+    return {
+      ...minted.state,
+      pendingResolutionStack: [...minted.state.pendingResolutionStack, pending],
+    };
+  }
+
   const minted = mintId(cleared, 'r');
   const pending: PendingResolution = {
     id: minted.id,

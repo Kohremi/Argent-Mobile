@@ -2892,16 +2892,37 @@ export function technomancyOnPlacePatch(
   if (!state.activePackIds.includes('mancers')) return {};
   const player = state.players.find((p) => p.id === playerId);
   const mage = player?.mages.find((m) => m.id === mageId);
-  // Side A only — Technomancy Side B (mark a Voter) has a different trigger.
-  if (!mage || !colorAbilityActive(state, mage, 'orange')) return {};
+  if (!mage || !actsAsColor(mage, 'orange')) return {};
   const room = state.rooms.find((r) =>
     r.actionSpaces.some((s) => s.id === spaceId),
   );
   if (!room) return {};
+
+  const side = sideForColor(state, 'orange');
+  if (side === 'A') {
+    // Side A: "Pay 3 Gold → gain a Research."
+    return {
+      pendingTechnomancyTrigger: [
+        ...state.pendingTechnomancyTrigger,
+        { playerId, roomId: room.id, side: 'A' },
+      ],
+    };
+  }
+
+  // Side B: "When you place into a room with another player's Mage, you may
+  // pay 3 Gold to Mark a Voter that player has marked." Only queue when the
+  // room actually holds an opposing Mage (base or shadow) — `state` here is
+  // pre-placement, so the placing Mage isn't counted.
+  const hasOpponentInRoom = room.actionSpaces.some(
+    (s) =>
+      (s.occupant && s.occupant.ownerId !== playerId) ||
+      (s.shadowOccupant && s.shadowOccupant.ownerId !== playerId),
+  );
+  if (!hasOpponentInRoom) return {};
   return {
     pendingTechnomancyTrigger: [
       ...state.pendingTechnomancyTrigger,
-      { playerId, roomId: room.id },
+      { playerId, roomId: room.id, side: 'B' },
     ],
   };
 }

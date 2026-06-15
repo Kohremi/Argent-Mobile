@@ -1286,8 +1286,17 @@ export interface GameState {
    *
    * The queue is reset at the same lifecycle points as
    * `pendingMysticismPostCast` (resolution transition + turn change).
+   *
+   * `side` selects which Technomancy power the drain surfaces: Side A (default)
+   * is the "Pay 3 Gold → gain a Research" prompt; Side B is the "Pay 3 Gold →
+   * Mark a Voter an opponent in this room has marked" prompt (only queued when
+   * the room actually holds another player's Mage).
    */
-  pendingTechnomancyTrigger: { playerId: PlayerId; roomId: RoomId }[];
+  pendingTechnomancyTrigger: {
+    playerId: PlayerId;
+    roomId: RoomId;
+    side?: MageAbilitySide;
+  }[];
 
   /**
    * Active "immunity" buffs (Moste Holie Litanies / Heart of the Mountain

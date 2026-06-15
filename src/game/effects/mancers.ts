@@ -688,6 +688,85 @@ registerEffect(
 );
 
 // ============================================================================
+// Technomancer (orange) mage power — Side B: "When you place into a room with
+// another player's Mage, you may pay 3 Gold to Mark a Voter that player has
+// marked." Queued at PLACE_WORKER time onto `pendingTechnomancyTrigger`
+// (side: 'B') and drained by the engine pump, which computes the eligible
+// Voters and surfaces the pay/skip prompt. This effect resolves it: on `pay`
+// it deducts 3 Gold and surfaces a Voter choice; the chosen Voter gains the
+// placer's Mark.
+// ============================================================================
+
+registerEffect(
+  'mancers.mage.technomancy.mark-voter',
+  (ctx: EffectContext): EffectResult => {
+    const self = 'mancers.mage.technomancy.mark-voter';
+    const step = ctx.resumeContext?.['step'];
+
+    if (step === 'mark') {
+      if (ctx.resumeAnswer?.kind !== 'voter-chosen') {
+        throw new Error(`${self} mark expected voter-chosen`);
+      }
+      return {
+        kind: 'done',
+        patch: applyGainMark(
+          ctx.state,
+          ctx.triggeringPlayerId,
+          ctx.resumeAnswer.voterId,
+        ),
+      };
+    }
+
+    // Initial pay/skip resolution.
+    if (ctx.resumeAnswer?.kind !== 'option-chosen') {
+      throw new Error(
+        `${self} expected option-chosen, got ${ctx.resumeAnswer?.kind}`,
+      );
+    }
+    if (ctx.resumeAnswer.optionId === 'skip') {
+      return { kind: 'done', patch: {} };
+    }
+    if (ctx.resumeAnswer.optionId !== 'pay') {
+      throw new Error(`${self}: unknown option ${ctx.resumeAnswer.optionId}`);
+    }
+    const eligibleRaw = ctx.resumeContext?.['eligibleVoterIds'];
+    const eligibleVoterIds = Array.isArray(eligibleRaw)
+      ? (eligibleRaw.filter((v) => typeof v === 'string') as string[])
+      : [];
+    const player = ctx.state.players.find(
+      (p) => p.id === ctx.triggeringPlayerId,
+    );
+    // Defence-in-depth: re-check affordability and that a markable Voter
+    // remains (the placer may have gained a mark elsewhere meanwhile).
+    const stillEligible = eligibleVoterIds.filter(
+      (voterId) =>
+        !ctx.state.voterMarks.some(
+          (m) => m.voterId === voterId && m.playerId === ctx.triggeringPlayerId,
+        ),
+    );
+    if (!player || player.resources.gold < 3 || stillEligible.length === 0) {
+      return { kind: 'done', patch: {} };
+    }
+    const goldPatch = gainResourcePatch(
+      ctx.state,
+      ctx.triggeringPlayerId,
+      'gold',
+      -3,
+    );
+    return {
+      kind: 'pause',
+      patch: goldPatch,
+      pending: {
+        responderId: ctx.triggeringPlayerId,
+        prompt: { kind: 'choose-voter', eligibleVoterIds: stillEligible },
+        resume: { effectId: self, context: { step: 'mark' } },
+        source: ctx.source,
+      },
+    };
+  },
+);
+
+// ============================================================================
 // Technomancy leader (unique) spells.
 //
 // Arcane Surge (Sophica Sentavra) — Free / Fast Action: "Give an
