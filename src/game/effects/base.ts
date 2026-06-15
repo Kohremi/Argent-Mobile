@@ -7534,6 +7534,7 @@ function listEligibleShadowSlots(
   const out: string[] = [];
   for (const r of state.rooms) {
     if (r.cannotBePlacedInDirectly) continue;
+    if (r.noShadowSlots) continue;
     if (isRoomLocked(state, r.id)) continue;
     if (isRoomAtPlayerCap(state, playerId, r.id)) continue;
     for (const s of r.actionSpaces) {
@@ -9026,6 +9027,7 @@ registerEffect('base.vault.shadow-potion', (ctx): EffectResult => {
     const eligibleSpaces: string[] = [];
     for (const r of ctx.state.rooms) {
       if (r.cannotBePlacedInDirectly) continue;
+      if (r.noShadowSlots) continue;
       if (isRoomAtPlayerCap(ctx.state, ctx.triggeringPlayerId, r.id)) continue;
       for (const s of r.actionSpaces) {
         if (s.occupant && !s.shadowOccupant) eligibleSpaces.push(s.id);
@@ -11599,14 +11601,16 @@ registerEffect('base.spell.indefinite-definitives.l3', (ctx): EffectResult => {
             !m.isShadowing,
         )
         .filter((m) => {
-          // Only target slots whose shadow position is empty.
-          const space = ctx.state.rooms
-            .flatMap((r) => r.actionSpaces)
-            .find(
-              (s) =>
-                s.id ===
-                (m.location as { kind: 'action-space'; spaceId: string }).spaceId,
-            );
+          // Only target slots whose shadow position is empty, in rooms that
+          // actually have shadow positions (skip Great Hall / Golem Lab).
+          const spaceId = (
+            m.location as { kind: 'action-space'; spaceId: string }
+          ).spaceId;
+          const room = ctx.state.rooms.find((r) =>
+            r.actionSpaces.some((s) => s.id === spaceId),
+          );
+          if (!room || room.noShadowSlots) return false;
+          const space = room.actionSpaces.find((s) => s.id === spaceId);
           return space && !space.shadowOccupant;
         })
         .map((m) => m.id) ?? [];
@@ -20209,6 +20213,7 @@ function listCutPlaneTargets(
   const out: { mageId: string; spaceId: string; ownerId: string }[] = [];
   for (const r of state.rooms) {
     if (isRoomLocked(state, r.id)) continue;
+    if (r.noShadowSlots) continue;
     if (isRoomAtPlayerCap(state, casterId, r.id)) continue;
     for (const s of r.actionSpaces) {
       if (!s.occupant) continue;
@@ -20356,6 +20361,7 @@ function listFadeRooms(state: GameState, casterId: string): string[] {
   const out: string[] = [];
   for (const r of state.rooms) {
     if (isRoomLocked(state, r.id)) continue;
+    if (r.noShadowSlots) continue;
     let eligibleInRoom = 0;
     for (const s of r.actionSpaces) {
       if (!s.occupant) continue;
@@ -20378,7 +20384,7 @@ function listFadeCandidates(
   roomId: string,
 ): { mageId: string; spaceId: string; ownerId: string }[] {
   const room = state.rooms.find((r) => r.id === roomId);
-  if (!room) return [];
+  if (!room || room.noShadowSlots) return [];
   const out: { mageId: string; spaceId: string; ownerId: string }[] = [];
   for (const s of room.actionSpaces) {
     if (!s.occupant) continue;

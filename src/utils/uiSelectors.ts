@@ -58,16 +58,28 @@ export function eligiblePlacementSlots(
  * slots are shown regardless (they're occupied), so targeting never points at
  * a hidden slot either way.
  */
+/**
+ * True when a room is a "pool" of many interchangeable seats — the Great
+ * Hall's 10 identical slots. These render as a growing tile row (occupied
+ * seats + one open seat) rather than a labelled per-slot list, mirroring the
+ * Infirmary ward. Rooms with a handful of distinct slots (e.g. the Golem
+ * Lab's three) are NOT pools and keep their labelled rows.
+ */
+export function isPoolRoom(room: Room): boolean {
+  const all = room.actionSpaces;
+  if (all.length <= 5) return false;
+  const sig = (s: ActionSpace) =>
+    `${s.slotType}|${s.effectId}|${s.costToActivate?.gold ?? 0}|${s.costToActivate?.mana ?? 0}|${s.costToActivate?.meritBadges ?? 0}`;
+  const first = all[0]!;
+  return all.every((s) => sig(s) === sig(first));
+}
+
 export function visibleRoomSpaces(
   room: Room,
   extraVisibleIds?: Set<string>,
 ): ActionSpace[] {
   const all = room.actionSpaces;
-  if (all.length <= 5) return all;
-  const sig = (s: ActionSpace) =>
-    `${s.slotType}|${s.effectId}|${s.costToActivate?.gold ?? 0}|${s.costToActivate?.mana ?? 0}|${s.costToActivate?.meritBadges ?? 0}`;
-  const first = all[0]!;
-  if (!all.every((s) => sig(s) === sig(first))) return all;
+  if (!isPoolRoom(room)) return all;
 
   // Occupied (base or shadow) seats always show.
   const occupied = all.filter((s) => s.occupant || s.shadowOccupant);

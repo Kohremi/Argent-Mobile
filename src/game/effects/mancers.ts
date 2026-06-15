@@ -1171,6 +1171,7 @@ function openShadowSlotsForGolem(state: GameState): ActionSpaceId[] {
   const out: ActionSpaceId[] = [];
   for (const r of state.rooms) {
     if (r.cannotBePlacedInDirectly) continue;
+    if (r.noShadowSlots) continue;
     if (isRoomLocked(state, r.id)) continue;
     for (const s of r.actionSpaces) if (!s.shadowOccupant) out.push(s.id);
   }

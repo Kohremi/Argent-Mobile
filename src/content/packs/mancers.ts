@@ -1095,6 +1095,7 @@ const golemLabA: Room = {
   isInstantRoom: true,
   cannotBePlacedInDirectly: false,
   cannotBeLocked: false,
+  noShadowSlots: true,
   description:
     'Instant room — conjure a temporary golem Mage that ignores limits and vanishes at end of round.',
   actionSpaces: [
@@ -1150,6 +1151,7 @@ const golemLabB: Room = {
   isInstantRoom: true,
   cannotBePlacedInDirectly: false,
   cannotBeLocked: false,
+  noShadowSlots: true,
   description:
     'Instant room — conjure a powered golem, or banish / wound a Mage and seize its slot with a golem.',
   actionSpaces: [

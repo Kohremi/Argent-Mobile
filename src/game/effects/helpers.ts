@@ -218,6 +218,16 @@ export function buildHarmfulMageTargets(
       // (wounded, banished, moved, shadowed). Mages in locked rooms still
       // perform their Errands at Resolution per the rulebook.
       if (isMageInLockedRoom(state, m.id)) continue;
+      // Shadow effects need an open shadow position above the target's base.
+      // Rooms flagged `noShadowSlots` (Great Hall, Golem Lab) have none, so
+      // their occupants can never be shadowed.
+      if (opts.effect === 'shadow') {
+        const sid = m.location.spaceId;
+        const room = state.rooms.find((r) =>
+          r.actionSpaces.some((s) => s.id === sid),
+        );
+        if (room?.noShadowSlots) continue;
+      }
       // Sustained immunity buffs (Sanctification / Stoneskin / Spell Shield
       // / Wall / Diamondskin) protect the owner's mages.
       if (isMageImmuneByBuff(state, p.id, opts.effect, opts.source)) continue;
@@ -1371,12 +1381,29 @@ export function buildReactionOptionsFor(
       'byPlayerId' in event && event.byPlayerId !== event.ownerId;
     const mageId = event.mageId;
 
+    // Phase Steppers / Invisibility Cloak re-shadow the mage at its original
+    // slot. Rooms flagged `noShadowSlots` (Great Hall, Golem Lab) have no
+    // shadow position, so those two reactions have nowhere to land and are
+    // not offered for a mage affected there.
+    const originalSpaceId =
+      event.kind === 'mage-moved'
+        ? event.fromSpaceId
+        : event.kind === 'mage-wounded' || event.kind === 'mage-banished'
+          ? event.originalSpaceId
+          : null;
+    const originalRoomHasNoShadow =
+      originalSpaceId != null &&
+      (state.rooms.find((r) =>
+        r.actionSpaces.some((s) => s.id === originalSpaceId),
+      )?.noShadowSlots ??
+        false);
+
     // Phase Steppers / Invisibility Cloak send the mage back to its original
     // slot. That's always allowed — even if the room is now locked, the mage
     // was already there before being affected (the lock applies *after* the
     // wound), so the reaction effectively undoes the wound rather than
     // crossing the lock.
-    if (isWoundBanishOrMove && hasPhaseSteppers) {
+    if (isWoundBanishOrMove && hasPhaseSteppers && !originalRoomHasNoShadow) {
       options.push({
         sourceKind: 'vault-card',
         sourceId: 'base.vault.phase-steppers',
@@ -1404,7 +1431,7 @@ export function buildReactionOptionsFor(
         ...(multi ? { forMageId: mageId } : {}),
       });
     }
-    if (isWoundBanishOrMove && hasInvisibilityCloak) {
+    if (isWoundBanishOrMove && hasInvisibilityCloak && !originalRoomHasNoShadow) {
       options.push({
         sourceKind: 'vault-card',
         sourceId: 'base.vault.invisibility-cloak',

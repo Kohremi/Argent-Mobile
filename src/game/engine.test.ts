@@ -12238,7 +12238,9 @@ describe('Mancers Vault cards (Mancers)', () => {
     s = addMage(s, 'p1', { id: 'mine', cardId: 'base.mage.neutral', color: 'off-white' });
     s = addMage(s, 'p1', { id: 'cloak', cardId: 'base.mage.neutral', color: 'off-white' });
     const slot = s.rooms
-      .flatMap((r) => (r.cannotBePlacedInDirectly ? [] : r.actionSpaces))
+      .flatMap((r) =>
+        r.cannotBePlacedInDirectly || r.noShadowSlots ? [] : r.actionSpaces,
+      )
       .find((sp) => !sp.occupant)!.id;
     s = placeMageOnSpace(s, 'p1', 'mine', slot);
     s = play(s, 'mancers.vault.shadow-salve');

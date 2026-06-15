@@ -7,7 +7,7 @@ import {
 } from '../../game/effects/helpers';
 import type { ActionSpace, GameState, OwnedMage, Player, Room } from '../../game/types';
 import { useUiStore } from '../../store/uiStore';
-import { PLAYER_AURA } from '../../utils/uiSelectors';
+import { isPoolRoom, PLAYER_AURA } from '../../utils/uiSelectors';
 import { LockIcon, ResourceIcon } from '../icons';
 import { usePromptTargets } from '../Prompts/usePromptTargets';
 import { MageToken } from './MageToken';
@@ -101,6 +101,13 @@ export function RoomScene({
         <InfirmarySlots room={room} state={state} />
       ) : spaces.length === 0 ? (
         <p className="text-[10px] text-slate-500 italic">no action spaces</p>
+      ) : isPoolRoom(room) ? (
+        <PoolSlots
+          spaces={spaces}
+          eligible={eligible}
+          onPlace={onPlace}
+          mageIndex={mageIndex}
+        />
       ) : (
         <ul className="space-y-1">
           {spaces.map((s) => (
@@ -110,6 +117,7 @@ export function RoomScene({
               eligible={eligible.has(s.id)}
               onPlace={onPlace}
               mageIndex={mageIndex}
+              noShadow={room.noShadowSlots === true}
             />
           ))}
         </ul>
@@ -126,11 +134,14 @@ function SlotRow({
   eligible,
   onPlace,
   mageIndex,
+  noShadow,
 }: {
   space: ActionSpace;
   eligible: boolean;
   onPlace: (spaceId: string) => void;
   mageIndex: Map<string, { mage: OwnedMage; owner: Player }>;
+  /** Room has no shadow positions (Great Hall, Golem Lab) — hide the shadow tile. */
+  noShadow?: boolean;
 }) {
   const { mageTargets, spaceTargets, pickMage, pickSpace } = usePromptTargets();
   const occupant = space.occupant as Occupant | null;
@@ -177,14 +188,16 @@ function SlotRow({
           : 'bg-slate-950/40 text-slate-300',
       )}
     >
-      <SlotTile
-        isShadow
-        occupant={shadowOccupant}
-        mageIndex={mageIndex}
-        onClick={shadowClick}
-        ring={shadowMageTargeted ? 'ring-2 ring-amber-400' : ''}
-        title={shadowTitle}
-      />
+      {!noShadow && (
+        <SlotTile
+          isShadow
+          occupant={shadowOccupant}
+          mageIndex={mageIndex}
+          onClick={shadowClick}
+          ring={shadowMageTargeted ? 'ring-2 ring-amber-400' : ''}
+          title={shadowTitle}
+        />
+      )}
       <SlotTile
         occupant={occupant}
         mageIndex={mageIndex}
@@ -231,6 +244,106 @@ function SlotRow({
         </div>
       </div>
     </li>
+  );
+}
+
+/**
+ * A "pool" room (the Great Hall's many identical seats) rendered like the
+ * Infirmary ward: a growing, wrapping row of square tiles — the occupied
+ * seats plus exactly one open "SLOT" (a new one appears once this fills, via
+ * `visibleRoomSpaces`). No per-slot label / type / effect blurb, since the
+ * room description at the top already explains what every seat does.
+ *
+ * Each tile carries the same interactions as `SlotRow`'s base tile: place a
+ * selected mage on the open seat, answer a space-target prompt, or pick an
+ * occupant for a mage-target prompt.
+ */
+function PoolSlots({
+  spaces,
+  eligible,
+  onPlace,
+  mageIndex,
+}: {
+  spaces: ActionSpace[];
+  eligible: Set<string>;
+  onPlace: (spaceId: string) => void;
+  mageIndex: Map<string, { mage: OwnedMage; owner: Player }>;
+}) {
+  const { mageTargets, spaceTargets, pickMage, pickSpace } = usePromptTargets();
+  return (
+    <div className="flex flex-wrap gap-1">
+      {spaces.map((space) => {
+        const occupant = space.occupant as Occupant | null;
+        const entry = occupant ? mageIndex.get(occupant.mageId) : undefined;
+        const isEligible = eligible.has(space.id);
+        const spaceTargeted = spaceTargets.has(space.id);
+        const occMageTargeted =
+          occupant !== null && mageTargets.has(occupant.mageId);
+
+        const onClick: (() => void) | undefined = spaceTargeted
+          ? () => pickSpace(space.id)
+          : isEligible
+            ? () => onPlace(space.id)
+            : occMageTargeted && occupant
+              ? () => pickMage(occupant.mageId)
+              : undefined;
+        const highlighted = spaceTargeted || isEligible || occMageTargeted;
+        const title = occMageTargeted
+          ? 'Choose this student'
+          : occupant
+            ? 'occupied'
+            : isEligible || spaceTargeted
+              ? 'place here'
+              : 'empty slot';
+
+        const content = entry ? (
+          <MageToken
+            color={entry.mage.color}
+            aura={PLAYER_AURA[entry.owner.color]}
+            isWounded={entry.mage.isWounded}
+            isShadowing={entry.mage.isShadowing}
+            golem={entry.mage.isTemporary === true}
+            size={entry.mage.isTemporary ? 44 : 38}
+          />
+        ) : (
+          <span className="text-[9px] uppercase tracking-wide text-slate-600">
+            SLOT
+          </span>
+        );
+
+        const className = clsx(
+          'w-14 h-12 rounded border-2 border-slate-500 flex items-center justify-center flex-shrink-0 p-0.5',
+          occupant ? 'bg-amber-400/15' : 'bg-slate-950/40',
+          highlighted && 'ring-2 ring-amber-400',
+        );
+
+        if (onClick) {
+          return (
+            <button
+              key={space.id}
+              type="button"
+              data-available={isEligible || spaceTargeted ? true : undefined}
+              onClick={(e) => {
+                e.stopPropagation();
+                onClick();
+              }}
+              title={title}
+              className={clsx(
+                className,
+                'hover:bg-amber-400/25 cursor-pointer transition-colors',
+              )}
+            >
+              {content}
+            </button>
+          );
+        }
+        return (
+          <div key={space.id} title={title} className={className}>
+            {content}
+          </div>
+        );
+      })}
+    </div>
   );
 }
 
