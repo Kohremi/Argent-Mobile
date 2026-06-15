@@ -1043,7 +1043,35 @@ function handlePlaceWorker(state: GameState, action: PlaceWorkerAction): GameSta
     !requestedShadow &&
     colorAbilityActive(state, mage, 'red') &&
     canArsMagnaTakeSpace(state, action.playerId, space);
-  if (!requestedShadow && space.occupant && !isArsMagnaPlacement) {
+
+  // Natural Magick (green) Side B: "When placing, if possible you may move an
+  // opponent's Mage to another slot in the same room and take its place."
+  // Placing a green-B Mage directly onto an opposing-occupied base slot opts
+  // into the displacement — the player then picks an open base slot in the
+  // same room to shove the opponent into. Requires such an open slot to exist.
+  const roomOpenBaseSlots = room.actionSpaces.filter(
+    (sp) =>
+      sp.id !== space.id &&
+      !sp.occupant &&
+      sp.slotType !== 'shadow' &&
+      sp.slotType !== 'shadow-merit' &&
+      sp.slotType !== 'wound',
+  );
+  const isNaturalMagickBDisplace =
+    !requestedShadow &&
+    actsAsColor(mage, 'green') &&
+    sideForColor(state, 'green') === 'B' &&
+    !magesLosePowers(state) &&
+    space.occupant !== null &&
+    space.occupant.ownerId !== action.playerId &&
+    roomOpenBaseSlots.length > 0;
+
+  if (
+    !requestedShadow &&
+    space.occupant &&
+    !isArsMagnaPlacement &&
+    !isNaturalMagickBDisplace
+  ) {
     throw new Error(`PLACE_WORKER: space ${space.id} already occupied`);
   }
   if (
@@ -1294,6 +1322,41 @@ function handlePlaceWorker(state: GameState, action: PlaceWorkerAction): GameSta
       },
     };
     return applyEffectResult(stateAfterCosts, result, ctx);
+  }
+
+  // Natural Magick Side B displacement: budget already consumed. Surface a
+  // prompt for which open slot in the room the opponent's Mage is shoved into;
+  // the resume effect performs the move and seats the green Mage in the
+  // vacated slot.
+  if (isNaturalMagickBDisplace && space.occupant) {
+    const minted = mintId(state, 'r');
+    const pending: PendingResolution = {
+      id: minted.id,
+      responderId: action.playerId,
+      prompt: {
+        kind: 'choose-target-action-space',
+        eligibleSpaceIds: roomOpenBaseSlots.map((sp) => sp.id),
+        label: "Move the opponent's Mage to which slot?",
+      },
+      resume: {
+        effectId: 'base.mage.natural-magick.displace',
+        context: {
+          greenMageId: action.mageId,
+          targetMageId: space.occupant.mageId,
+          takenSpaceId: space.id,
+        },
+      },
+      source: {
+        kind: 'mage-power',
+        id: action.mageId,
+        triggeringPlayerId: action.playerId,
+        description: 'Natural Magick (Side B) — displace & take slot',
+      },
+    };
+    return {
+      ...minted.state,
+      pendingResolutionStack: [...minted.state.pendingResolutionStack, pending],
+    };
   }
 
   const updatedRooms = state.rooms.map((r, ri) =>

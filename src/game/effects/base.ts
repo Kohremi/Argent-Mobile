@@ -6184,6 +6184,109 @@ function moveRedMagePatch(
 }
 
 // ============================================================================
+// Natural Magick (green) Side B — "When placing, if possible you may move an
+// opponent's Mage to another slot in the same room and take its place."
+//
+// The engine detects the opt-in at PLACE_WORKER (a green-B Mage placed onto an
+// opposing-occupied base slot) and surfaces a choose-slot prompt; this effect
+// resumes once the destination is chosen. The opponent's Mage moves to the
+// chosen open slot and the green Mage seats in the vacated slot. Modeled as a
+// forced reposition with no reaction window (mirrors Cut Plane's in-place
+// shadow move). The placed green Mage does not re-trigger an instant-room
+// reward for the seized slot.
+// ============================================================================
+registerEffect(
+  'base.mage.natural-magick.displace',
+  (ctx: EffectContext): EffectResult => {
+    if (ctx.resumeAnswer?.kind !== 'space-chosen') {
+      throw new Error(
+        `natural-magick.displace expected space-chosen, got ${ctx.resumeAnswer?.kind}`,
+      );
+    }
+    const destSpaceId = ctx.resumeAnswer.spaceId;
+    const greenMageId = ctx.resumeContext?.['greenMageId'];
+    const targetMageId = ctx.resumeContext?.['targetMageId'];
+    const takenSpaceId = ctx.resumeContext?.['takenSpaceId'];
+    if (
+      typeof greenMageId !== 'string' ||
+      typeof targetMageId !== 'string' ||
+      typeof takenSpaceId !== 'string'
+    ) {
+      throw new Error('natural-magick.displace: missing context fields');
+    }
+    const greenOwnerId = ctx.triggeringPlayerId;
+    const targetOwner = ctx.state.players.find((p) =>
+      p.mages.some((m) => m.id === targetMageId),
+    );
+    if (!targetOwner) return { kind: 'done', patch: {} };
+
+    const rooms = ctx.state.rooms.map((r) => ({
+      ...r,
+      actionSpaces: r.actionSpaces.map((sp) => {
+        if (sp.id === takenSpaceId) {
+          return {
+            ...sp,
+            occupant: {
+              mageId: greenMageId,
+              ownerId: greenOwnerId,
+              isShadowing: false,
+            },
+          };
+        }
+        if (sp.id === destSpaceId) {
+          return {
+            ...sp,
+            occupant: {
+              mageId: targetMageId,
+              ownerId: targetOwner.id,
+              isShadowing: false,
+            },
+          };
+        }
+        return sp;
+      }),
+    }));
+    const players = ctx.state.players.map((p) => {
+      if (p.id === greenOwnerId) {
+        return {
+          ...p,
+          mages: p.mages.map((m) =>
+            m.id !== greenMageId
+              ? m
+              : {
+                  ...m,
+                  location: {
+                    kind: 'action-space' as const,
+                    spaceId: takenSpaceId,
+                  },
+                  isShadowing: false,
+                },
+          ),
+        };
+      }
+      if (p.id === targetOwner.id) {
+        return {
+          ...p,
+          mages: p.mages.map((m) =>
+            m.id !== targetMageId
+              ? m
+              : {
+                  ...m,
+                  location: {
+                    kind: 'action-space' as const,
+                    spaceId: destSpaceId,
+                  },
+                },
+          ),
+        };
+      }
+      return p;
+    });
+    return { kind: 'done', patch: { rooms, players } };
+  },
+);
+
+// ============================================================================
 // Bell Tower offerings (base pack, 2-player game)
 // ============================================================================
 

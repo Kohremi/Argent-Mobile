@@ -15352,6 +15352,64 @@ describe('Modular mage powers — Side A gated by mageAbilitySides', () => {
     expect(s.activeReactionWindows).toHaveLength(1);
   });
 
+  it('Natural Magick Side B: displace an opponent in the room and take its slot', () => {
+    let s = initGame({
+      ...TWO_PLAYER_CONFIG,
+      mageAbilitySides: { 'natural-magick': 'B' },
+    });
+    const room = s.rooms.find(
+      (r) =>
+        !r.cannotBePlacedInDirectly &&
+        !r.isInstantRoom &&
+        r.actionSpaces.filter(
+          (sp) => sp.slotType !== 'shadow' && sp.slotType !== 'shadow-merit',
+        ).length >= 2,
+    );
+    if (!room) throw new Error('test: no room with 2 base slots');
+    const baseSlots = room.actionSpaces.filter(
+      (sp) => sp.slotType !== 'shadow' && sp.slotType !== 'shadow-merit',
+    );
+    const takenSlot = baseSlots[0]!.id;
+    const openSlot = baseSlots[1]!.id;
+    s = addMage(s, 'p2', { id: 'bob', cardId: 'base.mage.neutral', color: 'off-white' });
+    s = placeMageOnSpace(s, 'p2', 'bob', takenSlot);
+    s = addMage(s, 'p1', {
+      id: 'g',
+      cardId: 'base.mage.natural-magick',
+      color: 'green',
+    });
+    s = errands(s);
+    // Place the green Mage directly onto Bob's occupied slot → opt into the
+    // displacement; a destination prompt is surfaced.
+    s = applyAction(s, {
+      type: 'PLACE_WORKER',
+      playerId: 'p1',
+      mageId: 'g',
+      actionSpaceId: takenSlot,
+    });
+    const top = topPending(s);
+    if (top.prompt.kind !== 'choose-target-action-space') {
+      throw new Error('expected choose-target-action-space');
+    }
+    expect(top.prompt.eligibleSpaceIds).toContain(openSlot);
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: top.id,
+      answer: { kind: 'space-chosen', spaceId: openSlot },
+    });
+    const spaces = s.rooms.flatMap((r) => r.actionSpaces);
+    expect(spaces.find((sp) => sp.id === takenSlot)?.occupant?.mageId).toBe('g');
+    expect(spaces.find((sp) => sp.id === openSlot)?.occupant?.mageId).toBe('bob');
+    const green = s.players
+      .find((p) => p.id === 'p1')!
+      .mages.find((m) => m.id === 'g')!;
+    const bob = s.players
+      .find((p) => p.id === 'p2')!
+      .mages.find((m) => m.id === 'bob')!;
+    expect(green.location).toEqual({ kind: 'action-space', spaceId: takenSlot });
+    expect(bob.location).toEqual({ kind: 'action-space', spaceId: openSlot });
+  });
+
   it('Planar Studies Side A: cannot shadow on place (no buff)', () => {
     let s = initGame(TWO_PLAYER_CONFIG); // default Side A
     const room = s.rooms.find(
