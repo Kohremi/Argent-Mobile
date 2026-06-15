@@ -755,6 +755,15 @@ export function buildNonSpellHarmfulTargets(
  * Returns the patch + a `mage-moved` reaction trigger. The caller must
  * validate that the target space is empty and (for in-room moves) that the
  * rooms match. Throws if the mage is not on a slot.
+ *
+ * RULE: moving a mage NEVER claims an instant-room reward — only a fresh
+ * placement does (a worker placed from the office, via the engine's
+ * PLACE_WORKER reward prompt or `patchWithMaybeInstantReward`). This primitive
+ * is the canonical chokepoint for relocations precisely so that invariant
+ * holds by construction: it produces no reward prompt. Effects that relocate a
+ * mage (Gust of Wind, Paralocation, Cut Plane / Fade, the Infirmary-move
+ * spells, Natural Magick Side B's displacement, …) route through here and so
+ * inherit the rule for free.
  */
 export function moveMageToSpace(
   state: GameState,

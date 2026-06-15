@@ -236,6 +236,27 @@ every dependent effect inherits it.
   When adding an effect that "grants N of X to surface later," prefer pushing
   onto the appropriate queue rather than nesting N prompts inline.
 
+### Rule: instant-room rewards — placement vs. move
+
+Instant rooms (Guilds, Great Hall, Golem Lab, …) fire their slot reward when a
+Mage is **placed** there from the office. **Moving an already-placed Mage into a
+slot NEVER claims an instant-room reward** — only a fresh placement does. So:
+
+- **Placements** claim the reward: the engine's `PLACE_WORKER` reward prompt
+  (`pushResolutionChoicePrompt`) and the effect-side equivalent
+  `patchWithMaybeInstantReward` (Tardy/Stop Time, shadow placements, Ars Magna
+  takeover, Natural Magick B's *seizing* Mage, …).
+- **Moves** claim nothing: route every relocation through
+  `moveMageToSpace` ([helpers.ts](src/game/effects/helpers.ts)), which by
+  construction produces no reward prompt. Gust of Wind, Paralocation, Cut Plane /
+  Fade, the Infirmary-move spells, and Natural Magick B's *displaced opponent*
+  all inherit the rule for free.
+
+When writing a new effect that lands a Mage on a slot, decide which it is: if the
+Mage is already on the board, it's a move (use `moveMageToSpace`, no reward); if
+it's a fresh placement from the office, claim the reward via
+`patchWithMaybeInstantReward`.
+
 ## 8. Phase machine
 
 `GamePhase` is a discriminated union; `applyAction` + `ADVANCE_PHASE` walk it:

@@ -15410,6 +15410,50 @@ describe('Modular mage powers — Side A gated by mageAbilitySides', () => {
     expect(bob.location).toEqual({ kind: 'action-space', spaceId: openSlot });
   });
 
+  it('Natural Magick Side B: the seized-slot placement claims the instant-room reward (the move does not)', () => {
+    let s = initGame({
+      ...TWO_PLAYER_CONFIG,
+      mageAbilitySides: { 'natural-magick': 'B' },
+    });
+    s = forceRoomSide(s, 'Guilds', 'B');
+    const taken = 'base.room.guilds.b.slot-2'; // a slot with a registered reward
+    const guilds = s.rooms.find((r) => r.name === 'Guilds')!;
+    const openSlot = guilds.actionSpaces.find(
+      (sp) =>
+        sp.id !== taken &&
+        sp.slotType !== 'shadow' &&
+        sp.slotType !== 'shadow-merit' &&
+        sp.slotType !== 'wound',
+    )!.id;
+    s = addMage(s, 'p2', { id: 'bob', cardId: 'base.mage.neutral', color: 'off-white' });
+    s = placeMageOnSpace(s, 'p2', 'bob', taken);
+    s = addMage(s, 'p1', {
+      id: 'g',
+      cardId: 'base.mage.natural-magick',
+      color: 'green',
+    });
+    s = errands(s);
+    s = applyAction(s, {
+      type: 'PLACE_WORKER',
+      playerId: 'p1',
+      mageId: 'g',
+      actionSpaceId: taken,
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'space-chosen', spaceId: openSlot },
+    });
+    // The green placement into the seized instant-room slot claims the reward:
+    // a forfeit-or-reward prompt surfaces for p1.
+    const top = topPending(s);
+    expect(top.resume.effectId).toBe('base.system.resolution-choice');
+    expect(top.responderId).toBe('p1');
+    const spaces = s.rooms.flatMap((r) => r.actionSpaces);
+    expect(spaces.find((sp) => sp.id === taken)?.occupant?.mageId).toBe('g');
+    expect(spaces.find((sp) => sp.id === openSlot)?.occupant?.mageId).toBe('bob');
+  });
+
   it('Planar Studies Side A: cannot shadow on place (no buff)', () => {
     let s = initGame(TWO_PLAYER_CONFIG); // default Side A
     const room = s.rooms.find(
