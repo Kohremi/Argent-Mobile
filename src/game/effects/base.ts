@@ -6220,25 +6220,67 @@ registerEffect(
     }
     const greenOwnerId = ctx.triggeringPlayerId;
 
-    // 1. Move the opponent to the chosen slot (no instant reward — it's a move).
+    // Move the opponent to the chosen slot (a MOVE — no instant reward) and
+    // open the standard mage-moved reaction window so the displaced owner may
+    // respond (Phase Steppers / Invisibility Cloak / Ancient Armor, …). The
+    // green Mage is seated afterward, once the window drains, via the
+    // `afterResume` continuation — so a reaction that sends the opponent back
+    // to the vacated slot can foil the takeover.
     const moved = moveMageToSpace(
       ctx.state,
       targetMageId,
       destSpaceId,
       greenOwnerId,
     );
-    const afterMove: GameState = { ...ctx.state, ...moved.patch };
+    return {
+      kind: 'open-reaction',
+      patch: moved.patch,
+      window: {
+        triggerEvents: [moved.triggerEvent],
+        pendingResponderIds: buildReactionQueue(ctx.state, greenOwnerId),
+        reactedPlayerIds: [],
+        afterResume: {
+          effectId: 'base.mage.natural-magick.displace.seat',
+          context: { greenMageId, takenSpaceId },
+        },
+        source: ctx.source,
+      },
+    };
+  },
+);
 
-    // 2. Seat the green Mage in the now-vacated slot (a placement) and let it
-    //    claim the slot's instant-room reward if any.
+// After the displaced opponent's reaction window drains, seat the green Mage in
+// the vacated slot (a placement → claims the instant-room reward). If a reaction
+// returned a Mage to that slot (Phase Steppers sends the moved Mage back to its
+// original slot, which is the vacated one), the takeover fizzles — the green
+// Mage stays in the office and the Action is still spent.
+registerEffect(
+  'base.mage.natural-magick.displace.seat',
+  (ctx: EffectContext): EffectResult => {
+    const greenMageId = ctx.resumeContext?.['greenMageId'];
+    const takenSpaceId = ctx.resumeContext?.['takenSpaceId'];
+    if (typeof greenMageId !== 'string' || typeof takenSpaceId !== 'string') {
+      throw new Error('natural-magick.displace.seat: missing context fields');
+    }
+    const greenOwnerId = ctx.triggeringPlayerId;
+    const space = ctx.state.rooms
+      .flatMap((r) => r.actionSpaces)
+      .find((s) => s.id === takenSpaceId);
+    if (!space || space.occupant) return { kind: 'done', patch: {} };
+    const greenMage = ctx.state.players
+      .find((p) => p.id === greenOwnerId)
+      ?.mages.find((m) => m.id === greenMageId);
+    if (!greenMage || greenMage.location.kind !== 'office') {
+      return { kind: 'done', patch: {} };
+    }
     const seatPatch = placeOfficeMageOnSpace(
-      afterMove,
+      ctx.state,
       greenOwnerId,
       greenMageId,
       takenSpaceId,
     );
     return patchWithMaybeInstantReward(
-      afterMove,
+      ctx.state,
       seatPatch,
       takenSpaceId,
       greenOwnerId,

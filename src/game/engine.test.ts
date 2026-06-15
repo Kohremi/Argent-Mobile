@@ -15327,6 +15327,8 @@ describe('Modular mage powers — Side A gated by mageAbilitySides', () => {
     )!;
     s = addMage(s, 'p2', { id: 'bob', cardId: 'base.mage.neutral', color: 'off-white' });
     s = placeMageOnSpace(s, 'p2', 'bob', slot.id);
+    // Bob holds a Mystic Amulet, which reacts "when shadowed".
+    s = addVaultCard(s, 'p2', 'base.vault.mystic-amulet');
     s = addMage(s, 'p1', {
       id: 'pp',
       cardId: 'base.mage.planar-studies',
@@ -15348,8 +15350,19 @@ describe('Modular mage powers — Side A gated by mageAbilitySides', () => {
     expect(space.occupant?.mageId).toBe('bob');
     expect(space.shadowOccupant?.mageId).toBe('pp');
     expect(s.players.find((p) => p.id === 'p1')!.resources.mana).toBe(2);
-    // Shadowing an opponent opens a mage-shadowed reaction window.
+    // Shadowing an opponent opens a mage-shadowed reaction window, and Bob's
+    // "when shadowed" reaction (Mystic Amulet) is offered.
     expect(s.activeReactionWindows).toHaveLength(1);
+    const react = topPending(s);
+    expect(react.prompt.kind).toBe('reaction-window');
+    expect(react.responderId).toBe('p2');
+    if (react.prompt.kind === 'reaction-window') {
+      expect(
+        react.prompt.reactionOptions.some(
+          (o) => o.sourceId === 'base.vault.mystic-amulet',
+        ),
+      ).toBe(true);
+    }
   });
 
   it('Natural Magick Side B: displace an opponent in the room and take its slot', () => {
@@ -15396,6 +15409,15 @@ describe('Modular mage powers — Side A gated by mageAbilitySides', () => {
       type: 'RESOLVE_PENDING',
       resolutionId: top.id,
       answer: { kind: 'space-chosen', spaceId: openSlot },
+    });
+    // Moving Bob opens a mage-moved reaction window for him; he passes.
+    const react = topPending(s);
+    expect(react.prompt.kind).toBe('reaction-window');
+    expect(react.responderId).toBe('p2');
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: react.id,
+      answer: { kind: 'reaction-passed' },
     });
     const spaces = s.rooms.flatMap((r) => r.actionSpaces);
     expect(spaces.find((sp) => sp.id === takenSlot)?.occupant?.mageId).toBe('g');
@@ -15444,8 +15466,17 @@ describe('Modular mage powers — Side A gated by mageAbilitySides', () => {
       resolutionId: topPending(s).id,
       answer: { kind: 'space-chosen', spaceId: openSlot },
     });
-    // The green placement into the seized instant-room slot claims the reward:
-    // a forfeit-or-reward prompt surfaces for p1.
+    // Moving Bob opens his mage-moved reaction window first; he passes.
+    const react = topPending(s);
+    expect(react.prompt.kind).toBe('reaction-window');
+    expect(react.responderId).toBe('p2');
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: react.id,
+      answer: { kind: 'reaction-passed' },
+    });
+    // THEN the green placement into the seized instant-room slot claims the
+    // reward: a forfeit-or-reward prompt surfaces for p1.
     const top = topPending(s);
     expect(top.resume.effectId).toBe('base.system.resolution-choice');
     expect(top.responderId).toBe('p1');
