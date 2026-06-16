@@ -11,6 +11,7 @@ import {
   applyCandidateAllocation,
   buildReactionOptionsFor,
   buildReactionQueue,
+  buildResolutionChoiceOptions,
   actsAsColor,
   colorAbilityActive,
   sideForColor,
@@ -39,7 +40,6 @@ import type {
   BuyVaultCardAction,
   DiscardBonusActionsAction,
   CastSpellAction,
-  ChoiceOption,
   ChooseCandidateAction,
   ChooseDraftFirstAction,
   ClaimBellTowerAction,
@@ -1462,31 +1462,12 @@ function pushResolutionChoicePrompt(
   if (!player) {
     throw new Error(`pushResolutionChoicePrompt: player ${playerId} not found`);
   }
-  // Shadow occupants don't pay the slot's merit cost — they didn't get there
-  // via normal merit placement.
-  const meritCost =
-    position === 'base' && space.slotType === 'merit'
-      ? (space.costToActivate?.meritBadges ?? 0)
-      : 0;
-  const canAffordReward =
-    meritCost === 0 || player.resources.meritBadges >= meritCost;
-
-  // Divinity Side B ("Resolution"): a blue Mage may pay 4 Gold to activate a
-  // Merit Slot it occupies, instead of spending a Merit Badge. Offered only on
-  // a base-position merit slot whose occupant acts as blue while Divinity is on
-  // Side B.
-  const DIVINITY_B_GOLD = 4;
-  const occupantMage =
-    position === 'base' && space.occupant
-      ? player.mages.find((m) => m.id === space.occupant!.mageId)
-      : undefined;
-  const divinityGoldOption =
-    meritCost > 0 &&
-    occupantMage !== undefined &&
-    actsAsColor(occupantMage, 'blue') &&
-    sideForColor(state, 'blue') === 'B';
-  const canAffordGold = player.resources.gold >= DIVINITY_B_GOLD;
-
+  const { options, meritCost, goldCost } = buildResolutionChoiceOptions(
+    state,
+    space,
+    playerId,
+    position,
+  );
   const source: ResolutionSource = describeSpaceSource(
     space.id,
     room.name,
@@ -1494,40 +1475,6 @@ function pushResolutionChoicePrompt(
     space.index,
     playerId,
   );
-  const options: ChoiceOption[] = [
-    canAffordReward
-      ? {
-          id: 'reward',
-          label:
-            meritCost > 0
-              ? `Take reward (spend ${meritCost} MB)`
-              : 'Take reward',
-          payload: {},
-          available: true,
-        }
-      : {
-          id: 'reward',
-          label: `Take reward (spend ${meritCost} MB)`,
-          payload: {},
-          available: false,
-          unavailableReason: `requires ${meritCost} Merit Badge${meritCost === 1 ? '' : 's'} (you have ${player.resources.meritBadges})`,
-        },
-  ];
-  if (divinityGoldOption) {
-    options.push({
-      id: 'reward-gold',
-      label: `Take reward (pay ${DIVINITY_B_GOLD} Gold — Divinity)`,
-      payload: {},
-      available: canAffordGold,
-      ...(canAffordGold
-        ? {}
-        : {
-            unavailableReason: `requires ${DIVINITY_B_GOLD} Gold (you have ${player.resources.gold})`,
-          }),
-    });
-  }
-  options.push({ id: 'forfeit', label: 'Forfeit for 1 IP', payload: {} });
-
   const promptInput: PendingResolutionInput = {
     responderId: playerId,
     prompt: { kind: 'choose-from-options', options },
@@ -1537,7 +1484,7 @@ function pushResolutionChoicePrompt(
         spaceId: space.id,
         innerEffectId: space.effectId,
         meritCost,
-        goldCost: divinityGoldOption ? DIVINITY_B_GOLD : 0,
+        goldCost,
       },
     },
     source,

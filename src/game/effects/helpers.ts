@@ -2874,6 +2874,95 @@ export function colorAbilityActive(
   return actsAsColor(mage, color) && sideForColor(state, color) === 'A';
 }
 
+/** Gold cost of the Divinity Side B "pay to activate a Merit Slot" option. */
+export const DIVINITY_B_MERIT_GOLD = 4;
+
+/**
+ * Builds the shared "forfeit-or-reward" option list for an occupied slot's
+ * resolution (used at the resolution-phase pump AND at instant-room placement,
+ * by both the engine and the effect-side prompt builders — the single source
+ * of truth so the two never drift).
+ *
+ * Returns the option list plus the resolved `meritCost` / `goldCost` to thread
+ * into the resume context. Options:
+ *   - `reward` — take the slot's reward, paying any Merit cost with Badges.
+ *   - `reward-gold` — Divinity Side B: pay 4 Gold instead of a Merit Badge to
+ *     activate a Merit Slot whose base occupant acts as blue. Only present when
+ *     applicable.
+ *   - `forfeit` — skip the reward for 1 IP.
+ *
+ * The slot occupant is read from live `state` by slot id, NOT from the passed
+ * `space` snapshot — instant-room callers pass the pre-placement slot (whose
+ * `occupant` is still null), so reading `space.occupant` directly would miss
+ * the just-seated Mage.
+ */
+export function buildResolutionChoiceOptions(
+  state: GameState,
+  space: ActionSpace,
+  playerId: PlayerId,
+  position: 'base' | 'shadow',
+): { options: ChoiceOption[]; meritCost: number; goldCost: number } {
+  const player = findPlayer(state, playerId);
+  // Shadow occupants didn't arrive via merit placement, so they pay no cost.
+  const meritCost =
+    position === 'base' && space.slotType === 'merit'
+      ? (space.costToActivate?.meritBadges ?? 0)
+      : 0;
+  const meritBadges = player?.resources.meritBadges ?? 0;
+  const gold = player?.resources.gold ?? 0;
+  const canAffordReward = meritCost === 0 || meritBadges >= meritCost;
+
+  const liveSpace = state.rooms
+    .flatMap((r) => r.actionSpaces)
+    .find((s) => s.id === space.id);
+  const baseOccupantId =
+    position === 'base' ? liveSpace?.occupant?.mageId : undefined;
+  const occupantMage = baseOccupantId
+    ? player?.mages.find((m) => m.id === baseOccupantId)
+    : undefined;
+  const divinityGoldOption =
+    meritCost > 0 &&
+    occupantMage !== undefined &&
+    actsAsColor(occupantMage, 'blue') &&
+    sideForColor(state, 'blue') === 'B';
+  const goldCost = divinityGoldOption ? DIVINITY_B_MERIT_GOLD : 0;
+
+  const options: ChoiceOption[] = [
+    canAffordReward
+      ? {
+          id: 'reward',
+          label:
+            meritCost > 0 ? `Take reward (spend ${meritCost} MB)` : 'Take reward',
+          payload: {},
+          available: true,
+        }
+      : {
+          id: 'reward',
+          label: `Take reward (spend ${meritCost} MB)`,
+          payload: {},
+          available: false,
+          unavailableReason: `requires ${meritCost} Merit Badge${meritCost === 1 ? '' : 's'} (you have ${meritBadges})`,
+        },
+  ];
+  if (divinityGoldOption) {
+    const canAffordGold = gold >= goldCost;
+    options.push({
+      id: 'reward-gold',
+      label: `Take reward (pay ${goldCost} Gold — Divinity)`,
+      payload: {},
+      available: canAffordGold,
+      ...(canAffordGold
+        ? {}
+        : {
+            unavailableReason: `requires ${goldCost} Gold (you have ${gold})`,
+          }),
+    });
+  }
+  options.push({ id: 'forfeit', label: 'Forfeit for 1 IP', payload: {} });
+
+  return { options, meritCost, goldCost };
+}
+
 /**
  * Technomancy (orange) "upon placement" hook. Whenever an orange Mage — or
  * the Archmage's Apprentice, which acts as every department colour — is

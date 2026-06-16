@@ -15240,6 +15240,50 @@ describe('Modular mage powers — Side A gated by mageAbilitySides', () => {
     expect(p1.resources.meritBadges).toBe(0); // no badge spent
   });
 
+  it('Divinity Side B: the gold option is offered on an INSTANT merit slot at placement', () => {
+    // Regression: instant rooms push the reward prompt at placement with a
+    // pre-placement slot snapshot, so the occupant must be read from live state.
+    let s = initGame({
+      ...TWO_PLAYER_CONFIG,
+      mageAbilitySides: { divinity: 'B' },
+    });
+    s = forceRoomSide(s, 'Guilds', 'B'); // instant; slot-1 is a 1-MB merit slot
+    s = addMage(s, 'p1', {
+      id: 'blue',
+      cardId: 'base.mage.divinity',
+      color: 'blue',
+    });
+    s = zeroPlayerResources(s, 'p1');
+    s = mapPlayer(s, 'p1', (p) => ({
+      ...p,
+      resources: { ...p.resources, gold: 6, meritBadges: 0 },
+    }));
+    s = errands(s);
+    s = applyAction(s, {
+      type: 'PLACE_WORKER',
+      playerId: 'p1',
+      mageId: 'blue',
+      actionSpaceId: 'base.room.guilds.b.slot-1',
+    });
+    // Instant placement immediately surfaces the forfeit-or-reward prompt.
+    const top = topPending(s);
+    if (top.prompt.kind !== 'choose-from-options') {
+      throw new Error('expected choose-from-options');
+    }
+    expect(top.prompt.options.map((o) => o.id)).toContain('reward-gold');
+    expect(top.prompt.options.find((o) => o.id === 'reward')?.available).toBe(
+      false,
+    );
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: top.id,
+      answer: { kind: 'option-chosen', optionId: 'reward-gold', payload: {} },
+    });
+    const p1 = s.players.find((p) => p.id === 'p1')!;
+    expect(p1.resources.gold).toBe(2); // 6 - 4 (the slot's own reward is still pending)
+    expect(p1.resources.meritBadges).toBe(0);
+  });
+
   it('Technomancy Side B: pay 3 Gold to Mark a Voter an opponent in the room has marked', () => {
     let s = initGame({
       activePackIds: ['base', 'mancers'],

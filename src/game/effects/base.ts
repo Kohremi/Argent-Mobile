@@ -8,6 +8,7 @@ import { getOrthogonallyAdjacentRoomIds } from '../setup';
 import {
   actsAsColor,
   colorAbilityActive,
+  buildResolutionChoiceOptions,
   affordableVaultCards,
   ADVENTURING_B_CAP,
   adventuringBPlacementHookPatch,
@@ -7778,44 +7779,22 @@ function buildResolutionChoicePromptInput(
   playerId: string,
   position: 'base' | 'shadow' = 'base',
 ): PendingResolutionInput {
-  const player = state.players.find((p) => p.id === playerId);
-  const meritCost =
-    position === 'base' && space.slotType === 'merit'
-      ? (space.costToActivate?.meritBadges ?? 0)
-      : 0;
-  const canAffordReward =
-    meritCost === 0 || (player?.resources.meritBadges ?? 0) >= meritCost;
+  const { options, meritCost, goldCost } = buildResolutionChoiceOptions(
+    state,
+    space,
+    playerId,
+    position,
+  );
   return {
     responderId: playerId,
-    prompt: {
-      kind: 'choose-from-options',
-      options: [
-        canAffordReward
-          ? {
-              id: 'reward',
-              label:
-                meritCost > 0
-                  ? `Take reward (spend ${meritCost} MB)`
-                  : 'Take reward',
-              payload: {},
-              available: true,
-            }
-          : {
-              id: 'reward',
-              label: `Take reward (spend ${meritCost} MB)`,
-              payload: {},
-              available: false,
-              unavailableReason: `requires ${meritCost} Merit Badge${meritCost === 1 ? '' : 's'} (you have ${player?.resources.meritBadges ?? 0})`,
-            },
-        { id: 'forfeit', label: 'Forfeit for 1 IP', payload: {} },
-      ],
-    },
+    prompt: { kind: 'choose-from-options', options },
     resume: {
       effectId: 'base.system.resolution-choice',
       context: {
         spaceId: space.id,
         innerEffectId: space.effectId,
         meritCost,
+        goldCost,
       },
     },
     source: {
