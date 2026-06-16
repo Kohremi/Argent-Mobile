@@ -20322,9 +20322,9 @@ function chainLightningCastAnotherPrompt(
 // is empty AND whose room isn't at the caster's per-room cap), then pick one
 // of the caster's office mages to seat at the now-vacated base position.
 // Opposing blue mages are spell-immune and excluded from the target list.
-// No reaction window opens for the self-shadow move (the spell forces the
-// reposition; defensive reactions like Phase Steppers / Haunt key off
-// wound/banish/move/shadow events that the engine doesn't synthesize here).
+// Forcing the opponent's Mage to its shadow position is a move, so it opens a
+// mage-moved reaction window (Phase Steppers / Invisibility Cloak / Ancient
+// Armor, …); the caster's Mage is seated only after the window drains.
 // ============================================================================
 
 function listCutPlaneTargets(
@@ -20360,7 +20360,7 @@ registerEffect(
     const self = 'base.spell.indefinite-definitives.l1';
     const step = ctx.resumeContext?.['step'];
 
-    if (!ctx.resumeAnswer) {
+    if (step === undefined) {
       const targets = listCutPlaneTargets(ctx.state, ctx.triggeringPlayerId);
       if (targets.length === 0) return { kind: 'done', patch: {} };
       const officeMages = listPlaceWithoutPowersMages(
@@ -20383,7 +20383,7 @@ registerEffect(
     }
 
     if (step === 'apply-shadow') {
-      if (ctx.resumeAnswer.kind !== 'mage-chosen') {
+      if (ctx.resumeAnswer?.kind !== 'mage-chosen') {
         throw new Error(`${self} apply-shadow expected mage-chosen`);
       }
       const targetMageId = ctx.resumeAnswer.mageId;
@@ -20421,17 +20421,50 @@ registerEffect(
             : { ...s, occupant: null, shadowOccupant: occupancy },
         ),
       }));
-      const afterShadow: GameState = { ...ctx.state, players, rooms };
+      // Forcing the opponent's Mage to its shadow position is a move — open the
+      // standard mage-moved reaction window so its owner may respond. The
+      // caster's Mage is seated afterward, via the afterResume continuation,
+      // so a reaction that returns the Mage to the base foils the takeover.
+      const event: ReactionTriggerEvent = {
+        kind: 'mage-moved',
+        mageId: targetMageId,
+        ownerId: targetOwner.id,
+        fromSpaceId: spaceId,
+        toSpaceId: spaceId,
+        byPlayerId: ctx.triggeringPlayerId,
+      };
+      return {
+        kind: 'open-reaction',
+        patch: { players, rooms },
+        window: {
+          triggerEvents: [event],
+          pendingResponderIds: buildReactionQueue(
+            ctx.state,
+            ctx.triggeringPlayerId,
+          ),
+          reactedPlayerIds: [],
+          afterResume: { effectId: self, context: { step: 'after-react', spaceId } },
+          source: ctx.source,
+        },
+      };
+    }
+
+    if (step === 'after-react') {
+      // Continuation once the move window drains: seat one of the caster's
+      // office Mages in the vacated base, if it's still empty.
+      const spaceId = String(ctx.resumeContext?.['spaceId'] ?? '');
+      if (!spaceId) return { kind: 'done', patch: {} };
+      const space = ctx.state.rooms
+        .flatMap((r) => r.actionSpaces)
+        .find((s) => s.id === spaceId);
+      if (!space || space.occupant) return { kind: 'done', patch: {} };
       const officeMages = listPlaceWithoutPowersMages(
-        afterShadow,
+        ctx.state,
         ctx.triggeringPlayerId,
       );
-      if (officeMages.length === 0) {
-        return { kind: 'done', patch: { players, rooms } };
-      }
+      if (officeMages.length === 0) return { kind: 'done', patch: {} };
       return {
         kind: 'pause',
-        patch: { players, rooms },
         pending: {
           responderId: ctx.triggeringPlayerId,
           prompt: { kind: 'choose-target-mage', eligibleMageIds: officeMages },
@@ -20445,12 +20478,16 @@ registerEffect(
     }
 
     if (step === 'apply-place') {
-      if (ctx.resumeAnswer.kind !== 'mage-chosen') {
+      if (ctx.resumeAnswer?.kind !== 'mage-chosen') {
         throw new Error(`${self} apply-place expected mage-chosen`);
       }
       const placerMageId = ctx.resumeAnswer.mageId;
       const spaceId = String(ctx.resumeContext?.['spaceId'] ?? '');
       if (!spaceId) return { kind: 'done', patch: {} };
+      const space = ctx.state.rooms
+        .flatMap((r) => r.actionSpaces)
+        .find((s) => s.id === spaceId);
+      if (!space || space.occupant) return { kind: 'done', patch: {} };
       return {
         kind: 'done',
         patch: placeOfficeMageOnSpace(
@@ -20475,7 +20512,10 @@ registerEffect(
 // whose slot's shadow is empty), then a multi-pick prompt that lets the
 // caster toggle which placed mages in that room shift to their slot's
 // shadow position. Opposing blue mages are spell-immune and excluded.
-// No reaction window opens for the moves (matches Inversion's pattern).
+// Each base→shadow shift is a move, so the spell opens a mage-moved reaction
+// window for any shifted OPPONENT Mage (own-Mage shifts can't be reacted to —
+// the caster is excluded from the reactor queue). Unlike Inversion (which only
+// moves the caster's OWN Mages and so fires nothing), Fade can move opponents.
 // ============================================================================
 
 function listFadeRooms(state: GameState, casterId: string): string[] {
@@ -20612,7 +20652,34 @@ registerEffect(
         );
         const shifts = candidates.filter((c) => picked.includes(c.mageId));
         if (shifts.length === 0) return { kind: 'done', patch: {} };
-        return { kind: 'done', patch: applyFadeShift(ctx.state, shifts) };
+        const patch = applyFadeShift(ctx.state, shifts);
+        // Each base→shadow shift is a move — opponents whose Mage was shifted
+        // may react (Phase Steppers / Invisibility Cloak / Ancient Armor, …).
+        // Own-Mage shifts emit events too but are harmless: the caster is
+        // excluded from the reactor queue.
+        const events: ReactionTriggerEvent[] = shifts.map((sh) => ({
+          kind: 'mage-moved',
+          mageId: sh.mageId,
+          ownerId: sh.ownerId,
+          fromSpaceId: sh.spaceId,
+          toSpaceId: sh.spaceId,
+          byPlayerId: ctx.triggeringPlayerId,
+        }));
+        return {
+          kind: 'open-reaction',
+          patch,
+          window: {
+            triggerEvents: events,
+            pendingResponderIds: buildBatchReactorQueue(
+              ctx.state,
+              ctx.triggeringPlayerId,
+              events,
+            ),
+            reactedPlayerIds: [],
+            afterResume: { effectId: 'base.system.noop', context: {} },
+            source: ctx.source,
+          },
+        };
       }
       const next = picked.includes(optionId)
         ? picked.filter((id) => id !== optionId)

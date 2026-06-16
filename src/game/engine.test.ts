@@ -25664,6 +25664,16 @@ describe('Fade (Parallel Synchronicity L2)', () => {
       resolutionId: topPending(s).id,
       answer: { kind: 'option-chosen', optionId: 'done', payload: {} },
     });
+    // Shifting Bob's Mages base→shadow is a move → Bob gets one mage-moved
+    // reaction window for the batch; pass it.
+    const react = topPending(s);
+    expect(react.prompt.kind).toBe('reaction-window');
+    expect(react.responderId).toBe('p2');
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: react.id,
+      answer: { kind: 'reaction-passed' },
+    });
     // Both Bob mages in shadow position; Alice's mage unchanged.
     const lib = s.rooms.find((r) => r.id === 'base.room.library.a')!;
     const slot1 = lib.actionSpaces.find(
@@ -25820,6 +25830,16 @@ describe('Cut Plane (Indefinite Definitives L1)', () => {
     // Mage's isShadowing flag flipped.
     const bob = s.players.find((p) => p.id === 'p2')!;
     expect(bob.mages.find((m) => m.id === 'bob-grey')!.isShadowing).toBe(true);
+    // Forcing bob to its shadow position is a move → bob's owner gets a
+    // mage-moved reaction window; pass it.
+    const react = topPending(s);
+    expect(react.prompt.kind).toBe('reaction-window');
+    expect(react.responderId).toBe('p2');
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: react.id,
+      answer: { kind: 'reaction-passed' },
+    });
     // Next prompt: pick caster's placer.
     const placerPrompt = topPending(s);
     expect(placerPrompt.prompt.kind).toBe('choose-target-mage');
@@ -25839,6 +25859,12 @@ describe('Cut Plane (Indefinite Definitives L1)', () => {
       type: 'RESOLVE_PENDING',
       resolutionId: topPending(s).id,
       answer: { kind: 'mage-chosen', mageId: 'bob-grey' },
+    });
+    // Pass bob's mage-moved reaction window.
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'reaction-passed' },
     });
     s = applyAction(s, {
       type: 'RESOLVE_PENDING',
