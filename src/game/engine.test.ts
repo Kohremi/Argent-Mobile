@@ -5109,6 +5109,42 @@ describe('Leader spells (unique single-level)', () => {
     expect(topPending(s).prompt.kind).toBe('reaction-window');
   });
 
+  it('a reposition reaction to a move clears the Mage origin slot (no stale occupant)', () => {
+    // Regression: applyReactionReposition used to leave the Mage listed on the
+    // slot it came from when repositioning a Mage that was still on the board
+    // (a reaction to a MOVE). The Mage then occupied two slots and its
+    // `location` desynced — the inconsistency that crashed Yinsei Arlington.
+    let s = setupLeaderTest();
+    s = addMage(s, 'p1', { id: 'alice-mage-1', cardId: 'base.mage.natural-magick', color: 'green' });
+    s = addMage(s, 'p2', { id: 'bob-mage-1', cardId: 'base.mage.sorcery', color: 'red' });
+    s = placeMageOnSpace(s, 'p2', 'bob-mage-1', 'base.room.library.a.slot-1');
+    s = setMana(s, 'p1', 1);
+    s = addOwnedSpell(s, 'p1', 'base.spell.strength-of-earth');
+    s = addVaultCard(s, 'p2', 'base.vault.ancient-armor');
+    // Alice moves Bob's mage slot-1 → slot-3.
+    s = applyAction(s, { type: 'CAST_SPELL', playerId: 'p1', spellCardId: 'base.spell.strength-of-earth', level: 1 });
+    s = applyAction(s, { type: 'RESOLVE_PENDING', resolutionId: topPending(s).id, answer: { kind: 'mage-chosen', mageId: 'bob-mage-1' } });
+    s = applyAction(s, { type: 'RESOLVE_PENDING', resolutionId: topPending(s).id, answer: { kind: 'space-chosen', spaceId: 'base.room.library.a.slot-3' } });
+    // Bob reacts with Ancient Armor → repositions back to the original slot-1.
+    const reaction = topPending(s);
+    expect(reaction.prompt.kind).toBe('reaction-window');
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: reaction.id,
+      answer: { kind: 'reaction-played', effectId: 'base.vault.ancient-armor.react', reactionContext: {} },
+    });
+    // The Mage is on EXACTLY one slot, matching its location, and the slot it
+    // was moved to (slot-3) is vacated — no stale occupant left behind.
+    const slots = s.rooms.flatMap((r) => r.actionSpaces);
+    const refs = slots.filter(
+      (sp) => sp.occupant?.mageId === 'bob-mage-1' || sp.shadowOccupant?.mageId === 'bob-mage-1',
+    );
+    expect(refs).toHaveLength(1);
+    const mage = findMageById(s, 'bob-mage-1');
+    expect(mage.location).toEqual({ kind: 'action-space', spaceId: refs[0]!.id });
+    expect(slots.find((sp) => sp.id === 'base.room.library.a.slot-3')?.occupant).toBeNull();
+  });
+
   it('Paralocation: places one of the casters mages in the shadow slot; opponent base is untouched', () => {
     let s = setupLeaderTest();
     // Alice gets two mages: the leader (purple) that does the casting, and

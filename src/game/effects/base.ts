@@ -1307,15 +1307,30 @@ function applyReactionReposition(
     ownerId,
     isShadowing: asShadow,
   };
+  // The mage may already sit on a slot — repositions that react to a MOVE or
+  // SHADOW (e.g. Ancient Armor after Gust of Wind, Phase Steppers, Invisibility
+  // Cloak) act on a Mage that's still on the board. Clear that origin slot, or
+  // it keeps a stale reference and the Mage ends up "on" two slots with a
+  // `location` that disagrees. (Wound / banish reactions repose from the
+  // infirmary, so there's no origin slot to clear.)
+  const origin = findMageSlotPosition(state, mageId);
   const rooms = state.rooms.map((r) => ({
     ...r,
-    actionSpaces: r.actionSpaces.map((s) =>
-      s.id !== destinationSpaceId
-        ? s
-        : asShadow
-          ? { ...s, shadowOccupant: occupancy }
-          : { ...s, occupant: occupancy },
-    ),
+    actionSpaces: r.actionSpaces.map((s) => {
+      let sp = s;
+      if (origin && s.id === origin.spaceId) {
+        sp =
+          origin.position === 'shadow'
+            ? { ...sp, shadowOccupant: null }
+            : { ...sp, occupant: null };
+      }
+      if (s.id === destinationSpaceId) {
+        sp = asShadow
+          ? { ...sp, shadowOccupant: occupancy }
+          : { ...sp, occupant: occupancy };
+      }
+      return sp;
+    }),
   }));
 
   return { players, rooms };
