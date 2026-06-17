@@ -2,10 +2,15 @@
 
 **"Starfall Academy" Art Direction** · presentation-layer design doc
 
-> Status: the game engine is complete and prompt-driven (`applyAction` +
-> `pendingResolutionStack`); the React presentation layer is greenfield
-> (`Board/`, `HUD/`, `Player/`, `Cards/`, `Modals/`, `Council/` are stubs).
-> This document is the blueprint for building it.
+> Status: **living design spec.** The prompt-driven engine (`applyAction` +
+> `pendingResolutionStack`) and the React presentation layer it describes are
+> both built — components throughout `src/components/` cite this doc by section
+> for their design rationale (palette, typography, motion, interaction
+> patterns), and `tailwind.config.js` derives its tokens from §3 and §5. The
+> visual-design system below is the source of truth. The §8 component map has
+> been reconciled with the shipped tree; treat the grander interaction
+> set-pieces (Persona-style cut-ins, full room flip/destroy cinematics) as the
+> north-star target rather than a claim that every flourish has shipped.
 
 ---
 
@@ -362,52 +367,47 @@ source of truth** for bed occupancy:
 ## 8. Component Architecture (React)
 
 ```
-src/components/
-├─ App.tsx → screens/{SetupScreen, GameScreen, ScoringScreen}
-│
-├─ GameScreen.tsx              // layout shell + FX/Modal portals
+src/
+├─ App.tsx                      // screen router: Setup ▸ draft (DebugControls) ▸ GameScreen ▸ scoring
+├─ main.tsx
+├─ components/
+│  ├─ GameScreen.tsx            // in-game layout shell (sky → HUD → board → dock → rails)
+│  ├─ DebugControls.tsx         // full engine console: drives the draft phases + in-game debug drawer
+│  ├─ icons.tsx
+│  ├─ Setup/SetupScreen.tsx     // 2–6 player setup + pack toggles + per-seat bot picker
 │  ├─ HUD/
-│  │  ├─ TopBar.tsx            // day-dial, phase banner, menu
-│  │  ├─ BellTowerMeter.tsx    // sky-clock + bell cards popover
-│  │  └─ TurnBanner.tsx        // hot-seat hand-off splash
+│  │  ├─ TopBar.tsx             // round/phase banner, bell-tower meter, menu
+│  │  └─ TurnBanner.tsx         // hot-seat hand-off splash
 │  ├─ Board/
-│  │  ├─ CampusBoard.tsx       // pan/zoom stage, ley-line SVG layer
-│  │  ├─ RoomScene.tsx         // island + building + state overlays
-│  │  ├─ ActionSlot.tsx        // spell-circle (all 7 visual states)
-│  │  ├─ MageToken.tsx         // archetype SVG + aura + status dressing
-│  │  └─ roomArt.ts            // roomId → scene art/tint registry
-│  ├─ Council/
-│  │  ├─ CouncilTower.tsx      // right rail: voters, marks
-│  │  └─ VoterTile.tsx         // face-down/revealed/marked states
+│  │  ├─ CampusBoard.tsx        // grid stage from roomLayout
+│  │  ├─ RoomScene.tsx          // one room: slots, occupants, placement + state overlays
+│  │  ├─ MageToken.tsx          // archetype SVG + player aura + status dressing
+│  │  └─ TableauShelf.tsx       // shared market shelf (spell / vault / supporter tableaux)
+│  ├─ Council/CouncilTower.tsx  // right rail: voters + marks
 │  ├─ Player/
-│  │  ├─ PlayerDock.tsx        // bottom: active player command center
-│  │  ├─ OpponentRail.tsx      // left: compact rival panels
-│  │  ├─ MageBench.tsx         // office mages (drag/select source)
-│  │  ├─ ResourceChips.tsx     // gold/mana/IP/marks/badges/INT/WIS
-│  │  └─ HandFans.tsx          // spells · vault · supporters fans
-│  ├─ Cards/
-│  │  ├─ SpellBook.tsx         // tome w/ L1/L2/L3 page-tabs
-│  │  ├─ VaultCard.tsx, SupporterCard.tsx, BellCard.tsx
-│  │  └─ CardZoom.tsx          // shared long-press/right-click zoom
-│  ├─ Prompts/                 // ⭐ heart of the UI
-│  │  ├─ PromptDirector.tsx    // routes top of pendingResolutionStack
-│  │  ├─ TargetingLayer.tsx    // board overlay: eligible mages/slots/rooms
-│  │  ├─ ChoiceSheet.tsx       // choose-from-options bottom sheet
-│  │  ├─ ReactionCutIn.tsx     // reaction-window interrupt panel
-│  │  ├─ VoterPick.tsx         // choose-voter w/ council zoom
-│  │  └─ PromptBreadcrumb.tsx  // “Devastation ▸ choose room” context line
-│  ├─ FX/
-│  │  ├─ FxLayer.tsx           // portal; queue of one-shot effects
-│  │  ├─ effects.ts            // wound, banish, flip, destroy, sparkle…
-│  │  └─ useStateDiffFx.ts     // diff GameState transitions → enqueue FX
-│  └─ Modals/
-│     ├─ DraftModal.tsx, PeekModal.tsx (privacy flow), LogDrawer.tsx
-│     └─ ScoringCeremony.tsx   // staged election reveal
+│  │  ├─ PlayerDock.tsx         // bottom command center (resources, bench, hand fans)
+│  │  ├─ OpponentRail.tsx       // left rail: compact rival panels
+│  │  ├─ PortraitBust.tsx       // Tier-1 portrait busts
+│  │  └─ PlayerBuffBadges.tsx   // active-buff chips
+│  ├─ Cards/HandFans.tsx        // the active player's spell / vault / supporter fans
+│  ├─ Prompts/                  // ⭐ heart of the UI
+│  │  ├─ PromptDirector.tsx     // routes the top of pendingResolutionStack to an interaction
+│  │  ├─ usePromptTargets.ts    // exposes the prompt's eligible mages / slots / voters to the board
+│  │  └─ promptHelpers.ts
+│  ├─ Modals/ScoringCeremony.tsx// staged election reveal (final scoring)
+│  └─ FX/useStateDiffFx.ts      // diff GameState transitions → enqueue one-shot FX
+├─ hooks/useKlankDriver.ts      // paces AI-bot dispatch
 └─ store/
-   ├─ gameStore.ts             // existing (state + dispatch)
-   └─ uiStore.ts               // NEW: selection, hovered, camera, fxQueue,
-                               //      handedOffTo (hot-seat privacy)
+   ├─ gameStore.ts              // GameState + dispatch (= applyAction)
+   ├─ uiStore.ts                // presentation-only state (selection, drawers, FX queue, hot-seat privacy)
+   └─ setupStore.ts             // pre-game setup form state
 ```
+
+> The component names in the code samples that follow (`TargetingLayer`,
+> `ChoiceSheet`, `ReactionCutIn`, …) are *conceptual*: the shipped UI folds
+> those roles into `PromptDirector.tsx` (prompt routing + inline sheets) and
+> `usePromptTargets.ts` (board targeting). The patterns they illustrate hold;
+> the real file names are in the tree above.
 
 ### Key patterns
 

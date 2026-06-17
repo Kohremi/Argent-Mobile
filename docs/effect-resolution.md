@@ -1,8 +1,26 @@
 # Effect Resolution Design
 
-**Status:** proposal — for review before implementation. No effect-resolution
-code has been written yet; the only related code is the `PendingResolution`
-type stub in [src/game/types.ts](../src/game/types.ts).
+**Status:** historical design proposal — **now implemented, with changes.**
+This is the original pre-implementation write-up, kept for the rationale behind
+the resolution model. The system it describes is fully built and is the heart
+of the engine, but several shapes drifted during implementation — **trust the
+code and AGENTS.md over the exact signatures below.**
+
+Key differences from what shipped:
+
+- `EffectResult` is a single discriminated union
+  (`{ kind: 'done' | 'pause' | 'open-reaction', … }`), not the combinable
+  `{ patch?, openReactionWindow?, pending? }` sketched here.
+- Multi-step effects thread state via `resumeContext` / `resumeAnswer` on the
+  `EffectContext` (continuations as data, not closures).
+- Open prompts live on `GameState.pendingResolutionStack`; reaction windows on
+  `GameState.activeReactionWindows`.
+
+For the current model see **AGENTS.md §6–7**,
+[src/game/types.ts](../src/game/types.ts) (the "Effect resolution" types), and
+[src/game/engine.ts](../src/game/engine.ts). The original proposal follows.
+
+---
 
 This document proposes how Argent's card, room, and ability effects should
 resolve, with particular attention to mid-resolution player input

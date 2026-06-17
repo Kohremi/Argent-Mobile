@@ -14,8 +14,9 @@ can make correct edits without re-deriving the architecture each time.
 ## 1. What this is
 
 A web implementation of **Argent: The Consortium** (Level 99 Games) — a
-worker-placement board game. Local hot-seat only (2–6 players, one browser); no
-online play, no AI opponents.
+worker-placement board game. Local hot-seat (2–6 players, one browser); no
+online play. Any seat can be filled by a human or by an AI bot personality
+(see §4a).
 
 **Stack:** React 18 + TypeScript (strict) + Vite + Tailwind + Zustand. Tests in
 Vitest. No backend.
@@ -25,7 +26,7 @@ Vitest. No backend.
 ```sh
 npm run dev        # Vite dev server (http://localhost:5173)
 npm run typecheck  # tsc --noEmit  — run this after any change
-npm run test       # vitest run    — full suite (~850 tests, runs in a few seconds)
+npm run test       # vitest run    — full suite (~910 tests, runs in a few seconds)
 npm run build      # typecheck + production build
 ```
 
@@ -84,6 +85,12 @@ src/
       base.ts                # base-pack effect impls   (~21k lines, 300+ effects)
       mancers.ts             # Mancers expansion effects (~4k lines, 70+ effects)
       knights.ts/ascension.ts/promo.ts  # still empty stubs
+    ai/                      # AI bot personalities — pure decision policies (§4a)
+      types.ts               # BotPersonality contract
+      index.ts               # registry + setup picker options
+      klank.ts               # greedy tiered cascade
+      thickhide.ts           # mostly-random with a few instincts
+      malfoy.ts              # grab Mana, then research toward big spells
   content/
     types.ts                 # ContentPack interface
     registry.ts              # registerPack + getPack/requirePack/listPacks (eager)
@@ -113,11 +120,41 @@ src/
     rng.ts                   # seeded mulberry32 — the ONLY randomness source
     uiSelectors.ts           # derived view-model helpers (eligible slots, pool detection, hues)
     helpers.ts
+  hooks/
+    useKlankDriver.ts        # drives bot seats in the React layer (paces dispatch)
 docs/
   UI_DESIGN.md               # design-system + UI architecture spec
   effect-resolution.md       # ORIGINAL design proposal (historical; shapes have since changed)
   argent_data/*.tsv          # extracted card/room/voter data from the physical game
 ```
+
+## 4a. AI bots
+
+Any seat can be played by a bot. A `BotPersonality`
+([src/game/ai/types.ts](src/game/ai/types.ts)) is a pair of **pure** decision
+functions — `chooseErrandsAction(state, playerId)` and
+`answerPendingResolution(state, pending)` — that read engine truth and return a
+legal `GameAction` / `ResolutionAnswer`. They enumerate legality with the same
+dry-run selectors the human UI uses
+([src/utils/uiSelectors.ts](src/utils/uiSelectors.ts)), so a bot can never
+attempt an illegal move, and they seed any randomness from the state so a given
+state always yields the same choice (reproducible, testable).
+
+Personalities self-register in [src/game/ai/index.ts](src/game/ai/index.ts)
+(and appear in the setup per-seat picker):
+
+- **Klank** — greedy tiered cascade (research → disrupt an opponent → value
+  seats → any placement → Bell Tower).
+- **Thickhide** — mostly random with a few instincts (Merit budgeting,
+  opponent-only harmful targeting).
+- **Malfoy** — grab the best Mana seat once per round, then pivot to Research
+  for big spells; all trumped by casting disruptive spells on opponents.
+
+Shared rules they all honor: only ever aim harmful effects at opponents, and
+never occupy more Merit seats than Merit Badges held this round.
+[src/hooks/useKlankDriver.ts](src/hooks/useKlankDriver.ts) paces a bot seat's
+dispatch in the React layer. Each personality has unit tests plus a headless
+all-bot game that must run to completion ([src/game/ai/](src/game/ai/)).
 
 ## 5. Core data model
 
@@ -358,5 +395,7 @@ Every game must be reproducible from `(rngSeed, action[])`. Therefore:
   University Tavern, Technomancy, Black Chronicle, Eternal Engine, treasures…).
 - **knights / ascension / promo**: empty stubs (data arrays + effect modules
   exist but are empty).
-- ~850 Vitest specs pass; the bulk live in
+- **AI bots**: Klank, Thickhide, and Malfoy ([src/game/ai/](src/game/ai/)) can
+  fill any seat; all-bot tables run to completion (§4a).
+- ~910 Vitest specs pass; the bulk live in
   [src/game/engine.test.ts](src/game/engine.test.ts).

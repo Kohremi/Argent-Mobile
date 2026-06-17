@@ -1,7 +1,8 @@
 # Argent
 
 Web-based implementation of **Argent: The Consortium** (Level 99 Games), built
-for local hot-seat play (2–6 players, same browser). No online play, no AI.
+for local hot-seat play (2–6 players, same browser). No online play; each seat
+is either a human or an AI bot (Klank, Thickhide, or Malfoy).
 
 Built with React + TypeScript + Vite + Tailwind + Zustand.
 
@@ -9,13 +10,19 @@ Built with React + TypeScript + Vite + Tailwind + Zustand.
 
 The base pack is playable end-to-end: candidate draft, mage draft, all 5
 rounds of placement / resolution, voter scoring, and final game scoring.
-303+ engine tests cover phase machine, placement, casting, reactions,
-research, vault buying, supporter play, scoring, and edge cases.
+900+ tests cover the phase machine, placement, casting, reactions,
+research, vault buying, supporter play, scoring, the AI bots, and edge cases.
+
+Any seat can be filled by an AI bot — Klank (greedy heuristics), Thickhide
+(randomised with a few instincts), and Malfoy (grab Mana, then research toward
+big spells) — so a table can be any mix of humans and bots, including all-bot
+games.
 
 Known gaps (in active iteration): a handful of spells, supporters, and
 vault cards still have placeholder effects. They show their card text but
-their action throws "effect not yet registered" when triggered. The
-expansion packs (Mancers, Knights, Ascension, Promo) are stubs.
+their action throws "effect not yet registered" when triggered. The Mancers
+expansion is substantially implemented; Knights, Ascension, and Promo are
+still stubs.
 
 ## Getting started
 
@@ -66,10 +73,6 @@ runs against a fresh state and never holds stale closures.
 
 ```
 src/
-  components/
-    Setup/SetupScreen.tsx     # 2–6 player setup + pack toggles
-    DebugControls.tsx         # the main game UI (board + prompts + HUD)
-    icons.tsx                 # shared SVG icons
   game/
     types.ts                  # all shared types (state, actions, prompts)
     engine.ts                 # pure reducer + phase machine + resolution pumps
@@ -80,13 +83,25 @@ src/
       index.ts                # effect registry
       helpers.ts              # shared helpers (wound, banish, move, etc.)
       base.ts                 # base-pack effect implementations
-      mancers.ts | knights.ts | ascension.ts | promo.ts  # expansion stubs
+      mancers.ts              # Mancers expansion effects
+      knights.ts | ascension.ts | promo.ts   # expansion stubs
+    ai/                       # AI bot personalities (pure decision policies)
+      types.ts                # BotPersonality interface
+      index.ts                # personality registry + setup picker options
+      klank.ts | thickhide.ts | malfoy.ts    # the bots
   content/
     types.ts                  # ContentPack interface
     packs/                    # base, mancers, knights, ascension, promo
     registry.ts               # pack registration + lookup
-  store/                      # Zustand store (game state, setup state)
-  utils/                      # seeded RNG, helpers
+  components/                 # React UI (reads engine state, dispatches actions)
+    Setup/SetupScreen.tsx     # 2–6 player setup + pack/bot toggles
+    GameScreen.tsx            # main in-game layout (board + dock + rails + prompts)
+    Board/ Prompts/ Player/ Council/ HUD/ Modals/ Cards/ FX/
+    DebugControls.tsx         # full engine console (draft phases + debug drawer)
+    icons.tsx                 # shared SVG icons
+  hooks/useKlankDriver.ts     # paces AI-bot dispatch in the React layer
+  store/                      # Zustand store (game state, UI state, setup state)
+  utils/                      # seeded RNG, view-model selectors, helpers
 ```
 
 ## Content packs
@@ -94,7 +109,7 @@ src/
 | Pack ID     | Name                              | Status                                                        |
 | ----------- | --------------------------------- | ------------------------------------------------------------- |
 | `base`      | Argent: The Consortium            | Playable. 14 candidates, 8 rooms (A/B), 25+ spell books + 6 legendary, 26 vault cards, 36 supporters, 18 voters, 3 bell tower offerings. |
-| `mancers`   | Mancers of the University         | Empty                                                         |
+| `mancers`   | Mancers of the University         | Substantially implemented (Golem Lab, University Tavern, Technomancy, Black Chronicle, Eternal Engine, treasures…). |
 | `knights`   | Saturday Knight Special           | Empty                                                         |
 | `ascension` | Era of Ascension                  | Empty                                                         |
 | `promo`     | Promo & Kickstarter               | Empty                                                         |
@@ -136,15 +151,19 @@ Packs are toggled per-game on the setup screen. The base pack is required.
   Armor, Mystic Amulet, Auric Catalyst — all fire from the correct
   trigger events (wound / banish / move / shadow / gold-payment-pending /
   bell-tower-last-claimed).
-- Determinism: every game is reproducible from its seed; 303+ Vitest
-  specs run in under 2 s.
+- AI bots: three pluggable personalities (Klank, Thickhide, Malfoy) that can
+  play any seat via pure decision policies in `src/game/ai/`, chosen per-seat
+  at setup. All-bot tables run headless to completion.
+- Determinism: every game is reproducible from its seed; 900+ Vitest
+  specs run in a few seconds.
 
 ## Known incomplete
 
 - A handful of spells, supporters, and vault cards still have placeholder
   effects (no `registerEffect` call — casting them throws). Card text is
   shown in the UI so unwired cards are visible.
-- All expansion packs (Mancers, Knights, Ascension, Promo) are stubs.
+- Mancers is substantially implemented; Knights, Ascension, and Promo are
+  still stubs.
 
 ## Determinism
 
