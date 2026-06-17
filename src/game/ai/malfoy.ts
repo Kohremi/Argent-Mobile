@@ -313,6 +313,33 @@ function chooseErrandsAction(state: GameState, playerId: PlayerId): GameAction {
   return { type: 'PASS_TURN', playerId };
 }
 
+/**
+ * First eligible card whose pick is actually LEGAL, found by dry-running the
+ * resolution (engine-truth — the same safeguard we use for actions). A
+ * `choose-vault-card` BUY prompt can list cards Malfoy can't afford; picking the
+ * first blindly would throw an illegal-move error, so we skip any candidate the
+ * engine rejects. Falls back to the first id if none dry-run cleanly.
+ */
+function firstLegalCard(
+  state: GameState,
+  pending: PendingResolution,
+  cardIds: readonly string[],
+): string | undefined {
+  for (const cardId of cardIds) {
+    try {
+      applyAction(state, {
+        type: 'RESOLVE_PENDING',
+        resolutionId: pending.id,
+        answer: { kind: 'card-chosen', cardId },
+      });
+      return cardId;
+    } catch {
+      // Illegal (e.g. an unaffordable buy) — try the next candidate.
+    }
+  }
+  return cardIds[0];
+}
+
 // ============================================================================
 // Prompt answers — cloned from Klank, but Malfoy takes MANA over Gold and the
 // biggest Spell level (he's building toward big casts).
@@ -358,7 +385,7 @@ function answerPendingResolution(
     case 'choose-vault-card':
     case 'choose-supporter-card':
     case 'choose-peeked-supporter': {
-      const cardId = prompt.eligibleCardIds[0];
+      const cardId = firstLegalCard(state, pending, prompt.eligibleCardIds);
       if (cardId === undefined) return { kind: 'pass' };
       return { kind: 'card-chosen', cardId };
     }

@@ -310,6 +310,34 @@ function chooseErrandsAction(state: GameState, playerId: PlayerId): GameAction {
   return pickRandom(inCategory, rng).action;
 }
 
+/**
+ * Eligible cards whose pick is actually LEGAL, found by dry-running each
+ * resolution (engine-truth — the same safeguard she uses for actions). A
+ * `choose-vault-card` BUY prompt can list cards she can't afford; choosing one
+ * would throw an illegal-move error, so unaffordable candidates are dropped
+ * before the random pick. Returns the full list if none dry-run cleanly (no
+ * worse than before).
+ */
+function legalCards(
+  state: GameState,
+  pending: PendingResolution,
+  cardIds: readonly string[],
+): string[] {
+  const legal = cardIds.filter((cardId) => {
+    try {
+      applyAction(state, {
+        type: 'RESOLVE_PENDING',
+        resolutionId: pending.id,
+        answer: { kind: 'card-chosen', cardId },
+      });
+      return true;
+    } catch {
+      return false;
+    }
+  });
+  return legal.length > 0 ? legal : [...cardIds];
+}
+
 // ============================================================================
 // Prompt answers — always take the reward (forfeit only when forced); otherwise
 // choose at random among the legal options.
@@ -365,7 +393,7 @@ function answerPendingResolution(
     case 'choose-supporter-card':
     case 'choose-peeked-supporter': {
       if (prompt.eligibleCardIds.length === 0) return { kind: 'pass' };
-      return { kind: 'card-chosen', cardId: pickRandom([...prompt.eligibleCardIds], rng) };
+      return { kind: 'card-chosen', cardId: pickRandom(legalCards(state, pending, prompt.eligibleCardIds), rng) };
     }
 
     case 'choose-spell-level':
