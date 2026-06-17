@@ -276,7 +276,7 @@ const shadowBolt: SpellCard = leaderSpell({
   id: 'base.spell.shadow-bolt',
   name: 'Shadow Bolt',
   department: 'planar-studies',
-  manaCost: 1,
+  manaCost: 0,
   timing: 'fast-action',
   description: "An opponent's Mage is now shadowing its slot.",
 });
