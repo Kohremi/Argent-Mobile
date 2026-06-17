@@ -40,10 +40,35 @@ import type {
   PendingResolution,
   Player,
   PlayerId,
+  ReactionOption,
   ResolutionAnswer,
   Room,
 } from '../types';
 import type { BotPersonality } from './types';
+
+/**
+ * Pick a reaction to play from an open reaction window's offered options, or
+ * pass when none are offered. The engine only ever offers reactions Thickhide
+ * can legally play (she owns the card and can pay), and a reaction always
+ * protects one of her OWN Mages from the triggering harm, so she reacts
+ * whenever she can. A repeatable option (Sacred Shield) is preferred so she
+ * keeps her slot in the window and can save several affected Mages; otherwise
+ * she picks at random (her usual idiom). `reactionContext: {}` lets the engine
+ * resolve a slot-pick reaction by keeping the Mage on its original slot.
+ */
+function chooseReaction(
+  options: readonly ReactionOption[],
+  rng: Rng,
+): ResolutionAnswer {
+  if (options.length === 0) return { kind: 'reaction-passed' };
+  const choice = options.find((o) => o.repeatable) ?? pickRandom([...options], rng);
+  return {
+    kind: 'reaction-played',
+    effectId: choice.effectId,
+    reactionContext: {},
+    ...(choice.forMageId ? { forMageId: choice.forMageId } : {}),
+  };
+}
 
 type Category = 'place' | 'spell' | 'vault' | 'supporter' | 'bell';
 
@@ -341,8 +366,9 @@ function answerPendingResolution(
     }
 
     case 'reaction-window':
-      // Reactions are situational; passing is always safe.
-      return { kind: 'reaction-passed' };
+      // Always react when a reaction is available — every offered option is a
+      // playable, defensive save of one of her own Mages (see chooseReaction).
+      return chooseReaction(prompt.reactionOptions, rng);
 
     case 'confirm':
       return { kind: 'confirmed' };

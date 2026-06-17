@@ -35,10 +35,31 @@ import type {
   PendingResolution,
   Player,
   PlayerId,
+  ReactionOption,
   ResolutionAnswer,
   Room,
 } from '../types';
 import type { BotPersonality } from './types';
+
+/**
+ * Pick a reaction to play from an open reaction window's offered options, or
+ * pass when none are offered. The engine only ever offers reactions Malfoy can
+ * legally play (he owns the card and can pay), and a reaction always protects
+ * one of his OWN Mages from the triggering harm, so he reacts whenever he can.
+ * A repeatable option (Sacred Shield) is preferred so he keeps his slot in the
+ * window and can save several affected Mages; `reactionContext: {}` lets the
+ * engine resolve a slot-pick reaction by keeping the Mage on its original slot.
+ */
+function chooseReaction(options: readonly ReactionOption[]): ResolutionAnswer {
+  if (options.length === 0) return { kind: 'reaction-passed' };
+  const choice = options.find((o) => o.repeatable) ?? options[0]!;
+  return {
+    kind: 'reaction-played',
+    effectId: choice.effectId,
+    reactionContext: {},
+    ...(choice.forMageId ? { forMageId: choice.forMageId } : {}),
+  };
+}
 
 // ============================================================================
 // Errands turn — Mana grab → big-spell research, all trumped by disruption.
@@ -344,8 +365,9 @@ function answerPendingResolution(
     }
 
     case 'reaction-window':
-      // Reactions are situational and passing is always safe.
-      return { kind: 'reaction-passed' };
+      // Always react when a reaction is available — every offered option is a
+      // playable, defensive save of one of Malfoy's own Mages (see chooseReaction).
+      return chooseReaction(prompt.reactionOptions);
 
     case 'confirm':
       return { kind: 'confirmed' };

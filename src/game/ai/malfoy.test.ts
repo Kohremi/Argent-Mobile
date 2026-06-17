@@ -304,6 +304,32 @@ describe('Malfoy — prompt answers', () => {
     );
     expect(ans).toEqual({ kind: 'level-chosen', level: 3 });
   });
+
+  it('passes a pass-only reaction window but always plays an offered reaction', () => {
+    expect(
+      malfoy.answerPendingResolution(
+        baseState,
+        mk({ kind: 'reaction-window', triggerEvents: [], reactionOptions: [], canPass: true }),
+      ),
+    ).toEqual({ kind: 'reaction-passed' });
+
+    const ans = malfoy.answerPendingResolution(
+      baseState,
+      mk({
+        kind: 'reaction-window',
+        triggerEvents: [],
+        reactionOptions: [
+          { sourceKind: 'vault-card', sourceId: 'base.vault.shield-potion', effectId: 'base.vault.shield-potion.react', label: 'Shield Potion', requiresSlotPick: true },
+        ],
+        canPass: true,
+      }),
+    );
+    expect(ans).toEqual({
+      kind: 'reaction-played',
+      effectId: 'base.vault.shield-potion.react',
+      reactionContext: {},
+    });
+  });
 });
 
 describe('Malfoy — headless all-bot game', () => {

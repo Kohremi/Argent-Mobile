@@ -41,10 +41,32 @@ import type {
   PendingResolution,
   Player,
   PlayerId,
+  ReactionOption,
   ResolutionAnswer,
   Room,
 } from '../types';
 import type { BotPersonality } from './types';
+
+/**
+ * Pick a reaction to play from an open reaction window's offered options, or
+ * pass when none are offered. The engine only ever offers reactions the bot
+ * can legally play (it owns the card and can pay), and a reaction always
+ * protects one of the bot's OWN Mages from the triggering harm, so the bots
+ * react whenever they can. A repeatable option (Sacred Shield) is preferred so
+ * the bot keeps its slot in the window and can save several affected Mages;
+ * `reactionContext: {}` lets the engine resolve a slot-pick reaction by keeping
+ * the Mage on its original slot.
+ */
+function chooseReaction(options: readonly ReactionOption[]): ResolutionAnswer {
+  if (options.length === 0) return { kind: 'reaction-passed' };
+  const choice = options.find((o) => o.repeatable) ?? options[0]!;
+  return {
+    kind: 'reaction-played',
+    effectId: choice.effectId,
+    reactionContext: {},
+    ...(choice.forMageId ? { forMageId: choice.forMageId } : {}),
+  };
+}
 
 // ============================================================================
 // Errands turn — a tiered priority cascade (see file header).
@@ -376,8 +398,14 @@ function answerPendingResolution(
     }
 
     case 'reaction-window':
-      // v1: never react. Reactions are situational and passing is always safe.
-      return { kind: 'reaction-passed' };
+      // Always react when a reaction is available. The engine only offers
+      // options Klank can actually play (he owns the card and can pay for it),
+      // and every reaction is a defensive save of one of his OWN Mages, so
+      // playing one is always to his benefit. Prefer a repeatable option (e.g.
+      // Sacred Shield) so he stays in the window and can rescue more than one
+      // affected Mage. `reactionContext: {}` lets the engine resolve any
+      // slot-pick reaction by keeping the Mage on its original slot.
+      return chooseReaction(prompt.reactionOptions);
 
     case 'confirm':
       return { kind: 'confirmed' };
