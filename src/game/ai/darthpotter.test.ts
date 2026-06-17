@@ -308,20 +308,16 @@ describe('DarthPotter — prompt answers', () => {
     expect(darthPotter.answerPendingResolution(selfOnly.state, selfOnly.pending)).toEqual({ kind: 'pass' });
   });
 
-  it('reaction-window → always plays an offered reaction', () => {
+  it('reaction-window (pass-only) → reaction-passed', () => {
     const { state, pending } = mk({
       kind: 'reaction-window',
       triggerEvents: [],
-      reactionOptions: [
-        { sourceKind: 'vault-card', sourceId: 'base.vault.shield-potion', effectId: 'base.vault.shield-potion.react', label: 'Shield Potion', requiresSlotPick: true },
-      ],
+      reactionOptions: [],
       canPass: true,
     });
-    expect(darthPotter.answerPendingResolution(state, pending)).toEqual({
-      kind: 'reaction-played',
-      effectId: 'base.vault.shield-potion.react',
-      reactionContext: {},
-    });
+    expect(darthPotter.answerPendingResolution(state, pending)).toEqual({ kind: 'reaction-passed' });
+    // Real reaction-window play behavior is covered for all personalities by the
+    // engine-driven "AI bots play a legal reaction" test in engine.test.ts.
   });
 
   it('answers the remaining prompt kinds with a shape-valid choice', () => {

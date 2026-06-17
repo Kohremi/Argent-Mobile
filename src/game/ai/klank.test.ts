@@ -242,45 +242,9 @@ describe('Klank — prompt answers (shape-valid for every kind)', () => {
     ).toEqual({ kind: 'confirmed' });
   });
 
-  it('reaction-window → plays an offered reaction (never passes when it can react)', () => {
-    const ans = klank.answerPendingResolution(
-      baseState,
-      mk({
-        kind: 'reaction-window',
-        triggerEvents: [],
-        reactionOptions: [
-          { sourceKind: 'vault-card', sourceId: 'base.vault.shield-potion', effectId: 'base.vault.shield-potion.react', label: 'Play Shield Potion', requiresSlotPick: true },
-        ],
-        canPass: true,
-      }),
-    );
-    expect(ans).toEqual({
-      kind: 'reaction-played',
-      effectId: 'base.vault.shield-potion.react',
-      reactionContext: {},
-    });
-  });
-
-  it('reaction-window → prefers a repeatable reaction and threads forMageId', () => {
-    const ans = klank.answerPendingResolution(
-      baseState,
-      mk({
-        kind: 'reaction-window',
-        triggerEvents: [],
-        reactionOptions: [
-          { sourceKind: 'vault-card', sourceId: 'base.vault.shield-potion', effectId: 'base.vault.shield-potion.react', label: 'Shield Potion', requiresSlotPick: true, forMageId: 'a1' },
-          { sourceKind: 'vault-card', sourceId: 'mancers.vault.sacred-shield', effectId: 'mancers.vault.sacred-shield.react', label: 'Sacred Shield', repeatable: true, forMageId: 'a2' },
-        ],
-        canPass: true,
-      }),
-    );
-    expect(ans).toEqual({
-      kind: 'reaction-played',
-      effectId: 'mancers.vault.sacred-shield.react',
-      reactionContext: {},
-      forMageId: 'a2',
-    });
-  });
+  // Real reaction-window play behavior (the bot dry-run-verifies its pick, so it
+  // needs a live on-stack window) is covered for all personalities by the
+  // engine-driven "AI bots play a legal reaction" test in engine.test.ts.
 });
 
 describe('Klank — priority cascade', () => {

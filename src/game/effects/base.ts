@@ -4193,12 +4193,18 @@ function affordableVaultCardsDiscounted(
 ): string[] {
   const player = state.players.find((p) => p.id === playerId);
   if (!player) return [];
-  const hasCatalyst = playerHasAuricCatalyst(player);
+  // Affordability must match what the Student Stores buy path can ACTUALLY
+  // pay (`applyVaultPurchaseDiscounted`): the gold cost net of the discount,
+  // waived only when `nextGoldCostWaived` is already set. Merely OWNING Auric
+  // Catalyst doesn't help here — that reaction is never offered on this path
+  // (it opens no gold-payment window), so counting it as "affordable" would
+  // surface a buy the player can't complete and the purchase would throw.
+  const waived = player.nextGoldCostWaived === true;
   const out: string[] = [];
   for (const cardId of state.vaultTableau) {
     const def = lookupVaultCardDef(state, cardId);
     if (!def) continue;
-    if (hasCatalyst) {
+    if (waived) {
       out.push(cardId);
       continue;
     }
@@ -7372,7 +7378,11 @@ registerEffect('base.supporter.yinsei-arlington', (ctx): EffectResult => {
     const targets: string[] = [];
     for (const p of ctx.state.players) {
       for (const m of p.mages) {
-        if (m.location.kind === 'action-space' && !m.isWounded) {
+        // Board truth: only Mages actually occupying a slot can be moved. A
+        // Mage whose `location` claims a slot it doesn't hold (a transient
+        // inconsistency) would otherwise crash `moveMageToSpace`, so gate on
+        // `findMageSlotPosition` rather than the `location` field alone.
+        if (!m.isWounded && findMageSlotPosition(ctx.state, m.id) !== null) {
           targets.push(m.id);
         }
       }
@@ -7396,13 +7406,11 @@ registerEffect('base.supporter.yinsei-arlington', (ctx): EffectResult => {
       throw new Error('yinsei-arlington pick-slot expected mage-chosen');
     }
     const targetMageId = ctx.resumeAnswer.mageId;
-    const targetMage = ctx.state.players
-      .flatMap((p) => p.mages)
-      .find((m) => m.id === targetMageId);
-    if (!targetMage || targetMage.location.kind !== 'action-space') {
-      throw new Error('yinsei-arlington: target is no longer on a slot');
-    }
-    const fromSpaceId = targetMage.location.spaceId;
+    // Locate the target on the board (truth) rather than trusting `location`;
+    // if it's no longer on a slot, the move simply fizzles.
+    const fromPos = findMageSlotPosition(ctx.state, targetMageId);
+    if (!fromPos) return { kind: 'done', patch: {} };
+    const fromSpaceId = fromPos.spaceId;
     const room = findRoomBySpaceId(ctx.state, fromSpaceId);
     if (!room) throw new Error('yinsei-arlington: room for target not found');
     const openSlots = room.actionSpaces
@@ -7432,6 +7440,10 @@ registerEffect('base.supporter.yinsei-arlington', (ctx): EffectResult => {
     const targetMageId = ctx.resumeContext?.['targetMageId'];
     if (typeof targetMageId !== 'string') {
       throw new Error('yinsei-arlington apply: missing targetMageId');
+    }
+    // If the target left its slot between prompts, the move fizzles.
+    if (!findMageSlotPosition(ctx.state, targetMageId)) {
+      return { kind: 'done', patch: {} };
     }
     const moved = moveMageToSpace(
       ctx.state,

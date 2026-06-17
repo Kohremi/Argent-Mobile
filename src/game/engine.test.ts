@@ -12,6 +12,7 @@ import {
 import { baseGamePack } from '../content/packs/base';
 import { mancersPack } from '../content/packs/mancers';
 import { listPacks } from '../content/registry';
+import { klank, malfoy, thickhide, darthPotter } from './ai';
 import type {
   ActionSpace,
   Candidate,
@@ -6706,6 +6707,101 @@ describe('PLAY_SUPPORTER', () => {
     expect(s.phase.actionUsed).toBe(false);
   });
 
+  it('Yinsei Arlington ignores a Mage whose location is stale (no crash, no-op)', () => {
+    // Regression: a Mage whose `location` claims a slot it doesn't actually
+    // occupy (a transient inconsistency) used to be offered as a move target,
+    // then crash `moveMageToSpace: not found in any slot`. Yinsei now gates
+    // targets on the board (findMageSlotPosition), so the stale Mage is skipped.
+    let s = setupSupporterTest('base.supporter.yinsei-arlington');
+    const slotId = s.rooms.find(
+      (r) => !r.cannotBePlacedInDirectly && r.actionSpaces.length > 0,
+    )!.actionSpaces[0]!.id;
+    // p2's only Mage claims `slotId` via its location, but no slot lists it as
+    // occupant — the inconsistency.
+    s = mapPlayer(s, 'p2', (p) => ({
+      ...p,
+      mages: [
+        {
+          id: 'ghost',
+          cardId: 'base.mage.sorcery',
+          color: 'red',
+          location: { kind: 'action-space', spaceId: slotId },
+          isShadowing: false,
+          isWounded: false,
+        },
+      ],
+    }));
+    let after: GameState | undefined;
+    expect(() => {
+      after = applyAction(s, {
+        type: 'PLAY_SUPPORTER',
+        playerId: 'p1',
+        supporterCardId: 'base.supporter.yinsei-arlington',
+      });
+    }).not.toThrow();
+    // No movable target → Yinsei resolves with no lingering target prompt.
+    expect(
+      after!.pendingResolutionStack.some(
+        (p) => p.prompt.kind === 'choose-target-mage',
+      ),
+    ).toBe(false);
+  });
+
+  it('Yinsei Arlington moves a Mage that is genuinely on a slot', () => {
+    let s = setupSupporterTest('base.supporter.yinsei-arlington');
+    const room = s.rooms.find(
+      (r) => !r.cannotBePlacedInDirectly && r.actionSpaces.length >= 2,
+    )!;
+    const fromSlot = room.actionSpaces[0]!.id;
+    const toSlot = room.actionSpaces[1]!.id;
+    // Place p2's Mage CONSISTENTLY: both its location and the slot's occupant.
+    s = mapPlayer(s, 'p2', (p) => ({
+      ...p,
+      mages: [
+        {
+          id: 'real',
+          cardId: 'base.mage.sorcery',
+          color: 'red',
+          location: { kind: 'action-space', spaceId: fromSlot },
+          isShadowing: false,
+          isWounded: false,
+        },
+      ],
+    }));
+    s = {
+      ...s,
+      rooms: s.rooms.map((r) => ({
+        ...r,
+        actionSpaces: r.actionSpaces.map((sp) =>
+          sp.id === fromSlot
+            ? { ...sp, occupant: { mageId: 'real', ownerId: 'p2', isShadowing: false } }
+            : sp,
+        ),
+      })),
+    };
+    s = applyAction(s, {
+      type: 'PLAY_SUPPORTER',
+      playerId: 'p1',
+      supporterCardId: 'base.supporter.yinsei-arlington',
+    });
+    const pickMage = topPending(s);
+    expect(pickMage.prompt.kind).toBe('choose-target-mage');
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: pickMage.id,
+      answer: { kind: 'mage-chosen', mageId: 'real' },
+    });
+    const pickSlot = topPending(s);
+    expect(pickSlot.prompt.kind).toBe('choose-target-action-space');
+    expect(() =>
+      applyAction(s, {
+        type: 'RESOLVE_PENDING',
+        resolutionId: pickSlot.id,
+        answer: { kind: 'space-chosen', spaceId: toSlot },
+      }),
+    ).not.toThrow();
+  });
+
   it('plays an action-timing supporter and the turn auto-ends', () => {
     let s = setupSupporterTest('base.supporter.jasper-haekel');
     s = applyAction(s, {
@@ -12984,6 +13080,37 @@ describe('Infirmary on-wound bonus', () => {
     expect(bob?.resources.influence).toBe(0);
   });
 
+  it('AI bots play a legal reaction when one is offered (dry-run verified)', () => {
+    // Each personality, faced with a real on-stack reaction window (Bob's Mage
+    // wounded; Bob holds Phase Steppers), plays the reaction — and its answer is
+    // always LEGAL (applying it must not throw). Guards the dry-run safeguard
+    // that replaced the old "play the first offered option blindly" behavior.
+    for (const bot of [klank, malfoy, thickhide, darthPotter]) {
+      let s = setupBurnTargetTest({ bobHasPhaseSteppers: true });
+      s = applyAction(s, {
+        type: 'CAST_SPELL',
+        playerId: 'p1',
+        spellCardId: 'base.spell.burn',
+        level: 1,
+      });
+      s = applyAction(s, {
+        type: 'RESOLVE_PENDING',
+        resolutionId: topPending(s).id,
+        answer: { kind: 'mage-chosen', mageId: 'bob-mage-1' },
+      });
+      const reaction = topPending(s);
+      expect(reaction.prompt.kind).toBe('reaction-window');
+      const answer = bot.answerPendingResolution(s, reaction);
+      expect(answer).toMatchObject({
+        kind: 'reaction-played',
+        effectId: 'base.vault.phase-steppers.react',
+      });
+      expect(() =>
+        applyAction(s, { type: 'RESOLVE_PENDING', resolutionId: reaction.id, answer }),
+      ).not.toThrow();
+    }
+  });
+
   it('does NOT prompt for the bonus on self-inflicted wounds', () => {
     // Alice casts Burn on her own mage. By rule, Burn allows self-targeting
     // (Divinity immunity is to RIVALS only). After the wound resolves, no
@@ -16694,6 +16821,29 @@ describe('Student Stores', () => {
     expect(alice.resources.gold).toBe(0);
     expect(alice.resources.intelligence).toBe(0);
     expect(alice.resources.wisdom).toBe(0);
+  });
+
+  it('owning (not playing) Auric Catalyst with 0 Gold leaves the buy UNAFFORDABLE (no crash)', () => {
+    // Regression: the affordability check used to treat merely OWNING Auric
+    // Catalyst as "can afford anything", but the Student Stores buy path never
+    // opens the gold-payment window that lets the card actually waive the cost,
+    // so the purchase would then throw "insufficient gold". Affordability must
+    // match what the path can really pay.
+    let s = setupRoomSlotTest(
+      'Student Stores',
+      'A',
+      'base.room.student-stores.a.slot-1',
+    );
+    s = addVaultCard(s, 'p1', 'base.vault.auric-catalyst'); // owned, never played
+    s = setVaultTableau(s, ['base.vault.spirits', 'base.vault.mana-elixir']); // cost 1, 2
+    s = driveToResolution(s);
+    const prompt = topPending(s);
+    expect(prompt.prompt.kind).toBe('choose-from-options');
+    if (prompt.prompt.kind !== 'choose-from-options') throw new Error('unreachable');
+    const vault = prompt.prompt.options.find((o) => o.id === 'vault');
+    expect(vault?.available).toBe(false);
+    // Skipping the (now unavailable) buy must resolve cleanly.
+    expect(() => pickBuyOption(s, 'skip')).not.toThrow();
   });
 
   it('A slot 3 buy-INT: deducts 4 Gold, grants 1 INT', () => {

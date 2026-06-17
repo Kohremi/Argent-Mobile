@@ -56,7 +56,6 @@ import type {
   PendingResolution,
   Player,
   PlayerId,
-  ReactionOption,
   ResolutionAnswer,
   Room,
   ScoringCriterion,
@@ -473,22 +472,50 @@ function firstLegalCard(
 }
 
 /**
- * Pick a reaction to play from an open reaction window, or pass when none are
- * offered. The engine only offers reactions the bot can legally play, and a
- * reaction always protects one of its OWN Mages, so DarthPotter reacts whenever
- * it can; a repeatable option (Sacred Shield) is preferred so it keeps its slot
- * and can save several affected Mages. `reactionContext: {}` resolves a slot-pick
- * reaction by keeping the Mage on its original slot.
+ * Choose a LEGAL reaction answer for an open reaction window, verified by
+ * dry-running each candidate (engine-truth). The engine only offers reactions
+ * the bot owns and can pay, but a multi-Mage window can still reject a naive
+ * play: e.g. Mystic Amulet over a window whose FIRST event is an opponent's
+ * Mage — with no `forMageId` the engine matches event[0] and the reaction
+ * throws "only protects your own Mage". So we try the option's own forMageId,
+ * then each of the responder's affected Mages, and commit only to an answer the
+ * engine accepts; if none do, we pass (always legal). A repeatable option
+ * (Sacred Shield) is preferred so it keeps its slot and can save several Mages.
+ * `reactionContext: {}` resolves a slot-pick reaction by keeping the Mage on
+ * its original slot.
  */
-function chooseReaction(options: readonly ReactionOption[]): ResolutionAnswer {
-  if (options.length === 0) return { kind: 'reaction-passed' };
-  const choice = options.find((o) => o.repeatable) ?? options[0]!;
-  return {
-    kind: 'reaction-played',
-    effectId: choice.effectId,
-    reactionContext: {},
-    ...(choice.forMageId ? { forMageId: choice.forMageId } : {}),
+function chooseReaction(state: GameState, pending: PendingResolution): ResolutionAnswer {
+  const prompt = pending.prompt;
+  if (prompt.kind !== 'reaction-window' || prompt.reactionOptions.length === 0) {
+    return { kind: 'reaction-passed' };
+  }
+  const ownAffected = prompt.triggerEvents
+    .filter((e) => 'ownerId' in e && e.ownerId === pending.responderId && 'mageId' in e)
+    .map((e) => (e as { mageId: string }).mageId);
+  const legal = (answer: ResolutionAnswer): boolean => {
+    try {
+      applyAction(state, { type: 'RESOLVE_PENDING', resolutionId: pending.id, answer });
+      return true;
+    } catch {
+      return false;
+    }
   };
+  const ordered = [...prompt.reactionOptions].sort(
+    (a, b) => Number(b.repeatable ?? false) - Number(a.repeatable ?? false),
+  );
+  for (const o of ordered) {
+    const targets = o.forMageId ? [o.forMageId] : [undefined, ...ownAffected];
+    for (const forMageId of targets) {
+      const answer: ResolutionAnswer = {
+        kind: 'reaction-played',
+        effectId: o.effectId,
+        reactionContext: {},
+        ...(forMageId ? { forMageId } : {}),
+      };
+      if (legal(answer)) return answer;
+    }
+  }
+  return { kind: 'reaction-passed' };
 }
 
 /**
@@ -608,7 +635,7 @@ function answerPendingResolution(
     }
 
     case 'reaction-window':
-      return chooseReaction(prompt.reactionOptions);
+      return chooseReaction(state, pending);
 
     case 'confirm':
       return { kind: 'confirmed' };

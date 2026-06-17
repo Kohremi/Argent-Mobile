@@ -235,45 +235,9 @@ describe('Thickhide — prompt answers', () => {
     ).toEqual({ kind: 'confirmed' });
   });
 
-  it('always plays an offered reaction (never passes when it can react)', () => {
-    const ans = thickhide.answerPendingResolution(
-      baseState,
-      mk({
-        kind: 'reaction-window',
-        triggerEvents: [],
-        reactionOptions: [
-          { sourceKind: 'vault-card', sourceId: 'base.vault.shield-potion', effectId: 'base.vault.shield-potion.react', label: 'Shield Potion', requiresSlotPick: true },
-        ],
-        canPass: true,
-      }),
-    );
-    expect(ans).toEqual({
-      kind: 'reaction-played',
-      effectId: 'base.vault.shield-potion.react',
-      reactionContext: {},
-    });
-  });
-
-  it('prefers a repeatable reaction (Sacred Shield) and threads its forMageId', () => {
-    const ans = thickhide.answerPendingResolution(
-      baseState,
-      mk({
-        kind: 'reaction-window',
-        triggerEvents: [],
-        reactionOptions: [
-          { sourceKind: 'vault-card', sourceId: 'base.vault.shield-potion', effectId: 'base.vault.shield-potion.react', label: 'Shield Potion', requiresSlotPick: true, forMageId: 'a1' },
-          { sourceKind: 'vault-card', sourceId: 'mancers.vault.sacred-shield', effectId: 'mancers.vault.sacred-shield.react', label: 'Sacred Shield', repeatable: true, forMageId: 'a2' },
-        ],
-        canPass: true,
-      }),
-    );
-    expect(ans).toEqual({
-      kind: 'reaction-played',
-      effectId: 'mancers.vault.sacred-shield.react',
-      reactionContext: {},
-      forMageId: 'a2',
-    });
-  });
+  // Real reaction-window play behavior (the bot dry-run-verifies its pick, so it
+  // needs a live on-stack window) is covered for all personalities by the
+  // engine-driven "AI bots play a legal reaction" test in engine.test.ts.
 });
 
 describe('Thickhide — negative effects only hit opponents', () => {

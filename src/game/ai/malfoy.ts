@@ -35,7 +35,6 @@ import type {
   PendingResolution,
   Player,
   PlayerId,
-  ReactionOption,
   ResolutionAnswer,
   Room,
 } from '../types';
@@ -51,23 +50,50 @@ function isMoveResearchOption(id: string): boolean {
 }
 
 /**
- * Pick a reaction to play from an open reaction window's offered options, or
- * pass when none are offered. The engine only ever offers reactions Malfoy can
- * legally play (he owns the card and can pay), and a reaction always protects
- * one of his OWN Mages from the triggering harm, so he reacts whenever he can.
- * A repeatable option (Sacred Shield) is preferred so he keeps his slot in the
- * window and can save several affected Mages; `reactionContext: {}` lets the
- * engine resolve a slot-pick reaction by keeping the Mage on its original slot.
+ * Choose a LEGAL reaction answer for an open reaction window, verified by
+ * dry-running each candidate (engine-truth). The engine only offers reactions
+ * Malfoy owns and can pay, but a multi-Mage window can still reject a naive
+ * play: e.g. Mystic Amulet over a window whose FIRST event is an opponent's
+ * Mage — with no `forMageId` the engine matches event[0] and the reaction
+ * throws "only protects your own Mage". So we try the option's own forMageId,
+ * then each of the responder's affected Mages, and commit only to an answer the
+ * engine accepts; if none do, we pass (always legal). A repeatable option
+ * (Sacred Shield) is preferred so he keeps his slot and can save several Mages.
+ * `reactionContext: {}` resolves a slot-pick reaction by keeping the Mage on
+ * its original slot.
  */
-function chooseReaction(options: readonly ReactionOption[]): ResolutionAnswer {
-  if (options.length === 0) return { kind: 'reaction-passed' };
-  const choice = options.find((o) => o.repeatable) ?? options[0]!;
-  return {
-    kind: 'reaction-played',
-    effectId: choice.effectId,
-    reactionContext: {},
-    ...(choice.forMageId ? { forMageId: choice.forMageId } : {}),
+function chooseReaction(state: GameState, pending: PendingResolution): ResolutionAnswer {
+  const prompt = pending.prompt;
+  if (prompt.kind !== 'reaction-window' || prompt.reactionOptions.length === 0) {
+    return { kind: 'reaction-passed' };
+  }
+  const ownAffected = prompt.triggerEvents
+    .filter((e) => 'ownerId' in e && e.ownerId === pending.responderId && 'mageId' in e)
+    .map((e) => (e as { mageId: string }).mageId);
+  const legal = (answer: ResolutionAnswer): boolean => {
+    try {
+      applyAction(state, { type: 'RESOLVE_PENDING', resolutionId: pending.id, answer });
+      return true;
+    } catch {
+      return false;
+    }
   };
+  const ordered = [...prompt.reactionOptions].sort(
+    (a, b) => Number(b.repeatable ?? false) - Number(a.repeatable ?? false),
+  );
+  for (const o of ordered) {
+    const targets = o.forMageId ? [o.forMageId] : [undefined, ...ownAffected];
+    for (const forMageId of targets) {
+      const answer: ResolutionAnswer = {
+        kind: 'reaction-played',
+        effectId: o.effectId,
+        reactionContext: {},
+        ...(forMageId ? { forMageId } : {}),
+      };
+      if (legal(answer)) return answer;
+    }
+  }
+  return { kind: 'reaction-passed' };
 }
 
 // ============================================================================
@@ -407,8 +433,9 @@ function answerPendingResolution(
 
     case 'reaction-window':
       // Always react when a reaction is available — every offered option is a
-      // playable, defensive save of one of Malfoy's own Mages (see chooseReaction).
-      return chooseReaction(prompt.reactionOptions);
+      // defensive save of one of Malfoy's own Mages. The pick is dry-run-
+      // verified (correct forMageId, else pass) so it's always legal.
+      return chooseReaction(state, pending);
 
     case 'confirm':
       return { kind: 'confirmed' };

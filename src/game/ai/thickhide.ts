@@ -40,7 +40,6 @@ import type {
   PendingResolution,
   Player,
   PlayerId,
-  ReactionOption,
   ResolutionAnswer,
   Room,
 } from '../types';
@@ -56,27 +55,58 @@ function isMoveResearchOption(id: string): boolean {
 }
 
 /**
- * Pick a reaction to play from an open reaction window's offered options, or
- * pass when none are offered. The engine only ever offers reactions Thickhide
- * can legally play (she owns the card and can pay), and a reaction always
- * protects one of her OWN Mages from the triggering harm, so she reacts
- * whenever she can. A repeatable option (Sacred Shield) is preferred so she
- * keeps her slot in the window and can save several affected Mages; otherwise
- * she picks at random (her usual idiom). `reactionContext: {}` lets the engine
- * resolve a slot-pick reaction by keeping the Mage on its original slot.
+ * Choose a LEGAL reaction answer for an open reaction window, verified by
+ * dry-running each candidate (engine-truth). The engine only offers reactions
+ * Thickhide owns and can pay, but a multi-Mage window can still reject a naive
+ * play: e.g. Mystic Amulet over a window whose FIRST event is an opponent's
+ * Mage — with no `forMageId` the engine matches event[0] and the reaction
+ * throws "only protects your own Mage". So we try the option's own forMageId,
+ * then each of her affected Mages, and commit only to an answer the engine
+ * accepts; if none do, she passes (always legal). A repeatable option (Sacred
+ * Shield) is tried first so she keeps her slot and can save several Mages; the
+ * rest are tried in random order (her usual idiom). `reactionContext: {}`
+ * resolves a slot-pick reaction by keeping the Mage on its original slot.
  */
 function chooseReaction(
-  options: readonly ReactionOption[],
+  state: GameState,
+  pending: PendingResolution,
   rng: Rng,
 ): ResolutionAnswer {
-  if (options.length === 0) return { kind: 'reaction-passed' };
-  const choice = options.find((o) => o.repeatable) ?? pickRandom([...options], rng);
-  return {
-    kind: 'reaction-played',
-    effectId: choice.effectId,
-    reactionContext: {},
-    ...(choice.forMageId ? { forMageId: choice.forMageId } : {}),
+  const prompt = pending.prompt;
+  if (prompt.kind !== 'reaction-window' || prompt.reactionOptions.length === 0) {
+    return { kind: 'reaction-passed' };
+  }
+  const ownAffected = prompt.triggerEvents
+    .filter((e) => 'ownerId' in e && e.ownerId === pending.responderId && 'mageId' in e)
+    .map((e) => (e as { mageId: string }).mageId);
+  const legal = (answer: ResolutionAnswer): boolean => {
+    try {
+      applyAction(state, { type: 'RESOLVE_PENDING', resolutionId: pending.id, answer });
+      return true;
+    } catch {
+      return false;
+    }
   };
+  // Repeatable first, then the rest shuffled (her random idiom).
+  const repeatables = prompt.reactionOptions.filter((o) => o.repeatable);
+  const rest = prompt.reactionOptions.filter((o) => !o.repeatable);
+  for (let i = rest.length - 1; i > 0; i--) {
+    const j = Math.floor(rng() * (i + 1));
+    [rest[i], rest[j]] = [rest[j]!, rest[i]!];
+  }
+  for (const o of [...repeatables, ...rest]) {
+    const targets = o.forMageId ? [o.forMageId] : [undefined, ...ownAffected];
+    for (const forMageId of targets) {
+      const answer: ResolutionAnswer = {
+        kind: 'reaction-played',
+        effectId: o.effectId,
+        reactionContext: {},
+        ...(forMageId ? { forMageId } : {}),
+      };
+      if (legal(answer)) return answer;
+    }
+  }
+  return { kind: 'reaction-passed' };
 }
 
 type Category = 'place' | 'spell' | 'vault' | 'supporter' | 'bell';
@@ -409,8 +439,9 @@ function answerPendingResolution(
 
     case 'reaction-window':
       // Always react when a reaction is available — every offered option is a
-      // playable, defensive save of one of her own Mages (see chooseReaction).
-      return chooseReaction(prompt.reactionOptions, rng);
+      // defensive save of one of her own Mages. The pick is dry-run-verified
+      // (correct forMageId, else pass) so it's always legal.
+      return chooseReaction(state, pending, rng);
 
     case 'confirm':
       return { kind: 'confirmed' };
