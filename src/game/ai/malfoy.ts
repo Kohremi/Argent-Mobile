@@ -1,38 +1,32 @@
-// Klank — the AI that plays bot-controlled seats.
+// Malfoy — a cloned-from-Klank personality with a Mana-then-big-spells plan.
 //
-// Pure decision functions: given a GameState (engine truth) they return a legal
-// GameAction / ResolutionAnswer. They never touch React or the store — the
-// `useKlankDriver` hook wires them up and paces dispatch. Legality is enumerated
-// with the same engine dry-run selectors the human UI uses (src/utils/uiSelectors),
-// so a bot can never attempt a move the rules forbid.
+// Pure decision functions (engine truth in, legal GameAction / ResolutionAnswer
+// out), same contract as Klank — see klank.ts. Malfoy's Errands priority:
 //
-// Klank plays a strict priority cascade each Errands turn:
-//   1. RESEARCH — if he holds ≥2 unspent INT+WIS, place into a space that
-//      provides Research (so he has the INT/WIS to actually convert it).
-//   2. DISRUPT  — else cast spells / play items / use slot-taking abilities
-//      that wound or disrupt an OPPONENT.
-//   3. VALUE    — else place into a space giving a large supporter draft, large
-//      Mana/Gold, or (failing those) any INT/WIS.
-//   4. PLACE    — else place a Mage in any (random) space.
-//   5. BELL     — if he can't place a Mage at all, take a Bell Tower card
-//      (which keeps the round advancing toward its end).
-// Each tier "fails over" to the next. Picks within a tier are seeded from the
-// state, so they're reproducible yet vary across the game.
+//   0. TRUMP — cast a harmful, disruptive Spell on an opponent. This beats
+//      everything below; if he can hurt a rival with a Spell, he does.
+//   1. MANA   — take the best open seat that grants ≥2 Mana, ONCE per round
+//      (and, when a seat offers Mana OR Gold, he takes the Mana).
+//   2. RESEARCH — he's really after big Spells, so once he's flush with Mana
+//      (≥6) OR there are no more 2+ Mana seats left, he pivots to a Research
+//      seat. (After his one Mana grab he's also chasing Research.)
+//   3. INT/WIS — if he can't get Research, he settles for an INT or WIS seat.
+//   4. otherwise place anywhere; if he can't place a Mage, take a Bell Tower
+//      card (which keeps the round advancing toward its end).
+//
+// Within-tier picks are seeded from the state, so they're reproducible yet
+// vary across the game. "Once per round" is read off the board: a placed Mage
+// sits on its seat until Resolution, so "already grabbed Mana this round" =
+// "Malfoy already occupies a 2+ Mana seat".
 
 import { applyAction } from '../engine';
 import { createRng, type Rng } from '../../utils/rng';
-import {
-  lookupSpellCardDef,
-  lookupSupporterCardDef,
-  lookupVaultCardDef,
-} from '../effects/helpers';
+import { lookupSpellCardDef } from '../effects/helpers';
 import {
   castableSpellLevels,
   claimableBellCards,
   eligiblePlacementSlots,
   eligibleShadowPlacementSlots,
-  playableSupporters,
-  playableVaultCards,
 } from '../../utils/uiSelectors';
 import type {
   ActionSpace,
@@ -47,7 +41,7 @@ import type {
 import type { BotPersonality } from './types';
 
 // ============================================================================
-// Errands turn — a tiered priority cascade (see file header).
+// Errands turn — Mana grab → big-spell research, all trumped by disruption.
 // ============================================================================
 
 /** A PRNG seeded from the state + a salt, so within-tier picks are reproducible. */
@@ -74,9 +68,26 @@ function findSpace(
   return null;
 }
 
-/** Unspent research currency in hand (INT + WIS pool, not yet placed on spells). */
-function unspentResearch(player: Player): number {
-  return player.resources.intelligence + player.resources.wisdom;
+// --- Reward classification from a slot's human-readable summary -------------
+// The ActionSpace `description` is the room file's reward summary (the same
+// text a human reads off the slot), so Malfoy classifies seats by keyword.
+
+const RESEARCH_RE = /\bresearch\b/;
+const INT_WIS_RE = /\bint\b|intelligence|\bwis\b|wisdom/;
+
+function providesResearch(desc: string): boolean {
+  return RESEARCH_RE.test(desc);
+}
+
+function providesIntWis(desc: string): boolean {
+  return INT_WIS_RE.test(desc);
+}
+
+/** Largest fixed "<n> mana" amount named in the reward text (0 if none). */
+function manaAmount(desc: string): number {
+  let best = 0;
+  for (const m of desc.matchAll(/(\d+)\s*mana/g)) best = Math.max(best, Number(m[1]));
+  return best;
 }
 
 /** Merit / shadow-merit seats cost a Merit Badge to activate (paid at Resolution). */
@@ -98,49 +109,10 @@ function meritBadgesCommitted(state: GameState, playerId: PlayerId): number {
   return committed;
 }
 
-// --- Reward classification from a slot's human-readable summary -------------
-// The ActionSpace `description` is the room file's reward summary (the same text
-// a human reads off the slot), so Klank classifies seats by keyword.
-
-const RESEARCH_RE = /\bresearch\b/;
-const SUPPORTER_DRAFT_RE = /draft[^.]*supporter/;
-const INT_WIS_RE = /\bint\b|intelligence|\bwis\b|wisdom/;
-
-function providesResearch(desc: string): boolean {
-  return RESEARCH_RE.test(desc);
-}
-
-/** Largest "<n> mana"/"<n> gold" amount named in the reward text. */
-function maxAmount(desc: string, unit: 'mana' | 'gold'): number {
-  let best = 0;
-  for (const m of desc.matchAll(new RegExp(`(\\d+)\\s*${unit}`, 'g'))) {
-    best = Math.max(best, Number(m[1]));
-  }
-  return best;
-}
-
-/**
- * Tier-3 "value" weight of a placement reward; 0 means it isn't a value seat.
- * Mirrors the user's order: large supporter drafts and large Mana/Gold rank
- * top, ordinary Mana/Gold next, and bare INT/WIS last.
- */
-function valueScore(desc: string): number {
-  if (SUPPORTER_DRAFT_RE.test(desc)) return 3; // large draftable supporters
-  const mana = maxAmount(desc, 'mana');
-  const gold = maxAmount(desc, 'gold');
-  if (mana >= 3 || gold >= 4) return 3; // large amounts of mana / gold
-  if (mana > 0 || gold > 0) return 2; // some mana / gold
-  if (INT_WIS_RE.test(desc)) return 1; // any int / wis
-  return 0;
-}
-
 interface PlacementOption {
   action: GameAction;
   /** Lower-cased reward summary for the target slot. */
   desc: string;
-  /** True when the placement seizes/over-shadows an OPPONENT-occupied slot
-   *  (Ars Magna wound, Natural-B displace, shadow-over-rival) — a disruption. */
-  disrupts: boolean;
 }
 
 function enumeratePlacements(state: GameState, player: Player): PlacementOption[] {
@@ -156,13 +128,11 @@ function enumeratePlacements(state: GameState, player: Player): PlacementOption[
       const cost = found.space.costToActivate?.meritBadges ?? 1;
       if (cost > meritBudget) return; // can't pay the Badge — skip this seat
     }
-    const occupant = found?.space.occupant ?? null;
     out.push({
       action: shadow
         ? { type: 'PLACE_WORKER', playerId: player.id, mageId, actionSpaceId: spaceId, isShadowing: true }
         : { type: 'PLACE_WORKER', playerId: player.id, mageId, actionSpaceId: spaceId },
       desc: (found?.space.description ?? '').toLowerCase(),
-      disrupts: occupant !== null && occupant.ownerId !== player.id,
     });
   };
   for (const mage of player.mages) {
@@ -177,7 +147,22 @@ function enumeratePlacements(state: GameState, player: Player): PlacementOption[
   return out;
 }
 
-// --- Disruption detection for spells / items --------------------------------
+/** True once Malfoy already occupies a 2+ Mana seat this round (his one grab). */
+function alreadyTookManaSeat(state: GameState, playerId: PlayerId): boolean {
+  for (const room of state.rooms) {
+    for (const sp of room.actionSpaces) {
+      if (
+        sp.occupant?.ownerId === playerId &&
+        manaAmount((sp.description ?? '').toLowerCase()) >= 2
+      ) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+// --- Disruption detection for spells ----------------------------------------
 
 /** Target-prompt labels that name a harmful effect. */
 const HARMFUL_LABEL_RE = /wound|banish|move|shadow|displace/i;
@@ -187,12 +172,12 @@ const DISRUPT_VERB_RE = /\b(wound|banish|shadow|displace|move)\b/i;
 const GLOBAL_DISRUPT_RE = /\bsteal\b|lose (their|its) power|may not cast|more mana|extra mana/i;
 
 /**
- * True when taking `action` would wound or disrupt an OPPONENT. Engine-truth:
- * dry-run the action and inspect the result —
+ * True when casting `action` would wound or disrupt an OPPONENT. Engine-truth:
+ * dry-run the cast and inspect the result —
  *   (a) a reaction window already records a harmful event on a rival's Mage,
- *   (b) the next prompt asks Klank to pick an opponent's Mage to hit, or
- *   (c) the source card's text is global control (Mesmerize / Silence / Energy
- *       Drain / steal) that hurts opponents without targeting a Mage.
+ *   (b) the next prompt asks Malfoy to pick an opponent's Mage to hit, or
+ *   (c) the Spell's text is global control (Mesmerize / Silence / Energy Drain
+ *       / steal) that hurts opponents without targeting a Mage.
  */
 function actionDisruptsOpponent(
   state: GameState,
@@ -242,8 +227,8 @@ function actionDisruptsOpponent(
   return GLOBAL_DISRUPT_RE.test(sourceText);
 }
 
-/** Castable spells + playable items whose effect wounds or disrupts an opponent. */
-function disruptiveCardActions(state: GameState, player: Player): GameAction[] {
+/** Castable Spells whose effect wounds or disrupts an opponent. */
+function disruptiveSpellActions(state: GameState, player: Player): GameAction[] {
   const out: GameAction[] = [];
   for (const [spellCardId, levels] of castableSpellLevels(state, player.id)) {
     const def = lookupSpellCardDef(state, spellCardId);
@@ -252,16 +237,6 @@ function disruptiveCardActions(state: GameState, player: Player): GameAction[] {
       const action: GameAction = { type: 'CAST_SPELL', playerId: player.id, spellCardId, level };
       if (actionDisruptsOpponent(state, player, action, text)) out.push(action);
     }
-  }
-  for (const vaultCardId of playableVaultCards(state, player.id)) {
-    const text = lookupVaultCardDef(state, vaultCardId)?.description ?? '';
-    const action: GameAction = { type: 'PLAY_VAULT_CARD', playerId: player.id, vaultCardId };
-    if (actionDisruptsOpponent(state, player, action, text)) out.push(action);
-  }
-  for (const supporterCardId of playableSupporters(state, player.id)) {
-    const text = lookupSupporterCardDef(state, supporterCardId)?.description ?? '';
-    const action: GameAction = { type: 'PLAY_SUPPORTER', playerId: player.id, supporterCardId };
-    if (actionDisruptsOpponent(state, player, action, text)) out.push(action);
   }
   return out;
 }
@@ -272,47 +247,45 @@ function chooseErrandsAction(state: GameState, playerId: PlayerId): GameAction {
   const rng = makeRng(state, playerId);
   const placements = enumeratePlacements(state, player);
 
-  // 1) Research seats — only when he holds research to spend (≥2 unspent INT+WIS).
-  if (unspentResearch(player) >= 2) {
-    const research = placements.filter((p) => providesResearch(p.desc));
-    if (research.length > 0) return pickRandom(research, rng).action;
-  }
+  // 0) TRUMP — cast a harmful, disruptive Spell on an opponent.
+  const disruptiveSpells = disruptiveSpellActions(state, player);
+  if (disruptiveSpells.length > 0) return pickRandom(disruptiveSpells, rng);
 
-  // 2) Wound / disrupt opponents — slot-taking abilities, then spells & items.
-  const disrupt: GameAction[] = [
-    ...placements.filter((p) => p.disrupts).map((p) => p.action),
-    ...disruptiveCardActions(state, player),
-  ];
-  if (disrupt.length > 0) return pickRandom(disrupt, rng);
+  // Mana seats worth grabbing: an open slot granting ≥2 Mana.
+  const manaSeats = placements.filter((p) => manaAmount(p.desc) >= 2);
+  // He's really after big Spells: pivot off Mana once he's flush (≥6) or the
+  // board has no 2+ Mana seats left.
+  const pivotToResearch = player.resources.mana >= 6 || manaSeats.length === 0;
 
-  // 3) Value seats — biggest reward wins (supporter draft / large Mana·Gold,
-  //    then any INT/WIS), ties broken at random.
-  const valued = placements
-    .map((p) => ({ p, v: valueScore(p.desc) }))
-    .filter((x) => x.v > 0);
-  if (valued.length > 0) {
-    const best = Math.max(...valued.map((x) => x.v));
+  // 1) Best Mana seat — once per round, while still chasing Mana.
+  if (!pivotToResearch && !alreadyTookManaSeat(state, playerId)) {
+    const best = Math.max(...manaSeats.map((p) => manaAmount(p.desc)));
     return pickRandom(
-      valued.filter((x) => x.v === best).map((x) => x.p),
+      manaSeats.filter((p) => manaAmount(p.desc) === best),
       rng,
     ).action;
   }
 
-  // 4) Otherwise drop a Mage into any (random) seat.
-  if (placements.length > 0) return pickRandom(placements, rng).action;
+  // 2) Research — to fuel big Spells.
+  const research = placements.filter((p) => providesResearch(p.desc));
+  if (research.length > 0) return pickRandom(research, rng).action;
 
-  // 5) Can't place a Mage → take a Bell Tower card (keeps the round ending).
+  // 3) INT / WIS — if he can't research.
+  const intWis = placements.filter((p) => providesIntWis(p.desc) && !providesResearch(p.desc));
+  if (intWis.length > 0) return pickRandom(intWis, rng).action;
+
+  // 4) Otherwise drop a Mage into any seat; if he can't place, take a Bell card.
+  if (placements.length > 0) return pickRandom(placements, rng).action;
   const bells = [...claimableBellCards(state, playerId)];
   if (bells.length > 0) {
     return { type: 'CLAIM_BELL_TOWER', playerId, bellTowerCardId: pickRandom(bells, rng) };
   }
-
   return { type: 'PASS_TURN', playerId };
 }
 
 // ============================================================================
-// Prompt answers — a valid answer for EVERY prompt kind (never stalls), with
-// light heuristics layered over safe defaults.
+// Prompt answers — cloned from Klank, but Malfoy takes MANA over Gold and the
+// biggest Spell level (he's building toward big casts).
 // ============================================================================
 
 function answerPendingResolution(
@@ -324,14 +297,10 @@ function answerPendingResolution(
     case 'choose-from-options': {
       const available = prompt.options.filter((o) => o.available !== false);
       const pool = available.length > 0 ? available : prompt.options;
-      // Light preferences by option id (covers the common engine menus):
-      //   merit resolution-choice → take the reward (gold variant if needed),
-      //   research menu → upgrade then draft before discarding,
-      //   infirmary bonus → take Gold.
-      const prefer = ['reward', 'reward-gold', 'add-wis', 'draft', 'gold', 'mana'];
+      // Same menu heuristics as Klank, but Mana is preferred ahead of Gold.
+      const prefer = ['reward', 'reward-gold', 'add-wis', 'draft', 'mana', 'gold'];
       const pick =
-        prefer.map((id) => pool.find((o) => o.id === id)).find(Boolean) ??
-        pool[0]!;
+        prefer.map((id) => pool.find((o) => o.id === id)).find(Boolean) ?? pool[0]!;
       return { kind: 'option-chosen', optionId: pick.id, payload: pick.payload };
     }
 
@@ -347,7 +316,6 @@ function answerPendingResolution(
 
     case 'choose-target-action-space': {
       const spaceId = prompt.eligibleSpaceIds[0];
-      // Defensive: an empty list shouldn't occur, but never throw.
       if (spaceId === undefined) return { kind: 'pass' };
       return { kind: 'space-chosen', spaceId };
     }
@@ -361,7 +329,7 @@ function answerPendingResolution(
     }
 
     case 'choose-spell-level': {
-      // Highest offered level (most powerful); the engine only lists castable ones.
+      // Highest offered level — Malfoy wants the big Spell.
       const level = [...prompt.availableLevels].sort((a, b) => b - a)[0];
       return { kind: 'level-chosen', level: level ?? prompt.availableLevels[0]! };
     }
@@ -376,7 +344,7 @@ function answerPendingResolution(
     }
 
     case 'reaction-window':
-      // v1: never react. Reactions are situational and passing is always safe.
+      // Reactions are situational and passing is always safe.
       return { kind: 'reaction-passed' };
 
     case 'confirm':
@@ -384,9 +352,9 @@ function answerPendingResolution(
   }
 }
 
-export const klank: BotPersonality = {
-  id: 'klank',
-  name: 'Klank',
+export const malfoy: BotPersonality = {
+  id: 'malfoy',
+  name: 'Malfoy',
   chooseErrandsAction,
   answerPendingResolution,
 };

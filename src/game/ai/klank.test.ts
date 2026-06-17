@@ -6,7 +6,11 @@
 import { describe, expect, it } from 'vitest';
 import { applyAction, initGame } from '../engine';
 import type { GameState, OwnedMage, PendingResolution } from '../types';
-import { botDecisionContext, claimableBellCards } from '../../utils/uiSelectors';
+import {
+  botDecisionContext,
+  claimableBellCards,
+  eligiblePlacementSlots,
+} from '../../utils/uiSelectors';
 import { klank } from './klank';
 
 /** Two-player base game seated straight into Errands round 1 (player 0 active). */
@@ -222,6 +226,202 @@ describe('Klank — prompt answers (shape-valid for every kind)', () => {
         mk({ kind: 'confirm', message: 'ok?' }),
       ),
     ).toEqual({ kind: 'confirmed' });
+  });
+});
+
+describe('Klank — priority cascade', () => {
+  // --- local state-shaping helpers -----------------------------------------
+  function setResources(
+    s: GameState,
+    idx: number,
+    patch: Partial<GameState['players'][number]['resources']>,
+  ): GameState {
+    return {
+      ...s,
+      players: s.players.map((p, i) =>
+        i === idx ? { ...p, resources: { ...p.resources, ...patch } } : p,
+      ),
+    };
+  }
+  /** Strip every slot's reward summary so only the seats we tag are classified. */
+  function clearDescriptions(s: GameState): GameState {
+    return {
+      ...s,
+      rooms: s.rooms.map((r) => ({
+        ...r,
+        actionSpaces: r.actionSpaces.map((sp) => {
+          const copy = { ...sp };
+          delete copy.description;
+          return copy;
+        }),
+      })),
+    };
+  }
+  function setDesc(s: GameState, spaceId: string, description: string): GameState {
+    return {
+      ...s,
+      rooms: s.rooms.map((r) => ({
+        ...r,
+        actionSpaces: r.actionSpaces.map((sp) =>
+          sp.id === spaceId ? { ...sp, description } : sp,
+        ),
+      })),
+    };
+  }
+  function descOf(s: GameState, spaceId: string): string {
+    for (const r of s.rooms) {
+      const sp = r.actionSpaces.find((x) => x.id === spaceId);
+      if (sp) return sp.description ?? '';
+    }
+    return '';
+  }
+  function addOwnedSpell(s: GameState, idx: number, cardId: string): GameState {
+    return {
+      ...s,
+      players: s.players.map((p, i) =>
+        i === idx
+          ? {
+              ...p,
+              ownedSpells: [
+                ...p.ownedSpells,
+                { cardId, intPlaced: true, wisPlacedLevel2: false, wisPlacedLevel3: false, exhausted: false },
+              ],
+            }
+          : p,
+      ),
+    };
+  }
+  function placeEnemyMage(s: GameState, idx: number, mageId: string, spaceId: string): GameState {
+    const pid = s.players[idx]!.id;
+    const withMage: GameState = {
+      ...s,
+      players: s.players.map((p, i) =>
+        i === idx
+          ? {
+              ...p,
+              mages: [
+                ...p.mages,
+                { id: mageId, cardId: 'base.mage.neutral', color: 'off-white', location: { kind: 'action-space', spaceId }, isShadowing: false, isWounded: false },
+              ],
+            }
+          : p,
+      ),
+    };
+    return {
+      ...withMage,
+      rooms: withMage.rooms.map((r) => ({
+        ...r,
+        actionSpaces: r.actionSpaces.map((sp) =>
+          sp.id === spaceId ? { ...sp, occupant: { mageId, ownerId: pid, isShadowing: false } } : sp,
+        ),
+      })),
+    };
+  }
+
+  function isMeritSlotId(s: GameState, id: string): boolean {
+    for (const r of s.rooms) {
+      const sp = r.actionSpaces.find((x) => x.id === id);
+      if (sp) return sp.slotType === 'merit' || sp.slotType === 'shadow-merit';
+    }
+    return false;
+  }
+  function meritSlotIds(s: GameState): string[] {
+    const out: string[] = [];
+    for (const r of s.rooms) {
+      for (const sp of r.actionSpaces) {
+        if (sp.slotType === 'merit' || sp.slotType === 'shadow-merit') out.push(sp.id);
+      }
+    }
+    return out;
+  }
+
+  it('seeks a Research seat when holding ≥2 unspent INT+WIS', () => {
+    let s = clearDescriptions(seatMages(errandsGame({ bots: true }), 0, ['a1']));
+    const pid = s.players[0]!.id;
+    const [research, value] = [...eligiblePlacementSlots(s, pid, 'a1')].filter(
+      (id) => !isMeritSlotId(s, id),
+    );
+    s = setDesc(setDesc(s, research!, 'Gain 3 Research'), value!, 'Gain 4 Mana');
+
+    s = setResources(s, 0, { intelligence: 2, wisdom: 0 });
+    const a = klank.chooseErrandsAction(s, pid);
+    expect(a.type).toBe('PLACE_WORKER');
+    if (a.type === 'PLACE_WORKER') expect(descOf(s, a.actionSpaceId)).toMatch(/research/i);
+  });
+
+  it('ignores Research seats when short on INT+WIS (takes value instead)', () => {
+    let s = clearDescriptions(seatMages(errandsGame({ bots: true }), 0, ['a1']));
+    const pid = s.players[0]!.id;
+    const [research, value] = [...eligiblePlacementSlots(s, pid, 'a1')].filter(
+      (id) => !isMeritSlotId(s, id),
+    );
+    s = setDesc(setDesc(s, research!, 'Gain 3 Research'), value!, 'Gain 4 Mana');
+
+    s = setResources(s, 0, { intelligence: 1, wisdom: 0 });
+    const a = klank.chooseErrandsAction(s, pid);
+    expect(a.type).toBe('PLACE_WORKER');
+    if (a.type === 'PLACE_WORKER') {
+      expect(a.actionSpaceId).not.toBe(research);
+      expect(descOf(s, a.actionSpaceId)).toMatch(/mana/i);
+    }
+  });
+
+  it('prefers the larger-value seat (big Mana over a lone WIS)', () => {
+    let s = clearDescriptions(seatMages(errandsGame({ bots: true }), 0, ['a1']));
+    s = setResources(s, 0, { intelligence: 0, wisdom: 0 });
+    const pid = s.players[0]!.id;
+    const [big, small] = [...eligiblePlacementSlots(s, pid, 'a1')].filter(
+      (id) => !isMeritSlotId(s, id),
+    );
+    s = setDesc(setDesc(s, big!, 'Gain 4 Mana'), small!, 'Gain 1 WIS');
+
+    const a = klank.chooseErrandsAction(s, pid);
+    expect(a).toMatchObject({ type: 'PLACE_WORKER', actionSpaceId: big });
+  });
+
+  it('disrupts an opponent (casts Burn) over taking a value seat', () => {
+    let s = seatMages(errandsGame({ bots: true }), 0, ['a1']);
+    s = setResources(s, 0, { intelligence: 0, wisdom: 0, mana: 5 });
+    s = addOwnedSpell(s, 0, 'base.spell.burn'); // L1 "Wound a Mage"
+    // Seat an opponent mage on a real slot so Burn has a target.
+    const room = s.rooms.find((r) => !r.isUniversityCentral && r.actionSpaces.length > 0)!;
+    s = placeEnemyMage(s, 1, 'enemy', room.actionSpaces[0]!.id);
+
+    const a = klank.chooseErrandsAction(s, s.players[0]!.id);
+    expect(a.type).toBe('CAST_SPELL');
+  });
+
+  it('never takes a Merit seat with no Merit Badges (even the best one)', () => {
+    let s = clearDescriptions(seatMages(errandsGame({ bots: true }), 0, ['a1']));
+    s = setResources(s, 0, { meritBadges: 0, intelligence: 0, wisdom: 0 });
+    const pid = s.players[0]!.id;
+    const eligible = [...eligiblePlacementSlots(s, pid, 'a1')];
+    const meritId = eligible.find((id) => isMeritSlotId(s, id))!;
+    const plainId = eligible.find((id) => !isMeritSlotId(s, id))!;
+    expect(meritId && plainId).toBeTruthy();
+    // The Merit seat is the juiciest value seat — but he can't pay the Badge.
+    s = setDesc(setDesc(s, meritId, 'Gain 4 Mana'), plainId, 'Gain 2 Mana');
+
+    const a = klank.chooseErrandsAction(s, pid);
+    expect(a.type).toBe('PLACE_WORKER');
+    if (a.type === 'PLACE_WORKER') expect(a.actionSpaceId).not.toBe(meritId);
+  });
+
+  it('counts Merit seats it already holds against its Badge budget', () => {
+    let s = clearDescriptions(seatMages(errandsGame({ bots: true }), 0, ['a1']));
+    s = setResources(s, 0, { meritBadges: 1, intelligence: 0, wisdom: 0 });
+    const pid = s.players[0]!.id;
+    const eligible = [...eligiblePlacementSlots(s, pid, 'a1')];
+    const meritId = eligible.find((id) => isMeritSlotId(s, id))!;
+    const plainId = eligible.find((id) => !isMeritSlotId(s, id))!;
+    s = setDesc(setDesc(s, meritId, 'Gain 4 Mana'), plainId, 'Gain 2 Mana');
+    // His one Badge is already spoken for: he sits on another Merit seat.
+    const otherMerit = meritSlotIds(s).find((id) => id !== meritId)!;
+    s = placeEnemyMage(s, 0, 'held', otherMerit);
+
+    const a = klank.chooseErrandsAction(s, pid);
+    expect(a.type).toBe('PLACE_WORKER');
+    if (a.type === 'PLACE_WORKER') expect(a.actionSpaceId).not.toBe(meritId);
   });
 });
 

@@ -1,7 +1,9 @@
 // Thickhide — a bot personality that mostly makes a RANDOM legal move, with a
 // few instincts:
-//   • Merit Badges: if she holds any she'll seek Merit slots out; if she holds
-//     none she avoids them entirely.
+//   • Merit Badges: she seeks Merit slots when she holds Badges, but never
+//     lines up more Merit slots than the Badges she has left this round (the
+//     surplus would only forfeit for 1 IP at Resolution); with none she avoids
+//     them entirely.
 //   • She won't take a space whose activation cost (Merit Badges / Gold / Mana)
 //     she can't meet — only "useful" spaces are considered.
 //   • She spends a Fast Action first when one is available, then takes a
@@ -12,6 +14,10 @@
 //     spell / supporter / vault / bell-tower.
 //   • When resolving prompts she always takes the reward (never randomly
 //     forfeits) and otherwise chooses at random.
+//   • Negative effects (wound / banish) are only ever aimed at an OPPONENT —
+//     never at her own Mages. If no opponent Mage is targetable she won't even
+//     attempt the wound: she declines the target pick when allowed and skips
+//     any action that would otherwise force her to wound herself.
 //
 // Randomness is seeded from the GameState so a given state always yields the
 // same choice (reproducible / testable) while varying across the game.
@@ -30,6 +36,7 @@ import type {
   ActionSpace,
   GameAction,
   GameState,
+  PendingPrompt,
   PendingResolution,
   Player,
   PlayerId,
@@ -73,25 +80,90 @@ function isMeritSlot(space: ActionSpace): boolean {
   return space.slotType === 'merit' || space.slotType === 'shadow-merit';
 }
 
+/** Merit Badges already committed to merit seats this round (charged at Resolution). */
+function meritBadgesCommitted(state: GameState, playerId: PlayerId): number {
+  let committed = 0;
+  for (const room of state.rooms) {
+    for (const sp of room.actionSpaces) {
+      if (!isMeritSlot(sp)) continue;
+      const cost = sp.costToActivate?.meritBadges ?? 1;
+      if (sp.occupant?.ownerId === playerId) committed += cost;
+      if (sp.shadowOccupant?.ownerId === playerId) committed += cost;
+    }
+  }
+  return committed;
+}
+
+/** Wound/banish target prompts — the negative effects she only aims at rivals. */
+const HARMFUL_TARGET_RE = /\b(wound|banish)\b/i;
+
+/** The set of Mage ids owned by `playerId`. */
+function ownMageIds(state: GameState, playerId: PlayerId): Set<string> {
+  const player = state.players.find((p) => p.id === playerId);
+  return new Set(player?.mages.map((m) => m.id) ?? []);
+}
+
+/**
+ * A `choose-target-mage` prompt that wounds or banishes — i.e. a NEGATIVE
+ * effect Thickhide should only ever aim at an opponent. Detected from the
+ * prompt's banner, which the engine labels "Wound which Mage?" / "Banish which
+ * Mage?" / "Choose a Mage to wound" / etc. Prompts that already restrict their
+ * eligible list to opponents (Arcane Surge) and beneficial self-target prompts
+ * ("Place which of your Mages…") carry no such label, so they're unaffected.
+ */
+function isHarmfulTargetPrompt(
+  prompt: Extract<PendingPrompt, { kind: 'choose-target-mage' }>,
+): boolean {
+  return HARMFUL_TARGET_RE.test(prompt.label ?? '');
+}
+
+/**
+ * True when taking `action` would immediately force Thickhide into a harmful
+ * (wound / banish) target pick whose only eligible Mages are her OWN — there
+ * are no opponents to hit and the prompt can't be passed. Rather than turn the
+ * effect on herself she declines to attempt it, so such actions are dropped
+ * from her candidate pool. Engine-truth: we dry-run the action and inspect the
+ * prompt it leaves on top of the stack (same approach as `isFastAction`).
+ */
+function forcesSelfWound(state: GameState, action: GameAction, botId: PlayerId): boolean {
+  let next: GameState;
+  try {
+    next = applyAction(state, action);
+  } catch {
+    return false;
+  }
+  const top = next.pendingResolutionStack[next.pendingResolutionStack.length - 1];
+  if (!top || top.responderId !== botId) return false;
+  const prompt = top.prompt;
+  if (prompt.kind !== 'choose-target-mage') return false;
+  // An optional leg can simply be passed at prompt time, so it's not a dead end.
+  if (!isHarmfulTargetPrompt(prompt) || prompt.canPass) return false;
+  const own = ownMageIds(next, botId);
+  return prompt.eligibleMageIds.every((id) => own.has(id));
+}
+
 /**
  * Whether Thickhide considers a placement space worthwhile: she can meet its
- * activation cost, and the Merit rule holds (seek Merit slots when she has
- * Badges, avoid them when she doesn't). Spaces with no cost are always useful.
+ * activation cost, and she still has Merit Badges left this round to pay for a
+ * Merit seat. `meritBudget` is her Badges minus those already committed to
+ * merit seats this round, so she never queues up more Merit seats than she can
+ * actually pay for (the surplus would only forfeit for 1 IP at Resolution).
+ * Spaces with no cost are always useful.
  *
  * NOTE: only the modelled costs (Merit Badges / Gold / Mana via
  * `costToActivate`) are checked. A "hand in a Treasure" style requirement isn't
  * represented in the data model, so it isn't filtered here.
  */
-function spaceIsUseful(player: Player, space: ActionSpace, hasBadges: boolean): boolean {
+function spaceIsUseful(player: Player, space: ActionSpace, meritBudget: number): boolean {
   const cost = space.costToActivate;
   if (isMeritSlot(space)) {
-    if (!hasBadges) return false; // avoid Merit slots with no Badges to spend
-    return player.resources.meritBadges >= (cost?.meritBadges ?? 0);
+    // No Badge to spare → skip (with 0 budget this also covers "no Badges").
+    return (cost?.meritBadges ?? 1) <= meritBudget;
   }
   if (cost) {
     if ((cost.gold ?? 0) > player.resources.gold) return false;
     if ((cost.mana ?? 0) > player.resources.mana) return false;
-    if ((cost.meritBadges ?? 0) > player.resources.meritBadges) return false;
+    if ((cost.meritBadges ?? 0) > meritBudget) return false;
   }
   return true;
 }
@@ -118,14 +190,16 @@ function isFastAction(state: GameState, action: GameAction): boolean {
 
 function enumerateCandidates(state: GameState, player: Player): Candidate[] {
   const playerId = player.id;
-  const hasBadges = player.resources.meritBadges > 0;
+  // Badges still free to spend this round, after those already on merit seats.
+  const meritBudget =
+    player.resources.meritBadges - meritBadgesCommitted(state, playerId);
   const out: Candidate[] = [];
 
   for (const mage of player.mages) {
     if (mage.location.kind !== 'office' || mage.isWounded) continue;
     const consider = (spaceId: string, shadow: boolean) => {
       const found = findSpace(state, spaceId);
-      if (found && !spaceIsUseful(player, found.space, hasBadges)) return;
+      if (found && !spaceIsUseful(player, found.space, meritBudget)) return;
       out.push({
         action: shadow
           ? { type: 'PLACE_WORKER', playerId, mageId: mage.id, actionSpaceId: spaceId, isShadowing: true }
@@ -156,7 +230,10 @@ function enumerateCandidates(state: GameState, player: Player): Candidate[] {
     out.push({ action: { type: 'CLAIM_BELL_TOWER', playerId, bellTowerCardId: cardId }, category: 'bell' });
   }
 
-  return out;
+  // Drop any move that would force her to wound/banish one of her own Mages
+  // because no opponent is targetable — she won't attempt a wound with no
+  // opponents to hit.
+  return out.filter((c) => !forcesSelfWound(state, c.action, playerId));
 }
 
 function chooseErrandsAction(state: GameState, playerId: PlayerId): GameAction {
@@ -225,6 +302,18 @@ function answerPendingResolution(
 
     case 'choose-target-mage': {
       if (prompt.eligibleMageIds.length === 0) return { kind: 'pass' };
+      if (isHarmfulTargetPrompt(prompt)) {
+        // Negative effect: only ever wound/banish an OPPONENT's Mage. With no
+        // opponent eligible she declines the effect when the prompt allows it;
+        // if it can't be passed she's already committed (an action that would
+        // force this is filtered out earlier), so she falls back to random.
+        const own = ownMageIds(state, pending.responderId);
+        const opponents = prompt.eligibleMageIds.filter((id) => !own.has(id));
+        if (opponents.length > 0) {
+          return { kind: 'mage-chosen', mageId: pickRandom(opponents, rng) };
+        }
+        if (prompt.canPass) return { kind: 'pass' };
+      }
       return { kind: 'mage-chosen', mageId: pickRandom([...prompt.eligibleMageIds], rng) };
     }
 

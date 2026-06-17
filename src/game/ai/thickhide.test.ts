@@ -72,6 +72,34 @@ function withMeritRoom(s: GameState): { state: GameState; meritIds: Set<string> 
   return { state: { ...s, rooms }, meritIds };
 }
 
+/** Place `mageId` (owned by player `idx`) onto `spaceId` as its occupant. */
+function occupyMeritSeat(s: GameState, idx: number, mageId: string, spaceId: string): GameState {
+  const pid = s.players[idx]!.id;
+  const withMage: GameState = {
+    ...s,
+    players: s.players.map((p, i) =>
+      i === idx
+        ? {
+            ...p,
+            mages: [
+              ...p.mages,
+              { id: mageId, cardId: 'base.mage.neutral', color: 'off-white', location: { kind: 'action-space', spaceId }, isShadowing: false, isWounded: false },
+            ],
+          }
+        : p,
+    ),
+  };
+  return {
+    ...withMage,
+    rooms: withMage.rooms.map((r) => ({
+      ...r,
+      actionSpaces: r.actionSpaces.map((sp) =>
+        sp.id === spaceId ? { ...sp, occupant: { mageId, ownerId: pid, isShadowing: false } } : sp,
+      ),
+    })),
+  };
+}
+
 /** Vary the RNG seed by bumping nextSequenceId, sampling Thickhide's choices. */
 function sampleActions(s: GameState, n: number) {
   const pid = s.players[0]!.id;
@@ -108,6 +136,21 @@ describe('Thickhide — merit instinct', () => {
       expect(a.type).toBe('PLACE_WORKER');
       if (a.type === 'PLACE_WORKER') {
         expect(meritIds.has(a.actionSpaceId)).toBe(true);
+      }
+    }
+  });
+
+  it('counts Merit seats it already holds against its Badge budget', () => {
+    let { state, meritIds } = withMeritRoom(errandsGame(true));
+    state = seatMages(state, 0, ['a1'], { meritBadges: 1 });
+    // Her one Badge is already committed — a mage sits on a Merit seat — so the
+    // budget is spent and she should never line up ANOTHER Merit seat.
+    state = occupyMeritSeat(state, 0, 'held', [...meritIds][0]!);
+    const actions = sampleActions(state, 30);
+    expect(actions.length).toBeGreaterThan(0);
+    for (const a of actions) {
+      if (a.type === 'PLACE_WORKER') {
+        expect(meritIds.has(a.actionSpaceId)).toBe(false);
       }
     }
   });
@@ -176,6 +219,71 @@ describe('Thickhide — prompt answers', () => {
     expect(
       thickhide.answerPendingResolution(baseState, mk({ kind: 'confirm', message: 'ok' })),
     ).toEqual({ kind: 'confirmed' });
+  });
+});
+
+describe('Thickhide — negative effects only hit opponents', () => {
+  // Akko (player 0) owns a1/a2; Diana (player 1) owns b1/b2.
+  let s = errandsGame(true);
+  s = seatMages(s, 0, ['a1', 'a2']);
+  s = seatMages(s, 1, ['b1', 'b2']);
+  const pid0 = s.players[0]!.id;
+  const opponentIds = new Set(['b1', 'b2']);
+  // rng for prompt answers is seeded from the prompt id, so vary it to sample.
+  const wound = (
+    id: string,
+    prompt: PendingResolution['prompt'],
+  ): PendingResolution => ({
+    id,
+    responderId: pid0,
+    prompt,
+    resume: { effectId: 'base.system.noop', context: {} },
+    source: { kind: 'spell', id: 'burn', triggeringPlayerId: pid0, description: 'Burn' },
+  });
+
+  it('always wounds an opponent when one is eligible, never her own Mage', () => {
+    for (let i = 0; i < 30; i++) {
+      const ans = thickhide.answerPendingResolution(
+        s,
+        wound(`w-${i}`, {
+          kind: 'choose-target-mage',
+          eligibleMageIds: ['a1', 'a2', 'b1', 'b2'],
+          label: 'Wound which Mage?',
+        }),
+      );
+      expect(ans.kind).toBe('mage-chosen');
+      if (ans.kind === 'mage-chosen') expect(opponentIds.has(ans.mageId)).toBe(true);
+    }
+  });
+
+  it('declines a passable wound when only her own Mages are eligible', () => {
+    const ans = thickhide.answerPendingResolution(
+      s,
+      wound('w-self', {
+        kind: 'choose-target-mage',
+        eligibleMageIds: ['a1', 'a2'],
+        canPass: true,
+        label: 'Choose a Mage to wound (or pass)',
+      }),
+    );
+    expect(ans).toEqual({ kind: 'pass' });
+  });
+
+  it('does not restrict a beneficial self-target prompt to opponents', () => {
+    const picks = new Set<string>();
+    for (let i = 0; i < 30; i++) {
+      const ans = thickhide.answerPendingResolution(
+        s,
+        wound(`heal-${i}`, {
+          kind: 'choose-target-mage',
+          eligibleMageIds: ['a1', 'a2'],
+          label: 'Place which of your Mages into the slot?',
+        }),
+      );
+      if (ans.kind === 'mage-chosen') picks.add(ans.mageId);
+    }
+    // She freely picks her own Mages for a non-harmful prompt.
+    expect(picks.has('a1') || picks.has('a2')).toBe(true);
   });
 });
 
