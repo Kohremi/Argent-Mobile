@@ -9,6 +9,7 @@ import {
   type LayoutModeId,
 } from '../../store/setupStore';
 import { useGameStore } from '../../store/gameStore';
+import { BOT_PERSONALITY_OPTIONS } from '../../game/ai';
 import { randomSeed } from '../../utils/rng';
 import type { GameConfig, RoomId } from '../../game/types';
 
@@ -41,11 +42,15 @@ export function SetupScreen() {
   const packs = useMemo(() => listPacks(), []);
   const selectedPackIds = useSetupStore((s) => s.selectedPackIds);
   const playerNames = useSetupStore((s) => s.playerNames);
+  const playerControlledByBot = useSetupStore((s) => s.playerControlledByBot);
+  const playerBotPersonality = useSetupStore((s) => s.playerBotPersonality);
   const numberOfRooms = useSetupStore((s) => s.numberOfRooms);
   const layoutMode = useSetupStore((s) => s.layoutMode);
   const customRoomIds = useSetupStore((s) => s.customRoomIds);
   const togglePack = useSetupStore((s) => s.togglePack);
   const setPlayerName = useSetupStore((s) => s.setPlayerName);
+  const setPlayerControlledByBot = useSetupStore((s) => s.setPlayerControlledByBot);
+  const setPlayerBotPersonality = useSetupStore((s) => s.setPlayerBotPersonality);
   const setPlayerCount = useSetupStore((s) => s.setPlayerCount);
   const setNumberOfRooms = useSetupStore((s) => s.setNumberOfRooms);
   const setLayoutMode = useSetupStore((s) => s.setLayoutMode);
@@ -115,6 +120,10 @@ export function SetupScreen() {
     const config: GameConfig = {
       activePackIds: selectedPackIds,
       playerNames: playerNames.map((n) => n.trim()),
+      controlledByBot: playerNames.map((_, i) => playerControlledByBot[i] ?? false),
+      botPersonalityIds: playerNames.map((_, i) =>
+        playerControlledByBot[i] ? (playerBotPersonality[i] ?? 'klank') : undefined,
+      ),
       rngSeed: randomSeed(),
       useCandidateDraft: true,
       numberOfRooms,
@@ -220,6 +229,31 @@ export function SetupScreen() {
                 className="flex-1 px-3 py-2 rounded bg-slate-900 border border-slate-700 focus:border-amber-400/60 focus:outline-none"
                 placeholder={`Player ${i + 1}`}
               />
+              <label
+                className="flex items-center gap-1.5 text-xs text-slate-400 select-none cursor-pointer whitespace-nowrap"
+                title="Let an AI play this seat"
+              >
+                <input
+                  type="checkbox"
+                  checked={playerControlledByBot[i] ?? false}
+                  onChange={(e) => setPlayerControlledByBot(i, e.target.checked)}
+                  className="accent-amber-400"
+                />
+                🤖 Controlled by bot
+              </label>
+              <select
+                value={playerBotPersonality[i] ?? 'klank'}
+                onChange={(e) => setPlayerBotPersonality(i, e.target.value)}
+                disabled={!(playerControlledByBot[i] ?? false)}
+                title="Which AI personality plays this seat"
+                className="rounded bg-slate-900 border border-slate-700 px-2 py-1 text-xs text-slate-200 focus:border-amber-400/60 focus:outline-none disabled:opacity-40"
+              >
+                {BOT_PERSONALITY_OPTIONS.map((opt) => (
+                  <option key={opt.id} value={opt.id}>
+                    {opt.name}
+                  </option>
+                ))}
+              </select>
             </li>
           ))}
         </ul>

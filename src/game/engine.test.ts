@@ -14923,6 +14923,135 @@ describe("Archmage's Apprentice — all mage powers", () => {
     expect(bobRed.isWounded).toBe(true);
     expect(bobRed.location.kind).toBe('infirmary');
   });
+
+  // When the chosen sides give the Apprentice TWO base-placement powers at once
+  // (Sorcery A's Ars Magna + Natural Magick B's displacement), placing it onto
+  // an occupied opposing slot must ask which to use instead of silently picking.
+  /** Apprentice in office + an opposing neutral Mage on Library slot-3. */
+  function apprenticeOverlapSetup(): GameState {
+    let s = initGame({
+      ...TWO_PLAYER_CONFIG,
+      mageAbilitySides: { 'natural-magick': 'B' }, // Sorcery stays Side A
+    });
+    s = forceLibrarySideA(s);
+    s = zeroPlayerResources(s, 'p1');
+    s = zeroPlayerResources(s, 'p2');
+    s = setMana(s, 'p1', 2);
+    s = mapPlayer(s, 'p1', (p) => ({
+      ...p,
+      mages: [apprenticeInOffice('p1', 'app-1')],
+    }));
+    s = addMage(s, 'p2', { id: 'bob', cardId: 'base.mage.neutral', color: 'off-white' });
+    s = placeMageOnSpace(s, 'p2', 'bob', 'base.room.library.a.slot-3');
+    return {
+      ...s,
+      firstPlayerIndex: 0,
+      phase: {
+        kind: 'errands',
+        round: 1,
+        activePlayerIndex: 0,
+        actionUsed: false,
+        fastActionUsed: false,
+      },
+      bellTower: { ...s.bellTower, available: [] },
+    };
+  }
+
+  it('Apprentice (Sorcery A + Natural Magick B): placing on an occupied opposing slot asks which power', () => {
+    let s = apprenticeOverlapSetup();
+    s = applyAction(s, {
+      type: 'PLACE_WORKER',
+      playerId: 'p1',
+      mageId: 'app-1',
+      actionSpaceId: 'base.room.library.a.slot-3',
+    });
+    const prompt = topPending(s);
+    expect(prompt.resume.effectId).toBe('base.mage.apprentice.place-on-occupied');
+    if (prompt.prompt.kind !== 'choose-from-options') {
+      throw new Error('expected choose-from-options');
+    }
+    expect([...prompt.prompt.options.map((o) => o.id)].sort()).toEqual([
+      'displace',
+      'wound',
+    ]);
+  });
+
+  it('Apprentice choosing displace: opponent moves to another slot, apprentice takes the slot (free)', () => {
+    let s = apprenticeOverlapSetup();
+    s = applyAction(s, {
+      type: 'PLACE_WORKER',
+      playerId: 'p1',
+      mageId: 'app-1',
+      actionSpaceId: 'base.room.library.a.slot-3',
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'option-chosen', optionId: 'displace', payload: {} },
+    });
+    const slotPrompt = topPending(s);
+    expect(slotPrompt.prompt.kind).toBe('choose-target-action-space');
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: slotPrompt.id,
+      answer: { kind: 'space-chosen', spaceId: 'base.room.library.a.slot-1' },
+    });
+    // Bob's mage-moved reaction window opens; he passes.
+    const react = topPending(s);
+    expect(react.prompt.kind).toBe('reaction-window');
+    expect(react.responderId).toBe('p2');
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: react.id,
+      answer: { kind: 'reaction-passed' },
+    });
+    const spaces = s.rooms.flatMap((r) => r.actionSpaces);
+    expect(spaces.find((sp) => sp.id === 'base.room.library.a.slot-3')?.occupant?.mageId).toBe('app-1');
+    expect(spaces.find((sp) => sp.id === 'base.room.library.a.slot-1')?.occupant?.mageId).toBe('bob');
+    const alice = s.players.find((p) => p.id === 'p1')!;
+    expect(alice.resources.mana).toBe(2); // displacement is free
+    const bob = s.players.find((p) => p.id === 'p2')!.mages.find((m) => m.id === 'bob')!;
+    expect(bob.isWounded).toBe(false);
+  });
+
+  it('Apprentice choosing Ars Magna: opponent is wounded and the apprentice takes the slot (1 Mana)', () => {
+    let s = apprenticeOverlapSetup();
+    s = applyAction(s, {
+      type: 'PLACE_WORKER',
+      playerId: 'p1',
+      mageId: 'app-1',
+      actionSpaceId: 'base.room.library.a.slot-3',
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'option-chosen', optionId: 'wound', payload: {} },
+    });
+    // Wound reaction window — pass.
+    const react = topPending(s);
+    expect(react.prompt.kind).toBe('reaction-window');
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: react.id,
+      answer: { kind: 'reaction-passed' },
+    });
+    // Bob's infirmary bonus.
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'option-chosen', optionId: 'gold', payload: {} },
+    });
+    const alice = s.players.find((p) => p.id === 'p1')!;
+    expect(alice.resources.mana).toBe(1); // 2 - 1 (Ars Magna)
+    const apprentice = alice.mages.find((m) => m.id === 'app-1')!;
+    expect(apprentice.location).toEqual({
+      kind: 'action-space',
+      spaceId: 'base.room.library.a.slot-3',
+    });
+    const bob = s.players.find((p) => p.id === 'p2')!.mages.find((m) => m.id === 'bob')!;
+    expect(bob.isWounded).toBe(true);
+    expect(bob.location.kind).toBe('infirmary');
+  });
 });
 
 describe('Modular mage powers — Side A gated by mageAbilitySides', () => {
@@ -15407,6 +15536,92 @@ describe('Modular mage powers — Side A gated by mageAbilitySides', () => {
         ),
       ).toBe(true);
     }
+  });
+
+  it('Planar Studies Side B: the board surfaces the shadow slot as eligible (1 Mana)', async () => {
+    const { eligibleShadowPlacementSlots, eligiblePlacementSlots } = await import(
+      '../utils/uiSelectors'
+    );
+    let s = initGame({
+      ...TWO_PLAYER_CONFIG,
+      mageAbilitySides: { 'planar-studies': 'B' },
+    });
+    const room = s.rooms.find(
+      (r) =>
+        !r.cannotBePlacedInDirectly &&
+        !r.isInstantRoom &&
+        !r.noShadowSlots &&
+        r.actionSpaces.some(
+          (sp) => sp.slotType !== 'shadow' && sp.slotType !== 'shadow-merit',
+        ),
+    )!;
+    const slot = room.actionSpaces.find(
+      (sp) => sp.slotType !== 'shadow' && sp.slotType !== 'shadow-merit',
+    )!;
+    s = addMage(s, 'p2', { id: 'bob', cardId: 'base.mage.neutral', color: 'off-white' });
+    s = placeMageOnSpace(s, 'p2', 'bob', slot.id);
+    s = addMage(s, 'p1', {
+      id: 'pp',
+      cardId: 'base.mage.planar-studies',
+      color: 'purple',
+    });
+    s = setMana(s, 'p1', 3);
+    s = errands(s);
+
+    // The board highlights the opponent's slot as a shadow target...
+    const shadow = eligibleShadowPlacementSlots(s, 'p1', 'pp');
+    expect(shadow.has(slot.id)).toBe(true);
+    // ...but NOT as a normal (base) placement — it's occupied.
+    expect(eligiblePlacementSlots(s, 'p1', 'pp').has(slot.id)).toBe(false);
+
+    // With no Mana, the shadow option disappears (can't pay the 1 Mana).
+    const broke = setMana(s, 'p1', 0);
+    expect(eligibleShadowPlacementSlots(broke, 'p1', 'pp').has(slot.id)).toBe(false);
+
+    // A non-purple Mage gets no shadow option at all.
+    let other = addMage(s, 'p1', {
+      id: 'neutral',
+      cardId: 'base.mage.neutral',
+      color: 'off-white',
+    });
+    expect(
+      eligibleShadowPlacementSlots(other, 'p1', 'neutral').has(slot.id),
+    ).toBe(false);
+  });
+
+  it('selectedMageOccupiedSlotPower: Ars Magna costs 1 Mana, Natural Magick B is free, others none', async () => {
+    const { selectedMageOccupiedSlotPower } = await import(
+      '../utils/uiSelectors'
+    );
+    // Sorcery defaults to Side A (Ars Magna); Natural Magick forced to Side B.
+    let s = initGame({
+      ...TWO_PLAYER_CONFIG,
+      mageAbilitySides: { 'natural-magick': 'B' },
+    });
+    s = addMage(s, 'p1', { id: 'red', cardId: 'base.mage.sorcery', color: 'red' });
+    s = addMage(s, 'p1', {
+      id: 'green',
+      cardId: 'base.mage.natural-magick',
+      color: 'green',
+    });
+    s = addMage(s, 'p1', {
+      id: 'neutral',
+      cardId: 'base.mage.neutral',
+      color: 'off-white',
+    });
+    const mages = s.players.find((p) => p.id === 'p1')!.mages;
+    const red = mages.find((m) => m.id === 'red')!;
+    const green = mages.find((m) => m.id === 'green')!;
+    const neutral = mages.find((m) => m.id === 'neutral')!;
+    expect(selectedMageOccupiedSlotPower(s, red)).toEqual({
+      kind: 'ars-magna',
+      manaCost: 1,
+    });
+    expect(selectedMageOccupiedSlotPower(s, green)).toEqual({
+      kind: 'natural-b',
+      manaCost: 0,
+    });
+    expect(selectedMageOccupiedSlotPower(s, neutral)).toBeNull();
   });
 
   it('Natural Magick Side B: displace an opponent in the room and take its slot', () => {

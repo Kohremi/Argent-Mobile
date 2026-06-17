@@ -6290,6 +6290,116 @@ registerEffect(
 );
 
 // ============================================================================
+// Archmage's Apprentice — placement-power choice
+// ============================================================================
+//
+// The Apprentice acts as every colour, so placing it onto an occupied opposing
+// base slot can satisfy BOTH Sorcery Side A (Ars Magna) and Natural Magick Side
+// B (displace). The engine surfaces a choose-one prompt at PLACE_WORKER time and
+// resumes here with the picked power. Both branches reuse the existing single-
+// colour machinery: the displace flow (`natural-magick.displace`) and the Ars
+// Magna continuation (`sorcery.ars-magna.complete`). The Action budget was
+// already consumed by PLACE_WORKER, so neither branch touches it again.
+registerEffect(
+  'base.mage.apprentice.place-on-occupied',
+  (ctx: EffectContext): EffectResult => {
+    if (ctx.resumeAnswer?.kind !== 'option-chosen') {
+      throw new Error(
+        `apprentice place-on-occupied expected option-chosen, got ${ctx.resumeAnswer?.kind}`,
+      );
+    }
+    const optionId = ctx.resumeAnswer.optionId;
+    const sourceMageId = ctx.resumeContext?.['sourceMageId'];
+    const takenSpaceId = ctx.resumeContext?.['takenSpaceId'];
+    const targetMageId = ctx.resumeContext?.['targetMageId'];
+    if (
+      typeof sourceMageId !== 'string' ||
+      typeof takenSpaceId !== 'string' ||
+      typeof targetMageId !== 'string'
+    ) {
+      throw new Error('apprentice place-on-occupied: missing context fields');
+    }
+    const playerId = ctx.triggeringPlayerId;
+
+    if (optionId === 'displace') {
+      // Natural Magick Side B: pick which open slot in the room to shove the
+      // occupant into, then hand off to the shared displacement effect.
+      const room = findRoomBySpaceId(ctx.state, takenSpaceId);
+      if (!room) throw new Error('apprentice displace: room not found');
+      const openSlots = room.actionSpaces.filter(
+        (sp) =>
+          sp.id !== takenSpaceId &&
+          !sp.occupant &&
+          sp.slotType !== 'shadow' &&
+          sp.slotType !== 'shadow-merit' &&
+          sp.slotType !== 'wound',
+      );
+      if (openSlots.length === 0) {
+        throw new Error('apprentice displace: no open slot to displace into');
+      }
+      return {
+        kind: 'pause',
+        pending: {
+          responderId: playerId,
+          prompt: {
+            kind: 'choose-target-action-space',
+            eligibleSpaceIds: openSlots.map((sp) => sp.id),
+            label: "Move the opponent's Mage to which slot?",
+          },
+          resume: {
+            effectId: 'base.mage.natural-magick.displace',
+            context: { greenMageId: sourceMageId, targetMageId, takenSpaceId },
+          },
+          source: ctx.source,
+        },
+      };
+    }
+
+    if (optionId === 'wound') {
+      // Ars Magna: pay 1 Mana, wound the occupant, then (after the reaction
+      // window) the Apprentice takes the vacated slot via the shared
+      // ars-magna.complete continuation.
+      const player = ctx.state.players.find((p) => p.id === playerId);
+      if (!player || player.resources.mana < 1) {
+        throw new Error('apprentice Ars Magna: requires 1 Mana');
+      }
+      const afterMana: GameState = {
+        ...ctx.state,
+        players: ctx.state.players.map((p) =>
+          p.id !== playerId
+            ? p
+            : { ...p, resources: { ...p.resources, mana: p.resources.mana - 1 } },
+        ),
+      };
+      const wounded = woundMage(afterMana, targetMageId, playerId);
+      if (wounded.triggerEvent.kind !== 'mage-wounded') {
+        throw new Error('apprentice Ars Magna: unexpected wound event');
+      }
+      return {
+        kind: 'open-reaction',
+        patch: wounded.patch,
+        window: {
+          triggerEvents: [wounded.triggerEvent],
+          pendingResponderIds: buildReactionQueue(afterMana, playerId),
+          reactedPlayerIds: [],
+          afterResume: {
+            effectId: 'base.mage.sorcery.ars-magna.complete',
+            context: {
+              sourceMageId,
+              targetSpaceId: takenSpaceId,
+              triggerEvent: triggerEventToContext(wounded.triggerEvent),
+            },
+          },
+          source: ctx.source,
+        },
+      };
+    }
+
+    throw new Error(`apprentice place-on-occupied: unknown option ${optionId}`);
+  },
+);
+
+// ============================================================================
 // Bell Tower offerings (base pack, 2-player game)
 // ============================================================================
 

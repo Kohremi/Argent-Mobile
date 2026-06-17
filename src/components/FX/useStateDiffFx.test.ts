@@ -64,6 +64,118 @@ describe('computeRoomFx', () => {
     expect(computeRoomFx(s, flipped)).toContainEqual({ roomId: oppId, kind: 'flip' });
   });
 
+  it('emits a mana-gain flourish when a Sorcery Side B mage is placed into an occupied room', () => {
+    let s = base();
+    s = { ...s, mageAbilitySides: { ...s.mageAbilitySides, sorcery: 'B' } };
+    const room = s.rooms.find(
+      (r) => !r.cannotBePlacedInDirectly && r.actionSpaces.length >= 2,
+    )!;
+    const [slotA, slotB] = room.actionSpaces;
+    const p1id = s.players[0]!.id;
+    const p2id = s.players[1]!.id;
+    // prev: opponent already seated in the room; p1's red Mage in the office.
+    const prev: GameState = {
+      ...s,
+      players: s.players.map((p, i) =>
+        i === 0
+          ? { ...p, mages: [{ ...mk('r', p.id), cardId: 'base.mage.sorcery', color: 'red' }] }
+          : { ...p, mages: [mk('o', p.id)] },
+      ),
+      rooms: s.rooms.map((r) =>
+        r.id !== room.id
+          ? r
+          : {
+              ...r,
+              actionSpaces: r.actionSpaces.map((sp) =>
+                sp.id === slotA!.id
+                  ? { ...sp, occupant: { mageId: 'o', ownerId: p2id, isShadowing: false } }
+                  : sp,
+              ),
+            },
+      ),
+    };
+    // next: the red Mage lands in the same room — gains 1 Mana (one other mage).
+    const next: GameState = {
+      ...prev,
+      players: prev.players.map((p, i) =>
+        i === 0
+          ? { ...p, mages: p.mages.map((m) => (m.id === 'r' ? { ...m, location: { kind: 'action-space', spaceId: slotB!.id } } : m)) }
+          : p,
+      ),
+      rooms: prev.rooms.map((r) =>
+        r.id !== room.id
+          ? r
+          : {
+              ...r,
+              actionSpaces: r.actionSpaces.map((sp) =>
+                sp.id === slotB!.id
+                  ? { ...sp, occupant: { mageId: 'r', ownerId: p1id, isShadowing: false } }
+                  : sp,
+              ),
+            },
+      ),
+    };
+    expect(computeRoomFx(prev, next)).toContainEqual({ roomId: room.id, kind: 'mana-gain', value: 1 });
+  });
+
+  it('no mana-gain flourish when Sorcery is on Side A', () => {
+    let s = base();
+    // sorcery defaults to Side A.
+    const room = s.rooms.find(
+      (r) => !r.cannotBePlacedInDirectly && r.actionSpaces.length >= 2,
+    )!;
+    const [slotA, slotB] = room.actionSpaces;
+    const p1id = s.players[0]!.id;
+    const p2id = s.players[1]!.id;
+    const prev: GameState = {
+      ...s,
+      players: s.players.map((p, i) =>
+        i === 0
+          ? { ...p, mages: [{ ...mk('r', p.id), cardId: 'base.mage.sorcery', color: 'red' }] }
+          : { ...p, mages: [mk('o', p.id)] },
+      ),
+      rooms: s.rooms.map((r) =>
+        r.id !== room.id
+          ? r
+          : { ...r, actionSpaces: r.actionSpaces.map((sp) => (sp.id === slotA!.id ? { ...sp, occupant: { mageId: 'o', ownerId: p2id, isShadowing: false } } : sp)) },
+      ),
+    };
+    const next: GameState = {
+      ...prev,
+      players: prev.players.map((p, i) =>
+        i === 0 ? { ...p, mages: p.mages.map((m) => (m.id === 'r' ? { ...m, location: { kind: 'action-space', spaceId: slotB!.id } } : m)) } : p,
+      ),
+      rooms: prev.rooms.map((r) =>
+        r.id !== room.id ? r : { ...r, actionSpaces: r.actionSpaces.map((sp) => (sp.id === slotB!.id ? { ...sp, occupant: { mageId: 'r', ownerId: p1id, isShadowing: false } } : sp)) },
+      ),
+    };
+    expect(computeRoomFx(prev, next).some((f) => f.kind === 'mana-gain')).toBe(false);
+  });
+
+  it('emits a buff-activate flourish when a Mysticism Side B mage is placed', () => {
+    let s = base();
+    s = { ...s, mageAbilitySides: { ...s.mageAbilitySides, mysticism: 'B' } };
+    const room = s.rooms.find((r) => !r.cannotBePlacedInDirectly && r.actionSpaces.length >= 1)!;
+    const slot = room.actionSpaces[0]!;
+    const p1id = s.players[0]!.id;
+    const prev: GameState = {
+      ...s,
+      players: s.players.map((p, i) =>
+        i === 0 ? { ...p, mages: [{ ...mk('g', p.id), cardId: 'base.mage.mysticism', color: 'grey' }] } : p,
+      ),
+    };
+    const next: GameState = {
+      ...prev,
+      players: prev.players.map((p, i) =>
+        i === 0 ? { ...p, mages: p.mages.map((m) => (m.id === 'g' ? { ...m, location: { kind: 'action-space', spaceId: slot.id } } : m)) } : p,
+      ),
+      rooms: prev.rooms.map((r) =>
+        r.id !== room.id ? r : { ...r, actionSpaces: r.actionSpaces.map((sp) => (sp.id === slot.id ? { ...sp, occupant: { mageId: 'g', ownerId: p1id, isShadowing: false } } : sp)) },
+      ),
+    };
+    expect(computeRoomFx(prev, next)).toContainEqual({ roomId: room.id, kind: 'buff-activate' });
+  });
+
   it('emits a banish ring when a placed mage returns to the office unwounded', () => {
     let s = base();
     s = { ...s, players: s.players.map((p, i) => (i === 1 ? { ...p, mages: [mk('b', p.id)] } : p)) };

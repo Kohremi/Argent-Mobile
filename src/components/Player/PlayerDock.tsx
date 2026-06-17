@@ -7,6 +7,8 @@ import { usePromptTargets } from '../Prompts/usePromptTargets';
 import { MageToken } from '../Board/MageToken';
 import { HandFans } from '../Cards/HandFans';
 import { PortraitBust } from './PortraitBust';
+import { PlayerBuffBadges } from './PlayerBuffBadges';
+import { getBotPersonality } from '../../game/ai';
 
 /**
  * Bottom command center for the active player (docs/UI_DESIGN.md §8):
@@ -103,12 +105,23 @@ export function PlayerDock() {
       <div className="flex min-w-[150px] items-center gap-2.5">
         <PortraitBust player={player} state={state} expression="neutral" size={44} />
         <div>
-          <p className="font-display text-base font-bold leading-tight" style={{ color: aura }}>
+          <p className="flex items-center gap-1.5 font-display text-base font-bold leading-tight" style={{ color: aura }}>
             {player.name}
+            {player.controlledByBot && (
+              <span
+                className="rounded-full bg-night-900/70 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-starlight ring-1 ring-starlight/40"
+                title="Played by an AI"
+              >
+                🤖 {getBotPersonality(player.botPersonalityId).name}
+              </span>
+            )}
           </p>
           <p className="text-[10px] uppercase tracking-widest text-white/40">
-            your move
+            {player.controlledByBot
+              ? `${getBotPersonality(player.botPersonalityId).name} is thinking…`
+              : 'your move'}
           </p>
+          <PlayerBuffBadges state={state} playerId={player.id} className="mt-1" />
         </div>
       </div>
 

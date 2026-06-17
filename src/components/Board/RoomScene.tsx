@@ -1,4 +1,5 @@
 import clsx from 'clsx';
+import type { ReactNode } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
 import {
   INFIRMARY_GOLD_BED,
@@ -7,8 +8,16 @@ import {
 } from '../../game/effects/helpers';
 import type { ActionSpace, GameState, OwnedMage, Player, Room } from '../../game/types';
 import { useUiStore } from '../../store/uiStore';
-import { isPoolRoom, PLAYER_AURA } from '../../utils/uiSelectors';
+import { isPoolRoom, PLAYER_AURA, type OccupiedSlotPower } from '../../utils/uiSelectors';
 import { LockIcon, ResourceIcon } from '../icons';
+
+/**
+ * Distinct ring for "Mage power" placement targets (Ars Magna / Natural Magick
+ * B displacement / Planar Studies B shadow) — a fuchsia glow that sets them
+ * apart from the amber ring used for ordinary empty-slot placement / prompt
+ * targeting, so the player can tell at a glance they're spending a power.
+ */
+const POWER_RING = 'ring-2 ring-fuchsia-400 shadow-[0_0_6px_rgba(232,121,249,0.7)]';
 import { usePromptTargets } from '../Prompts/usePromptTargets';
 import { MageToken } from './MageToken';
 
@@ -29,7 +38,15 @@ export interface RoomSceneProps {
   room: Room;
   state: GameState;
   eligible: Set<string>;
+  /** Slots whose shadow position the selected Mage may drop into (Planar B). */
+  shadowEligible?: Set<string>;
+  /** Mana cost of a shadow placement (1 for Planar B, 0 under a buff). */
+  shadowManaCost?: number;
+  /** The selected Mage's occupied-slot power (Ars Magna / Natural Magick B). */
+  occupiedSlotPower?: OccupiedSlotPower | null | undefined;
   onPlace: (spaceId: string) => void;
+  /** Dispatches a shadow placement (PLACE_WORKER with isShadowing). */
+  onPlaceShadow?: (spaceId: string) => void;
   mageIndex: Map<string, { mage: OwnedMage; owner: Player }>;
   /** Kept for API compatibility — the layout grid sizes the card now. */
   width?: number | string;
@@ -48,7 +65,11 @@ export function RoomScene({
   room,
   state,
   eligible,
+  shadowEligible,
+  shadowManaCost = 1,
+  occupiedSlotPower,
   onPlace,
+  onPlaceShadow,
   mageIndex,
   spaces,
 }: RoomSceneProps) {
@@ -105,6 +126,7 @@ export function RoomScene({
         <PoolSlots
           spaces={spaces}
           eligible={eligible}
+          occupiedSlotPower={occupiedSlotPower}
           onPlace={onPlace}
           mageIndex={mageIndex}
         />
@@ -115,7 +137,11 @@ export function RoomScene({
               key={s.id}
               space={s}
               eligible={eligible.has(s.id)}
+              shadowEligible={shadowEligible?.has(s.id) === true}
+              shadowManaCost={shadowManaCost}
+              occupiedSlotPower={occupiedSlotPower}
               onPlace={onPlace}
+              onPlaceShadow={onPlaceShadow}
               mageIndex={mageIndex}
               noShadow={room.noShadowSlots === true}
             />
@@ -132,13 +158,23 @@ export function RoomScene({
 function SlotRow({
   space,
   eligible,
+  shadowEligible = false,
+  shadowManaCost = 1,
+  occupiedSlotPower,
   onPlace,
+  onPlaceShadow,
   mageIndex,
   noShadow,
 }: {
   space: ActionSpace;
   eligible: boolean;
+  /** The selected Mage may shadow-place into this slot (Planar Studies B). */
+  shadowEligible?: boolean;
+  shadowManaCost?: number;
+  /** The selected Mage's occupied-slot power (Ars Magna / Natural Magick B). */
+  occupiedSlotPower?: OccupiedSlotPower | null | undefined;
   onPlace: (spaceId: string) => void;
+  onPlaceShadow?: ((spaceId: string) => void) | undefined;
   mageIndex: Map<string, { mage: OwnedMage; owner: Player }>;
   /** Room has no shadow positions (Great Hall, Golem Lab) — hide the shadow tile. */
   noShadow?: boolean;
@@ -154,6 +190,11 @@ function SlotRow({
   // then placement, then selecting the occupant for a mage-target prompt.
   const occMageTargeted =
     occupant !== null && mageTargets.has(occupant.mageId);
+  // A "power placement" onto an OCCUPIED base slot — Ars Magna (wound & take,
+  // 1 Mana) or Natural Magick B (displace & take, free). Normal placement can't
+  // land on an occupied base, so an eligible+occupied slot is always a power.
+  const baseIsPowerTarget =
+    eligible && occupant !== null && occupiedSlotPower != null;
   const baseClick = spaceTargeted
     ? () => pickSpace(space.id)
     : eligible
@@ -161,23 +202,60 @@ function SlotRow({
       : occMageTargeted && occupant
         ? () => pickMage(occupant.mageId)
         : undefined;
-  const baseRing =
-    spaceTargeted || eligible || occMageTargeted ? 'ring-2 ring-amber-400' : '';
-  const baseTitle = occMageTargeted
-    ? 'Choose this student'
-    : occupant
-      ? 'occupied'
-      : eligible || spaceTargeted
-        ? 'place here'
-        : 'empty slot';
+  const baseRing = baseIsPowerTarget
+    ? POWER_RING
+    : spaceTargeted || eligible || occMageTargeted
+      ? 'ring-2 ring-amber-400'
+      : '';
+  const powerVerb =
+    occupiedSlotPower?.kind === 'ars-magna'
+      ? 'Ars Magna — wound the occupant & take this slot (1 Mana)'
+      : occupiedSlotPower?.kind === 'natural-b'
+        ? 'Natural Magick — displace the occupant & take this slot'
+        : 'Take this slot — choose to wound (Ars Magna, 1 Mana) or displace the occupant';
+  const baseTitle = baseIsPowerTarget
+    ? powerVerb
+    : occMageTargeted
+      ? 'Choose this student'
+      : occupant
+        ? 'occupied'
+        : eligible || spaceTargeted
+          ? 'place here'
+          : 'empty slot';
 
   const shadowMageTargeted =
     shadowOccupant !== null && mageTargets.has(shadowOccupant.mageId);
+  // The selected Mage may shadow-place here (Planar Studies B / a buff). The
+  // shadow slot must be empty; pick-a-mage targeting takes precedence.
+  const shadowPlaceable =
+    shadowEligible && !shadowMageTargeted && shadowOccupant === null;
   const shadowClick =
     shadowMageTargeted && shadowOccupant
       ? () => pickMage(shadowOccupant.mageId)
-      : undefined;
-  const shadowTitle = shadowMageTargeted ? 'Choose this student' : 'shadow slot';
+      : shadowPlaceable && onPlaceShadow
+        ? () => onPlaceShadow(space.id)
+        : undefined;
+  const shadowRing = shadowPlaceable
+    ? POWER_RING
+    : shadowMageTargeted
+      ? 'ring-2 ring-amber-400'
+      : '';
+  const shadowTitle = shadowMageTargeted
+    ? 'Choose this student'
+    : shadowPlaceable
+      ? shadowManaCost > 0
+        ? `Shadow here — pay ${shadowManaCost} Mana`
+        : 'Shadow here'
+      : 'shadow slot';
+  // On an empty placeable shadow tile, label it with the Mana cost instead of
+  // the generic "shadow".
+  const shadowEmptyLabel =
+    shadowPlaceable && shadowManaCost > 0 ? (
+      <span className="inline-flex items-center gap-0.5 text-[9px] font-semibold text-cyan-300">
+        {shadowManaCost}
+        <ResourceIcon kind="mana" size={10} />
+      </span>
+    ) : undefined;
 
   return (
     <li
@@ -194,8 +272,10 @@ function SlotRow({
           occupant={shadowOccupant}
           mageIndex={mageIndex}
           onClick={shadowClick}
-          ring={shadowMageTargeted ? 'ring-2 ring-amber-400' : ''}
+          ring={shadowRing}
           title={shadowTitle}
+          dataAvailable={shadowPlaceable}
+          emptyLabel={shadowEmptyLabel}
         />
       )}
       <SlotTile
@@ -214,6 +294,24 @@ function SlotRow({
           <span className="text-[10px] uppercase tracking-wide text-slate-500">
             {space.slotType}
           </span>
+          {baseIsPowerTarget && (
+            <span
+              className="inline-flex items-center gap-0.5 rounded border border-fuchsia-400/60 bg-fuchsia-500/10 px-1 text-[10px] font-semibold uppercase tracking-wide text-fuchsia-200"
+              title={baseTitle}
+            >
+              {occupiedSlotPower!.kind === 'ars-magna' ? (
+                <>
+                  Ars Magna
+                  {occupiedSlotPower!.manaCost}
+                  <ResourceIcon kind="mana" size={10} />
+                </>
+              ) : occupiedSlotPower!.kind === 'natural-b' ? (
+                'displace'
+              ) : (
+                'wound / displace'
+              )}
+            </span>
+          )}
           {isMerit && (
             <span className="text-[10px] uppercase tracking-wide text-orange-300/70 inline-flex items-center gap-1">
               merit
@@ -261,11 +359,13 @@ function SlotRow({
 function PoolSlots({
   spaces,
   eligible,
+  occupiedSlotPower,
   onPlace,
   mageIndex,
 }: {
   spaces: ActionSpace[];
   eligible: Set<string>;
+  occupiedSlotPower?: OccupiedSlotPower | null | undefined;
   onPlace: (spaceId: string) => void;
   mageIndex: Map<string, { mage: OwnedMage; owner: Player }>;
 }) {
@@ -279,6 +379,10 @@ function PoolSlots({
         const spaceTargeted = spaceTargets.has(space.id);
         const occMageTargeted =
           occupant !== null && mageTargets.has(occupant.mageId);
+        // Ars Magna / Natural Magick B taking an occupied seat (e.g. in the
+        // Great Hall) — give it the distinct power ring.
+        const isPowerTarget =
+          isEligible && occupant !== null && occupiedSlotPower != null;
 
         const onClick: (() => void) | undefined = spaceTargeted
           ? () => pickSpace(space.id)
@@ -288,13 +392,19 @@ function PoolSlots({
               ? () => pickMage(occupant.mageId)
               : undefined;
         const highlighted = spaceTargeted || isEligible || occMageTargeted;
-        const title = occMageTargeted
-          ? 'Choose this student'
-          : occupant
-            ? 'occupied'
-            : isEligible || spaceTargeted
-              ? 'place here'
-              : 'empty slot';
+        const title = isPowerTarget
+          ? occupiedSlotPower!.kind === 'ars-magna'
+            ? 'Ars Magna — wound the occupant & take this seat (1 Mana)'
+            : occupiedSlotPower!.kind === 'natural-b'
+              ? 'Natural Magick — displace the occupant & take this seat'
+              : 'Take this seat — choose to wound (Ars Magna, 1 Mana) or displace'
+          : occMageTargeted
+            ? 'Choose this student'
+            : occupant
+              ? 'occupied'
+              : isEligible || spaceTargeted
+                ? 'place here'
+                : 'empty slot';
 
         const content = entry ? (
           <MageToken
@@ -314,7 +424,9 @@ function PoolSlots({
         const className = clsx(
           'w-14 h-12 rounded border-2 border-slate-500 flex items-center justify-center flex-shrink-0 p-0.5',
           occupant ? 'bg-amber-400/15' : 'bg-slate-950/40',
-          highlighted && 'ring-2 ring-amber-400',
+          isPowerTarget
+            ? POWER_RING
+            : highlighted && 'ring-2 ring-amber-400',
         );
 
         if (onClick) {
@@ -358,6 +470,7 @@ function SlotTile({
   ring,
   title,
   dataAvailable,
+  emptyLabel,
 }: {
   isShadow?: boolean;
   occupant: Occupant | null;
@@ -366,6 +479,8 @@ function SlotTile({
   ring: string;
   title: string;
   dataAvailable?: boolean;
+  /** Replaces the default "shadow"/"slot" text when the tile is empty. */
+  emptyLabel?: ReactNode;
 }) {
   const entry = occupant ? mageIndex.get(occupant.mageId) : undefined;
   const occupantShadowed = isShadow || occupant?.isShadowing === true;
@@ -387,9 +502,11 @@ function SlotTile({
       size={entry.mage.isTemporary ? 38 : 32}
     />
   ) : (
-    <span className="text-[8px] uppercase tracking-wide text-slate-600">
-      {isShadow ? 'shadow' : 'slot'}
-    </span>
+    emptyLabel ?? (
+      <span className="text-[8px] uppercase tracking-wide text-slate-600">
+        {isShadow ? 'shadow' : 'slot'}
+      </span>
+    )
   );
 
   const className = clsx(
@@ -580,6 +697,54 @@ function RoomFxOverlay({ roomId }: { roomId: string }) {
                 animate={{ scale: 2.6, opacity: 0 }}
                 transition={{ duration: 0.7, ease: 'easeOut' }}
               />
+            </motion.div>
+          );
+        }
+        if (f.kind === 'mana-gain') {
+          // Sorcery Side B — a cyan "+N ✦" floats up off the room as the
+          // placed Mage drinks in the ambient power.
+          return (
+            <motion.div
+              key={f.id}
+              className="pointer-events-none absolute inset-0 z-30 flex items-center justify-center"
+            >
+              <motion.span
+                className="flex items-center gap-1 rounded-full bg-night-900/80 px-2.5 py-1 font-display text-base font-extrabold text-cyan-300 ring-1 ring-cyan-300/50"
+                style={{ textShadow: '0 0 10px rgba(125,232,250,0.8)' }}
+                initial={{ y: 14, scale: 0.6, opacity: 0 }}
+                animate={{ y: [-14, -34], scale: [1, 1.05], opacity: [0, 1, 1, 0] }}
+                transition={{ duration: 1, ease: 'easeOut', times: [0, 0.2, 0.7, 1] }}
+              >
+                +{f.value ?? 1}
+                <ResourceIcon kind="mana" size={18} />
+              </motion.span>
+            </motion.div>
+          );
+        }
+        if (f.kind === 'buff-activate') {
+          // Mysticism Side B — the In-Place discount switches on: a blue
+          // pulse ring + a "Spells −1 ✦" tag rise to announce the power.
+          return (
+            <motion.div
+              key={f.id}
+              className="pointer-events-none absolute inset-0 z-30 flex items-center justify-center"
+            >
+              <motion.span
+                className="absolute h-14 w-14 rounded-full border-2 border-sky-300/70"
+                initial={{ scale: 0.4, opacity: 0.9 }}
+                animate={{ scale: 2.4, opacity: 0 }}
+                transition={{ duration: 0.9, ease: 'easeOut' }}
+              />
+              <motion.span
+                className="flex items-center gap-1 rounded-full bg-night-900/80 px-2.5 py-1 font-display text-xs font-extrabold text-sky-300 ring-1 ring-sky-300/50"
+                style={{ textShadow: '0 0 10px rgba(125,211,252,0.8)' }}
+                initial={{ y: 12, scale: 0.7, opacity: 0 }}
+                animate={{ y: [-8, -26], scale: [1, 1.04], opacity: [0, 1, 1, 0] }}
+                transition={{ duration: 1, ease: 'easeOut', times: [0, 0.25, 0.7, 1] }}
+              >
+                Spells −1
+                <ResourceIcon kind="mana" size={13} />
+              </motion.span>
             </motion.div>
           );
         }

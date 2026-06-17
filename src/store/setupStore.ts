@@ -41,6 +41,16 @@ interface SetupState {
   selectedPackIds: PackId[];
   playerNames: string[];
   /**
+   * Per-player "controlled by the AI" flags, parallel to `playerNames` by
+   * index. Kept in sync with the player count by `setPlayerCount`.
+   */
+  playerControlledByBot: boolean[];
+  /**
+   * Per-player AI personality id (e.g. 'klank', 'thickhide'), parallel to
+   * `playerNames`. Only meaningful where `playerControlledByBot[i]` is true.
+   */
+  playerBotPersonality: string[];
+  /**
    * Number of rooms in play. Auto-recomputed to the default for the player
    * count whenever the player count changes, but the user may then override
    * manually via `setNumberOfRooms`. Only meaningful in `'random'` layout
@@ -66,6 +76,8 @@ interface SetupState {
   setSelectedPacks: (ids: PackId[]) => void;
   togglePack: (id: PackId) => void;
   setPlayerName: (index: number, name: string) => void;
+  setPlayerControlledByBot: (index: number, controlled: boolean) => void;
+  setPlayerBotPersonality: (index: number, personalityId: string) => void;
   setPlayerCount: (count: number) => void;
   setNumberOfRooms: (n: number) => void;
   setLayoutMode: (m: LayoutModeId) => void;
@@ -96,6 +108,8 @@ export const useSetupStore = create<SetupState>((set) => ({
   // Base is always required. Other packs are off by default.
   selectedPackIds: ['base'],
   playerNames: defaultPlayerNames(2),
+  playerControlledByBot: Array.from({ length: 2 }, () => false),
+  playerBotPersonality: Array.from({ length: 2 }, () => 'klank'),
   numberOfRooms: defaultRoomCountForPlayerCount(2),
   // Default to the recommended beginner layout for new games.
   layoutMode: 'first-time',
@@ -129,6 +143,22 @@ export const useSetupStore = create<SetupState>((set) => ({
       return { playerNames: next };
     }),
 
+  setPlayerControlledByBot: (index, controlled) =>
+    set((s) => {
+      if (index < 0 || index >= s.playerControlledByBot.length) return s;
+      const next = s.playerControlledByBot.slice();
+      next[index] = controlled;
+      return { playerControlledByBot: next };
+    }),
+
+  setPlayerBotPersonality: (index, personalityId) =>
+    set((s) => {
+      if (index < 0 || index >= s.playerBotPersonality.length) return s;
+      const next = s.playerBotPersonality.slice();
+      next[index] = personalityId;
+      return { playerBotPersonality: next };
+    }),
+
   setPlayerCount: (count) =>
     set((s) => {
       const clamped = Math.max(MIN_PLAYERS, Math.min(MAX_PLAYERS, count));
@@ -136,9 +166,16 @@ export const useSetupStore = create<SetupState>((set) => ({
       while (next.length < clamped) {
         next.push(`Player ${next.length + 1}`);
       }
+      // Keep the per-player arrays the same length as the player list.
+      const bots = s.playerControlledByBot.slice(0, clamped);
+      while (bots.length < clamped) bots.push(false);
+      const personalities = s.playerBotPersonality.slice(0, clamped);
+      while (personalities.length < clamped) personalities.push('klank');
       // Auto-correct room count to the default for the new player count.
       return {
         playerNames: next,
+        playerControlledByBot: bots,
+        playerBotPersonality: personalities,
         numberOfRooms: defaultRoomCountForPlayerCount(clamped),
       };
     }),

@@ -1,4 +1,13 @@
 import { applyAction } from '../game/engine';
+import {
+  actsAsColor,
+  colorAbilityActive,
+  magesLosePowers,
+  mysticismInPlaceDiscount,
+  sideForColor,
+  spellLevelBaseManaCost,
+  spellManaDiscountFor,
+} from '../game/effects/helpers';
 import type {
   ActionSpace,
   GameState,
@@ -6,6 +15,7 @@ import type {
   Player,
   PlayerColor,
   Room,
+  SpellLevel,
 } from '../game/types';
 
 /**
@@ -18,6 +28,64 @@ import type {
 export function activePlayer(state: GameState): Player | null {
   if (state.phase.kind !== 'errands') return null;
   return state.players[state.phase.activePlayerIndex] ?? null;
+}
+
+/** True when the active Errands player is an AI-controlled (Klank) seat. */
+export function activePlayerIsBot(state: GameState): boolean {
+  return activePlayer(state)?.controlledByBot === true;
+}
+
+/** True when every seated player is AI-controlled (enables all-bot auto-run). */
+export function allPlayersAreBots(state: GameState): boolean {
+  return state.players.length > 0 && state.players.every((p) => p.controlledByBot === true);
+}
+
+/**
+ * What, if anything, the AI driver (`useKlankDriver`) should do right now:
+ *  - `'prompt'`  — the top pending resolution is owed by a bot seat → answer it.
+ *  - `'errands'` — it's a bot seat's Errands turn with no pending prompt → act.
+ *  - `'advance'` — an all-bot game is idle in a non-interactive phase → advance.
+ *  - `null`      — nothing for the bot to do (a human owns the next decision).
+ *
+ * Only `'prompt'`/`'errands'` mean a bot "owns the current decision" (used to
+ * gate human input). `'advance'` only fires when no human is seated, so it
+ * never needs to block anyone. A bot's move that opens a reaction window for a
+ * HUMAN yields `null` here (top responder isn't a bot, and there's a pending
+ * prompt so the errands branch is skipped), so the human is correctly left to act.
+ */
+export type BotDecision =
+  | { kind: 'prompt'; pending: GameState['pendingResolutionStack'][number] }
+  | { kind: 'errands'; playerId: string }
+  | { kind: 'advance' };
+
+export function botDecisionContext(state: GameState): BotDecision | null {
+  const top = state.pendingResolutionStack[state.pendingResolutionStack.length - 1];
+  if (top) {
+    const responder = state.players.find((p) => p.id === top.responderId);
+    return responder?.controlledByBot ? { kind: 'prompt', pending: top } : null;
+  }
+  if (state.phase.kind === 'errands') {
+    const active = state.players[state.phase.activePlayerIndex];
+    return active?.controlledByBot ? { kind: 'errands', playerId: active.id } : null;
+  }
+  // No pending prompt and not Errands. In an all-bot game, keep the
+  // non-interactive phases moving (mixed games rely on the human's dock button).
+  if (
+    allPlayersAreBots(state) &&
+    (state.phase.kind === 'round-setup' ||
+      state.phase.kind === 'resolution' ||
+      state.phase.kind === 'mid-game-scoring' ||
+      state.phase.kind === 'final-scoring')
+  ) {
+    return { kind: 'advance' };
+  }
+  return null;
+}
+
+/** True when a bot owns the current human-blocking decision (prompt or turn). */
+export function botOwnsCurrentDecision(state: GameState): boolean {
+  const ctx = botDecisionContext(state);
+  return ctx?.kind === 'prompt' || ctx?.kind === 'errands';
 }
 
 /** Action-space ids where `mageId` may legally be placed right now. */
@@ -45,6 +113,79 @@ export function eligiblePlacementSlots(
     }
   }
   return out;
+}
+
+/**
+ * Action-space ids where `mageId` may legally SHADOW-place right now — i.e.
+ * drop into the slot's shadow position over the (opposing) base occupant.
+ * Dry-runs `PLACE_WORKER` with `isShadowing: true`, so it covers Planar
+ * Studies Side B ("pay 1 Mana to shadow an opponent on place") as well as any
+ * active shadow-on-place buff (Zero Hour / Inversion). Mirrors
+ * `eligiblePlacementSlots`; the engine is the source of truth for legality.
+ */
+export function eligibleShadowPlacementSlots(
+  state: GameState,
+  playerId: string,
+  mageId: string,
+): Set<string> {
+  const out = new Set<string>();
+  if (state.phase.kind !== 'errands') return out;
+  if (state.pendingResolutionStack.length > 0) return out;
+  for (const room of state.rooms) {
+    for (const space of room.actionSpaces) {
+      try {
+        applyAction(state, {
+          type: 'PLACE_WORKER',
+          playerId,
+          mageId,
+          actionSpaceId: space.id,
+          isShadowing: true,
+        });
+        out.add(space.id);
+      } catch {
+        // Illegal shadow placement — engine said no.
+      }
+    }
+  }
+  return out;
+}
+
+/**
+ * A "power placement" lets a Mage drop onto an OCCUPIED base slot (which a
+ * normal placement can't): Sorcery Side A's Ars Magna (wound the occupant &
+ * take the slot, costs 1 Mana) or Natural Magick Side B's displacement (shove
+ * the opponent to another slot in the room & take its place, free). The board
+ * uses this to give those occupied-slot targets a distinct border + cost label,
+ * separate from ordinary empty-slot placement.
+ *
+ * Returns null when the mage has no occupied-slot power active. The engine
+ * dry-run (`eligiblePlacementSlots`) is still the source of truth for WHICH
+ * occupied slots are legal; this only labels the power + its Mana cost.
+ */
+export type OccupiedSlotPower = {
+  /**
+   * `ars-magna` — wound & take (1 Mana). `natural-b` — displace & take (free).
+   * `choice` — the Archmage's Apprentice has BOTH powers, so taking the slot
+   * pops a "wound vs displace" prompt (the engine decides the actual cost).
+   */
+  kind: 'ars-magna' | 'natural-b' | 'choice';
+  manaCost: number;
+};
+
+export function selectedMageOccupiedSlotPower(
+  state: GameState,
+  mage: OwnedMage,
+): OccupiedSlotPower | null {
+  if (magesLosePowers(state)) return null;
+  const arsMagna = colorAbilityActive(state, mage, 'red');
+  const naturalB =
+    actsAsColor(mage, 'green') && sideForColor(state, 'green') === 'B';
+  // The Apprentice can hold both at once — the board flags the overlap so the
+  // player knows the click will ask which power to spend (engine-driven).
+  if (arsMagna && naturalB) return { kind: 'choice', manaCost: 1 };
+  if (arsMagna) return { kind: 'ars-magna', manaCost: 1 };
+  if (naturalB) return { kind: 'natural-b', manaCost: 0 };
+  return null;
 }
 
 /**
@@ -153,6 +294,29 @@ export const DEPT_HUE: Record<string, string> = {
   students: '#e8e4da',
   wild: '#ffd93d',
 };
+
+/**
+ * What `playerId` would actually pay to cast `level` right now: the printed
+ * cost minus the always-on Mana discounts (Power / Inner Fire "spells cheaper"
+ * buffs and the Mysticism Side B in-place discount, which floors at 1 per the
+ * rulebook). Situational, opponent-imposed surcharges (Energy Drain) and
+ * one-shot free-mana flags are deliberately excluded — this is for showing the
+ * card's standing cost, highlighting it when a sustained power is shaving it
+ * down. Returns `{ printed, effective }`; `effective < printed` means reduced.
+ */
+export function spellLevelManaDisplay(
+  state: GameState,
+  playerId: string,
+  level: SpellLevel,
+): { printed: number; effective: number } {
+  const printed = spellLevelBaseManaCost(state, level);
+  let effective = Math.max(0, printed - spellManaDiscountFor(state, playerId));
+  const mysticism = mysticismInPlaceDiscount(state, playerId);
+  if (mysticism > 0 && effective >= 1) {
+    effective = Math.max(1, effective - mysticism);
+  }
+  return { printed, effective };
+}
 
 /** Spell levels castable right now, by spell card id (engine dry-run). */
 export function castableSpellLevels(

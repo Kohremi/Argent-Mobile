@@ -5,6 +5,8 @@ import {
   activePlayer,
   buildMageIndex,
   eligiblePlacementSlots,
+  eligibleShadowPlacementSlots,
+  selectedMageOccupiedSlotPower,
   visibleRoomSpaces,
 } from '../../utils/uiSelectors';
 import { usePromptTargets } from '../Prompts/usePromptTargets';
@@ -38,12 +40,42 @@ export function CampusBoard() {
     return eligiblePlacementSlots(state, player.id, selectedMageId);
   }, [state, selectedMageId]);
 
+  // Slots whose SHADOW position the selected Mage may drop into — Planar
+  // Studies Side B (pay 1 Mana) or an active shadow-on-place buff.
+  const shadowEligible = useMemo(() => {
+    if (!state || !selectedMageId) return new Set<string>();
+    const player = activePlayer(state);
+    if (!player) return new Set<string>();
+    return eligibleShadowPlacementSlots(state, player.id, selectedMageId);
+  }, [state, selectedMageId]);
+
+  // The selected Mage's occupied-slot power (Ars Magna / Natural Magick B), if
+  // any — used to give occupied targets a distinct border + Mana cost label.
+  const occupiedSlotPower = useMemo(() => {
+    if (!state || !selectedMageId) return null;
+    const mage = state.players
+      .flatMap((p) => p.mages)
+      .find((m) => m.id === selectedMageId);
+    if (!mage) return null;
+    return selectedMageOccupiedSlotPower(state, mage);
+  }, [state, selectedMageId]);
+
   // Prompt-targeted slots must stay visible even in collapsed pool rooms.
   const { spaceTargets } = usePromptTargets();
 
   if (!state) return null;
   const { grid, cols } = state.roomLayout;
   const roomById = new Map(state.rooms.map((r) => [r.id, r] as const));
+
+  // Shadowing costs 1 Mana via Planar Studies Side B, or is free under a
+  // shadow-on-place buff (Zero Hour / Inversion).
+  const activeId = activePlayer(state)?.id;
+  const shadowIsFree =
+    activeId !== undefined &&
+    state.activeBuffs.some(
+      (b) => b.kind === 'shadow-on-place' && b.casterPlayerId === activeId,
+    );
+  const shadowManaCost = shadowIsFree ? 0 : 1;
 
   const onPlace = (spaceId: string) => {
     const player = activePlayer(state);
@@ -53,6 +85,18 @@ export function CampusBoard() {
       playerId: player.id,
       mageId: selectedMageId,
       actionSpaceId: spaceId,
+    });
+  };
+
+  const onPlaceShadow = (spaceId: string) => {
+    const player = activePlayer(state);
+    if (!player || !selectedMageId) return;
+    tryDispatch({
+      type: 'PLACE_WORKER',
+      playerId: player.id,
+      mageId: selectedMageId,
+      actionSpaceId: spaceId,
+      isShadowing: true,
     });
   };
 
@@ -84,7 +128,11 @@ export function CampusBoard() {
                   room={room}
                   state={state}
                   eligible={eligible}
+                  shadowEligible={shadowEligible}
+                  shadowManaCost={shadowManaCost}
+                  occupiedSlotPower={occupiedSlotPower}
                   onPlace={onPlace}
+                  onPlaceShadow={onPlaceShadow}
                   mageIndex={mageIndex}
                   spaces={visible}
                 />

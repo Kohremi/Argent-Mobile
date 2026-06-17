@@ -1265,6 +1265,55 @@ function handlePlaceWorker(state: GameState, action: PlaceWorkerAction): GameSta
     return applyEffectResult(withAdventuring, result, ctx);
   }
 
+  // Archmage's Apprentice overlap: placing onto an occupied opposing base slot
+  // can satisfy BOTH Sorcery Side A (Ars Magna — wound & take, 1 Mana) AND
+  // Natural Magick Side B (displace & take, free). A single-colour Mage only
+  // ever has one of these powers, so this ambiguity is unique to the Apprentice
+  // (which acts as every colour). Rather than silently pick one, ask the player
+  // which power to use; the resume effect runs the chosen one. (Shadowing the
+  // occupant — Planar Side B — is a separate gesture, reached via the slot's
+  // shadow tile, so it isn't an option here.) Budget is already consumed above.
+  if (isArsMagnaPlacement && isNaturalMagickBDisplace && space.occupant) {
+    const minted = mintId(state, 'r');
+    const pending: PendingResolution = {
+      id: minted.id,
+      responderId: action.playerId,
+      prompt: {
+        kind: 'choose-from-options',
+        options: [
+          {
+            id: 'wound',
+            label: 'Ars Magna — wound the occupant & take the slot (1 Mana)',
+            payload: {},
+          },
+          {
+            id: 'displace',
+            label: "Natural Magick — displace the occupant & take the slot",
+            payload: {},
+          },
+        ],
+      },
+      resume: {
+        effectId: 'base.mage.apprentice.place-on-occupied',
+        context: {
+          sourceMageId: action.mageId,
+          takenSpaceId: space.id,
+          targetMageId: space.occupant.mageId,
+        },
+      },
+      source: {
+        kind: 'mage-power',
+        id: action.mageId,
+        triggeringPlayerId: action.playerId,
+        description: "Archmage's Apprentice — choose a placement power",
+      },
+    };
+    return {
+      ...minted.state,
+      pendingResolutionStack: [...minted.state.pendingResolutionStack, pending],
+    };
+  }
+
   // Red Mage Ars Magna: spending 1 mana when placing wounds the slot's
   // occupant and lets the red mage take that slot. The standard placement
   // logic below assumes an empty slot — we branch here for Ars Magna and

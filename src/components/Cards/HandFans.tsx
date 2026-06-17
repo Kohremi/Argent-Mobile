@@ -1,6 +1,5 @@
-import { useState } from 'react';
 import clsx from 'clsx';
-import type { GameState, Player } from '../../game/types';
+import type { GameState, Player, SpellLevel } from '../../game/types';
 import {
   lookupSpellCardDef,
   lookupSupporterCardDef,
@@ -12,6 +11,7 @@ import {
   DEPT_HUE,
   playableSupporters,
   playableVaultCards,
+  spellLevelManaDisplay,
 } from '../../utils/uiSelectors';
 
 /**
@@ -41,6 +41,34 @@ export const TIMING_HUE: Record<string, string> = {
   endgame: '#6d28d9', // violet — scores at the election
 };
 
+/**
+ * A spell level's Mana cost. When a sustained discount (Mysticism Side B
+ * in-place / Power) is shaving the printed cost down, the reduced cost is
+ * shown in bold blue with the original struck through, so the player can see
+ * the saving at a glance. `reducedClass` tints the bold number for the surface
+ * it sits on (dark parchment face vs. the night-toned popover).
+ */
+function ManaCostLabel({
+  printed,
+  effective,
+  reducedClass,
+}: {
+  printed: number;
+  effective: number;
+  reducedClass: string;
+}) {
+  if (printed <= 0) return <>free</>;
+  if (effective < printed) {
+    return (
+      <span className="inline-flex items-baseline gap-0.5">
+        <span className={clsx('font-extrabold', reducedClass)}>{effective}✦</span>
+        <span className="font-normal line-through opacity-50">{printed}</span>
+      </span>
+    );
+  }
+  return <>{printed}✦</>;
+}
+
 /** Arc a card into its fan position (origin well below the card). */
 function fanStyle(i: number, n: number, flat: boolean): React.CSSProperties {
   const style: React.CSSProperties = { transformOrigin: '50% 140%' };
@@ -68,10 +96,12 @@ function SpellTome({
   fanCount: number;
 }) {
   const tryDispatch = useUiStore((s) => s.tryDispatch);
-  const [open, setOpen] = useState(false);
+  const openCardId = useUiStore((s) => s.openCardId);
+  const setOpenCard = useUiStore((s) => s.setOpenCard);
   const owned = player.ownedSpells.find((s) => s.cardId === cardId);
   const def = lookupSpellCardDef(state, cardId);
   if (!owned || !def) return null;
+  const open = openCardId === cardId;
   const hue = DEPT_HUE[def.department] ?? '#ffe9a8';
   const anyCastable = (castable?.size ?? 0) > 0;
 
@@ -82,7 +112,7 @@ function SpellTome({
     >
       <button
         type="button"
-        onClick={() => setOpen((o) => !o)}
+        onClick={() => setOpenCard(open ? null : cardId)}
         title={def.name}
         className={clsx(
           'flex h-[232px] w-[136px] flex-col rounded-xl border-l-4 bg-parchment-50 px-1.5 py-1.5 text-left shadow-card transition',
@@ -133,7 +163,20 @@ function SpellTome({
                     {lvl.title ?? `Level ${lvl.level}`}
                   </span>
                   <span className="ml-auto shrink-0 text-[8px] font-bold text-black/55">
-                    {lvl.manaCost > 0 ? `${lvl.manaCost}✦` : 'free'}
+                    {(() => {
+                      const { printed, effective } = spellLevelManaDisplay(
+                        state,
+                        player.id,
+                        lvl as SpellLevel,
+                      );
+                      return (
+                        <ManaCostLabel
+                          printed={printed}
+                          effective={effective}
+                          reducedClass="text-sky-700"
+                        />
+                      );
+                    })()}
                   </span>
                 </span>
                 <span className="line-clamp-3 block text-[8.5px] leading-snug text-black/70">
@@ -167,7 +210,7 @@ function SpellTome({
                   type="button"
                   disabled={!ok}
                   onClick={() => {
-                    setOpen(false);
+                    // tryDispatch clears openCardId on success; no manual close.
                     tryDispatch({
                       type: 'CAST_SPELL',
                       playerId: player.id,
@@ -186,7 +229,20 @@ function SpellTome({
                     L{lvl.level} {lvl.title ?? ''}
                   </span>
                   <span className="ml-1 text-starlight">
-                    {lvl.manaCost > 0 ? `${lvl.manaCost}✦` : 'free'}
+                    {(() => {
+                      const { printed, effective } = spellLevelManaDisplay(
+                        state,
+                        player.id,
+                        lvl as SpellLevel,
+                      );
+                      return (
+                        <ManaCostLabel
+                          printed={printed}
+                          effective={effective}
+                          reducedClass="text-sky-300"
+                        />
+                      );
+                    })()}
                   </span>
                   <span
                     className="ml-1 text-[10px] font-bold uppercase tracking-wide brightness-150"

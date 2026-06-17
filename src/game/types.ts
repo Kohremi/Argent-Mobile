@@ -292,6 +292,20 @@ export interface Player {
    * expansion ships multiple, this can become a Record keyed by card id.
    */
   wildDepartmentChoice?: Department;
+  /**
+   * When true, this seat is played by the AI ("Klank") rather than a human —
+   * the bot driver (`useKlankDriver`) takes this player's Errands turns and
+   * answers any prompt whose `responderId` is this player. Set from the setup
+   * screen's "Controlled by bot" checkbox; fixed for the game. Absent/false =
+   * a human seat.
+   */
+  controlledByBot?: boolean;
+  /**
+   * Which AI personality drives this seat when `controlledByBot` (e.g.
+   * `'klank'`, `'thickhide'`). Omitted → the default personality. Ignored for
+   * human seats.
+   */
+  botPersonalityId?: string | undefined;
 }
 
 // ============================================================================
@@ -1437,6 +1451,18 @@ export interface GameState {
 export interface GameConfig {
   activePackIds: PackId[];
   playerNames: string[];
+  /**
+   * Per-player "controlled by the AI (Klank)" flags, parallel to `playerNames`
+   * by index. Omitted or `false` = a human seat. Threaded onto each
+   * `Player.controlledByBot` by `buildInitialState`.
+   */
+  controlledByBot?: boolean[];
+  /**
+   * Per-player AI personality ids, parallel to `playerNames` by index. Only
+   * meaningful where `controlledByBot[i]` is true; `undefined` uses the
+   * default personality. Threaded onto each `Player.botPersonalityId`.
+   */
+  botPersonalityIds?: (string | undefined)[];
   rngSeed: number;
   /**
    * If true, `initGame` produces a `candidate-draft` phase before round-setup;

@@ -4,6 +4,9 @@ import { MotionConfig } from 'framer-motion';
 import { useGameStore } from '../store/gameStore';
 import { useUiStore } from '../store/uiStore';
 import { useStateDiffFx } from './FX/useStateDiffFx';
+import { useKlankDriver } from '../hooks/useKlankDriver';
+import { botOwnsCurrentDecision, activePlayer } from '../utils/uiSelectors';
+import { getBotPersonality } from '../game/ai';
 import { TopBar } from './HUD/TopBar';
 import { TurnBanner } from './HUD/TurnBanner';
 import { CampusBoard } from './Board/CampusBoard';
@@ -116,7 +119,20 @@ export function GameScreen() {
   const debugOpen = useUiStore((s) => s.debugOpen);
   const setDebugOpen = useUiStore((s) => s.setDebugOpen);
   useStateDiffFx();
+  useKlankDriver();
   if (!state) return null;
+
+  // While a bot owns the current decision, show a non-blocking "thinking"
+  // banner. Name the seat on a bot's own Errands turn; otherwise (answering a
+  // prompt between turns) name the responding bot.
+  const botThinking = botOwnsCurrentDecision(state);
+  const active = activePlayer(state);
+  const activeBot = active?.controlledByBot ? active : null;
+  const topPending = state.pendingResolutionStack[state.pendingResolutionStack.length - 1];
+  const respondingBot = topPending
+    ? state.players.find((p) => p.id === topPending.responderId && p.controlledByBot) ?? null
+    : null;
+  const bannerBot = activeBot ?? respondingBot;
 
   const sky = skyPhase(state.bellTower.available.length, state.phase.kind);
 
@@ -149,6 +165,17 @@ export function GameScreen() {
         <CouncilTower />
       </main>
       <PlayerDock />
+
+      {botThinking && (
+        <div className="pointer-events-none absolute inset-x-0 top-3 z-40 flex justify-center">
+          <div className="flex animate-pop items-center gap-2 rounded-full bg-night-800/95 px-4 py-1.5 text-sm font-bold text-starlight ring-1 ring-starlight/40 shadow-glow-sm">
+            <span className="animate-breathe">🤖</span>
+            {activeBot
+              ? `${getBotPersonality(activeBot.botPersonalityId).name} is taking ${activeBot.name}'s turn…`
+              : `${getBotPersonality(bannerBot?.botPersonalityId).name} is responding…`}
+          </div>
+        </div>
+      )}
 
       <PromptDirector />
       <PeekModal />

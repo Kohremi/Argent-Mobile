@@ -434,6 +434,8 @@ export function buildInitialState(config: GameConfig): GameState {
     bellTowerCards: [],
     initiativeOrder: i + 1,
     influenceArrivalSeq: 0,
+    controlledByBot: config.controlledByBot?.[i] ?? false,
+    botPersonalityId: config.botPersonalityIds?.[i],
   }));
 
   // ---- First player (random per rulebook) ----

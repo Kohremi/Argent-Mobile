@@ -1,5 +1,7 @@
 import { create } from 'zustand';
 import type { GameAction } from '../game/types';
+import type { RoomFx } from '../components/FX/useStateDiffFx';
+import { botOwnsCurrentDecision } from '../utils/uiSelectors';
 import { useGameStore } from './gameStore';
 
 /**
@@ -10,6 +12,15 @@ interface UiStore {
   /** Office mage currently picked up for placement (TargetingLayer source). */
   selectedMageId: string | null;
   selectMage: (mageId: string | null) => void;
+
+  /**
+   * The single hand card whose popover is currently open (spell level menu).
+   * Lifted out of the card component so only ONE popover is ever open: opening
+   * another card replaces this id, and selecting a Mage or dispatching any
+   * action (cast / play / place) clears it — so a stray menu never lingers.
+   */
+  openCardId: string | null;
+  setOpenCard: (cardId: string | null) => void;
 
   /** Dev/debug drawer (full engine controls until PromptDirector lands). */
   debugOpen: boolean;
@@ -33,8 +44,8 @@ interface UiStore {
    * "FX from state diffs") — wound flashes, banish rings, flip glows.
    * RoomScene renders entries for its room; useStateDiffFx expires them.
    */
-  roomFx: { id: number; roomId: string; kind: 'wound' | 'banish' | 'flip' }[];
-  pushRoomFx: (fx: { roomId: string; kind: 'wound' | 'banish' | 'flip' }[]) => void;
+  roomFx: (RoomFx & { id: number })[];
+  pushRoomFx: (fx: RoomFx[]) => void;
   expireRoomFx: (ids: number[]) => void;
 
   /** Campus zoom factor (drag-to-pan uses native scroll). */
@@ -68,7 +79,11 @@ interface UiStore {
 
 export const useUiStore = create<UiStore>((set) => ({
   selectedMageId: null,
-  selectMage: (mageId) => set({ selectedMageId: mageId }),
+  // Picking up (or dropping) a Mage dismisses any open card popover.
+  selectMage: (mageId) => set({ selectedMageId: mageId, openCardId: null }),
+
+  openCardId: null,
+  setOpenCard: (cardId) => set({ openCardId: cardId }),
 
   debugOpen: false,
   setDebugOpen: (open) => set({ debugOpen: open }),
@@ -103,10 +118,17 @@ export const useUiStore = create<UiStore>((set) => ({
   clearPeek: () => set({ peek: null, peekRevealed: false }),
 
   tryDispatch: (action) => {
+    // Block human input while a bot ("Klank") owns the current decision — the
+    // active Errands seat is a bot, or the top pending prompt is owed by one —
+    // so a human can't act on the bot's behalf. The bot driver dispatches
+    // through gameStore directly, so it's unaffected.
+    const gs = useGameStore.getState().state;
+    if (gs && botOwnsCurrentDecision(gs)) return false;
     try {
       useGameStore.getState().dispatch(action);
       set({
         selectedMageId: null,
+        openCardId: null,
         lastError: null,
         reactionSlotPick: null,
         privacyRevealedForId: null,

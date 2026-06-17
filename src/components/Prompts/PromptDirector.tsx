@@ -44,6 +44,8 @@ interface SheetOption {
   id: string;
   label: string;
   sub?: string | undefined;
+  /** When false, the button is dimmed and unclickable (engine would reject). */
+  available?: boolean | undefined;
 }
 
 function ResponderChip({ state, pending }: { state: GameState; pending: PendingResolution }) {
@@ -90,17 +92,29 @@ function ChoiceSheet({
           <ResponderChip state={state} pending={pending} />
         </div>
         <div className="flex max-h-56 flex-wrap gap-1.5 overflow-y-auto">
-          {options.map((o) => (
-            <button
-              key={o.id}
-              type="button"
-              onClick={() => onPick(o.id)}
-              className="rounded-xl bg-night-600 px-3 py-1.5 text-left text-sm ring-1 ring-white/15 transition hover:-translate-y-0.5 hover:bg-night-600/80 hover:ring-starlight/60"
-            >
-              <span className="font-semibold text-white/95">{o.label}</span>
-              {o.sub && <span className="block text-[11px] text-white/55">{o.sub}</span>}
-            </button>
-          ))}
+          {options.map((o) => {
+            const disabled = o.available === false;
+            return (
+              <button
+                key={o.id}
+                type="button"
+                disabled={disabled}
+                title={disabled ? o.sub : undefined}
+                onClick={() => onPick(o.id)}
+                className={clsx(
+                  'rounded-xl px-3 py-1.5 text-left text-sm ring-1 transition',
+                  disabled
+                    ? 'cursor-not-allowed bg-night-800 text-white/40 ring-white/10'
+                    : 'bg-night-600 text-white/95 ring-white/15 hover:-translate-y-0.5 hover:bg-night-600/80 hover:ring-starlight/60',
+                )}
+              >
+                <span className="font-semibold">{o.label}</span>
+                {o.sub && (
+                  <span className="block text-[11px] text-white/55">{o.sub}</span>
+                )}
+              </button>
+            );
+          })}
           {canPass && (
             <button
               type="button"
@@ -691,7 +705,12 @@ export function PromptDirector() {
           state={state}
           pending={pending}
           title="choose one"
-          options={prompt.options.map((o) => ({ id: o.id, label: o.label }))}
+          options={prompt.options.map((o) => ({
+            id: o.id,
+            label: o.label,
+            available: o.available,
+            sub: o.available === false ? o.unavailableReason : undefined,
+          }))}
           onPick={pickOption}
         />
       );

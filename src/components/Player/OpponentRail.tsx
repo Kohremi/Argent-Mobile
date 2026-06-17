@@ -5,8 +5,10 @@ import { activePlayer, PLAYER_AURA, researchTotals } from '../../utils/uiSelecto
 import { usePromptTargets } from '../Prompts/usePromptTargets';
 import { MageToken } from '../Board/MageToken';
 import { PortraitBust } from './PortraitBust';
+import { PlayerBuffBadges } from './PlayerBuffBadges';
 import { ResourceIcon } from '../icons';
 import { RESOURCE_ORDER } from './PlayerDock';
+import { getBotPersonality } from '../../game/ai';
 
 /**
  * Left rail: compact rival panels (docs/UI_DESIGN.md §8). Shows each
@@ -66,6 +68,14 @@ export function OpponentRail() {
             <p className="flex items-center gap-1.5 font-display text-sm font-bold" style={{ color: aura }}>
               <PortraitBust player={p} state={state} expression="neutral" size={26} />
               {p.name}
+              {p.controlledByBot && (
+                <span
+                  className="ml-auto rounded-full bg-night-900/70 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-starlight ring-1 ring-starlight/40"
+                  title="Played by an AI"
+                >
+                  🤖 {getBotPersonality(p.botPersonalityId).name}
+                </span>
+              )}
             </p>
             <p className="mb-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-[12px] font-semibold text-white/85">
               {RESOURCE_ORDER.map(({ kind, key }) => {
@@ -94,6 +104,7 @@ export function OpponentRail() {
                 );
               })}
             </p>
+            <PlayerBuffBadges state={state} playerId={p.id} className="mb-1.5" />
             <div className={clsx('flex flex-wrap items-end gap-0.5', office.length === 0 && 'hidden')}>
               {office.map((m) => (
                 <RailToken key={m.id} player={p} mage={m} />
