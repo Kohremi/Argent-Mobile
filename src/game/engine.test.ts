@@ -6722,6 +6722,44 @@ describe('PLAY_SUPPORTER', () => {
     expect(alice?.resources.marks).toBe(1);
   });
 
+  it('Alumis: "Gain 2 Marks" lands marks on two voters (voterMarks + resource)', () => {
+    let s = setupSupporterTest('base.supporter.alumis');
+    const before = s.players.find((p) => p.id === 'p1')!.resources.marks;
+    s = applyAction(s, {
+      type: 'PLAY_SUPPORTER',
+      playerId: 'p1',
+      supporterCardId: 'base.supporter.alumis',
+    });
+    // First Mark prompt → mark voter 0.
+    let top = topPending(s);
+    expect(top.prompt.kind).toBe('choose-voter');
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: top.id,
+      answer: { kind: 'voter-chosen', voterId: s.voters[0]!.id },
+    });
+    // Second Mark prompt → the first voter is no longer eligible (its mark
+    // must have persisted), and we mark voter 1.
+    top = topPending(s);
+    expect(top.prompt.kind).toBe('choose-voter');
+    if (top.prompt.kind === 'choose-voter') {
+      expect(top.prompt.eligibleVoterIds).not.toContain(s.voters[0]!.id);
+    }
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: top.id,
+      answer: { kind: 'voter-chosen', voterId: s.voters[1]!.id },
+    });
+    // Both marks recorded on voters, and the marks resource went up by 2.
+    const alice = s.players.find((p) => p.id === 'p1')!;
+    expect(alice.resources.marks).toBe(before + 2);
+    const myMarks = s.voterMarks
+      .filter((m) => m.playerId === 'p1')
+      .map((m) => m.voterId)
+      .sort();
+    expect(myMarks).toEqual([s.voters[0]!.id, s.voters[1]!.id].sort());
+  });
+
   it('rejects playing a passive (familiar) supporter', () => {
     const s = setupSupporterTest('base.supporter.salamander');
     expect(() =>

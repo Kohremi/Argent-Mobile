@@ -6658,17 +6658,24 @@ function marksLoop(
     };
     appliedRemaining = remaining - 1;
   }
+  // Persist BOTH the Mark placements (`voterMarks`) and the `marks` resource
+  // bump — `applyGainMark` updates both, so the patch must carry both or the
+  // Mark never lands on the Voter (only the counter would move).
+  const diff: GameStatePatch = {
+    players: working.players,
+    voterMarks: working.voterMarks,
+  };
   if (appliedRemaining <= 0) {
-    return { kind: 'done', patch: { players: working.players } };
+    return { kind: 'done', patch: diff };
   }
   const prompt = spawnGainMarkPrompt(working, ctx.triggeringPlayerId, ctx.source);
   if (prompt === null) {
     // No more eligible voters — emit what we already applied and stop.
-    return { kind: 'done', patch: { players: working.players } };
+    return { kind: 'done', patch: diff };
   }
   return {
     kind: 'pause',
-    patch: { players: working.players },
+    patch: diff,
     pending: {
       ...prompt,
       resume: {
