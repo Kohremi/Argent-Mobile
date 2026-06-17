@@ -61,6 +61,12 @@ const FIVE_PLAYER_CONFIG: GameConfig = {
   rngSeed: 12345,
 };
 
+const THREE_PLAYER_CONFIG: GameConfig = {
+  activePackIds: ['base'],
+  playerNames: ['Alice', 'Bob', 'Cara'],
+  rngSeed: 12345,
+};
+
 function advance(state: GameState): GameState {
   return applyAction(state, { type: 'ADVANCE_PHASE' });
 }
@@ -13014,19 +13020,52 @@ describe('Infirmary on-wound bonus', () => {
       resolutionId: topPending(s).id,
       answer: { kind: 'mage-chosen', mageId: 'alice-target' },
     });
-    // Reaction window — Bob gets a prompt even though he's not the owner;
-    // any player may react. Pass.
-    s = applyAction(s, {
-      type: 'RESOLVE_PENDING',
-      resolutionId: topPending(s).id,
-      answer: { kind: 'reaction-passed' },
-    });
+    // No reaction window surfaces: the only other player (Bob) owns no affected
+    // Mage and holds no reaction, so he isn't prompted with an empty window.
+    // The self-inflicted wound resolves straight through.
     // No bonus — self-inflicted wound.
     expect(s.pendingResolutionStack).toHaveLength(0);
     const alice = s.players.find((p) => p.id === 'p1');
     expect(alice?.resources.gold).toBe(0);
     expect(alice?.resources.mana).toBe(4); // 5 - 1 from cast
     expect(alice?.resources.influence).toBe(0);
+  });
+
+  it('3-player: a single-target wound only prompts the affected opponent, not bystanders', () => {
+    // Alice (p1) Burns Bob's (p2) Mage. Cara (p3) is an uninvolved bystander
+    // with no reaction card. The reaction window must surface for Bob only —
+    // Cara should never see an empty "take the hit" prompt.
+    let s = initGame(THREE_PLAYER_CONFIG);
+    s = forceLibrarySideA(s);
+    s = zeroPlayerResources(s, 'p1');
+    s = zeroPlayerResources(s, 'p2');
+    s = zeroPlayerResources(s, 'p3');
+    s = addOwnedSpell(s, 'p1', 'base.spell.burn');
+    s = mapPlayer(s, 'p1', (p) => ({ ...p, resources: { ...p.resources, mana: 5 } }));
+    s = addMage(s, 'p2', { id: 'bob-mage', cardId: 'base.mage.sorcery', color: 'red' });
+    s = placeMageOnSpace(s, 'p2', 'bob-mage', 'base.room.library.a.slot-4');
+    s = addMage(s, 'p3', { id: 'cara-mage', cardId: 'base.mage.sorcery', color: 'red' });
+    s = placeMageOnSpace(s, 'p3', 'cara-mage', 'base.room.library.a.slot-3');
+    s = { ...s, firstPlayerIndex: 0, phase: { kind: 'errands', round: 1, activePlayerIndex: 0, actionUsed: false, fastActionUsed: false } };
+
+    s = applyAction(s, { type: 'CAST_SPELL', playerId: 'p1', spellCardId: 'base.spell.burn', level: 1 });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'mage-chosen', mageId: 'bob-mage' },
+    });
+
+    // The reaction window is presented to the affected opponent, Bob.
+    const rp = topPending(s);
+    expect(rp.prompt.kind).toBe('reaction-window');
+    expect(rp.responderId).toBe('p2');
+
+    // Bob takes the hit. The window then closes WITHOUT popping an empty
+    // reaction prompt for the bystander Cara (the old behavior queued her too).
+    s = applyAction(s, { type: 'RESOLVE_PENDING', resolutionId: rp.id, answer: { kind: 'reaction-passed' } });
+    expect(s.activeReactionWindows).toHaveLength(0);
+    expect(s.pendingResolutionStack.every((p) => p.prompt.kind !== 'reaction-window')).toBe(true);
+    expect(s.pendingResolutionStack.every((p) => p.responderId !== 'p3')).toBe(true);
   });
 
   it('IP bonus path bumps influence and influenceArrivalSeq', () => {

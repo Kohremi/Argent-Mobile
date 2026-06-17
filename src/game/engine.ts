@@ -624,38 +624,86 @@ function applyEffectResult(
  * Either pushes the next responder's prompt or, if the queue is empty,
  * pops the window and invokes its afterResume continuation.
  */
-function advanceReactionWindow(state: GameState, window: ReactionWindow): GameState {
-  if (window.pendingResponderIds.length === 0) {
-    const afterRemove = removeWindow(state, window.id);
-    return invokeContinuation(afterRemove, window.afterResume, window.source, true);
-  }
-
-  const responderId = window.pendingResponderIds[0];
-  if (responderId === undefined) {
-    throw new Error('advanceReactionWindow: empty pendingResponderIds');
-  }
-  const reactionOptions = buildReactionOptionsFor(
-    state,
-    responderId,
-    window.triggerEvents,
-    window.source,
+/**
+ * True when `responderId` owns a Mage that was actually affected (wounded,
+ * banished, moved, or shadowed) by this window's trigger events. Such a player
+ * is prompted even when they hold no reaction card, so they can acknowledge /
+ * "take the hit".
+ */
+function responderOwnsAffectedMage(
+  responderId: PlayerId,
+  triggerEvents: ReactionTriggerEvent[],
+): boolean {
+  return triggerEvents.some(
+    (e) =>
+      (e.kind === 'mage-wounded' ||
+        e.kind === 'mage-banished' ||
+        e.kind === 'mage-moved' ||
+        e.kind === 'mage-shadowed') &&
+      e.ownerId === responderId,
   );
-  const promptInput: PendingResolutionInput = {
-    responderId,
-    prompt: {
-      kind: 'reaction-window',
-      triggerEvents: window.triggerEvents,
-      reactionOptions,
-      canPass: true,
-    },
-    resume: {
-      effectId: '__reaction_window__',
-      context: { reactionWindowId: window.id },
-    },
-    source: window.source,
-    reactionWindowId: window.id,
-  };
-  return pushPending(state, promptInput);
+}
+
+function advanceReactionWindow(state: GameState, window: ReactionWindow): GameState {
+  let curr = state;
+  let win = window;
+  // Walk the responder queue, skipping anyone with nothing to do: no reaction
+  // available AND none of their Mages affected by this window. Surfacing an
+  // empty "pass only" window for them just gates the turn for no reason — and,
+  // for a single-target harm (e.g. Ars Magna), would pop a reaction screen for
+  // EVERY opponent instead of only the wounded one. (The batch-spell and
+  // bell-tower paths already pre-filter their queues this way; doing it here
+  // covers every single-target source that queues all opponents.)
+  for (;;) {
+    if (win.pendingResponderIds.length === 0) {
+      const afterRemove = removeWindow(curr, win.id);
+      return invokeContinuation(afterRemove, win.afterResume, win.source, true);
+    }
+
+    const responderId = win.pendingResponderIds[0];
+    if (responderId === undefined) {
+      throw new Error('advanceReactionWindow: empty pendingResponderIds');
+    }
+    const reactionOptions = buildReactionOptionsFor(
+      curr,
+      responderId,
+      win.triggerEvents,
+      win.source,
+    );
+
+    if (
+      reactionOptions.length === 0 &&
+      !responderOwnsAffectedMage(responderId, win.triggerEvents)
+    ) {
+      // Nothing to react to and nothing to acknowledge — drop this responder
+      // and look at the next one (same effect as an immediate pass).
+      curr = replaceWindow(curr, win.id, (w) => ({
+        ...w,
+        pendingResponderIds: w.pendingResponderIds.filter((id) => id !== responderId),
+      }));
+      const updated = curr.activeReactionWindows.find((w) => w.id === win.id);
+      if (!updated) return curr; // window vanished (shouldn't happen)
+      win = updated;
+      continue;
+    }
+
+    const promptInput: PendingResolutionInput = {
+      responderId,
+      prompt: {
+        kind: 'reaction-window',
+        triggerEvents: win.triggerEvents,
+        reactionOptions,
+        canPass: true,
+      },
+      resume: {
+        effectId: '__reaction_window__',
+        context: { reactionWindowId: win.id },
+      },
+      source: win.source,
+      reactionWindowId: win.id,
+    };
+    return pushPending(curr, promptInput);
+  }
 }
 
 function invokeContinuation(
