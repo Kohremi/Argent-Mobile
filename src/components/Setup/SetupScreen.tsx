@@ -11,7 +11,60 @@ import {
 import { useGameStore } from '../../store/gameStore';
 import { BOT_PERSONALITY_OPTIONS } from '../../game/ai';
 import { randomSeed } from '../../utils/rng';
-import type { GameConfig, RoomId } from '../../game/types';
+import type { Department, GameConfig, Mage, RoomId } from '../../game/types';
+
+/**
+ * Brief, NON-mechanical "what to expect" blurbs per room, keyed by the room's
+ * display name. Purely presentational setup-screen flavor (like
+ * LAYOUT_MODE_OPTIONS) — the authoritative mechanical text lives on the room's
+ * action-space `description`s in the content packs. A room whose two sides
+ * differ in feel carries `{ a, b }`; otherwise a single string covers both.
+ */
+const ROOM_OVERVIEWS: Record<string, string | { a?: string; b?: string }> = {
+  'Council Chamber':
+    'Study for Intelligence & Wisdom, bank Research, and draft Vault cards.',
+  Library: 'Research your spell books — gain Intelligence, Wisdom, and Research.',
+  Infirmary:
+    'Where wounded Mages recover — claim Gold or Mana when one is struck down.',
+  'Training Fields': 'Train up your Intelligence and Wisdom.',
+  Guilds: {
+    a: 'Cash in for Gold or Mana.',
+    b: 'Instantly earn Gold or Mana the moment you place.',
+  },
+  Catacombs:
+    'Dig for Influence and Marks, recruit shady Supporters, and trade Gold for IP.',
+  Courtyard: 'Channel your Wisdom into a surge of Mana.',
+  Vault: 'Reveal and draft powerful Vault cards (with a little Gold on the side).',
+  Adventuring: 'Draft from a shared pool of Spells, Vault cards, and Supporters.',
+  Chapel: 'Collect Marks alongside knowledge, Influence, and resources.',
+  Dormitory: 'Recruit new Mages into your ranks.',
+  'Student Stores': {
+    a: 'Stock up on Buys to purchase Vault cards.',
+    b: 'Stock up on Buys — with a discount on Vault purchases.',
+  },
+  'Great Hall': {
+    a: 'Place freely for guaranteed Influence — holds any number of Mages.',
+    b: 'Place freely for Gold or Mana — holds any number of Mages.',
+  },
+  "Archmage's Study":
+    "Borrow the Archmage's Apprentice — a Mage that wields every power.",
+  'Astronomy Tower': 'Advance the reward-track marker and claim where it lands.',
+  // Mancers expansion
+  Laboratory: 'Tinker for Research and Technomancy power.',
+  'Research Archive': 'Pore over the archives for Research and knowledge.',
+  'Golem Lab': 'Conjure a temporary golem Mage that ignores the usual limits.',
+  'University Tavern': 'Mingle for Supporters, Marks, and favors.',
+  Atelier: 'Craft and upgrade your Treasures.',
+  'Synthesis Workshop': 'Synthesize new Treasures from the ones you hold.',
+};
+
+/** Resolve the overview for a room name + selected side (B falls back to A). */
+function roomOverviewFor(name: string, side: 'A' | 'B'): string | null {
+  const entry = ROOM_OVERVIEWS[name];
+  if (!entry) return null;
+  if (typeof entry === 'string') return entry;
+  return (side === 'B' ? entry.b : entry.a) ?? entry.a ?? entry.b ?? null;
+}
 
 const LAYOUT_MODE_OPTIONS: {
   id: LayoutModeId;
@@ -108,6 +161,19 @@ export function SetupScreen() {
       }
       return a.name.localeCompare(b.name);
     });
+  }, [packs, selectedPackIds]);
+
+  // Department → its worker-Mage, for surfacing the ability blurb in the Mage
+  // Abilities section. Only the six magic departments have one.
+  const mageByDept = useMemo(() => {
+    const map = new Map<Department, Mage>();
+    for (const pack of packs) {
+      if (!selectedPackIds.includes(pack.id)) continue;
+      for (const m of pack.mages) {
+        if (m.department) map.set(m.department, m);
+      }
+    }
+    return map;
   }, [packs, selectedPackIds]);
 
   const playerCount = playerNames.length;
@@ -386,24 +452,32 @@ export function SetupScreen() {
                     </button>
                   );
                 };
+                const overview = roomOverviewFor(g.name, bSelected ? 'B' : 'A');
                 return (
                   <li
                     key={`${g.packId}::${g.name}`}
                     className={clsx(
-                      'flex items-center gap-2 px-2 py-1.5 rounded bg-slate-950/40',
+                      'flex items-start gap-2 px-2 py-1.5 rounded bg-slate-950/40',
                       required && 'border border-white/70',
                     )}
                   >
-                    <span className="flex-1 text-sm">
-                      {g.name}
-                      {required && (
-                        <span className="ml-2 text-[10px] uppercase tracking-wide text-slate-400">
-                          always in play
-                        </span>
-                      )}
-                      {!required && g.packId !== 'base' && (
-                        <span className="ml-2 text-[10px] uppercase tracking-wide text-slate-500">
-                          {g.packName}
+                    <span className="flex-1 min-w-0">
+                      <span className="text-sm">
+                        {g.name}
+                        {required && (
+                          <span className="ml-2 text-[10px] uppercase tracking-wide text-slate-400">
+                            always in play
+                          </span>
+                        )}
+                        {!required && g.packId !== 'base' && (
+                          <span className="ml-2 text-[10px] uppercase tracking-wide text-slate-500">
+                            {g.packName}
+                          </span>
+                        )}
+                      </span>
+                      {overview && (
+                        <span className="block text-[11px] text-slate-400 leading-snug mt-0.5">
+                          {overview}
                         </span>
                       )}
                     </span>
@@ -426,7 +500,8 @@ export function SetupScreen() {
         <h2 className="text-xl font-medium mb-1">Mage Abilities</h2>
         <p className="text-sm text-slate-400 mb-3">
           Pick which side of each department's worker-Mage power is in play.
-          All current abilities are Side A.
+          The two sides are different abilities — the selected side's effect
+          is shown below each department.
         </p>
         <ul className="space-y-1">
           {ABILITY_DEPARTMENTS.map((dept) => {
@@ -456,26 +531,38 @@ export function SetupScreen() {
                 </button>
               );
             };
+            const mage = mageByDept.get(dept.id);
+            const ability =
+              (current === 'B' ? mage?.bDescription : mage?.aDescription) ??
+              mage?.description ??
+              null;
             return (
               <li
                 key={dept.id}
-                className="flex items-center gap-2 px-2 py-1.5 rounded bg-slate-950/40"
+                className="flex items-start gap-2 px-2 py-1.5 rounded bg-slate-950/40"
               >
-                <span
-                  className={clsx(
-                    'flex-1 text-sm',
-                    !packActive && 'text-slate-500',
-                  )}
-                >
-                  {dept.label}
-                  {requiresPack && (
-                    <span
-                      className={clsx(
-                        'ml-2 text-[10px] uppercase tracking-wide',
-                        packActive ? 'text-slate-500' : 'text-slate-600',
-                      )}
-                    >
-                      Mancers{packActive ? '' : ' — not included'}
+                <span className="flex-1 min-w-0">
+                  <span
+                    className={clsx(
+                      'text-sm',
+                      !packActive && 'text-slate-500',
+                    )}
+                  >
+                    {dept.label}
+                    {requiresPack && (
+                      <span
+                        className={clsx(
+                          'ml-2 text-[10px] uppercase tracking-wide',
+                          packActive ? 'text-slate-500' : 'text-slate-600',
+                        )}
+                      >
+                        Mancers{packActive ? '' : ' — not included'}
+                      </span>
+                    )}
+                  </span>
+                  {ability && packActive && (
+                    <span className="block text-[11px] text-slate-400 leading-snug mt-0.5">
+                      {ability}
                     </span>
                   )}
                 </span>

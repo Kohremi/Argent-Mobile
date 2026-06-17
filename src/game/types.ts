@@ -413,6 +413,14 @@ export interface Mage {
   aPowerEffectId?: EffectId;
   bPowerEffectId?: EffectId;
   description?: string;
+  /**
+   * Short human-readable text for each worker-Mage power side. The two sides
+   * are distinct abilities (see docs/argent_data/mage-powers.tsv), so the
+   * setup screen surfaces whichever side is selected. `description` remains
+   * the Side-A fallback for any consumer that doesn't care about sides.
+   */
+  aDescription?: string;
+  bDescription?: string;
   abilities?: MageAbility[];
   portrait?: string;
 }

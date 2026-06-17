@@ -309,6 +309,9 @@ const mages: Mage[] = [
     department: 'technomancy',
     description:
       'Place: Spend 3 Gold when placing this mage to gain a Research.',
+    aDescription: 'On placement, spend 3 Gold to gain a Research.',
+    bDescription:
+      'When you place into a room holding another player’s Mage, pay 3 Gold to Mark a Voter that player has Marked.',
     aPowerEffectId: 'mancers.mage.technomancy.a',
     bPowerEffectId: 'mancers.mage.technomancy.b',
   },

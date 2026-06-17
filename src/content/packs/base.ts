@@ -29,6 +29,10 @@ const mages: Mage[] = [
     department: 'sorcery',
     description:
       'When placing this mage, you may spend 1 Mana to wound a Mage and take its slot.',
+    aDescription:
+      'On placement, spend 1 Mana to wound an opponent’s Mage and take its slot.',
+    bDescription:
+      'On placement, gain 1 Mana for each other Mage already in the room (max 3).',
     aPowerEffectId: 'base.mage.sorcery.a',
     bPowerEffectId: 'base.mage.sorcery.b',
   },
@@ -39,6 +43,10 @@ const mages: Mage[] = [
     color: 'grey',
     department: 'mysticism',
     description: 'May place after casting a spell (and after reactions resolve).',
+    aDescription:
+      'After you cast an Action spell (once Reactions resolve), place a Mage as a free action.',
+    bDescription:
+      'While in a University slot other than the Infirmary, your Spells cost 1 less Mana (min 1).',
     aPowerEffectId: 'base.mage.mysticism.a',
     bPowerEffectId: 'base.mage.mysticism.b',
   },
@@ -49,6 +57,9 @@ const mages: Mage[] = [
     color: 'green',
     department: 'natural-magick',
     description: 'Cannot be wounded.',
+    aDescription: 'Cannot be wounded.',
+    bDescription:
+      'On placement, you may move an opponent’s Mage to another slot in the same room and take its place.',
     aPowerEffectId: 'base.mage.natural-magick.a',
     bPowerEffectId: 'base.mage.natural-magick.b',
   },
@@ -59,6 +70,9 @@ const mages: Mage[] = [
     color: 'purple',
     department: 'planar-studies',
     description: 'May place as a fast action',
+    aDescription: 'Placement is a Fast Action.',
+    bDescription:
+      'On placement, pay 1 Mana to shadow an opponent’s Mage instead.',
     aPowerEffectId: 'base.mage.planar-studies.a',
     bPowerEffectId: 'base.mage.planar-studies.b',
   },
@@ -69,6 +83,9 @@ const mages: Mage[] = [
     color: 'blue',
     department: 'divinity',
     description: 'Immune to spells cast by rival mages.',
+    aDescription: 'Immune to all effects of opponents’ Spells.',
+    bDescription:
+      'Pay 4 Gold to activate a Merit Slot this Mage occupies instead of spending a Merit Badge.',
     aPowerEffectId: 'base.mage.divinity.a',
     bPowerEffectId: 'base.mage.divinity.b',
   },
