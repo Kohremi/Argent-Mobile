@@ -19,13 +19,14 @@ import {
   spellLevelBaseManaCost,
 } from '../game/effects/helpers';
 import { BellIcon, LockIcon, MageIcon, ResourceIcon, ShieldIcon, type ResourceKind } from './icons';
+import { CandidatePortrait } from './Player/PortraitBust';
+import { MageToken } from './Board/MageToken';
 import type {
   BendTimeKind,
   Candidate,
   Department,
   GameAction,
   GameState,
-  Mage,
   MageColor,
   OwnedMage,
   PendingPrompt,
@@ -3255,16 +3256,12 @@ function CandidateDraftScreen({
     if (p.candidateId) taken.set(p.candidateId, p.name);
   }
 
-  // Build the spell/mage lookup once.
+  // Build the spell lookup once (each candidate's innate starter spell).
   const spellById = new Map<string, SpellCard>();
-  const mageByDept = new Map<Department | 'students', Mage | undefined>();
   for (const pack of listPacks()) {
     if (!state.activePackIds.includes(pack.id)) continue;
     for (const sp of pack.legendarySpells) spellById.set(sp.id, sp);
     for (const sp of pack.spells) spellById.set(sp.id, sp);
-    for (const m of pack.mages) {
-      if (m.department) mageByDept.set(m.department, m);
-    }
   }
 
   // Group candidates by department to render pairs side by side.
@@ -3355,26 +3352,47 @@ function CandidateDraftScreen({
         <div className="flex items-center justify-between flex-wrap gap-2">
           <h2 className="text-lg font-medium">Faction Leaders</h2>
           {activePlayer && (
-            <button
-              type="button"
-              disabled={
-                !highlightedCandidate || taken.has(highlightedCandidate.id)
-              }
-              onClick={() => {
-                if (!highlightedCandidate || !activePlayer) return;
-                dispatch({
-                  type: 'CHOOSE_CANDIDATE',
-                  playerId: activePlayer.id,
-                  candidateId: highlightedCandidate.id,
-                });
-                setHighlighted(null);
-              }}
-              className="px-4 py-2 rounded bg-amber-500 text-slate-950 font-medium hover:bg-amber-400 disabled:opacity-40 disabled:cursor-not-allowed"
-            >
-              {highlightedCandidate
-                ? `Pick ${highlightedCandidate.name} (as ${activePlayer.name})`
-                : `Pick (as ${activePlayer.name}) — select a leader first`}
-            </button>
+            <div className="flex items-center gap-2 flex-wrap">
+              <button
+                type="button"
+                onClick={() => {
+                  if (!activePlayer) return;
+                  const available = candidates.filter((c) => !taken.has(c.id));
+                  if (available.length === 0) return;
+                  const pick =
+                    available[Math.floor(Math.random() * available.length)]!;
+                  dispatch({
+                    type: 'CHOOSE_CANDIDATE',
+                    playerId: activePlayer.id,
+                    candidateId: pick.id,
+                  });
+                  setHighlighted(null);
+                }}
+                className="px-3 py-2 rounded bg-slate-700 text-slate-100 font-medium hover:bg-slate-600"
+              >
+                🎲 Random pick ({activePlayer.name})
+              </button>
+              <button
+                type="button"
+                disabled={
+                  !highlightedCandidate || taken.has(highlightedCandidate.id)
+                }
+                onClick={() => {
+                  if (!highlightedCandidate || !activePlayer) return;
+                  dispatch({
+                    type: 'CHOOSE_CANDIDATE',
+                    playerId: activePlayer.id,
+                    candidateId: highlightedCandidate.id,
+                  });
+                  setHighlighted(null);
+                }}
+                className="px-4 py-2 rounded bg-amber-500 text-slate-950 font-medium hover:bg-amber-400 disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                {highlightedCandidate
+                  ? `Pick ${highlightedCandidate.name} (as ${activePlayer.name})`
+                  : `Pick (as ${activePlayer.name}) — select a leader first`}
+              </button>
+            </div>
           )}
         </div>
 
@@ -3391,7 +3409,7 @@ function CandidateDraftScreen({
                   renderCandidateCard({
                     c,
                     spell: spellById.get(c.starterSpellId) ?? null,
-                    mage: mageByDept.get(dept) ?? null,
+                    deptLabel: departmentLabel[dept],
                     isHighlighted: highlighted === c.id,
                     takenBy: taken.get(c.id),
                     onClick: () => {
@@ -3412,12 +3430,12 @@ function CandidateDraftScreen({
 function renderCandidateCard(args: {
   c: Candidate;
   spell: SpellCard | null;
-  mage: Mage | null;
+  deptLabel: string;
   isHighlighted: boolean;
   takenBy: string | undefined;
   onClick: () => void;
 }) {
-  const { c, spell, mage, isHighlighted, takenBy, onClick } = args;
+  const { c, spell, deptLabel, isHighlighted, takenBy, onClick } = args;
   const mageColor =
     c.startingMageColor === 'neutral' ? 'off-white' : c.startingMageColor;
   const level1 = spell?.levels[0];
@@ -3436,7 +3454,7 @@ function renderCandidateCard(args: {
       onClick={onClick}
       disabled={takenBy !== undefined}
       className={clsx(
-        'text-left p-3 rounded border space-y-2 w-full transition-colors',
+        'text-left p-2 rounded border space-y-1.5 w-full transition-colors',
         takenBy
           ? 'border-slate-800 bg-slate-900/40 opacity-60 cursor-not-allowed'
           : isHighlighted
@@ -3444,24 +3462,43 @@ function renderCandidateCard(args: {
             : 'border-slate-700 bg-slate-900 hover:border-slate-500',
       )}
     >
-      <div className="flex items-baseline justify-between">
-        <h4 className="text-base font-semibold">{c.name}</h4>
-        {c.startingExtraMeritBadge && (
-          <span className="inline-flex items-center gap-1 text-xs">
-            <ResourceIcon kind="merit-badge" size={12} />
-            +1
-          </span>
-        )}
+      {/* Portrait square + name / department. */}
+      <div className="flex items-center gap-2">
+        <CandidatePortrait candidate={c} size={44} />
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center justify-between gap-1">
+            <h4 className="text-sm font-semibold truncate">{c.name}</h4>
+            <span className="inline-flex items-center gap-1 shrink-0">
+              {/* The two starting Mages this leader brings (in-game meeple). */}
+              <span className="inline-flex items-center -space-x-1" title={`Starts with ×2 ${c.startingMageColor} Mages`}>
+                <MageToken color={mageColor} size={20} />
+                <MageToken color={mageColor} size={20} />
+              </span>
+              {c.startingExtraMeritBadge && (
+                <span className="inline-flex items-center gap-0.5 text-[10px]">
+                  <ResourceIcon kind="merit-badge" size={11} />
+                  +1
+                </span>
+              )}
+            </span>
+          </div>
+          {c.title && (
+            <p className="text-[10px] text-slate-400 truncate">{c.title}</p>
+          )}
+          <p className="text-[10px] uppercase tracking-wide text-slate-500">
+            {deptLabel}
+          </p>
+        </div>
       </div>
 
-      {/* Spell preview — styled like an in-game spell card. */}
+      {/* Innate spell — styled like an in-game spell card. */}
       {spell && level1 ? (
-        <div className="rounded border border-violet-500/40 bg-violet-500/5 p-2 space-y-0.5">
+        <div className="rounded border border-violet-500/40 bg-violet-500/5 p-1.5 space-y-0.5">
           <div className="flex items-baseline justify-between gap-2">
-            <span className="text-sm font-medium text-violet-200">
+            <span className="text-xs font-medium text-violet-200 truncate">
               {spell.name}
             </span>
-            <span className="text-[10px] text-slate-400 inline-flex items-center gap-1">
+            <span className="text-[10px] text-slate-400 inline-flex items-center gap-1 shrink-0">
               {timingLabel}
               {' · '}
               <ResourceIcon kind="mana" size={11} />
@@ -3478,24 +3515,8 @@ function renderCandidateCard(args: {
         </p>
       )}
 
-      {/* Department mage + ability. */}
-      <div className="rounded border border-slate-700 bg-slate-950/40 p-2 space-y-1">
-        <div className="flex items-center gap-2">
-          <MageIcon color={mageColor} size={28} />
-          <MageIcon color={mageColor} size={28} />
-          <span className="text-xs text-slate-400">
-            ×2 {mage?.name ?? `${c.startingMageColor} mages`}
-          </span>
-        </div>
-        {mage?.description && (
-          <p className="text-[11px] text-slate-200/90 italic leading-snug">
-            {mage.description}
-          </p>
-        )}
-      </div>
-
       {takenBy && (
-        <p className="text-xs text-amber-300/70">chosen by {takenBy}</p>
+        <p className="text-[10px] text-amber-300/70">chosen by {takenBy}</p>
       )}
     </button>
   );

@@ -1,4 +1,4 @@
-import type { GameState, Player } from '../../game/types';
+import type { Candidate, Department, GameState, Player } from '../../game/types';
 import { lookupCandidate } from '../../game/effects/helpers';
 import { DEPT_HUE, PLAYER_AURA } from '../../utils/uiSelectors';
 
@@ -186,7 +186,81 @@ function Accessory({ variant, hue }: { variant: number; hue: string }) {
   }
 }
 
-/* ------------------------------ the component ---------------------------- */
+/* ------------------------------ the core bust ---------------------------- */
+
+/**
+ * The framed procedural bust (or real art), deterministic from `seed`. Shared
+ * by `PortraitBust` (player, framed in player aura) and `CandidatePortrait`
+ * (faction leader, framed in department hue) so both stay visually identical.
+ */
+function FramedBust({
+  seed,
+  robeHue,
+  frameHue,
+  expression,
+  size,
+  artUrl,
+  title,
+  alt,
+  className,
+}: {
+  seed: number;
+  robeHue: string;
+  frameHue: string;
+  expression: Expression;
+  size: number;
+  artUrl?: string | undefined;
+  title?: string | undefined;
+  alt: string;
+  className?: string | undefined;
+}) {
+  const hairColor = HAIR_COLORS[seed % HAIR_COLORS.length]!;
+  const skin = SKIN_TONES[(seed >> 4) % SKIN_TONES.length]!;
+
+  return (
+    <span
+      className={className}
+      title={title}
+      style={{
+        display: 'inline-block',
+        width: size,
+        height: size,
+        borderRadius: size / 5,
+        overflow: 'hidden',
+        background: `radial-gradient(circle at 50% 30%, ${frameHue}33, #1f1b3f 75%)`,
+        boxShadow: `0 0 0 2px ${frameHue}, 0 3px 8px #00000088`,
+        flexShrink: 0,
+      }}
+    >
+      {artUrl ? (
+        <img src={artUrl} alt={alt} className="h-full w-full object-cover" />
+      ) : (
+        <svg viewBox="0 0 96 96" width={size} height={size}>
+          {/* shoulders / robe */}
+          <path d="M14 96 C16 76 30 68 48 68 C66 68 80 76 82 96 Z" fill={robeHue} />
+          <path d="M40 70 L48 84 L56 70 C53 68 43 68 40 70 Z" fill="#fdf8ec" />
+          {/* neck + head */}
+          <rect x="42" y="58" width="12" height="14" rx="5" fill={skin} />
+          <circle cx="48" cy="48" r="22" fill={skin} />
+          {/* blush */}
+          <ellipse cx="30" cy="57" rx="4" ry="2.4" fill="#ff8fab" opacity=".5" />
+          <ellipse cx="66" cy="57" rx="4" ry="2.4" fill="#ff8fab" opacity=".5" />
+          <Eyes ex={expression} />
+          <Brows ex={expression} />
+          <Mouth ex={expression} />
+          <Hair variant={seed >> 8} color={hairColor} />
+          <Accessory variant={seed >> 12} hue={frameHue} />
+          {/* worried sweat drop */}
+          {expression === 'worried' && (
+            <path d="M74 40 q-5 8 0 10 q5 -2 0 -10" fill="#7ee8fa" opacity=".9" />
+          )}
+        </svg>
+      )}
+    </span>
+  );
+}
+
+/* ------------------------------ the components ---------------------------- */
 
 export interface PortraitBustProps {
   player: Player;
@@ -208,49 +282,55 @@ export function PortraitBust({
   const candidate = player.candidateId ? lookupCandidate(state, player.candidateId) : null;
   const artUrl = player.candidateId ? PORTRAIT_ART[player.candidateId] : undefined;
   const seed = hash(player.candidateId || `${player.id}:${player.color}`);
-  const hairColor = HAIR_COLORS[seed % HAIR_COLORS.length]!;
-  const skin = SKIN_TONES[(seed >> 4) % SKIN_TONES.length]!;
   const robeHue = candidate ? (DEPT_HUE[candidate.department] ?? aura) : aura;
 
   return (
-    <span
-      className={className}
+    <FramedBust
+      seed={seed}
+      robeHue={robeHue}
+      frameHue={aura}
+      expression={expression}
+      size={size}
+      artUrl={artUrl}
       title={candidate ? `${player.name} — ${candidate.name}, ${candidate.title}` : player.name}
-      style={{
-        display: 'inline-block',
-        width: size,
-        height: size,
-        borderRadius: size / 5,
-        overflow: 'hidden',
-        background: `radial-gradient(circle at 50% 30%, ${aura}33, #1f1b3f 75%)`,
-        boxShadow: `0 0 0 2px ${aura}, 0 3px 8px #00000088`,
-        flexShrink: 0,
-      }}
-    >
-      {artUrl ? (
-        <img src={artUrl} alt={player.name} className="h-full w-full object-cover" />
-      ) : (
-        <svg viewBox="0 0 96 96" width={size} height={size}>
-          {/* shoulders / robe */}
-          <path d="M14 96 C16 76 30 68 48 68 C66 68 80 76 82 96 Z" fill={robeHue} />
-          <path d="M40 70 L48 84 L56 70 C53 68 43 68 40 70 Z" fill="#fdf8ec" />
-          {/* neck + head */}
-          <rect x="42" y="58" width="12" height="14" rx="5" fill={skin} />
-          <circle cx="48" cy="48" r="22" fill={skin} />
-          {/* blush */}
-          <ellipse cx="30" cy="57" rx="4" ry="2.4" fill="#ff8fab" opacity=".5" />
-          <ellipse cx="66" cy="57" rx="4" ry="2.4" fill="#ff8fab" opacity=".5" />
-          <Eyes ex={expression} />
-          <Brows ex={expression} />
-          <Mouth ex={expression} />
-          <Hair variant={seed >> 8} color={hairColor} />
-          <Accessory variant={seed >> 12} hue={aura} />
-          {/* worried sweat drop */}
-          {expression === 'worried' && (
-            <path d="M74 40 q-5 8 0 10 q5 -2 0 -10" fill="#7ee8fa" opacity=".9" />
-          )}
-        </svg>
-      )}
-    </span>
+      alt={player.name}
+      className={className}
+    />
+  );
+}
+
+export interface CandidatePortraitProps {
+  candidate: Pick<Candidate, 'id' | 'name' | 'title' | 'department'>;
+  /** Pixel size (square). */
+  size?: number;
+  expression?: Expression;
+  className?: string;
+}
+
+/**
+ * Portrait for a faction leader that is NOT yet bound to a player (e.g. the
+ * candidate-draft screen). Seeded on the candidate id so it matches the bust
+ * that player will carry once they pick this leader, and framed in the
+ * department hue. Real art still comes from `PORTRAIT_ART`.
+ */
+export function CandidatePortrait({
+  candidate,
+  size = 48,
+  expression = 'neutral',
+  className,
+}: CandidatePortraitProps) {
+  const hue = DEPT_HUE[candidate.department as Department] ?? '#9aa0b4';
+  return (
+    <FramedBust
+      seed={hash(candidate.id)}
+      robeHue={hue}
+      frameHue={hue}
+      expression={expression}
+      size={size}
+      artUrl={PORTRAIT_ART[candidate.id]}
+      title={`${candidate.name} — ${candidate.title}`}
+      alt={candidate.name}
+      className={className}
+    />
   );
 }
