@@ -48,6 +48,16 @@ import type {
 import type { BotPersonality } from './types';
 
 /**
+ * Option ids on a `choose-from-options` research menu that REARRANGE already
+ * placed Research (relocate a WIS/INT token between Spells). Bots never do this
+ * — they can't judge it strategically — so these are filtered out of the menu,
+ * leaving "Done moving Research" (`discard`) as the move-only menu's choice.
+ */
+function isMoveResearchOption(id: string): boolean {
+  return id === 'move-wis' || id === 'move-int';
+}
+
+/**
  * Pick a reaction to play from an open reaction window's offered options, or
  * pass when none are offered. The engine only ever offers reactions the bot
  * can legally play (it owns the card and can pay), and a reaction always
@@ -345,7 +355,14 @@ function answerPendingResolution(
   switch (prompt.kind) {
     case 'choose-from-options': {
       const available = prompt.options.filter((o) => o.available !== false);
-      const pool = available.length > 0 ? available : prompt.options;
+      const base = available.length > 0 ? available : prompt.options;
+      // Bots never rearrange placed Research — they lack the strategic read to
+      // do it well. Drop the move-Research actions so e.g. the Research Archive's
+      // "Move a WIS token / Done moving Research" menu resolves to "Done moving
+      // Research" instead of shuffling tokens around. (Falls back to the full
+      // pool only in the impossible case that move actions were the sole menu.)
+      const noMove = base.filter((o) => !isMoveResearchOption(o.id));
+      const pool = noMove.length > 0 ? noMove : base;
       // Light preferences by option id (covers the common engine menus):
       //   merit resolution-choice → take the reward (gold variant if needed),
       //   research menu → upgrade then draft before discarding,

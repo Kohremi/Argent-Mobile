@@ -129,6 +129,20 @@ describe('Klank — prompt answers (shape-valid for every kind)', () => {
     expect(ans).toEqual({ kind: 'option-chosen', optionId: 'reward', payload: {} });
   });
 
+  it('never rearranges Research → picks "Done moving Research" on the move-only menu', () => {
+    const ans = klank.answerPendingResolution(
+      baseState,
+      mk({
+        kind: 'choose-from-options',
+        options: [
+          { id: 'move-wis', label: 'Move a WIS token to another Spell', payload: {} },
+          { id: 'discard', label: 'Done moving Research', payload: {} },
+        ],
+      }),
+    );
+    expect(ans).toEqual({ kind: 'option-chosen', optionId: 'discard', payload: {} });
+  });
+
   it('choose-from-options → skips unavailable options', () => {
     const ans = klank.answerPendingResolution(
       baseState,

@@ -297,6 +297,20 @@ describe('Malfoy — prompt answers', () => {
     expect(ans).toEqual({ kind: 'option-chosen', optionId: 'mana', payload: {} });
   });
 
+  it('never rearranges Research → picks "Done moving Research" on the move-only menu', () => {
+    const ans = malfoy.answerPendingResolution(
+      baseState,
+      mk({
+        kind: 'choose-from-options',
+        options: [
+          { id: 'move-wis', label: 'Move a WIS token to another Spell', payload: {} },
+          { id: 'discard', label: 'Done moving Research', payload: {} },
+        ],
+      }),
+    );
+    expect(ans).toEqual({ kind: 'option-chosen', optionId: 'discard', payload: {} });
+  });
+
   it('takes the biggest Spell level offered', () => {
     const ans = malfoy.answerPendingResolution(
       baseState,
