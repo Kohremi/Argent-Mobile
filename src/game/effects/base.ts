@@ -59,7 +59,9 @@ import {
   MAGE_CARD_BY_COLOR,
   magesLosePowers,
   moveMageToSpace,
+  placeMageOnSlot,
   placeOfficeMageAsShadow,
+  slotPositionHeldBy,
   refreshOwnedSpellPatch,
   returnMageToOfficePatch,
   playerHasAuricCatalyst,
@@ -1252,86 +1254,50 @@ function applyReactionReposition(
     cardId,
     disposal,
   } = args;
-  const players = state.players.map((p): Player => {
-    let updated = p;
-    if (p.id === ownerId) {
-      updated = {
-        ...updated,
-        mages: updated.mages.map((m) =>
-          m.id !== mageId
-            ? m
-            : {
-                ...m,
-                isWounded: false,
-                isShadowing: asShadow,
-                location: {
-                  kind: 'action-space' as const,
-                  spaceId: destinationSpaceId,
-                },
-              },
-        ),
-      };
-    }
-    if (p.id === reactorId && disposal !== 'none') {
-      const idx = updated.vaultCards.findIndex((v) => v.cardId === cardId);
-      if (idx === -1) {
-        throw new Error(`${cardId}: reactor does not own the card`);
-      }
-      if (disposal === 'consumable') {
-        updated = {
-          ...updated,
-          vaultCards: updated.vaultCards.filter((_, i) => i !== idx),
+  // Fizzle if the destination position is already held by a DIFFERENT mage —
+  // repositioning there would orphan that occupant (e.g. Invisibility Cloak
+  // re-shadowing onto a slot whose shadow another of your Mages already holds).
+  // The Mage simply stays where it is and the card is NOT consumed.
+  const blocker = slotPositionHeldBy(
+    state,
+    destinationSpaceId,
+    asShadow ? 'shadow' : 'base',
+  );
+  if (blocker !== null && blocker !== mageId) {
+    return { players: state.players, rooms: state.rooms };
+  }
+
+  // Board move via the canonical primitive — clears the origin slot (so a
+  // reaction to a MOVE/SHADOW doesn't leave the Mage on two slots), sets the
+  // destination, and clears the wound (a slotted Mage is never wounded).
+  const placePatch = placeMageOnSlot(state, {
+    mageId,
+    ownerId,
+    spaceId: destinationSpaceId,
+    asShadow,
+  });
+  const rooms = placePatch.rooms!;
+  // Card disposal on the reactor (consumable → discard; exhaust → flag).
+  const players = placePatch.players!.map((p): Player => {
+    if (p.id !== reactorId || disposal === 'none') return p;
+    const idx = p.vaultCards.findIndex((v) => v.cardId === cardId);
+    if (idx === -1) throw new Error(`${cardId}: reactor does not own the card`);
+    return disposal === 'consumable'
+      ? {
+          ...p,
+          vaultCards: p.vaultCards.filter((_, i) => i !== idx),
           personalDiscard: [
-            ...updated.personalDiscard,
+            ...p.personalDiscard,
             { kind: 'consumable' as const, cardId },
           ],
-        };
-      } else {
-        updated = {
-          ...updated,
-          vaultCards: updated.vaultCards.map((v, i) =>
+        }
+      : {
+          ...p,
+          vaultCards: p.vaultCards.map((v, i) =>
             i !== idx ? v : { ...v, exhausted: true },
           ),
         };
-      }
-    }
-    return updated;
   });
-
-  // Shadowing reactions (Phase Steppers / Invisibility Cloak) land the
-  // mage in the slot's SHADOW position with isShadowing=true; the base
-  // position is left untouched. Non-shadowing reactions (Shield Potion /
-  // Ancient Armor / Mystic Amulet) replace the base occupant unflagged.
-  const occupancy: WorkerOccupancy = {
-    mageId,
-    ownerId,
-    isShadowing: asShadow,
-  };
-  // The mage may already sit on a slot — repositions that react to a MOVE or
-  // SHADOW (e.g. Ancient Armor after Gust of Wind, Phase Steppers, Invisibility
-  // Cloak) act on a Mage that's still on the board. Clear that origin slot, or
-  // it keeps a stale reference and the Mage ends up "on" two slots with a
-  // `location` that disagrees. (Wound / banish reactions repose from the
-  // infirmary, so there's no origin slot to clear.)
-  const origin = findMageSlotPosition(state, mageId);
-  const rooms = state.rooms.map((r) => ({
-    ...r,
-    actionSpaces: r.actionSpaces.map((s) => {
-      let sp = s;
-      if (origin && s.id === origin.spaceId) {
-        sp =
-          origin.position === 'shadow'
-            ? { ...sp, shadowOccupant: null }
-            : { ...sp, occupant: null };
-      }
-      if (s.id === destinationSpaceId) {
-        sp = asShadow
-          ? { ...sp, shadowOccupant: occupancy }
-          : { ...sp, occupant: occupancy };
-      }
-      return sp;
-    }),
-  }));
 
   return { players, rooms };
 }
@@ -18566,38 +18532,22 @@ registerEffect(
     if (!originalSpaceId) return { kind: 'done', patch: { players: paid.players } };
     const mageId = event.mageId;
     const ownerId = event.ownerId;
-    const occupancy: WorkerOccupancy = {
-      mageId,
-      ownerId,
-      isShadowing: true,
+    const working: GameState = { ...ctx.state, ...paid };
+    // Fizzle the re-shadow if the original slot's shadow is already held by
+    // another Mage (placing there would orphan it) — the spell is still spent.
+    const blocker = slotPositionHeldBy(working, originalSpaceId, 'shadow');
+    if (blocker !== null && blocker !== mageId) {
+      return { kind: 'done', patch: { players: paid.players } };
+    }
+    return {
+      kind: 'done',
+      patch: placeMageOnSlot(working, {
+        mageId,
+        ownerId,
+        spaceId: originalSpaceId,
+        asShadow: true,
+      }),
     };
-    const players = paid.players.map((p): Player =>
-      p.id !== ownerId
-        ? p
-        : {
-            ...p,
-            mages: p.mages.map((m) =>
-              m.id !== mageId
-                ? m
-                : {
-                    ...m,
-                    isWounded: false,
-                    isShadowing: true,
-                    location: {
-                      kind: 'action-space' as const,
-                      spaceId: originalSpaceId,
-                    },
-                  },
-            ),
-          },
-    );
-    const rooms = paid.rooms.map((r) => ({
-      ...r,
-      actionSpaces: r.actionSpaces.map((s) =>
-        s.id !== originalSpaceId ? s : { ...s, shadowOccupant: occupancy },
-      ),
-    }));
-    return { kind: 'done', patch: { players, rooms } };
   },
 );
 
@@ -19379,45 +19329,20 @@ registerEffect(
         .flatMap((p) => p.mages)
         .find((m) => m.id === mageId);
       if (!mage) return { kind: 'done', patch: {} };
-      const fromSpaceId =
-        mage.location.kind === 'action-space' ? mage.location.spaceId : null;
-      const occupancy: WorkerOccupancy = {
-        mageId,
-        ownerId,
-        isShadowing: false,
-      };
-      const players = ctx.state.players.map((p): Player => {
-        if (p.id !== ownerId) return p;
-        return {
-          ...p,
-          mages: p.mages.map((m) =>
-            m.id !== mageId
-              ? m
-              : {
-                  ...m,
-                  isWounded: false,
-                  isShadowing: false,
-                  location: {
-                    kind: 'action-space' as const,
-                    spaceId: destSpaceId,
-                  },
-                },
-          ),
-        };
-      });
-      const rooms = ctx.state.rooms.map((r) => ({
-        ...r,
-        actionSpaces: r.actionSpaces.map((s) => {
-          if (fromSpaceId && s.id === fromSpaceId && s.occupant?.mageId === mageId) {
-            return { ...s, occupant: null };
-          }
-          if (s.id === destSpaceId) {
-            return { ...s, occupant: occupancy };
-          }
-          return s;
+      // Fizzle if the destination base is already taken (would orphan it).
+      const blocker = slotPositionHeldBy(ctx.state, destSpaceId, 'base');
+      if (blocker !== null && blocker !== mageId) {
+        return { kind: 'done', patch: {} };
+      }
+      return {
+        kind: 'done',
+        patch: placeMageOnSlot(ctx.state, {
+          mageId,
+          ownerId,
+          spaceId: destSpaceId,
+          asShadow: false,
         }),
-      }));
-      return { kind: 'done', patch: { players, rooms } };
+      };
     }
 
     throw new Error(`${selfRegrowth} unexpected step ${String(step)}`);

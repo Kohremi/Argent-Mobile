@@ -513,6 +513,102 @@ export function findMageSlotPosition(
   return null;
 }
 
+/**
+ * THE canonical "put a mage on a slot" primitive — every place / move /
+ * reposition routes through it so a mage's `location` and the slot
+ * `occupant` / `shadowOccupant` can never desync:
+ *   - clears the mage's CURRENT slot, if any (a reposition leaves no stale
+ *     reference and never lands on two slots);
+ *   - sets `location` + `isShadowing` and clears `isWounded` (a slotted mage is
+ *     never wounded — its infirmary bed frees automatically, being derived from
+ *     `location`);
+ *   - fills the destination base/shadow position.
+ *
+ * Throws if the destination position is already held by a DIFFERENT mage — that
+ * would orphan the previous occupant (the bug class this primitive prevents).
+ * Callers that might target an occupied position (reaction repositions) must
+ * check `slotPositionHeldBy` first and fizzle.
+ *
+ * Side-effects (instant-room reward, Technomancy / Adventuring-B hooks, per-room
+ * caps, card disposal) live in the wrappers, not here — this primitive only
+ * guarantees the board invariant.
+ */
+export function placeMageOnSlot(
+  state: GameState,
+  args: {
+    mageId: OwnedMageId;
+    ownerId: PlayerId;
+    spaceId: ActionSpaceId;
+    asShadow: boolean;
+  },
+): GameStatePatch {
+  const { mageId, ownerId, spaceId, asShadow } = args;
+  const target = state.rooms
+    .flatMap((r) => r.actionSpaces)
+    .find((s) => s.id === spaceId);
+  if (!target) throw new Error(`placeMageOnSlot: space ${spaceId} not found`);
+  const existing = asShadow ? target.shadowOccupant : target.occupant;
+  if (existing && existing.mageId !== mageId) {
+    throw new Error(
+      `placeMageOnSlot: ${spaceId} ${asShadow ? 'shadow' : 'base'} position already held by ${existing.mageId}`,
+    );
+  }
+  // Clear the mage's current slot (if any) so a reposition leaves no stale ref.
+  const origin = findMageSlotPosition(state, mageId);
+  let rooms = state.rooms;
+  const targetPos: 'base' | 'shadow' = asShadow ? 'shadow' : 'base';
+  if (origin && !(origin.spaceId === spaceId && origin.position === targetPos)) {
+    rooms = clearSpaceOccupant(rooms, origin.spaceId, origin.position);
+  }
+  const occupancy: WorkerOccupancy = { mageId, ownerId, isShadowing: asShadow };
+  rooms = rooms.map((r) => ({
+    ...r,
+    actionSpaces: r.actionSpaces.map((s) =>
+      s.id !== spaceId
+        ? s
+        : asShadow
+          ? { ...s, shadowOccupant: occupancy }
+          : { ...s, occupant: occupancy },
+    ),
+  }));
+  const players = state.players.map((p) =>
+    p.id !== ownerId
+      ? p
+      : {
+          ...p,
+          mages: p.mages.map((m) =>
+            m.id !== mageId
+              ? m
+              : {
+                  ...m,
+                  isWounded: false,
+                  isShadowing: asShadow,
+                  location: { kind: 'action-space' as const, spaceId },
+                },
+          ),
+        },
+  );
+  return { players, rooms };
+}
+
+/**
+ * The mage id currently holding the given position on a slot, or null. Lets a
+ * reposition check whether its destination is free before calling
+ * `placeMageOnSlot` (which throws on an occupied destination).
+ */
+export function slotPositionHeldBy(
+  state: GameState,
+  spaceId: ActionSpaceId,
+  position: 'base' | 'shadow',
+): OwnedMageId | null {
+  const space = state.rooms
+    .flatMap((r) => r.actionSpaces)
+    .find((s) => s.id === spaceId);
+  if (!space) return null;
+  const occ = position === 'shadow' ? space.shadowOccupant : space.occupant;
+  return occ ? occ.mageId : null;
+}
+
 /** Clears the specified position on the matching space. */
 function clearSpaceOccupant(
   rooms: Room[],
