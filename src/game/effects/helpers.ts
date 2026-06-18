@@ -1188,35 +1188,12 @@ export function placeOfficeMageAsShadow(
       `placeOfficeMageAsShadow: ${ownerId} already at per-room cap in ${targetRoom.name}`,
     );
   }
-  const occupancy: WorkerOccupancy = {
+  const placePatch = placeMageOnSlot(state, {
     mageId,
     ownerId,
-    isShadowing: true,
-  };
-  const placePatch: GameStatePatch = {
-    players: state.players.map((p) =>
-      p.id !== ownerId
-        ? p
-        : {
-            ...p,
-            mages: p.mages.map((m) =>
-              m.id !== mageId
-                ? m
-                : {
-                    ...m,
-                    isShadowing: true,
-                    location: { kind: 'action-space' as const, spaceId },
-                  },
-            ),
-          },
-    ),
-    rooms: state.rooms.map((r) => ({
-      ...r,
-      actionSpaces: r.actionSpaces.map((s) =>
-        s.id !== spaceId ? s : { ...s, shadowOccupant: occupancy },
-      ),
-    })),
-  };
+    spaceId,
+    asShadow: true,
+  });
   return {
     ...placePatch,
     ...adventuringBPlacementHookPatch(state, spaceId, ownerId),

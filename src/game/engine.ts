@@ -31,7 +31,7 @@ import {
   technomancyOnPlacePatch,
   woundMage,
 } from './effects/helpers';
-import { buildAdventuringBPickPrompt } from './effects/helpers';
+import { buildAdventuringBPickPrompt, placeMageOnSlot } from './effects/helpers';
 import type {
   ActionSpace,
   BellTowerCard,
@@ -62,7 +62,6 @@ import type {
   PendingResolution,
   PendingResolutionInput,
   PlaceWorkerAction,
-  Player,
   PlayerId,
   ReactionTriggerEvent,
   ReactionWindow,
@@ -1205,48 +1204,24 @@ function handlePlaceWorker(state: GameState, action: PlaceWorkerAction): GameSta
   // placement — no event.
   if (requestedShadow) {
     const baseOccupant = space.occupant;
-    const updatedRooms = state.rooms.map((r, ri) =>
-      ri !== foundRoomIdx
-        ? r
-        : {
-            ...r,
-            actionSpaces: r.actionSpaces.map((sp, si) =>
-              si !== foundSpaceIdx
-                ? sp
-                : {
-                    ...sp,
-                    shadowOccupant: {
-                      mageId: action.mageId,
-                      ownerId: action.playerId,
-                      isShadowing: true,
-                    },
-                  },
-            ),
-          },
-    );
-    const updatedPlayers = state.players.map((p): Player => {
-      if (p.id !== action.playerId) return p;
-      return {
-        ...p,
-        // Planar Studies Side B costs 1 Mana to shadow.
-        resources: planarBShadow
-          ? { ...p.resources, mana: p.resources.mana - 1 }
-          : p.resources,
-        mages: p.mages.map((m) =>
-          m.id !== action.mageId
-            ? m
-            : {
-                ...m,
-                location: { kind: 'action-space' as const, spaceId: space.id },
-                isShadowing: true,
-              },
-        ),
-      };
+    const placePatch = placeMageOnSlot(state, {
+      mageId: action.mageId,
+      ownerId: action.playerId,
+      spaceId: space.id,
+      asShadow: true,
     });
+    // Planar Studies Side B costs 1 Mana to shadow.
+    const placedPlayers = planarBShadow
+      ? placePatch.players!.map((p) =>
+          p.id !== action.playerId
+            ? p
+            : { ...p, resources: { ...p.resources, mana: p.resources.mana - 1 } },
+        )
+      : placePatch.players!;
     const placed: GameState = {
       ...state,
-      rooms: updatedRooms,
-      players: updatedPlayers,
+      rooms: placePatch.rooms!,
+      players: placedPlayers,
     };
     // Instant rooms resolve at placement time. The shadow occupant gets
     // the same forfeit-or-reward prompt as a base occupant, except shadow
@@ -1456,25 +1431,6 @@ function handlePlaceWorker(state: GameState, action: PlaceWorkerAction): GameSta
     };
   }
 
-  const updatedRooms = state.rooms.map((r, ri) =>
-    ri !== foundRoomIdx
-      ? r
-      : {
-          ...r,
-          actionSpaces: r.actionSpaces.map((s, si) =>
-            si !== foundSpaceIdx
-              ? s
-              : {
-                  ...s,
-                  occupant: {
-                    mageId: action.mageId,
-                    ownerId: action.playerId,
-                    isShadowing: false,
-                  },
-                },
-          ),
-        },
-  );
   // Sorcery Side B: "Gain 1 Mana for each other Mage in the room you place
   // into (maximum of 3)." Counts every Mage (base or shadow, any owner)
   // already in the destination room before this placement. Disabled under
@@ -1492,25 +1448,22 @@ function handlePlaceWorker(state: GameState, action: PlaceWorkerAction): GameSta
         )
       : 0;
 
-  const updatedPlayers = state.players.map((p): Player => {
-    if (p.id !== action.playerId) return p;
-    return {
-      ...p,
-      resources:
-        sorceryBManaGain > 0
-          ? { ...p.resources, mana: p.resources.mana + sorceryBManaGain }
-          : p.resources,
-      mages: p.mages.map((m) =>
-        m.id !== action.mageId
-          ? m
-          : {
-              ...m,
-              location: { kind: 'action-space' as const, spaceId: space.id },
-              isShadowing: false,
-            },
-      ),
-    };
+  // Core board mutation via the canonical place primitive (location + occupant
+  // atomic, origin-clear, empty-destination guard).
+  const placePatch = placeMageOnSlot(state, {
+    mageId: action.mageId,
+    ownerId: action.playerId,
+    spaceId: space.id,
+    asShadow: false,
   });
+  const placedPlayers =
+    sorceryBManaGain > 0
+      ? placePatch.players!.map((p) =>
+          p.id !== action.playerId
+            ? p
+            : { ...p, resources: { ...p.resources, mana: p.resources.mana + sorceryBManaGain } },
+        )
+      : placePatch.players!;
 
   // Technomancy (orange) post-placement trigger — queued here so it
   // fires AFTER the instant-room reward chain (and the resolution-stack)
@@ -1521,8 +1474,8 @@ function handlePlaceWorker(state: GameState, action: PlaceWorkerAction): GameSta
   // Mancers-pack-active gate.
   const placed: GameState = {
     ...state,
-    rooms: updatedRooms,
-    players: updatedPlayers,
+    rooms: placePatch.rooms!,
+    players: placedPlayers,
     ...technomancyOnPlacePatch(state, action.playerId, mage.id, space.id),
   };
 

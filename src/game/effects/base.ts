@@ -8059,38 +8059,41 @@ registerEffect('base.spell.living-image.l1', (ctx): EffectResult => {
     const spaceId = ctx.resumeAnswer.spaceId;
     const poolNow = ctx.state.mageDraftPool['off-white'] ?? 0;
     if (poolNow === 0) return { kind: 'done', patch: {} };
+    // Summoning IS a placement: mint the neutral Mage in the office, then route
+    // through the canonical place primitive (so it fires the instant-room reward
+    // like any other place).
     const seq = ctx.state.nextSequenceId;
+    const newMageId = `m-${seq}`;
     const newMage: OwnedMage = {
-      id: `m-${seq}`,
+      id: newMageId,
       cardId: 'base.mage.neutral',
       color: 'off-white',
-      location: { kind: 'action-space' as const, spaceId },
+      location: { kind: 'office', playerId: ctx.triggeringPlayerId },
       isShadowing: false,
       isWounded: false,
       isSummoned: true,
     };
-    const occupancy: WorkerOccupancy = {
-      mageId: newMage.id,
-      ownerId: ctx.triggeringPlayerId,
-      isShadowing: false,
-    };
-    const patch: GameStatePatch = {
+    const poolPatch = {
       nextSequenceId: seq + 1,
-      mageDraftPool: {
-        ...ctx.state.mageDraftPool,
-        'off-white': poolNow - 1,
-      },
+      mageDraftPool: { ...ctx.state.mageDraftPool, 'off-white': poolNow - 1 },
+    };
+    const withMage: GameState = {
+      ...ctx.state,
+      ...poolPatch,
       players: ctx.state.players.map((p) =>
         p.id !== ctx.triggeringPlayerId
           ? p
           : { ...p, mages: [...p.mages, newMage] },
       ),
-      rooms: ctx.state.rooms.map((r) => ({
-        ...r,
-        actionSpaces: r.actionSpaces.map((s) =>
-          s.id !== spaceId ? s : { ...s, occupant: occupancy },
-        ),
-      })),
+    };
+    const patch: GameStatePatch = {
+      ...poolPatch,
+      ...placeMageOnSlot(withMage, {
+        mageId: newMageId,
+        ownerId: ctx.triggeringPlayerId,
+        spaceId,
+        asShadow: false,
+      }),
     };
     return patchWithMaybeInstantReward(
       ctx.state,
@@ -9443,35 +9446,12 @@ function placeOfficeMageOnSpace(
   if (mage.location.kind !== 'office') {
     throw new Error('placeOfficeMageOnSpace: mage not in office');
   }
-  const placePatch: GameStatePatch = {
-    players: state.players.map((p) =>
-      p.id !== playerId
-        ? p
-        : {
-            ...p,
-            mages: p.mages.map((m) =>
-              m.id !== mageId
-                ? m
-                : { ...m, location: { kind: 'action-space' as const, spaceId } },
-            ),
-          },
-    ),
-    rooms: state.rooms.map((r) => ({
-      ...r,
-      actionSpaces: r.actionSpaces.map((s) =>
-        s.id !== spaceId
-          ? s
-          : {
-              ...s,
-              occupant: {
-                mageId,
-                ownerId: playerId,
-                isShadowing: false,
-              },
-            },
-      ),
-    })),
-  };
+  const placePatch = placeMageOnSlot(state, {
+    mageId,
+    ownerId: playerId,
+    spaceId: spaceId as ActionSpaceId,
+    asShadow: false,
+  });
   return {
     ...placePatch,
     ...adventuringBPlacementHookPatch(

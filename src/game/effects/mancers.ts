@@ -24,6 +24,7 @@ import {
   lookupVaultCardDef,
   MAGE_CARD_BY_COLOR,
   moveMageToSpace,
+  placeMageOnSlot,
   returnMageToOfficePatch,
   technomancyOnPlacePatch,
   woundMage,
@@ -50,7 +51,6 @@ import type {
   ReactionTriggerEvent,
   ResolutionSource,
   SerializableContext,
-  WorkerOccupancy,
 } from '../types';
 
 // ============================================================================
@@ -1270,36 +1270,34 @@ function summonGolemPatch(
   asShadow: boolean,
   color: MageColor = 'off-white',
 ): GameStatePatch {
+  // Summoning a golem IS a placement: mint it in the office, then route through
+  // the canonical place primitive so location/occupancy stay in sync uniformly.
   const seq = state.nextSequenceId;
+  const golemId = `m-${seq}`;
   const golem: OwnedMage = {
-    id: `m-${seq}`,
+    id: golemId,
     cardId: GOLEM_CARD_ID,
     color,
-    location: { kind: 'action-space', spaceId },
-    isShadowing: asShadow,
+    location: { kind: 'office', playerId },
+    isShadowing: false,
     isWounded: false,
     isTemporary: true,
   };
-  const occ: WorkerOccupancy = {
-    mageId: golem.id,
-    ownerId: playerId,
-    isShadowing: asShadow,
-  };
-  return {
+  const withGolem: GameState = {
+    ...state,
     nextSequenceId: seq + 1,
     players: state.players.map((p) =>
       p.id !== playerId ? p : { ...p, mages: [...p.mages, golem] },
     ),
-    rooms: state.rooms.map((r) => ({
-      ...r,
-      actionSpaces: r.actionSpaces.map((s) =>
-        s.id !== spaceId
-          ? s
-          : asShadow
-            ? { ...s, shadowOccupant: occ }
-            : { ...s, occupant: occ },
-      ),
-    })),
+  };
+  return {
+    nextSequenceId: seq + 1,
+    ...placeMageOnSlot(withGolem, {
+      mageId: golemId,
+      ownerId: playerId,
+      spaceId,
+      asShadow,
+    }),
   };
 }
 
@@ -2886,40 +2884,13 @@ function shadowPlaceEffect(
       ...ctx.state,
       ...gainResourcePatch(ctx.state, ctx.triggeringPlayerId, 'mana', -manaCost),
     };
-    const occ: WorkerOccupancy = {
+    const patch: GameStatePatch = placeMageOnSlot(working, {
       mageId,
       ownerId: ctx.triggeringPlayerId,
-      isShadowing: true,
-    };
-    working = {
-      ...working,
-      players: working.players.map((p) =>
-        p.id !== ctx.triggeringPlayerId
-          ? p
-          : {
-              ...p,
-              mages: p.mages.map((m) =>
-                m.id !== mageId
-                  ? m
-                  : {
-                      ...m,
-                      location: { kind: 'action-space', spaceId },
-                      isShadowing: true,
-                    },
-              ),
-            },
-      ),
-      rooms: working.rooms.map((r) => ({
-        ...r,
-        actionSpaces: r.actionSpaces.map((s) =>
-          s.id !== spaceId ? s : { ...s, shadowOccupant: occ },
-        ),
-      })),
-    };
-    const patch: GameStatePatch = {
-      players: working.players,
-      rooms: working.rooms,
-    };
+      spaceId,
+      asShadow: true,
+    });
+    working = { ...working, ...patch };
     // Shadowing an opponent's base Mage opens a mage-shadowed reaction window.
     const baseOcc = space.occupant;
     if (baseOcc && baseOcc.ownerId !== ctx.triggeringPlayerId) {
@@ -3067,42 +3038,18 @@ function artificierGolemPlace(
     };
 
     if (mode === 'shadow') {
-      const space = paid.rooms
+      const baseOcc = paid.rooms
         .flatMap((r) => r.actionSpaces)
-        .find((s) => s.id === spaceId);
-      const occ: WorkerOccupancy = { mageId, ownerId: playerId, isShadowing: true };
-      const working: GameState = {
-        ...paid,
-        players: paid.players.map((p) =>
-          p.id !== playerId
-            ? p
-            : {
-                ...p,
-                mages: p.mages.map((m) =>
-                  m.id !== mageId
-                    ? m
-                    : {
-                        ...m,
-                        location: { kind: 'action-space', spaceId },
-                        isShadowing: true,
-                      },
-                ),
-              },
-        ),
-        rooms: paid.rooms.map((r) => ({
-          ...r,
-          actionSpaces: r.actionSpaces.map((s) =>
-            s.id !== spaceId ? s : { ...s, shadowOccupant: occ },
-          ),
-        })),
-      };
-      const patch: GameStatePatch = {
-        players: working.players,
-        rooms: working.rooms,
-      };
+        .find((s) => s.id === spaceId)?.occupant;
+      const patch: GameStatePatch = placeMageOnSlot(paid, {
+        mageId,
+        ownerId: playerId,
+        spaceId,
+        asShadow: true,
+      });
       // Shadowing an opponent's base Mage opens a mage-shadowed reaction window.
-      const baseOcc = space?.occupant;
       if (baseOcc && baseOcc.ownerId !== playerId) {
+        const working: GameState = { ...paid, ...patch };
         const event: ReactionTriggerEvent = {
           kind: 'mage-shadowed',
           mageId: baseOcc.mageId,
@@ -3126,37 +3073,17 @@ function artificierGolemPlace(
     }
 
     // Base placement (regular / merit) into an empty slot, firing Mage powers.
-    const occ: WorkerOccupancy = { mageId, ownerId: playerId, isShadowing: false };
-    const working: GameState = {
-      ...paid,
-      players: paid.players.map((p) =>
-        p.id !== playerId
-          ? p
-          : {
-              ...p,
-              mages: p.mages.map((m) =>
-                m.id !== mageId
-                  ? m
-                  : {
-                      ...m,
-                      location: { kind: 'action-space', spaceId },
-                      isShadowing: false,
-                    },
-              ),
-            },
-      ),
-      rooms: paid.rooms.map((r) => ({
-        ...r,
-        actionSpaces: r.actionSpaces.map((s) =>
-          s.id !== spaceId ? s : { ...s, occupant: occ },
-        ),
-      })),
-    };
+    const placePatch = placeMageOnSlot(paid, {
+      mageId,
+      ownerId: playerId,
+      spaceId,
+      asShadow: false,
+    });
+    const working: GameState = { ...paid, ...placePatch };
     return {
       kind: 'done',
       patch: {
-        players: working.players,
-        rooms: working.rooms,
+        ...placePatch,
         ...technomancyOnPlacePatch(working, playerId, mageId, spaceId),
       },
     };
@@ -3481,31 +3408,15 @@ registerEffect('mancers.vault.hourglass-of-fate.react', (ctx): EffectResult => {
     if (!listPlaceWithoutPowersSlots(ctx.state, playerId, undefined).includes(spaceId)) {
       return { kind: 'done', patch: {} };
     }
-    const occ: WorkerOccupancy = { mageId, ownerId: playerId, isShadowing: false };
-    let working: GameState = {
-      ...s0,
-      players: s0.players.map((p) =>
-        p.id !== playerId
-          ? p
-          : {
-              ...p,
-              mages: p.mages.map((m) =>
-                m.id !== mageId
-                  ? m
-                  : { ...m, location: { kind: 'action-space', spaceId } },
-              ),
-            },
-      ),
-      rooms: s0.rooms.map((r) => ({
-        ...r,
-        actionSpaces: r.actionSpaces.map((s) =>
-          s.id !== spaceId ? s : { ...s, occupant: occ },
-        ),
-      })),
-    };
+    const placePatch = placeMageOnSlot(s0, {
+      mageId,
+      ownerId: playerId,
+      spaceId,
+      asShadow: false,
+    });
+    const working: GameState = { ...s0, ...placePatch };
     const patch: GameStatePatch = {
-      players: working.players,
-      rooms: working.rooms,
+      ...placePatch,
       // Technomancy "upon placement" trigger (orange Mage placed by its owner).
       ...technomancyOnPlacePatch(working, playerId, mageId, spaceId),
     };
@@ -4158,33 +4069,18 @@ function moveMageToSlotPatch(
   mageId: string,
   spaceId: ActionSpaceId,
 ): GameStatePatch {
-  const occ: WorkerOccupancy = { mageId, ownerId: playerId, isShadowing: false };
+  // Heal an Infirmary Mage onto an open slot — a placement (clears the wound).
+  const placePatch = placeMageOnSlot(state, {
+    mageId,
+    ownerId: playerId,
+    spaceId,
+    asShadow: false,
+  });
+  const working: GameState = { ...state, ...placePatch };
   return {
-    players: state.players.map((p) =>
-      p.id !== playerId
-        ? p
-        : {
-            ...p,
-            mages: p.mages.map((m) =>
-              m.id !== mageId
-                ? m
-                : {
-                    ...m,
-                    isWounded: false,
-                    isShadowing: false,
-                    location: { kind: 'action-space', spaceId },
-                  },
-            ),
-          },
-    ),
-    rooms: state.rooms.map((r) => ({
-      ...r,
-      actionSpaces: r.actionSpaces.map((s) =>
-        s.id !== spaceId ? s : { ...s, occupant: occ },
-      ),
-    })),
+    ...placePatch,
     // Technomancy "upon placement" trigger (orange Mage placed by its owner).
-    ...technomancyOnPlacePatch(state, playerId, mageId, spaceId),
+    ...technomancyOnPlacePatch(working, playerId, mageId, spaceId),
   };
 }
 
