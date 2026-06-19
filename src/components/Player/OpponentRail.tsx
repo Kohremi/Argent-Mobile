@@ -1,6 +1,7 @@
 import clsx from 'clsx';
 import type { OwnedMage, Player } from '../../game/types';
 import { useGameStore } from '../../store/gameStore';
+import { useUiStore } from '../../store/uiStore';
 import { activePlayer, PLAYER_AURA, researchTotals } from '../../utils/uiSelectors';
 import { usePromptTargets } from '../Prompts/usePromptTargets';
 import { MageToken } from '../Board/MageToken';
@@ -48,6 +49,7 @@ function RailToken({ player, mage }: { player: Player; mage: OwnedMage }) {
 
 export function OpponentRail() {
   const state = useGameStore((s) => s.state);
+  const setInspectPlayerId = useUiStore((s) => s.setInspectPlayerId);
   if (!state) return null;
   const active = activePlayer(state);
   const rivals = state.players.filter((p) => p.id !== active?.id);
@@ -65,18 +67,30 @@ export function OpponentRail() {
             className="rounded-card bg-night-700/85 p-2 ring-1 ring-white/10 backdrop-blur"
             style={{ boxShadow: `inset 3px 0 0 ${aura}` }}
           >
-            <p className="flex items-center gap-1.5 font-display text-sm font-bold" style={{ color: aura }}>
+            <button
+              type="button"
+              onClick={() => setInspectPlayerId(p.id)}
+              title="Review full tableau — resources, spells, supporters, vault items & discards"
+              className="group flex w-full items-center gap-1.5 rounded-lg px-1 py-0.5 text-left transition hover:bg-white/5"
+              style={{ color: aura }}
+            >
               <PortraitBust player={p} state={state} expression="neutral" size={26} />
-              {p.name}
+              <span className="truncate font-display text-sm font-bold">{p.name}</span>
               {p.controlledByBot && (
                 <span
-                  className="ml-auto rounded-full bg-night-900/70 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-starlight ring-1 ring-starlight/40"
+                  className="rounded-full bg-night-900/70 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-starlight ring-1 ring-starlight/40"
                   title="Played by an AI"
                 >
                   🤖 {getBotPersonality(p.botPersonalityId).name}
                 </span>
               )}
-            </p>
+              <span
+                className="ml-auto shrink-0 text-xs text-white/25 transition group-hover:text-starlight"
+                aria-hidden
+              >
+                🔍
+              </span>
+            </button>
             <p className="mb-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-[12px] font-semibold text-white/85">
               {RESOURCE_ORDER.map(({ kind, key }) => {
                 const isInt = key === 'intelligence';

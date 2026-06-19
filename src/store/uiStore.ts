@@ -26,6 +26,15 @@ interface UiStore {
   debugOpen: boolean;
   setDebugOpen: (open: boolean) => void;
 
+  /**
+   * Opponent quick-reference: the rival whose full tableau (resources, spells,
+   * supporters, vault items, discards) is being reviewed. While set, the
+   * OpponentInspector overlays the board and blocks other actions until closed.
+   * Read-only — purely a presentation toggle.
+   */
+  inspectPlayerId: string | null;
+  setInspectPlayerId: (playerId: string | null) => void;
+
   /** Last rejected action's message — surfaced as a transient toast. */
   lastError: string | null;
   clearError: () => void;
@@ -87,6 +96,9 @@ export const useUiStore = create<UiStore>((set) => ({
 
   debugOpen: false,
   setDebugOpen: (open) => set({ debugOpen: open }),
+
+  inspectPlayerId: null,
+  setInspectPlayerId: (playerId) => set({ inspectPlayerId: playerId }),
 
   lastError: null,
   clearError: () => set({ lastError: null }),

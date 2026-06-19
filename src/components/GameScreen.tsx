@@ -12,6 +12,7 @@ import { TurnBanner } from './HUD/TurnBanner';
 import { CampusBoard } from './Board/CampusBoard';
 import { PlayerDock } from './Player/PlayerDock';
 import { OpponentRail } from './Player/OpponentRail';
+import { OpponentInspector } from './Player/OpponentInspector';
 import { CouncilTower } from './Council/CouncilTower';
 import { PromptDirector } from './Prompts/PromptDirector';
 import { ScoringCeremony } from './Modals/ScoringCeremony';
@@ -178,6 +179,7 @@ export function GameScreen() {
       )}
 
       <PromptDirector />
+      <OpponentInspector />
       <PeekModal />
       <TurnBanner />
       <ScoringCeremony />

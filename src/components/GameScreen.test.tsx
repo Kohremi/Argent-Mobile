@@ -3,14 +3,18 @@
 // state (same technique as engine.test.ts), renders GameScreen, selects a
 // bench mage, and places it via a glowing slot.
 import { afterEach, describe, expect, it } from 'vitest';
-import { cleanup, render, screen, fireEvent } from '@testing-library/react';
+import { cleanup, render, screen, fireEvent, within } from '@testing-library/react';
 
 afterEach(cleanup);
 import { GameScreen } from './GameScreen';
 import { useGameStore } from '../store/gameStore';
 import { useUiStore } from '../store/uiStore';
 import { initGame } from '../game/engine';
-import { lookupSpellCardDef, lookupVaultCardDef } from '../game/effects/helpers';
+import {
+  lookupSpellCardDef,
+  lookupSupporterCardDef,
+  lookupVaultCardDef,
+} from '../game/effects/helpers';
 import type { GameState, OwnedMage } from '../game/types';
 
 function errandsState(): GameState {
@@ -793,6 +797,70 @@ describe('Hand fans (card-face smoke)', () => {
       .map((el) => el.closest('button'))
       .find(Boolean)!;
     expect(handFace.textContent).toMatch(/treasure.*action/);
+  });
+});
+
+describe('Opponent inspector (quick-reference smoke)', () => {
+  it('opens a rival full tableau on click, shows discard counts only, and closes on Return', () => {
+    let s = errandsState();
+    const secretId = 'base.supporter.arec-russel-zane';
+    const discardSupId = 'base.supporter.allys-mehrmus';
+    const activeSupId = 'base.supporter.adelaide-chivers';
+    const vaultDiscardId = 'base.vault.shield-potion';
+    const secretName = lookupSupporterCardDef(s, secretId)!.name;
+    const discardSupName = lookupSupporterCardDef(s, discardSupId)!.name;
+    const activeSupName = lookupSupporterCardDef(s, activeSupId)!.name;
+    const vaultDiscardName = lookupVaultCardDef(s, vaultDiscardId)!.name;
+    // Diana (rival, p2) gets a full tableau to review: 1 vault discard, and a
+    // supporter discard of 2 (one regular + one face-down secret).
+    s = {
+      ...s,
+      players: s.players.map((p, i) =>
+        i === 1
+          ? {
+              ...p,
+              ownedSpells: [
+                { cardId: 'base.spell.burn', intPlaced: true, wisPlacedLevel2: true, wisPlacedLevel3: false, exhausted: true },
+              ],
+              vaultCards: [{ cardId: 'base.vault.the-arcane-eye', exhausted: false }],
+              supporters: [activeSupId],
+              personalDiscard: [
+                { kind: 'consumable', cardId: vaultDiscardId },
+                { kind: 'supporter', cardId: discardSupId },
+                { kind: 'secret-supporter', cardId: secretId },
+              ],
+            }
+          : p,
+      ),
+    };
+    useGameStore.setState({ state: s });
+    useUiStore.setState({ selectedMageId: null, debugOpen: false, lastError: null, inspectPlayerId: null });
+    render(<GameScreen />);
+
+    // No inspector until a rival is clicked.
+    expect(screen.queryByTestId('opponent-inspector')).toBeNull();
+
+    // Click the rival panel header in the left rail.
+    fireEvent.click(screen.getByTitle(/Review full tableau/));
+
+    const panel = screen.getByTestId('opponent-inspector');
+    const inPanel = within(panel);
+    // Identity + the reviewed categories are present.
+    expect(inPanel.getByText('quick reference · read-only')).toBeTruthy();
+    expect(inPanel.getByText('Diana')).toBeTruthy();
+    expect(inPanel.getByText('Burn')).toBeTruthy(); // researched spell
+    expect(inPanel.getByText(activeSupName)).toBeTruthy(); // active supporter
+
+    // Discard piles are face-down: only the COUNT shows, never the contents.
+    expect(inPanel.getByText(/1 discarded/)).toBeTruthy(); // vault discard pile
+    expect(inPanel.getByText(/2 discarded/)).toBeTruthy(); // supporter discard pile
+    expect(document.body.textContent).not.toContain(vaultDiscardName);
+    expect(document.body.textContent).not.toContain(discardSupName);
+    expect(document.body.textContent).not.toContain(secretName);
+
+    // Return closes it.
+    fireEvent.click(inPanel.getByText('✕ Return'));
+    expect(screen.queryByTestId('opponent-inspector')).toBeNull();
   });
 });
 
