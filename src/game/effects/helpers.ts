@@ -529,9 +529,16 @@ export function findMageSlotPosition(
  * Callers that might target an occupied position (reaction repositions) must
  * check `slotPositionHeldBy` first and fizzle.
  *
- * Side-effects (instant-room reward, Technomancy / Adventuring-B hooks, per-room
- * caps, card disposal) live in the wrappers, not here — this primitive only
- * guarantees the board invariant.
+ * The **Technomancy "upon placement"** Mage power is the one hook centralised
+ * here, via `firesTechnomancy` (opt-in, since this primitive also backs MOVE /
+ * reposition / re-shadow, which are NOT placements). Set it for a genuine PLACE —
+ * a mage entering a slot from off the board — and it fires for BOTH base and
+ * shadow placements: a shadowing mage keeps its colour power (only green's
+ * wound-immunity and blue's spell-immunity drop in a shadow slot). It is skipped
+ * when `suppressMagePowers` is set (Stop / Slow Time, Great Hall). Other
+ * side-effects (instant-room reward, Adventuring-B draft prompt, per-room caps,
+ * card disposal) still live in the wrappers — the engine orders the Adventuring-B
+ * prompt relative to the instant-room prompt, so it can't move in here.
  */
 export function placeMageOnSlot(
   state: GameState,
@@ -540,6 +547,11 @@ export function placeMageOnSlot(
     ownerId: PlayerId;
     spaceId: ActionSpaceId;
     asShadow: boolean;
+    /** Fire the Technomancy on-place trigger (genuine PLACE, base or shadow). */
+    firesTechnomancy?: boolean;
+    /** A "place without Mage powers" placement — skips Technomancy even when
+     *  `firesTechnomancy` is set (Stop / Slow Time, Great Hall). */
+    suppressMagePowers?: boolean;
   },
 ): GameStatePatch {
   const { mageId, ownerId, spaceId, asShadow } = args;
@@ -588,6 +600,18 @@ export function placeMageOnSlot(
           ),
         },
   );
+  // Technomancy "upon placement" — fired for genuine places only (base OR
+  // shadow), and never when this placement suppresses Mage powers. Computed
+  // against the PRE-placement `state` (the mage is still findable and owned by
+  // `ownerId`, and the opponent-in-room check excludes the placing mage either
+  // way), so it matches the wrappers that previously called it post-placement.
+  if (args.firesTechnomancy && !args.suppressMagePowers) {
+    return {
+      players,
+      rooms,
+      ...technomancyOnPlacePatch(state, ownerId, mageId, spaceId),
+    };
+  }
   return { players, rooms };
 }
 
@@ -625,6 +649,141 @@ function clearSpaceOccupant(
           : { ...s, shadowOccupant: null },
     ),
   }));
+}
+
+/**
+ * Batch sibling of {@link placeMageOnSlot} for operations that relocate several
+ * Mages *simultaneously* — mage↔mage swaps (Beyond the Beyonds L2) and room
+ * rearranges (Tornado / Hurricane / Flux). Doing these one Mage at a time with
+ * `placeMageOnSlot` is impossible because the intermediate states double-book a
+ * slot (in an A↔B swap, A's destination still holds B), and `placeMageOnSlot`
+ * throws on an occupied destination.
+ *
+ * So this clears **every** involved position first — each moved Mage's current
+ * slot AND every destination — then seats all the Mages, then syncs each Mage's
+ * `location` / `isShadowing` / clears `isWounded`. Like `placeMageOnSlot`, it is
+ * the single source of truth for board↔mage occupancy; callers build any
+ * trigger events (`mage-moved`, etc.) themselves.
+ *
+ * Throws if two ops target the same position or a destination space is unknown.
+ * Ops carry the Mage's existing `ownerId` — this never changes ownership (that
+ * is Possession's `applyOwnershipSwap`, which moves no Mage between slots).
+ */
+export function placeMagesOnSlots(
+  state: GameState,
+  ops: {
+    mageId: OwnedMageId;
+    ownerId: PlayerId;
+    spaceId: ActionSpaceId;
+    asShadow: boolean;
+  }[],
+): GameStatePatch {
+  if (ops.length === 0) return {};
+
+  const targeted = new Set<string>();
+  for (const op of ops) {
+    const key = `${op.spaceId}|${op.asShadow ? 'shadow' : 'base'}`;
+    if (targeted.has(key)) {
+      throw new Error(`placeMagesOnSlots: two ops target ${key}`);
+    }
+    targeted.add(key);
+    const exists = state.rooms.some((r) =>
+      r.actionSpaces.some((s) => s.id === op.spaceId),
+    );
+    if (!exists) {
+      throw new Error(`placeMagesOnSlots: space ${op.spaceId} not found`);
+    }
+  }
+
+  // Positions to clear up front: every moved Mage's origin + every destination.
+  // Clearing destinations is what lets a swap/rearrange pass through a transient
+  // state without ever double-booking a slot.
+  const clearBase = new Set<ActionSpaceId>();
+  const clearShadow = new Set<ActionSpaceId>();
+  const baseSeat = new Map<ActionSpaceId, WorkerOccupancy>();
+  const shadowSeat = new Map<ActionSpaceId, WorkerOccupancy>();
+  for (const op of ops) {
+    const origin = findMageSlotPosition(state, op.mageId);
+    if (origin) {
+      (origin.position === 'base' ? clearBase : clearShadow).add(origin.spaceId);
+    }
+    (op.asShadow ? clearShadow : clearBase).add(op.spaceId);
+    const occ: WorkerOccupancy = {
+      mageId: op.mageId,
+      ownerId: op.ownerId,
+      isShadowing: op.asShadow,
+    };
+    (op.asShadow ? shadowSeat : baseSeat).set(op.spaceId, occ);
+  }
+
+  const rooms = state.rooms.map((r) => ({
+    ...r,
+    actionSpaces: r.actionSpaces.map((s) => {
+      let occupant = s.occupant;
+      let shadowOccupant: WorkerOccupancy | null = s.shadowOccupant ?? null;
+      if (clearBase.has(s.id)) occupant = null;
+      if (clearShadow.has(s.id)) shadowOccupant = null;
+      if (baseSeat.has(s.id)) occupant = baseSeat.get(s.id)!;
+      if (shadowSeat.has(s.id)) shadowOccupant = shadowSeat.get(s.id)!;
+      return { ...s, occupant, shadowOccupant };
+    }),
+  }));
+
+  const byMage = new Map(ops.map((o) => [o.mageId, o]));
+  const players = state.players.map((p) => ({
+    ...p,
+    mages: p.mages.map((m) => {
+      const op = byMage.get(m.id);
+      if (!op) return m;
+      return {
+        ...m,
+        isWounded: false,
+        isShadowing: op.asShadow,
+        location: { kind: 'action-space' as const, spaceId: op.spaceId },
+      };
+    }),
+  }));
+
+  return { players, rooms };
+}
+
+/**
+ * The inverse of {@link placeMageOnSlot}: lift a placed mage OFF its slot back
+ * to its owner's office, clearing BOTH the slot occupancy and the mage's
+ * `location` (and `isShadowing`) in one step so they can never desync. This is
+ * the single source of truth for a plain board→office removal — the
+ * Resolution-phase "errand done → office" return and any other non-banish exit.
+ *
+ * No reaction event fires (use `banishMage` when a `mage-banished` trigger is
+ * needed). No-op if the mage isn't currently on a slot.
+ */
+export function removeMageFromSlot(
+  state: GameState,
+  mageId: OwnedMageId,
+): GameStatePatch {
+  const origin = findMageSlotPosition(state, mageId);
+  if (!origin) return {};
+  const lookup = findMageOwner(state, mageId);
+  if (!lookup) return {};
+  const { player: owner } = lookup;
+  const rooms = clearSpaceOccupant(state.rooms, origin.spaceId, origin.position);
+  const players = state.players.map((p) =>
+    p.id !== owner.id
+      ? p
+      : {
+          ...p,
+          mages: p.mages.map((m) =>
+            m.id !== mageId
+              ? m
+              : {
+                  ...m,
+                  isShadowing: false,
+                  location: { kind: 'office' as const, playerId: owner.id },
+                },
+          ),
+        },
+  );
+  return { players, rooms };
 }
 
 // ============================================================================
@@ -1193,6 +1352,9 @@ export function placeOfficeMageAsShadow(
     ownerId,
     spaceId,
     asShadow: true,
+    // A shadow placement is still a PLACE — fire Technomancy (the office mage
+    // keeps its colour power while shadowing).
+    firesTechnomancy: true,
   });
   return {
     ...placePatch,
@@ -1217,6 +1379,34 @@ export function isRoomAtPlayerCap(
   const cap = room.maxMagesPerPlayerPerRound ?? Infinity;
   if (!Number.isFinite(cap)) return false;
   return countPlayerMagesInRoom(state, playerId, roomId) >= cap;
+}
+
+/**
+ * Empty base slots a player may be placed into "without Mage powers": regular
+ * or merit slots, in placeable rooms that are neither locked nor at this
+ * player's per-round cap. Shared by the place-without-powers chain (Tardy,
+ * Stop Time, golems), Regrowth / Renewal's reposition step, and
+ * `buildReactionOptionsFor`'s landing gate. Lives here (not in `base.ts`) so
+ * it can gate reaction options without a `helpers → base` import cycle.
+ */
+export function listPlaceWithoutPowersSlots(
+  state: GameState,
+  playerId: string,
+  restrictRoomId?: string,
+): string[] {
+  const slots: string[] = [];
+  for (const r of state.rooms) {
+    if (restrictRoomId && r.id !== restrictRoomId) continue;
+    if (r.cannotBePlacedInDirectly) continue;
+    if (state.roomLocks.some((l) => l.roomId === r.id)) continue;
+    if (isRoomAtPlayerCap(state, playerId, r.id)) continue;
+    for (const s of r.actionSpaces) {
+      if (s.occupant) continue;
+      if (s.slotType !== 'regular' && s.slotType !== 'merit') continue;
+      slots.push(s.id);
+    }
+  }
+  return slots;
 }
 
 /**
@@ -1475,6 +1665,12 @@ export function buildReactionOptionsFor(
   const multi = ownMageEvents.length > 1;
   const labelSuffix = (mageId: string) => (multi ? ` on ${mageId}` : '');
 
+  // Regrowth / Renewal place the Mage into an empty regular/merit slot (the
+  // exact same set as the place-without-powers chain). They pay + exhaust
+  // BEFORE checking for a landing, so don't offer them when none exists.
+  const hasPlaceWithoutPowersLanding =
+    listPlaceWithoutPowersSlots(state, responderId).length > 0;
+
   for (const event of ownMageEvents) {
     if (
       event.kind !== 'mage-wounded' &&
@@ -1509,12 +1705,42 @@ export function buildReactionOptionsFor(
       )?.noShadowSlots ??
         false);
 
+    // Landing-availability gates — don't offer a reposition reaction that has
+    // nowhere to land (it would fizzle, and the spell-based ones would still
+    // pay/exhaust). Two destination shapes:
+    //
+    //  (a) Re-shadow the ORIGINAL slot (Phase Steppers, Invisibility Cloak,
+    //      Haunt): the room must have shadow positions AND the original slot's
+    //      shadow must be free (or already this Mage's).
+    //  (b) Reposition to ANY open base slot (Shield Potion, Ancient Armor,
+    //      Mystic Amulet, Sacred Shield, Diviner's Mitre): some placeable room
+    //      must have an empty base slot, or the original base slot is free.
+    const originalShadowFree =
+      originalSpaceId != null &&
+      (() => {
+        const held = slotPositionHeldBy(state, originalSpaceId, 'shadow');
+        return held === null || held === mageId;
+      })();
+    const canReShadowOriginal =
+      originalSpaceId != null && !originalRoomHasNoShadow && originalShadowFree;
+    const hasOpenBaseLanding =
+      state.rooms.some(
+        (r) =>
+          !r.cannotBePlacedInDirectly &&
+          r.actionSpaces.some((s) => !s.occupant),
+      ) ||
+      (originalSpaceId != null &&
+        (() => {
+          const held = slotPositionHeldBy(state, originalSpaceId, 'base');
+          return held === null || held === mageId;
+        })());
+
     // Phase Steppers / Invisibility Cloak send the mage back to its original
     // slot. That's always allowed — even if the room is now locked, the mage
     // was already there before being affected (the lock applies *after* the
     // wound), so the reaction effectively undoes the wound rather than
     // crossing the lock.
-    if (isWoundBanishOrMove && hasPhaseSteppers && !originalRoomHasNoShadow) {
+    if (isWoundBanishOrMove && hasPhaseSteppers && canReShadowOriginal) {
       options.push({
         sourceKind: 'vault-card',
         sourceId: 'base.vault.phase-steppers',
@@ -1530,6 +1756,7 @@ export function buildReactionOptionsFor(
       event.kind === 'mage-wounded' &&
       hasSacredShield &&
       responder.resources.mana >= 1 &&
+      hasOpenBaseLanding &&
       responder.mages.find((m) => m.id === mageId)?.isWounded === true
     ) {
       options.push({
@@ -1542,7 +1769,7 @@ export function buildReactionOptionsFor(
         ...(multi ? { forMageId: mageId } : {}),
       });
     }
-    if (isWoundBanishOrMove && hasInvisibilityCloak && !originalRoomHasNoShadow) {
+    if (isWoundBanishOrMove && hasInvisibilityCloak && canReShadowOriginal) {
       options.push({
         sourceKind: 'vault-card',
         sourceId: 'base.vault.invisibility-cloak',
@@ -1551,7 +1778,7 @@ export function buildReactionOptionsFor(
         ...(multi ? { forMageId: mageId } : {}),
       });
     }
-    if (isWoundBanishOrMove && hasShieldPotion) {
+    if (isWoundBanishOrMove && hasShieldPotion && hasOpenBaseLanding) {
       options.push({
         sourceKind: 'vault-card',
         sourceId: 'base.vault.shield-potion',
@@ -1564,7 +1791,8 @@ export function buildReactionOptionsFor(
     if (
       triggeredByOpponent &&
       (event.kind === 'mage-wounded' || event.kind === 'mage-moved') &&
-      hasAncientArmor
+      hasAncientArmor &&
+      hasOpenBaseLanding
     ) {
       options.push({
         sourceKind: 'vault-card',
@@ -1577,7 +1805,7 @@ export function buildReactionOptionsFor(
     }
     // Diviner's Mitre — when a SPELL would wound/banish/move your Mage, place
     // it in any open slot. Exhausts on use.
-    if (isWoundBanishOrMove && hasDivinersMitre) {
+    if (isWoundBanishOrMove && hasDivinersMitre && hasOpenBaseLanding) {
       options.push({
         sourceKind: 'vault-card',
         sourceId: 'mancers.vault.diviners-mitre',
@@ -1590,7 +1818,8 @@ export function buildReactionOptionsFor(
     if (
       triggeredByOpponent &&
       (event.kind === 'mage-banished' || event.kind === 'mage-shadowed') &&
-      hasMysticAmulet
+      hasMysticAmulet &&
+      hasOpenBaseLanding
     ) {
       options.push({
         sourceKind: 'vault-card',
@@ -1692,6 +1921,7 @@ export function buildReactionOptionsFor(
       songsReady &&
       songs?.wisPlacedLevel2 &&
       responder.resources.mana >= 1 &&
+      hasPlaceWithoutPowersLanding &&
       (event.kind === 'mage-wounded' || event.kind === 'mage-moved')
     ) {
       options.push({
@@ -1709,6 +1939,7 @@ export function buildReactionOptionsFor(
       songsReady &&
       songs?.wisPlacedLevel3 &&
       responder.resources.mana >= 2 &&
+      hasPlaceWithoutPowersLanding &&
       (event.kind === 'mage-wounded' || event.kind === 'mage-moved')
     ) {
       options.push({
@@ -1757,7 +1988,8 @@ export function buildReactionOptionsFor(
       darknessWithin.wisPlacedLevel2 &&
       !darknessWithin.exhausted &&
       responder.resources.mana >= 2 &&
-      isWoundBanishOrMove
+      isWoundBanishOrMove &&
+      canReShadowOriginal
     ) {
       options.push({
         sourceKind: 'spell',
@@ -2938,13 +3170,26 @@ export function sideForColor(state: GameState, color: MageColor): MageAbilitySid
  * NOTE: this gates *abilities* only. Plain `actsAsColor` is still correct for
  * colour-identity uses (scoring, diversity, apprentice colour matching) that
  * are not modal powers.
+ *
+ * SHADOW RULE: a mage occupying a shadow slot loses exactly its defensive
+ * colour immunities — green's wound-immunity and blue's spell-immunity — and
+ * nothing else (Technomancy on-place, red's Ars Magna, etc. all still fire from
+ * a shadow). Since green-A and blue-A have no colour power OTHER than those
+ * immunities, gating them here is the single source of truth for the rule; the
+ * other colours are unaffected by `isShadowing`.
  */
 export function colorAbilityActive(
   state: GameState,
   mage: OwnedMage,
   color: MageColor,
 ): boolean {
-  return actsAsColor(mage, color) && sideForColor(state, color) === 'A';
+  if (!actsAsColor(mage, color) || sideForColor(state, color) !== 'A') {
+    return false;
+  }
+  if (mage.isShadowing && (color === 'green' || color === 'blue')) {
+    return false;
+  }
+  return true;
 }
 
 /** Gold cost of the Divinity Side B "pay to activate a Merit Slot" option. */

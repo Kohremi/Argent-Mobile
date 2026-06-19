@@ -1,7 +1,12 @@
 // Base game effect implementations. Currently scoped to the Vertical Slice
 // targets: Library A slot 1, Burn L1, Phase Steppers reaction.
 
-import { getEffect, hasEffect, registerEffect } from './registry';
+import {
+  getEffect,
+  hasEffect,
+  firesInstantReward,
+  registerEffect,
+} from './registry';
 import { computeFinalScoring, playerOwnsWildSupporter } from '../scoring';
 import { getPack } from '../../content/registry';
 import { getOrthogonallyAdjacentRoomIds } from '../setup';
@@ -53,6 +58,7 @@ import {
   isLegendarySpell,
   isRoomAtPlayerCap,
   isRoomLocked,
+  listPlaceWithoutPowersSlots,
   lookupSpellCardDef,
   nextResearchLevel,
   lookupVaultCardDef,
@@ -60,13 +66,13 @@ import {
   magesLosePowers,
   moveMageToSpace,
   placeMageOnSlot,
+  placeMagesOnSlots,
   placeOfficeMageAsShadow,
   slotPositionHeldBy,
   refreshOwnedSpellPatch,
   returnMageToOfficePatch,
   playerHasAuricCatalyst,
   spellLabel,
-  technomancyOnPlacePatch,
   unclaimedLegendaryBooks,
   woundMage,
   allocateInfirmaryBed,
@@ -7936,7 +7942,7 @@ function patchWithMaybeInstantReward(
     r.actionSpaces.some((s) => s.id === spaceId),
   );
   const space = room?.actionSpaces.find((s) => s.id === spaceId);
-  if (room && space && room.isInstantRoom && hasEffect(space.effectId)) {
+  if (room && space && firesInstantReward(room, space)) {
     return {
       kind: 'pause',
       patch,
@@ -9451,6 +9457,8 @@ function placeOfficeMageOnSpace(
     ownerId: playerId,
     spaceId: spaceId as ActionSpaceId,
     asShadow: false,
+    firesTechnomancy: true,
+    suppressMagePowers,
   });
   return {
     ...placePatch,
@@ -9459,9 +9467,6 @@ function placeOfficeMageOnSpace(
       spaceId as ActionSpaceId,
       playerId,
     ),
-    ...(suppressMagePowers
-      ? {}
-      : technomancyOnPlacePatch(state, playerId, mageId, spaceId as ActionSpaceId)),
   };
 }
 
@@ -13081,42 +13086,18 @@ function swapTwoPlacedMagesPatch(
   const a = placedAt(state, idA);
   const b = placedAt(state, idB);
   if (!a || !b) return { patch: {}, events: [] };
-  const occA = { mageId: idA, ownerId: a.ownerId, isShadowing: b.position === 'shadow' };
-  const occB = { mageId: idB, ownerId: b.ownerId, isShadowing: a.position === 'shadow' };
-  const rooms = state.rooms.map((r) => ({
-    ...r,
-    actionSpaces: r.actionSpaces.map((s) => {
-      let occupant = s.occupant;
-      let shadowOccupant: WorkerOccupancy | null = s.shadowOccupant ?? null;
-      if (s.id === a.spaceId) {
-        // A's old slot now holds B.
-        if (a.position === 'base') occupant = occB;
-        else shadowOccupant = occB;
-      }
-      if (s.id === b.spaceId) {
-        if (b.position === 'base') occupant = occA;
-        else shadowOccupant = occA;
-      }
-      return { ...s, occupant, shadowOccupant };
-    }),
-  }));
-  const players = state.players.map((p) => ({
-    ...p,
-    mages: p.mages.map((m) => {
-      if (m.id === idA) {
-        return { ...m, location: { kind: 'action-space' as const, spaceId: b.spaceId }, isShadowing: b.position === 'shadow' };
-      }
-      if (m.id === idB) {
-        return { ...m, location: { kind: 'action-space' as const, spaceId: a.spaceId }, isShadowing: a.position === 'shadow' };
-      }
-      return m;
-    }),
-  }));
+  // Each Mage takes the other's slot AND position (base/shadow). Routed through
+  // the batch primitive so the swap's transient double-book never surfaces and
+  // location↔occupancy stay in sync.
+  const patch = placeMagesOnSlots(state, [
+    { mageId: idA, ownerId: a.ownerId, spaceId: b.spaceId, asShadow: b.position === 'shadow' },
+    { mageId: idB, ownerId: b.ownerId, spaceId: a.spaceId, asShadow: a.position === 'shadow' },
+  ]);
   const events: ReactionTriggerEvent[] = [
     { kind: 'mage-moved', mageId: idA, ownerId: a.ownerId, fromSpaceId: a.spaceId, toSpaceId: b.spaceId, byPlayerId },
     { kind: 'mage-moved', mageId: idB, ownerId: b.ownerId, fromSpaceId: b.spaceId, toSpaceId: a.spaceId, byPlayerId },
   ];
-  return { patch: { players, rooms }, events };
+  return { patch, events };
 }
 
 registerEffect('mancers.spell.beyond-the-beyonds.l2', (ctx): EffectResult => {
@@ -13208,33 +13189,6 @@ function lookupRoomDef(state: GameState, roomId: string): Room | null {
   return null;
 }
 
-/** Directly seats a Mage on a base slot (no powers, no reactions) — used by
- *  Flux's rearrange step. */
-function placeMageDirect(state: GameState, mageId: string, spaceId: string): GameStatePatch {
-  const owner = state.players.find((p) => p.mages.some((m) => m.id === mageId));
-  if (!owner) return {};
-  return {
-    players: state.players.map((p) =>
-      p.id !== owner.id
-        ? p
-        : {
-            ...p,
-            mages: p.mages.map((m) =>
-              m.id !== mageId
-                ? m
-                : { ...m, location: { kind: 'action-space' as const, spaceId }, isShadowing: false },
-            ),
-          },
-    ),
-    rooms: state.rooms.map((r) => ({
-      ...r,
-      actionSpaces: r.actionSpaces.map((s) =>
-        s.id !== spaceId ? s : { ...s, occupant: { mageId, ownerId: owner.id, isShadowing: false } },
-      ),
-    })),
-  };
-}
-
 /** Flips a room to its opposite side: swaps in a fresh copy of the other-side
  *  definition (empty slots), repoints the grid cell, drops any lock, and parks
  *  the room's Mages in their owners' offices to be rearranged. */
@@ -13319,7 +13273,21 @@ registerEffect('mancers.spell.beyond-the-beyonds.l3', (ctx): EffectResult => {
     if (typeof newRoomId !== 'string' || !Array.isArray(queue) || queue.length === 0) {
       return { kind: 'done', patch: {} };
     }
-    const placePatch = placeMageDirect(ctx.state, queue[0] as string, ctx.resumeAnswer.spaceId);
+    // The flip already parked every Mage of the room in its owner's office and
+    // the target slot was offered empty, so this is a plain PLACE — route it
+    // through the canonical primitive (no batch needed: one Mage, empty slot).
+    const fluxMageId = queue[0] as string;
+    const fluxOwner = ctx.state.players.find((p) =>
+      p.mages.some((m) => m.id === fluxMageId),
+    );
+    const placePatch = fluxOwner
+      ? placeMageOnSlot(ctx.state, {
+          mageId: fluxMageId,
+          ownerId: fluxOwner.id,
+          spaceId: ctx.resumeAnswer.spaceId,
+          asShadow: false,
+        })
+      : {};
     return fluxNextPlacement(ctx, self, placePatch, newRoomId, (queue as string[]).slice(1));
   }
 
@@ -15593,26 +15561,6 @@ registerEffect('base.spell.gust-of-wind.l1', (ctx): EffectResult => {
  *  step — excludes Infirmary, locked rooms, room-cap-exhausted rooms, and
  *  shadow/wound slot types. Pass `restrictRoomId` to limit slots to a
  *  specific room (Slow Time). */
-export function listPlaceWithoutPowersSlots(
-  state: GameState,
-  playerId: string,
-  restrictRoomId?: string,
-): string[] {
-  const slots: string[] = [];
-  for (const r of state.rooms) {
-    if (restrictRoomId && r.id !== restrictRoomId) continue;
-    if (r.cannotBePlacedInDirectly) continue;
-    if (state.roomLocks.some((l) => l.roomId === r.id)) continue;
-    if (isRoomAtPlayerCap(state, playerId, r.id)) continue;
-    for (const s of r.actionSpaces) {
-      if (s.occupant) continue;
-      if (s.slotType !== 'regular' && s.slotType !== 'merit') continue;
-      slots.push(s.id);
-    }
-  }
-  return slots;
-}
-
 /** Eligible office mages for a "place without Mage powers" step. */
 export function listPlaceWithoutPowersMages(
   state: GameState,
@@ -18564,6 +18512,13 @@ function buildPossessionTargets(
   return out;
 }
 
+/**
+ * Possession (The Darkness Within L3): swap which player OWNS two placed Mages.
+ * Deliberately NOT routed through `placeMagesOnSlots` — no Mage changes slot or
+ * position; only the `ownerId` on each Mage's player roster and on its slot
+ * occupancy flips. `location` / `isShadowing` / `isWounded` are untouched, so
+ * board↔mage occupancy stays consistent without the placement primitive.
+ */
 function applyOwnershipSwap(
   state: GameState,
   mageAId: string,
@@ -20984,45 +20939,27 @@ function baseSlotsInRoom(state: GameState, roomId: string): string[] {
     .map((s) => s.id);
 }
 
+/**
+ * Rearranges a room's base-position Mages onto their chosen slots in one atomic
+ * batch (Tornado / Hurricane). The assignment always covers every base occupant
+ * of the room (the queue is seeded from `baseMagesInRoom`), so routing through
+ * `placeMagesOnSlots` — which clears each Mage's origin slot before re-seating —
+ * reproduces the old "empty the room, then fill the assigned slots" semantics
+ * while keeping location↔occupancy in the single source of truth.
+ */
 function applyRearrangement(
   state: GameState,
-  roomId: string,
   assignments: { mageId: string; ownerId: string; spaceId: string }[],
 ): GameStatePatch {
-  const players = state.players.map((p): Player => ({
-    ...p,
-    mages: p.mages.map((m) => {
-      const assign = assignments.find((a) => a.mageId === m.id);
-      if (!assign) return m;
-      return {
-        ...m,
-        location: { kind: 'action-space' as const, spaceId: assign.spaceId },
-      };
-    }),
-  }));
-  const rooms = state.rooms.map((r) => {
-    if (r.id !== roomId) return r;
-    return {
-      ...r,
-      actionSpaces: r.actionSpaces.map((s) => {
-        const assign = assignments.find((a) => a.spaceId === s.id);
-        if (assign) {
-          return {
-            ...s,
-            occupant: {
-              mageId: assign.mageId,
-              ownerId: assign.ownerId,
-              isShadowing: false,
-            },
-          };
-        }
-        // Slot got no assignment — clear its base occupant (the previous
-        // occupant has moved elsewhere).
-        return { ...s, occupant: null };
-      }),
-    };
-  });
-  return { players, rooms };
+  return placeMagesOnSlots(
+    state,
+    assignments.map((a) => ({
+      mageId: a.mageId,
+      ownerId: a.ownerId,
+      spaceId: a.spaceId,
+      asShadow: false,
+    })),
+  );
 }
 
 registerEffect(
@@ -21110,7 +21047,7 @@ function tornadoSurfaceNextPick(
   }
   if (queue.length === 0) {
     // All mages assigned — apply.
-    return { kind: 'done', patch: applyRearrangement(ctx.state, roomId, assigned) };
+    return { kind: 'done', patch: applyRearrangement(ctx.state, assigned) };
   }
   // Next mage in queue. Look up its current owner.
   const nextMageId = queue[0]!;
@@ -21147,7 +21084,7 @@ function tornadoSurfaceMagePrompt(
     // Nowhere to put this mage — apply what we have and bail.
     return {
       kind: 'done',
-      patch: applyRearrangement(ctx.state, roomId, assigned),
+      patch: applyRearrangement(ctx.state, assigned),
     };
   }
   return {
@@ -21344,7 +21281,7 @@ function hurricaneNextPick(
   if (queue.length === 0) {
     return {
       kind: 'done',
-      patch: applyRearrangement(ctx.state, roomId, assigned),
+      patch: applyRearrangement(ctx.state, assigned),
     };
   }
   const nextMageId = queue[0]!;
@@ -21380,7 +21317,7 @@ function hurricaneSurfaceMagePrompt(
   if (available.length === 0) {
     const patch = {
       ...(carryPatch ?? {}),
-      ...applyRearrangement(ctx.state, roomId, assigned),
+      ...applyRearrangement(ctx.state, assigned),
     };
     return { kind: 'done', patch };
   }

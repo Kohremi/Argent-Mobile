@@ -4,9 +4,10 @@
 
 import { getPack } from '../content/registry';
 import { validateAction } from './actions';
+import { assertBoardConsistent, findBoardInconsistency } from './boardInvariant';
 import { computeFinalScoring, playerOwnsWildSupporter } from './scoring';
 import { buildInitialState } from './setup';
-import { getEffect, hasEffect } from './effects/index';
+import { getEffect, hasEffect, firesInstantReward } from './effects/index';
 import {
   applyCandidateAllocation,
   buildReactionOptionsFor,
@@ -31,7 +32,11 @@ import {
   technomancyOnPlacePatch,
   woundMage,
 } from './effects/helpers';
-import { buildAdventuringBPickPrompt, placeMageOnSlot } from './effects/helpers';
+import {
+  buildAdventuringBPickPrompt,
+  placeMageOnSlot,
+  removeMageFromSlot,
+} from './effects/helpers';
 import type {
   ActionSpace,
   BellTowerCard,
@@ -114,7 +119,36 @@ function maybeArmUnreactableAction(state: GameState, action: GameAction): GameSt
   };
 }
 
+/**
+ * Opt-in dev/test guard for the board invariant (location ↔ slot occupancy).
+ * Off by default — the invariant is otherwise checked only by
+ * `boardInvariant.test.ts`. Set `ARGENT_ASSERT_BOARD=1` to have `applyAction`
+ * assert after every action, surfacing a desync the instant the action that
+ * caused it is applied (e.g. a hand-rolled board mutation that skips the
+ * primitives) during real / interactive play the seeded sims don't cover. The
+ * `typeof process` guard keeps this a no-op (never throws) in the browser
+ * bundle, where `process` is undefined.
+ */
+function boardAssertionsEnabled(): boolean {
+  try {
+    return (
+      typeof process !== 'undefined' &&
+      process.env?.ARGENT_ASSERT_BOARD === '1'
+    );
+  } catch {
+    return false;
+  }
+}
+
 export function applyAction(state: GameState, action: GameAction): GameState {
+  // Only blame the action for a desync it INTRODUCES: capture whether the input
+  // board was already consistent, and assert the result only when it was. This
+  // mirrors `boardInvariant.test.ts` (flag `broke && !alreadyBroken`) so the
+  // guard ignores the deliberately-stale fixtures a few unit tests feed in to
+  // check defensive skips.
+  const checkBoard = boardAssertionsEnabled();
+  const inputWasConsistent = checkBoard && findBoardInconsistency(state) === null;
+
   validateAction(state, action);
   state = maybeArmUnreactableAction(state, action);
 
@@ -171,7 +205,11 @@ export function applyAction(state: GameState, action: GameAction): GameState {
       throw new Error(`applyAction: unknown action ${JSON.stringify(exhaustive)}`);
     }
   }
-  return autoAdvanceIfTurnDone(next);
+  const result = autoAdvanceIfTurnDone(next);
+  if (inputWasConsistent) {
+    assertBoardConsistent(result, `after ${action.type}`);
+  }
+  return result;
 }
 
 // ============================================================================
@@ -934,41 +972,16 @@ function completeCurrentSpaceResolution(state: GameState): GameState {
 
   const advancingToShadow = position === 'base' && space.shadowOccupant != null;
 
-  const updatedRooms = state.rooms.map((r, ri) =>
-    ri !== phase.pendingRoomIndex
-      ? r
-      : {
-          ...r,
-          actionSpaces: r.actionSpaces.map((s, si) =>
-            si !== phase.pendingSpaceIndex
-              ? s
-              : position === 'base'
-                ? { ...s, occupant: null }
-                : { ...s, shadowOccupant: null },
-          ),
-        },
-  );
-  const updatedPlayers = state.players.map((p) =>
-    p.id !== occupant.ownerId
-      ? p
-      : {
-          ...p,
-          mages: p.mages.map((m) =>
-            m.id !== occupant.mageId
-              ? m
-              : {
-                  ...m,
-                  location: { kind: 'office' as const, playerId: occupant.ownerId },
-                  isShadowing: false,
-                },
-          ),
-        },
-  );
+  // The resolved occupant's errand is done — lift it off the slot back to its
+  // office. Routed through the primitive so the slot occupancy and the mage's
+  // `location` always clear together (it targets exactly this position, since
+  // that's where the occupant lives).
+  const removalPatch = removeMageFromSlot(state, occupant.mageId);
 
   return {
     ...state,
-    rooms: updatedRooms,
-    players: updatedPlayers,
+    rooms: removalPatch.rooms ?? state.rooms,
+    players: removalPatch.players ?? state.players,
     phase: advancingToShadow
       ? { ...phase, pendingSlotPosition: 'shadow', slotInProgress: false }
       : {
@@ -1222,6 +1235,10 @@ function handlePlaceWorker(state: GameState, action: PlaceWorkerAction): GameSta
       ...state,
       rooms: placePatch.rooms!,
       players: placedPlayers,
+      // Technomancy fires on a SHADOW placement too — a shadowing mage keeps
+      // its colour power (only green wound- / blue spell-immunity drop in a
+      // shadow slot). Mirrors the base-placement tail below.
+      ...technomancyOnPlacePatch(state, action.playerId, action.mageId, space.id),
     };
     // Instant rooms resolve at placement time. The shadow occupant gets
     // the same forfeit-or-reward prompt as a base occupant, except shadow
@@ -1229,7 +1246,7 @@ function handlePlaceWorker(state: GameState, action: PlaceWorkerAction): GameSta
     // an opposing mage holds the base, the reaction window is opened on
     // top — the reward prompt waits on the stack until the window closes.
     const withInstantPrompt =
-      room.isInstantRoom && hasEffect(space.effectId)
+      firesInstantReward(room, space)
         ? pushResolutionChoicePrompt(
             placed,
             room,
@@ -1482,7 +1499,7 @@ function handlePlaceWorker(state: GameState, action: PlaceWorkerAction): GameSta
   // Instant rooms resolve at placement time. We push the same forfeit-or-
   // reward prompt the resolution pump uses for non-instant rooms, then the
   // resume effect either runs the slot's effect or grants 1 IP and skips it.
-  if (room.isInstantRoom && hasEffect(space.effectId)) {
+  if (firesInstantReward(room, space)) {
     const promptState = pushResolutionChoicePrompt(
       placed,
       room,

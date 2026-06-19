@@ -19,6 +19,7 @@ import {
   gainResourcesPatch,
   healMageToSpace,
   isRoomLocked,
+  listPlaceWithoutPowersSlots,
   lookupSpellCardDef,
   lookupSupporterCardDef,
   lookupVaultCardDef,
@@ -26,14 +27,10 @@ import {
   moveMageToSpace,
   placeMageOnSlot,
   returnMageToOfficePatch,
-  technomancyOnPlacePatch,
   woundMage,
 } from './helpers';
 import { nextRandom } from '../../utils/rng';
-import {
-  listPlaceWithoutPowersMages,
-  listPlaceWithoutPowersSlots,
-} from './base';
+import { listPlaceWithoutPowersMages } from './base';
 import {
   ALL_SYNTHESIS_IDS,
   SYNTHESIS_BY_DEPARTMENT,
@@ -2889,6 +2886,7 @@ function shadowPlaceEffect(
       ownerId: ctx.triggeringPlayerId,
       spaceId,
       asShadow: true,
+      firesTechnomancy: true,
     });
     working = { ...working, ...patch };
     // Shadowing an opponent's base Mage opens a mage-shadowed reaction window.
@@ -3046,6 +3044,7 @@ function artificierGolemPlace(
         ownerId: playerId,
         spaceId,
         asShadow: true,
+        firesTechnomancy: true,
       });
       // Shadowing an opponent's base Mage opens a mage-shadowed reaction window.
       if (baseOcc && baseOcc.ownerId !== playerId) {
@@ -3078,15 +3077,9 @@ function artificierGolemPlace(
       ownerId: playerId,
       spaceId,
       asShadow: false,
+      firesTechnomancy: true,
     });
-    const working: GameState = { ...paid, ...placePatch };
-    return {
-      kind: 'done',
-      patch: {
-        ...placePatch,
-        ...technomancyOnPlacePatch(working, playerId, mageId, spaceId),
-      },
-    };
+    return { kind: 'done', patch: placePatch };
   }
 
   if (step === 'slot') {
@@ -3413,14 +3406,9 @@ registerEffect('mancers.vault.hourglass-of-fate.react', (ctx): EffectResult => {
       ownerId: playerId,
       spaceId,
       asShadow: false,
+      firesTechnomancy: true,
     });
-    const working: GameState = { ...s0, ...placePatch };
-    const patch: GameStatePatch = {
-      ...placePatch,
-      // Technomancy "upon placement" trigger (orange Mage placed by its owner).
-      ...technomancyOnPlacePatch(working, playerId, mageId, spaceId),
-    };
-    return { kind: 'done', patch };
+    return { kind: 'done', patch: placePatch };
   }
 
   // A Mage was chosen — prompt for the destination (open slots + Ars Magna
@@ -4075,13 +4063,9 @@ function moveMageToSlotPatch(
     ownerId: playerId,
     spaceId,
     asShadow: false,
+    firesTechnomancy: true,
   });
-  const working: GameState = { ...state, ...placePatch };
-  return {
-    ...placePatch,
-    // Technomancy "upon placement" trigger (orange Mage placed by its owner).
-    ...technomancyOnPlacePatch(working, playerId, mageId, spaceId),
-  };
+  return placePatch;
 }
 
 function elixirNext(ctx: EffectContext, carryPatch: GameStatePatch): EffectResult {

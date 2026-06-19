@@ -12,6 +12,7 @@ export {
   registerEffect,
   getEffect,
   hasEffect,
+  firesInstantReward,
   listEffectIds,
   _resetEffectRegistry,
 } from './registry';

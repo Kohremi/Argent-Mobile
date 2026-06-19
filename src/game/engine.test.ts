@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { applyAction, initGame } from './engine';
+import { findBoardInconsistency } from './boardInvariant';
 import {
   getOrthogonallyAdjacentRoomIds,
   pickGridForRoomCount,
@@ -4071,6 +4072,64 @@ describe('Reaction vault cards', () => {
     );
     expect(byId.get('base.vault.shield-potion')?.requiresSlotPick).toBe(true);
     expect(byId.get('base.vault.ancient-armor')?.requiresSlotPick).toBe(true);
+  });
+
+  it('re-shadow reactions are NOT offered when the original slot shadow is already held', () => {
+    // Bob owns Phase Steppers AND Invisibility Cloak. A second Bob mage is
+    // already shadowing slot-1 (the slot the wounded mage occupies), so a
+    // re-shadow back to slot-1 would orphan it — both options must be hidden.
+    let s = setupReactionTest({ reactionCard: 'base.vault.phase-steppers' });
+    s = addVaultCard(s, 'p2', 'base.vault.invisibility-cloak');
+    s = addMage(s, 'p2', {
+      id: 'bob-mage-2',
+      cardId: 'base.mage.sorcery',
+      color: 'red',
+    });
+    const slotId = 'base.room.library.a.slot-1';
+    s = {
+      ...s,
+      players: s.players.map((p) =>
+        p.id !== 'p2'
+          ? p
+          : {
+              ...p,
+              mages: p.mages.map((m) =>
+                m.id !== 'bob-mage-2'
+                  ? m
+                  : {
+                      ...m,
+                      isShadowing: true,
+                      location: { kind: 'action-space', spaceId: slotId },
+                    },
+              ),
+            },
+      ),
+      rooms: s.rooms.map((r) => ({
+        ...r,
+        actionSpaces: r.actionSpaces.map((sp) =>
+          sp.id !== slotId
+            ? sp
+            : {
+                ...sp,
+                shadowOccupant: {
+                  mageId: 'bob-mage-2',
+                  ownerId: 'p2',
+                  isShadowing: true,
+                },
+              },
+        ),
+      })),
+    };
+    s = driveBurnToReactionPrompt(s);
+    const reactionPrompt = topPending(s);
+    if (reactionPrompt.prompt.kind !== 'reaction-window') {
+      throw new Error('expected reaction-window');
+    }
+    const sourceIds = reactionPrompt.prompt.reactionOptions.map(
+      (o) => o.sourceId,
+    );
+    expect(sourceIds).not.toContain('base.vault.phase-steppers');
+    expect(sourceIds).not.toContain('base.vault.invisibility-cloak');
   });
 
   it('Shield Potion: with reactionContext.destinationSpaceId, mage lands on the chosen empty slot', () => {
@@ -15444,6 +15503,126 @@ describe('Modular mage powers — Side A gated by mageAbilitySides', () => {
     expect(technomancyOnPlacePatch(b.s, 'p1', 'o', b.slot)).toEqual({});
   });
 
+  it('Technomancy fires on a SHADOW placement, not just a base one', async () => {
+    const { placeOfficeMageAsShadow } = await import('./effects/helpers');
+    const slot = 'base.room.library.a.slot-1';
+    // Orange Technomancer shadow-placed from the office: the on-place Research
+    // trigger still queues — a shadowing mage keeps its colour power (only
+    // green wound- / blue spell-immunity drop in a shadow slot).
+    let s = initGame({
+      activePackIds: ['base', 'mancers'],
+      playerNames: ['Alice', 'Bob'],
+      rngSeed: 7777,
+    });
+    s = forceLibrarySideA(s);
+    s = addMage(s, 'p1', {
+      id: 'o',
+      cardId: 'mancers.mage.technomancy',
+      color: 'orange',
+    });
+    const patch = placeOfficeMageAsShadow(s, 'p1', 'o', slot);
+    expect(patch.pendingTechnomancyTrigger).toHaveLength(1);
+
+    // Contrast: a non-orange mage shadow-placed queues nothing.
+    let s2 = initGame({
+      activePackIds: ['base', 'mancers'],
+      playerNames: ['Alice', 'Bob'],
+      rngSeed: 7777,
+    });
+    s2 = forceLibrarySideA(s2);
+    s2 = addMage(s2, 'p1', {
+      id: 'g',
+      cardId: 'base.mage.natural-magick',
+      color: 'green',
+    });
+    const patch2 = placeOfficeMageAsShadow(s2, 'p1', 'g', slot);
+    expect(patch2.pendingTechnomancyTrigger ?? []).toHaveLength(0);
+  });
+
+  it('shadow slot drops ONLY green wound- and blue spell-immunity, not other colour powers', async () => {
+    const { colorAbilityActive } = await import('./effects/helpers');
+    let s = initGame({
+      activePackIds: ['base'],
+      playerNames: ['Alice', 'Bob'],
+      rngSeed: 1,
+    });
+    s = addMage(s, 'p1', {
+      id: 'g',
+      cardId: 'base.mage.natural-magick',
+      color: 'green',
+    });
+    s = addMage(s, 'p1', {
+      id: 'b',
+      cardId: 'base.mage.divinity',
+      color: 'blue',
+    });
+    s = addMage(s, 'p1', {
+      id: 'r',
+      cardId: 'base.mage.sorcery',
+      color: 'red',
+    });
+    const mage = (id: string) =>
+      s.players.find((p) => p.id === 'p1')!.mages.find((m) => m.id === id)!;
+    const g = mage('g');
+    const b = mage('b');
+    const r = mage('r');
+    // Base (not shadowing): green wound-immunity and blue spell-immunity active.
+    expect(colorAbilityActive(s, g, 'green')).toBe(true);
+    expect(colorAbilityActive(s, b, 'blue')).toBe(true);
+    // While shadowing: those two immunities drop...
+    expect(colorAbilityActive(s, { ...g, isShadowing: true }, 'green')).toBe(
+      false,
+    );
+    expect(colorAbilityActive(s, { ...b, isShadowing: true }, 'blue')).toBe(
+      false,
+    );
+    // ...but red's Ars Magna power is retained in a shadow slot.
+    expect(colorAbilityActive(s, { ...r, isShadowing: true }, 'red')).toBe(true);
+  });
+
+  it('removeMageFromSlot lifts a placed mage back to office, clearing both sides', async () => {
+    const { removeMageFromSlot, placeOfficeMageAsShadow } = await import(
+      './effects/helpers'
+    );
+    const slot = 'base.room.library.a.slot-1';
+    let s = initGame({
+      activePackIds: ['base'],
+      playerNames: ['Alice', 'Bob'],
+      rngSeed: 3,
+    });
+    s = forceLibrarySideA(s);
+    s = addMage(s, 'p1', {
+      id: 'm',
+      cardId: 'base.mage.sorcery',
+      color: 'red',
+    });
+
+    // Base occupant → office: slot cleared, location updated, invariant intact.
+    let s2 = { ...s, ...removeMageFromSlot(placeMageOnSpace(s, 'p1', 'm', slot), 'm') };
+    const baseMage = s2.players.find((p) => p.id === 'p1')!.mages[0]!;
+    expect(baseMage.location).toEqual({ kind: 'office', playerId: 'p1' });
+    expect(
+      s2.rooms.flatMap((r) => r.actionSpaces).find((x) => x.id === slot)!
+        .occupant,
+    ).toBeNull();
+    expect(findBoardInconsistency(s2)).toBeNull();
+
+    // No-op for a mage that isn't on a slot.
+    expect(removeMageFromSlot(s2, 'm')).toEqual({});
+
+    // Shadow occupant → office: the shadow position clears too.
+    const shadowed = { ...s, ...placeOfficeMageAsShadow(s, 'p1', 'm', slot) };
+    const s3 = { ...shadowed, ...removeMageFromSlot(shadowed, 'm') };
+    expect(
+      s3.rooms.flatMap((r) => r.actionSpaces).find((x) => x.id === slot)!
+        .shadowOccupant ?? null,
+    ).toBeNull();
+    expect(s3.players.find((p) => p.id === 'p1')!.mages[0]!.isShadowing).toBe(
+      false,
+    );
+    expect(findBoardInconsistency(s3)).toBeNull();
+  });
+
   // ---- Side B powers ----
 
   it('Sorcery Side B: gain 1 Mana per other Mage in the room placed into', () => {
@@ -25447,6 +25626,9 @@ describe('Tornado (Taming of the Storm L2)', () => {
       kind: 'action-space',
       spaceId: 'base.room.library.a.slot-1',
     });
+    // The whole-room rearrange runs through placeMagesOnSlots in one batch —
+    // no slot is double-booked and every location matches its occupancy.
+    expect(findBoardInconsistency(s)).toBeNull();
   });
 
   it('fizzles when no room has any placed mages', () => {
@@ -25568,6 +25750,8 @@ describe('Hurricane (Taming of the Storm L3)', () => {
     expect(bob.mages.find((m) => m.id === 'bob-grey-2')!.location.kind).toBe(
       'action-space',
     );
+    // Wound (slot cleared) + batch rearrange leave the board consistent.
+    expect(findBoardInconsistency(s)).toBeNull();
   });
 });
 
@@ -30069,6 +30253,8 @@ describe('Beyond the Beyonds (Mancers)', () => {
     }
     expect(findMage(s, 'p2', 'a').location).toEqual({ kind: 'action-space', spaceId: slotB });
     expect(findMage(s, 'p2', 'b').location).toEqual({ kind: 'action-space', spaceId: slotA });
+    // The swap routes through placeMagesOnSlots — location and occupancy agree.
+    expect(findBoardInconsistency(s)).toBeNull();
   });
 
   it('L3 Flux: flips a room to its other side and rearranges its Mages', () => {
@@ -30097,6 +30283,9 @@ describe('Beyond the Beyonds (Mancers)', () => {
     const occ = newRoom.actionSpaces.map((sp) => sp.occupant?.mageId).filter(Boolean);
     expect(occ).toContain('mine');
     expect(occ).toContain('theirs');
+    // Flip parks Mages in office, then re-places each via placeMageOnSlot —
+    // the relocated Mages' location and the new slots agree (no orphans).
+    expect(findBoardInconsistency(s)).toBeNull();
   });
 
   it('L3 Flux: central-campus rooms are never offered', () => {
