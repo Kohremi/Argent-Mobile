@@ -17,6 +17,7 @@ import { useGameStore } from '../../store/gameStore';
 import { useUiStore } from '../../store/uiStore';
 import { DEPT_HUE, PLAYER_AURA } from '../../utils/uiSelectors';
 import { TIMING_HUE, TIMING_LABEL } from '../Cards/HandFans';
+import { MageToken } from '../Board/MageToken';
 import { PortraitBust } from '../Player/PortraitBust';
 import { describeTrigger, playerName, promptDraftsFromShelf, topPending } from './promptHelpers';
 
@@ -223,6 +224,90 @@ function TargetBanner({
             {passLabel}
           </button>
         )}
+      </div>
+    </div>
+  );
+}
+
+/** Finds a mage and its owning player by mage id (across all players). */
+function findMageWithOwner(state: GameState, mageId: string) {
+  for (const p of state.players) {
+    const mage = p.mages.find((m) => m.id === mageId);
+    if (mage) return { mage, owner: p };
+  }
+  return null;
+}
+
+/**
+ * Slot-pick banner for a rearrange that re-places several Mages one at a time
+ * (Flux): the generic `choose-target-action-space` banner doesn't say WHICH
+ * Mage the next slot click seats. We show the queue as meeples — the one being
+ * placed now is enlarged + ringed, the rest dimmed — each captioned with its
+ * owner so the caster can tell whose Mage they're positioning. The slot click
+ * itself still happens on the lit board (`usePromptTargets`).
+ */
+function RearrangePlacementBanner({
+  state,
+  pending,
+  label,
+  placingMageId,
+  pendingMageIds,
+}: {
+  state: GameState;
+  pending: PendingResolution;
+  label: string;
+  placingMageId: string;
+  pendingMageIds: string[];
+}) {
+  const ids = pendingMageIds.length > 0 ? pendingMageIds : [placingMageId];
+  return (
+    <div className="pointer-events-none absolute inset-x-0 top-16 z-40 flex justify-center px-4">
+      <div className="pointer-events-auto flex animate-pop flex-col items-center gap-2 rounded-card bg-night-800/95 px-4 py-2.5 ring-1 ring-starlight/50 shadow-card-lift backdrop-blur">
+        <div className="flex items-center gap-3">
+          <p className="font-display text-sm font-bold text-starlight">
+            {pending.source.description ?? 'Flux'} <span className="text-white/50">▸</span>{' '}
+            <span className="text-white/95">{label}</span>
+          </p>
+          <ResponderChip state={state} pending={pending} />
+        </div>
+        <div className="flex items-end gap-1">
+          {ids.map((id) => {
+            const found = findMageWithOwner(state, id);
+            if (!found) return null;
+            const isCurrent = id === placingMageId;
+            return (
+              <div
+                key={id}
+                className={clsx(
+                  'flex flex-col items-center rounded-xl px-1.5 pb-0.5 pt-1 transition',
+                  isCurrent
+                    ? 'bg-starlight/15 shadow-glow-sm ring-2 ring-starlight'
+                    : 'opacity-45',
+                )}
+                style={
+                  isCurrent
+                    ? ({ '--glow': '#ffe9a866' } as React.CSSProperties)
+                    : undefined
+                }
+              >
+                <MageToken
+                  color={found.mage.color}
+                  aura={PLAYER_AURA[found.owner.color]}
+                  golem={found.mage.isTemporary === true}
+                  size={isCurrent ? 44 : 30}
+                />
+                <span
+                  className={clsx(
+                    'mt-0.5 max-w-[68px] truncate text-[9px] font-bold',
+                    isCurrent ? 'text-starlight' : 'text-white/50',
+                  )}
+                >
+                  {isCurrent ? `▶ ${found.owner.name}` : found.owner.name}
+                </span>
+              </div>
+            );
+          })}
+        </div>
       </div>
     </div>
   );
@@ -725,6 +810,19 @@ export function PromptDirector() {
         />
       );
     case 'choose-target-action-space':
+      // Rearrange placements (Flux) name the Mage being placed — show the
+      // meeple queue with it highlighted instead of the bare banner.
+      if (prompt.placingMageId) {
+        return (
+          <RearrangePlacementBanner
+            state={state}
+            pending={pending}
+            label={prompt.label ?? 'Choose a slot'}
+            placingMageId={prompt.placingMageId}
+            pendingMageIds={prompt.pendingMageIds ?? [prompt.placingMageId]}
+          />
+        );
+      }
       return (
         <TargetBanner
           state={state}

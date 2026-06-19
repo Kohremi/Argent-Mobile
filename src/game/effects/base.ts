@@ -13252,7 +13252,11 @@ function fluxNextPlacement(
       prompt: {
         kind: 'choose-target-action-space',
         eligibleSpaceIds: open,
-        label: 'Rearrange: place the next Mage onto a slot',
+        label: 'Flux: place this Mage onto a slot',
+        // Tell the UI which Mage is being placed right now (highlighted) and
+        // which are still queued, so it can show the rearrange meeple list.
+        placingMageId: queue[0] as string,
+        pendingMageIds: queue as string[],
       },
       resume: { effectId: self, context: { step: 'flux-place', newRoomId, queue } },
       source: ctx.source,

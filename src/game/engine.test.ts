@@ -30267,6 +30267,19 @@ describe('Beyond the Beyonds (Mancers)', () => {
     s = placeMageOnSpace(s, 'p2', 'theirs', room.actionSpaces[1]!.id);
     s = cast(s, 3);
     s = chooseOpt(s, room.id);
+    // The placement prompt names the Mage being placed now (the UI highlights
+    // it in a meeple queue) and lists the others still to place.
+    const firstPlace = topPending(s);
+    if (firstPlace.prompt.kind !== 'choose-target-action-space') {
+      throw new Error('expected a slot prompt after the flip');
+    }
+    expect(firstPlace.prompt.placingMageId).toBeDefined();
+    expect(firstPlace.prompt.pendingMageIds).toEqual(
+      expect.arrayContaining(['mine', 'theirs']),
+    );
+    expect(firstPlace.prompt.pendingMageIds?.[0]).toBe(
+      firstPlace.prompt.placingMageId,
+    );
     let guard = 0;
     while (s.pendingResolutionStack.length > 0 && guard++ < 6) {
       const t = topPending(s);

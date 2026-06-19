@@ -788,6 +788,18 @@ export type PendingPrompt =
       kind: 'choose-target-action-space';
       eligibleSpaceIds: ActionSpaceId[];
       label?: string;
+      /**
+       * Optional placement context for rearrange effects (Flux): the Mage being
+       * placed RIGHT NOW. The UI highlights it in a meeple list so the player
+       * knows which Mage this slot pick seats.
+       */
+      placingMageId?: OwnedMageId;
+      /**
+       * The full set of Mages still to be placed this rearrange (includes
+       * `placingMageId`, which is first). Lets the UI render the whole queue as
+       * meeples with the current one highlighted.
+       */
+      pendingMageIds?: OwnedMageId[];
     }
   | { kind: 'choose-vault-card'; eligibleCardIds: VaultCardId[] }
   | { kind: 'choose-supporter-card'; eligibleCardIds: SupporterCardId[] }
