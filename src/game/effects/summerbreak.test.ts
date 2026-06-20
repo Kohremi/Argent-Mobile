@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { applyAction, initGame } from '../engine';
-import type { GameConfig, GameState, OwnedMage, Player } from '../types';
+import { buildResolutionChoiceOptions } from './helpers';
+import { getEffect } from './registry';
+import type { ActionSpace, GameConfig, GameState, OwnedMage, Player } from '../types';
 
 const TWO: GameConfig = {
   activePackIds: ['base', 'summerbreak'],
@@ -300,6 +302,25 @@ describe('Summer Break — Divine Beach Hat', () => {
   });
 });
 
+describe('Summer Break — Planar Ice Cream', () => {
+  it('inserts a not-in-play A-side room onto the board', () => {
+    let s = errands2P((st) => addVault(st, 'p1', 'summerbreak.vault.planar-ice-cream'));
+    const beforeCount = s.rooms.length;
+    const beforeNames = new Set(s.rooms.map((r) => r.name));
+    const beforeRng = s.rng.counter;
+    s = playVault(s, 'summerbreak.vault.planar-ice-cream');
+    expect(s.rooms.length).toBe(beforeCount + 1);
+    const added = s.rooms[s.rooms.length - 1]!;
+    expect(added.side).toBe('A');
+    expect(beforeNames.has(added.name)).toBe(false);
+    // The new room is on the board layout, and the RNG advanced (random draw).
+    expect(s.roomLayout.grid.some((row) => row.includes(added.id))).toBe(true);
+    expect(s.rng.counter).not.toBe(beforeRng);
+    // Consumable consumed.
+    expect(s.players[0]!.vaultCards).toEqual([]);
+  });
+});
+
 // ---- Department-discard supporters ----------------------------------------
 
 const NM_SPELL = 'base.spell.strength-of-earth'; // Natural Magick, L1 costs 1 Mana
@@ -355,6 +376,54 @@ describe('Summer Break — department-discard supporters', () => {
   it('a mismatched-department supporter does not enable an unaffordable cast', () => {
     const s = errands2P((st) => setMana(withSpellAndSupporters(st, [IRINI]), 'p1', 0));
     expect(() => cast(s)).toThrow(/insufficient mana/);
+  });
+});
+
+describe('Summer Break — Beach Brew (Merit-slot waiver)', () => {
+  const BREW = 'summerbreak.vault.beach-brew';
+  const meritSlot: ActionSpace = {
+    id: 'test.merit',
+    roomId: 'test.room',
+    index: 0,
+    slotType: 'merit',
+    occupant: null,
+    effectId: 'base.system.noop',
+    costToActivate: { meritBadges: 1 },
+  };
+
+  it('adds a "discard Beach Brew" option to a Merit slot prompt', () => {
+    let s = initGame(TWO);
+    s = mapPlayer(s, 'p1', (p) => ({ ...p, vaultCards: [{ cardId: BREW, exhausted: false }] }));
+    const { options } = buildResolutionChoiceOptions(s, meritSlot, 'p1', 'base');
+    expect(options.some((o) => o.id === `reward-waiver::${BREW}`)).toBe(true);
+  });
+
+  it('omits the option when no Beach Brew is held', () => {
+    const s = initGame(TWO);
+    const { options } = buildResolutionChoiceOptions(s, meritSlot, 'p1', 'base');
+    expect(options.some((o) => o.id.startsWith('reward-waiver'))).toBe(false);
+  });
+
+  it('discards Beach Brew to take the reward, spending no Merit Badge', () => {
+    let s = initGame(TWO);
+    s = mapPlayer(s, 'p1', (p) => ({
+      ...p,
+      resources: { ...p.resources, meritBadges: 2 },
+      vaultCards: [{ cardId: BREW, exhausted: false }],
+    }));
+    const result = getEffect('base.system.resolution-choice')({
+      state: s,
+      source: { kind: 'room-action', id: 'test.merit', triggeringPlayerId: 'p1', description: 'merit slot' },
+      triggeringPlayerId: 'p1',
+      resumeAnswer: { kind: 'option-chosen', optionId: `reward-waiver::${BREW}`, payload: {} },
+      resumeContext: { innerEffectId: 'base.system.noop', meritCost: 1, goldCost: 0 },
+      allowReactions: true,
+    });
+    if (result.kind !== 'done') throw new Error('expected done');
+    const p1 = result.patch.players!.find((p) => p.id === 'p1')!;
+    expect(p1.resources.meritBadges).toBe(2); // no Badge spent
+    expect(p1.vaultCards).toEqual([]); // Beach Brew consumed
+    expect(p1.personalDiscard).toContainEqual({ kind: 'consumable', cardId: BREW });
   });
 });
 

@@ -17,6 +17,8 @@ import {
   lookupSpellCardDef,
   MAGE_CARD_BY_COLOR,
 } from './helpers';
+import { getPack } from '../../content/registry';
+import { shuffleWithState } from '../../utils/rng';
 import { MAGE_COLORS } from '../types';
 import type {
   ChoiceOption,
@@ -27,6 +29,7 @@ import type {
   MageColor,
   MageImmunityBuff,
   Player,
+  Room,
   SpellCardId,
 } from '../types';
 
@@ -557,4 +560,61 @@ registerEffect('summerbreak.vault.divine-beach-hat', (ctx): EffectResult => {
   }
 
   throw new Error(`${self} unexpected state`);
+});
+
+// ----------------------------------------------------------------------------
+// Planar Ice Cream (Consumable, Fast Action) — Take a random room from the box
+// and add it to the bottom-left of the University Board on the A side.
+//
+// "The box" = wired A-side rooms from the active packs whose name is not
+// already in play. One is drawn with the game RNG and inserted at the
+// bottom-left grid cell (a new bottom row is grown if that cell is occupied),
+// so it joins the board for the rest of the game.
+// ----------------------------------------------------------------------------
+
+/** All wired A-side rooms from the active packs that aren't already in play. */
+function boxRooms(state: GameState): Room[] {
+  const inPlayNames = new Set(state.rooms.map((r) => r.name));
+  const out: Room[] = [];
+  for (const packId of state.activePackIds) {
+    const pack = getPack(packId);
+    if (!pack) continue;
+    for (const r of pack.rooms) {
+      if (r.side !== 'A') continue;
+      if (inPlayNames.has(r.name)) continue;
+      const wired = r.actionSpaces.length > 0 || r.cannotBePlacedInDirectly;
+      if (wired) out.push(r);
+    }
+  }
+  return out;
+}
+
+registerEffect('summerbreak.vault.planar-ice-cream', (ctx): EffectResult => {
+  const box = boxRooms(ctx.state);
+  if (box.length === 0) return { kind: 'done', patch: {} };
+
+  const draw = shuffleWithState(box, ctx.state.rng);
+  const room = draw.value[0]!;
+
+  // Insert at the bottom-left cell; grow a new bottom row if it's taken.
+  const layout = ctx.state.roomLayout;
+  const grid = layout.grid.map((row) => [...row]);
+  let rows = layout.rows;
+  if (grid[rows - 1]?.[0] == null) {
+    grid[rows - 1]![0] = room.id;
+  } else {
+    const newRow: (string | null)[] = new Array(layout.cols).fill(null);
+    newRow[0] = room.id;
+    grid.push(newRow);
+    rows += 1;
+  }
+
+  return {
+    kind: 'done',
+    patch: {
+      rng: draw.state,
+      rooms: [...ctx.state.rooms, room],
+      roomLayout: { cols: layout.cols, rows, grid },
+    },
+  };
 });

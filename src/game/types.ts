@@ -380,6 +380,13 @@ export interface VaultCard {
   description?: string;
   /** Number of copies of this card to add to the vault deck (default 1). */
   copies?: number;
+  /**
+   * Summer Break — Beach Brew: when held (readied) in the vault, this card may
+   * be DISCARDED to resolve a Merit slot without spending a Merit Badge. The
+   * option is surfaced inside the slot's resolution-choice prompt; the card is
+   * never played directly.
+   */
+  meritSlotWaiver?: boolean;
 }
 
 export type SupporterTiming =

@@ -2933,7 +2933,10 @@ registerEffect('base.system.resolution-choice', (ctx: EffectContext): EffectResu
   // is Divinity Side B — pay 4 Gold to activate the Merit Slot instead. Both run
   // the slot's real effect afterward; only the resource paid differs.
   const payWithGold = optionId === 'reward-gold';
-  if (optionId !== 'reward' && !payWithGold) {
+  // Beach Brew (Summer Break) — `reward-waiver::<vaultCardId>`: discard the
+  // named Vault card to take the reward without spending a Merit Badge.
+  const payWithWaiver = optionId.startsWith('reward-waiver::');
+  if (optionId !== 'reward' && !payWithGold && !payWithWaiver) {
     throw new Error(`resolution-choice: unknown optionId ${optionId}`);
   }
 
@@ -2941,7 +2944,33 @@ registerEffect('base.system.resolution-choice', (ctx: EffectContext): EffectResu
   // post-deduction state so the inner effect's player-patch already reflects
   // the spend.
   let working: GameState = ctx.state;
-  const meritToSpend = payWithGold ? 0 : meritCostRaw;
+  if (payWithWaiver) {
+    const waiverCardId = optionId.slice('reward-waiver::'.length);
+    working = {
+      ...working,
+      players: working.players.map((p) => {
+        if (p.id !== playerId) return p;
+        let removed = false;
+        const vaultCards = p.vaultCards.filter((v) => {
+          if (!removed && v.cardId === waiverCardId && !v.exhausted) {
+            removed = true;
+            return false;
+          }
+          return true;
+        });
+        if (!removed) return p;
+        return {
+          ...p,
+          vaultCards,
+          personalDiscard: [
+            ...p.personalDiscard,
+            { kind: 'consumable' as const, cardId: waiverCardId },
+          ],
+        };
+      }),
+    };
+  }
+  const meritToSpend = payWithGold || payWithWaiver ? 0 : meritCostRaw;
   const goldToSpend = payWithGold ? goldCost : 0;
   if (meritToSpend > 0 || goldToSpend > 0) {
     const player = working.players.find((p) => p.id === playerId);
@@ -2993,7 +3022,9 @@ registerEffect('base.system.resolution-choice', (ctx: EffectContext): EffectResu
     allowReactions: ctx.allowReactions,
   });
   const costPatch: GameStatePatch =
-    meritToSpend > 0 || goldToSpend > 0 ? { players: working.players } : {};
+    meritToSpend > 0 || goldToSpend > 0 || payWithWaiver
+      ? { players: working.players }
+      : {};
   const innerPatch = innerResult.patch ?? {};
   const combined: GameStatePatch = { ...costPatch, ...innerPatch };
 

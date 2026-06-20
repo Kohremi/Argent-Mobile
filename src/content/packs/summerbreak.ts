@@ -11,9 +11,9 @@ import type { Department, SupporterCard, VaultCard } from '../../game/types';
 //   3. A 6th round (`totalRounds: 6`), and a round-end scenario at the end of
 //      rounds 1-5 (`roundEndScenarios`) — see src/game/effects/summerbreak.ts.
 //
-// 4 of the 6 vault cards ship here. Deferred (new engine mechanics): Planar Ice
-// Cream (insert a random room mid-game) and Beach Brew (a Merit-slot payment
-// reaction).
+// All 6 vault cards ship here, including Planar Ice Cream (inserts a random room
+// onto the board mid-game) and Beach Brew (discard to resolve a Merit slot
+// without spending a Badge — surfaced inside the slot's resolution prompt).
 //
 // The 6 department-discard supporters ship here too: each may be discarded to
 // cast a Spell of its department for free (cast-time waiver in handleCastSpell).
@@ -24,6 +24,18 @@ const PACK_ID = 'summerbreak';
 // Beach Brew (a Merit-slot payment reaction) are deferred — they need new
 // engine mechanics. Effects live in src/game/effects/summerbreak.ts.
 const vaultCards: VaultCard[] = [
+  {
+    id: 'summerbreak.vault.planar-ice-cream',
+    name: 'Planar Ice Cream',
+    sourcePackId: PACK_ID,
+    type: 'consumable',
+    goldCost: 1,
+    timing: 'fast-action',
+    effectId: 'summerbreak.vault.planar-ice-cream',
+    description:
+      'Take a random room from the box and add it to the bottom-left of the University Board on the A side.',
+    copies: 1,
+  },
   {
     id: 'summerbreak.vault.yacht-keys',
     name: "Chancellor's Yacht Keys",
@@ -67,6 +79,20 @@ const vaultCards: VaultCard[] = [
     timing: 'action',
     effectId: 'summerbreak.vault.divine-beach-hat',
     description: 'Gain 1 Mana and then cast a Spell.',
+    copies: 1,
+  },
+  {
+    id: 'summerbreak.vault.beach-brew',
+    name: 'Beach Brew',
+    sourcePackId: PACK_ID,
+    type: 'consumable',
+    goldCost: 1,
+    // Never played directly (reaction timing blocks PLAY_VAULT_CARD); it is
+    // offered as an option inside a Merit slot's resolution prompt instead.
+    timing: 'reaction',
+    effectId: 'summerbreak.vault.beach-brew',
+    description: 'Resolve a Merit slot without exhausting a Merit Badge.',
+    meritSlotWaiver: true,
     copies: 1,
   },
 ];

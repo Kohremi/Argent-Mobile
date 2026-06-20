@@ -3241,6 +3241,25 @@ export const DIVINITY_B_MERIT_GOLD = 4;
  * `occupant` is still null), so reading `space.occupant` directly would miss
  * the just-seated Mage.
  */
+/**
+ * The first readied (unexhausted) Merit-slot-waiver Vault card the player holds
+ * (Beach Brew), or null. Used to surface the "discard to skip the Merit Badge"
+ * resolution option.
+ */
+export function findMeritSlotWaiverCard(
+  state: GameState,
+  playerId: PlayerId,
+): { cardId: VaultCardId; name: string } | null {
+  const player = findPlayer(state, playerId);
+  if (!player) return null;
+  for (const v of player.vaultCards) {
+    if (v.exhausted) continue;
+    const def = lookupVaultCardDef(state, v.cardId);
+    if (def?.meritSlotWaiver) return { cardId: v.cardId, name: def.name };
+  }
+  return null;
+}
+
 export function buildResolutionChoiceOptions(
   state: GameState,
   space: ActionSpace,
@@ -3311,6 +3330,20 @@ export function buildResolutionChoiceOptions(
             unavailableReason: `requires ${goldCost} Gold (you have ${gold})`,
           }),
     });
+  }
+  // Beach Brew (Summer Break) — discard a readied Merit-slot-waiver Vault card
+  // to take the reward without spending a Merit Badge. Always available when
+  // the slot has a Merit cost and such a card is held (even if Badges are short).
+  if (meritCost > 0) {
+    const waiver = findMeritSlotWaiverCard(state, playerId);
+    if (waiver) {
+      options.push({
+        id: `reward-waiver::${waiver.cardId}`,
+        label: `Take reward (discard ${waiver.name} — no Merit Badge)`,
+        payload: {},
+        available: true,
+      });
+    }
   }
   options.push({ id: 'forfeit', label: 'Forfeit for 1 IP', payload: {} });
 
