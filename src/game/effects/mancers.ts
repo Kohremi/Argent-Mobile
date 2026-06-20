@@ -8,6 +8,7 @@ import {
   applyRoomLockPatch,
   applyVaultDraft,
   applyVaultPurchaseMaybeWaived,
+  adventuringBPlacementHookPatch,
   banishMage,
   buildBanishTargets,
   buildBurnTargets,
@@ -1287,14 +1288,21 @@ function summonGolemPatch(
       p.id !== playerId ? p : { ...p, mages: [...p.mages, golem] },
     ),
   };
-  return {
-    nextSequenceId: seq + 1,
+  const placed: GameState = {
+    ...withGolem,
     ...placeMageOnSlot(withGolem, {
       mageId: golemId,
       ownerId: playerId,
       spaceId,
       asShadow,
     }),
+  };
+  return {
+    nextSequenceId: placed.nextSequenceId,
+    rooms: placed.rooms,
+    players: placed.players,
+    // A golem landing on Adventuring B still triggers its on-place card-add.
+    ...adventuringBPlacementHookPatch(placed, spaceId, playerId),
   };
 }
 
@@ -1394,6 +1402,8 @@ registerEffect('mancers.room.golem-lab-a.slot-1', (ctx): EffectResult => {
       rooms: working.rooms,
       nextSequenceId: working.nextSequenceId,
       roomLocks: working.roomLocks,
+      // Carry any on-place prompt the golem's landing queued (Adventuring B).
+      pendingResolutionStack: working.pendingResolutionStack,
     },
   };
 });
@@ -1457,6 +1467,8 @@ registerEffect('mancers.room.golem-lab-a.slot-3', (ctx): EffectResult => {
     players: working.players,
     rooms: working.rooms,
     nextSequenceId: working.nextSequenceId,
+    // Carry any on-place prompt the golem's landing queued (Adventuring B).
+    pendingResolutionStack: working.pendingResolutionStack,
   };
   // "Take another action" — +1 to the errands extra-action counter so the
   // turn stays open for one more Action.
@@ -1700,6 +1712,8 @@ registerEffect('mancers.room.golem-lab-b.slot-2', (ctx): EffectResult => {
         players: working.players,
         rooms: working.rooms,
         nextSequenceId: working.nextSequenceId,
+        // Carry any on-place prompt the golem's landing queued (Adventuring B).
+        pendingResolutionStack: working.pendingResolutionStack,
       },
       window: {
         triggerEvents: [ban.triggerEvent],
@@ -1771,6 +1785,8 @@ registerEffect('mancers.room.golem-lab-b.slot-3', (ctx): EffectResult => {
         rooms: working.rooms,
         nextSequenceId: working.nextSequenceId,
         pendingRevivalChecks: working.pendingRevivalChecks,
+        // Carry any on-place prompt the golem's landing queued (Adventuring B).
+        pendingResolutionStack: working.pendingResolutionStack,
       },
       window: {
         triggerEvents: [wounded.triggerEvent],
@@ -2881,13 +2897,21 @@ function shadowPlaceEffect(
       ...ctx.state,
       ...gainResourcePatch(ctx.state, ctx.triggeringPlayerId, 'mana', -manaCost),
     };
-    const patch: GameStatePatch = placeMageOnSlot(working, {
+    const placePatch = placeMageOnSlot(working, {
       mageId,
       ownerId: ctx.triggeringPlayerId,
       spaceId,
       asShadow: true,
       firesTechnomancy: true,
     });
+    const patch: GameStatePatch = {
+      ...placePatch,
+      ...adventuringBPlacementHookPatch(
+        { ...working, ...placePatch },
+        spaceId,
+        ctx.triggeringPlayerId,
+      ),
+    };
     working = { ...working, ...patch };
     // Shadowing an opponent's base Mage opens a mage-shadowed reaction window.
     const baseOcc = space.occupant;
@@ -3039,13 +3063,21 @@ function artificierGolemPlace(
       const baseOcc = paid.rooms
         .flatMap((r) => r.actionSpaces)
         .find((s) => s.id === spaceId)?.occupant;
-      const patch: GameStatePatch = placeMageOnSlot(paid, {
+      const placePatch = placeMageOnSlot(paid, {
         mageId,
         ownerId: playerId,
         spaceId,
         asShadow: true,
         firesTechnomancy: true,
       });
+      const patch: GameStatePatch = {
+        ...placePatch,
+        ...adventuringBPlacementHookPatch(
+          { ...paid, ...placePatch },
+          spaceId,
+          playerId,
+        ),
+      };
       // Shadowing an opponent's base Mage opens a mage-shadowed reaction window.
       if (baseOcc && baseOcc.ownerId !== playerId) {
         const working: GameState = { ...paid, ...patch };
@@ -3079,7 +3111,14 @@ function artificierGolemPlace(
       asShadow: false,
       firesTechnomancy: true,
     });
-    return { kind: 'done', patch: placePatch };
+    const placed: GameState = { ...paid, ...placePatch };
+    return {
+      kind: 'done',
+      patch: {
+        ...placePatch,
+        ...adventuringBPlacementHookPatch(placed, spaceId, playerId),
+      },
+    };
   }
 
   if (step === 'slot') {
@@ -3408,7 +3447,14 @@ registerEffect('mancers.vault.hourglass-of-fate.react', (ctx): EffectResult => {
       asShadow: false,
       firesTechnomancy: true,
     });
-    return { kind: 'done', patch: placePatch };
+    const placed: GameState = { ...s0, ...placePatch };
+    return {
+      kind: 'done',
+      patch: {
+        ...placePatch,
+        ...adventuringBPlacementHookPatch(placed, spaceId, playerId),
+      },
+    };
   }
 
   // A Mage was chosen — prompt for the destination (open slots + Ars Magna

@@ -6307,7 +6307,7 @@ describe('Adventuring B', () => {
     s = applyAction(s, {
       type: 'RESOLVE_PENDING',
       resolutionId: slotPrompt.id,
-      answer: { kind: 'space-chosen', spaceId: advSlot!, payload: {} },
+      answer: { kind: 'space-chosen', spaceId: advSlot! },
     });
     // The on-place pick-card-type prompt should now fire (the bug: it didn't).
     const top = topPending(s);
@@ -10602,6 +10602,41 @@ describe('Golem Lab A (Mancers)', () => {
     if (s.phase.kind === 'errands') {
       expect(s.phase.extraActions ?? 0).toBe(1);
     }
+  });
+
+  it('a golem placed on Adventuring B fires its on-place pick-card-type prompt', () => {
+    let s = setup(1);
+    // Force an Adventuring B room into play (replace a non-UC, non-Golem-Lab room).
+    const advB = baseGamePack.rooms.find(
+      (r) => r.name === 'Adventuring' && r.side === 'B',
+    )!;
+    const replaceIdx = s.rooms.findIndex(
+      (r) => !r.isUniversityCentral && r.name !== 'Golem Lab',
+    );
+    s = { ...s, rooms: s.rooms.map((r, i) => (i === replaceIdx ? advB : r)) };
+    // Golem Lab slot-1: pay 1 Mana, conjure a golem onto any open slot.
+    s = place(s, 'mancers.room.golem-lab.a.slot-1');
+    const top = topPending(s);
+    if (top.prompt.kind !== 'choose-target-action-space') {
+      throw new Error('expected a golem-destination prompt');
+    }
+    const advSlot = top.prompt.eligibleSpaceIds.find((id) =>
+      id.startsWith('base.room.adventuring.b'),
+    );
+    expect(advSlot).toBeDefined();
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: top.id,
+      answer: { kind: 'space-chosen', spaceId: advSlot! },
+    });
+    // The on-place pick-card-type prompt now fires for the golem (the bug: it
+    // didn't, because golems bypass the PLACE_WORKER hook path).
+    const pick = topPending(s);
+    expect(pick.source.id).toBe('base.room.adventuring.b');
+    if (pick.prompt.kind !== 'choose-from-options') {
+      throw new Error('expected choose-from-options prompt');
+    }
+    expect(pick.prompt.options.map((o) => o.id)).toContain('spell');
   });
 
   it('temporary golems vanish at round-end (not returned to any supply)', () => {

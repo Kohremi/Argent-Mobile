@@ -1292,6 +1292,14 @@ export function adventuringBPlacementHookPatch(
     r.actionSpaces.some((s) => s.id === spaceId),
   );
   if (room?.id !== 'base.room.adventuring.b') return {};
+  // Idempotent: a single placement can route through more than one helper that
+  // applies this hook (e.g. `placeOfficeMageOnSpace` baked it in AND a wrapping
+  // `patchWithMaybeInstantReward`). If the on-place prompt is already queued on
+  // top, don't stack a duplicate.
+  const top = state.pendingResolutionStack[state.pendingResolutionStack.length - 1];
+  if (top?.resume.effectId === 'base.system.adventuring-b.pick-card-type') {
+    return {};
+  }
   const promptInput = buildAdventuringBPickPrompt(state, ownerId);
   const seq = state.nextSequenceId;
   const fullPrompt: PendingResolution = {
