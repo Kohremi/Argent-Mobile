@@ -475,9 +475,28 @@ export function buildInitialState(config: GameConfig): GameState {
   const voters: ConsortiumVoter[] = [...faceUpVoters, ...drawnFaceDown];
 
   // ---- Bell Tower ----
-  const bellAvailable: BellTowerCard[] = allBellTower.filter(
+  // The eligible pool is every active pack's Bell Tower card passing the
+  // player-count filter (Renovation cards ship with minPlayers 2, so they join
+  // the pool when that pack is active).
+  const bellPool: BellTowerCard[] = allBellTower.filter(
     (c) => c.minPlayers <= playerCount,
   );
+  // Bell Tower Renovation: deal a fresh random hand equal to the player count
+  // each round, drawn from the combined pool. Otherwise the legacy behavior —
+  // the whole eligible set is available and restored each round.
+  const renovationActive = activePackIds.includes('renovation');
+  const bellTowerDealPerRound = renovationActive
+    ? Math.min(playerCount, bellPool.length)
+    : null;
+  let bellAvailable: BellTowerCard[];
+  if (bellTowerDealPerRound !== null) {
+    const dealt = shuffleWithState(bellPool, rng);
+    rng = dealt.state;
+    bellAvailable = dealt.value.slice(0, bellTowerDealPerRound);
+  } else {
+    bellAvailable = bellPool;
+  }
+  const bellTowerPool = bellPool.map((c) => c.id);
 
   // ---- Decks & opening tableaus ----
   // Defensive: never shuffle a UNIQUE leader spell into the draftable
@@ -530,6 +549,8 @@ export function buildInitialState(config: GameConfig): GameState {
     supporterTableau,
     legendarySpells: allLegendary.map((s) => s.id),
     bellTower: { available: bellAvailable, taken: [] },
+    bellTowerPool,
+    bellTowerDealPerRound,
     archmagesApprenticeOwner: null,
     roomLocks: [],
     oncePerGameSpellsCast: [],

@@ -3254,8 +3254,15 @@ export function buildResolutionChoiceOptions(
       ? (space.costToActivate?.meritBadges ?? 0)
       : 0;
   const meritBadges = player?.resources.meritBadges ?? 0;
+  // Greed's temporary Merit Badges (Renovation) cover a merit cost AFTER normal
+  // badges, at the price of 1 IP each.
+  const tempBadges = player?.temporaryMeritBadges ?? 0;
   const gold = player?.resources.gold ?? 0;
-  const canAffordReward = meritCost === 0 || meritBadges >= meritCost;
+  const canAffordReward =
+    meritCost === 0 || meritBadges + tempBadges >= meritCost;
+  // How many temporary badges the "reward" option would have to spend (and thus
+  // the IP it would cost) — used only for the option label.
+  const tempBadgesUsed = Math.max(0, Math.min(tempBadges, meritCost - meritBadges));
 
   const liveSpace = state.rooms
     .flatMap((r) => r.actionSpaces)
@@ -3277,7 +3284,9 @@ export function buildResolutionChoiceOptions(
       ? {
           id: 'reward',
           label:
-            meritCost > 0 ? `Take reward (spend ${meritCost} MB)` : 'Take reward',
+            meritCost > 0
+              ? `Take reward (spend ${meritCost} MB${tempBadgesUsed > 0 ? `, ${tempBadgesUsed} temporary = −${tempBadgesUsed} IP` : ''})`
+              : 'Take reward',
           payload: {},
           available: true,
         }
@@ -3286,7 +3295,7 @@ export function buildResolutionChoiceOptions(
           label: `Take reward (spend ${meritCost} MB)`,
           payload: {},
           available: false,
-          unavailableReason: `requires ${meritCost} Merit Badge${meritCost === 1 ? '' : 's'} (you have ${meritBadges})`,
+          unavailableReason: `requires ${meritCost} Merit Badge${meritCost === 1 ? '' : 's'} (you have ${meritBadges}${tempBadges > 0 ? ` + ${tempBadges} temporary` : ''})`,
         },
   ];
   if (divinityGoldOption) {

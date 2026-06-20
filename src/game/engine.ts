@@ -3,6 +3,7 @@
 // lives in state.rng, all id generation in state.nextSequenceId.
 
 import { getPack } from '../content/registry';
+import { shuffleWithState } from '../utils/rng';
 import { validateAction } from './actions';
 import { assertBoardConsistent, findBoardInconsistency } from './boardInvariant';
 import { computeFinalScoring, playerOwnsWildSupporter } from './scoring';
@@ -2623,17 +2624,46 @@ function handleClaimBellTower(
     description: card.name,
   };
 
+  const claimedPlayers = state.players.map((p) =>
+    p.id !== action.playerId
+      ? p
+      : { ...p, bellTowerCards: [...p.bellTowerCards, card.id] },
+  );
+
+  // Bell Tower Renovation — Adaptability: when this claim empties the tower, its
+  // holder gets a bonus "place a Mage" (with powers). Unlike the standard
+  // last-card reactions (Tardy / Stop Time / Hourglass), which only fire for
+  // players OTHER than the one who took the final card, Adaptability fires for
+  // its holder even when that holder took the final card. At most one
+  // Adaptability is in play per round, so a single place-chain slot suffices.
+  const adaptabilityHolder = isLastCard
+    ? claimedPlayers.find((p) =>
+        p.bellTowerCards.includes('renovation.bell.adaptability'),
+      )
+    : undefined;
+  const adaptabilityChain: GameState['pendingPlaceChain'] = adaptabilityHolder
+    ? {
+        playerId: adaptabilityHolder.id,
+        source: {
+          kind: 'bell-tower',
+          id: 'renovation.bell.adaptability',
+          triggeringPlayerId: adaptabilityHolder.id,
+          description: 'Adaptability',
+        },
+        remaining: 1,
+        allowStop: true,
+        suppressMagePowers: false,
+      }
+    : null;
+
   const claimed: GameState = {
     ...state,
     bellTower: {
       available: state.bellTower.available.filter((c) => c.id !== card.id),
       taken: [...state.bellTower.taken, { cardId: card.id, takenBy: action.playerId }],
     },
-    players: state.players.map((p) =>
-      p.id !== action.playerId
-        ? p
-        : { ...p, bellTowerCards: [...p.bellTowerCards, card.id] },
-    ),
+    players: claimedPlayers,
+    ...(adaptabilityChain ? { pendingPlaceChain: adaptabilityChain } : {}),
     ...(isLastCard
       ? {
           pendingBellTowerLastEvent: {
@@ -3171,6 +3201,9 @@ function refreshPlayerCardsAndMerit(state: GameState): GameState {
       meritBadges: p.resources.meritBadges + p.resources.meritBadgesSpent,
       meritBadgesSpent: 0,
     },
+    // Greed's temporary Merit Badges are discarded after the round they were
+    // granted (they were spendable through that round's Resolution).
+    temporaryMeritBadges: 0,
     bellTowerCards: [],
   }));
   return { ...state, players };
@@ -3200,6 +3233,26 @@ function redealTableaus(state: GameState): GameState {
 }
 
 function restoreBellTower(state: GameState): GameState {
+  // Bell Tower Renovation: re-deal a fresh random hand (= player count) from the
+  // master pool each round. Every round's offerings are independent draws, so
+  // cards taken in prior rounds are eligible again.
+  if (state.bellTowerDealPerRound !== null) {
+    const poolCards: BellTowerCard[] = [];
+    for (const id of state.bellTowerPool) {
+      const card = lookupBellTowerCard(state, id);
+      if (card) poolCards.push(card);
+    }
+    const shuffled = shuffleWithState(poolCards, state.rng);
+    const available = shuffled.value.slice(
+      0,
+      Math.min(state.bellTowerDealPerRound, shuffled.value.length),
+    );
+    return {
+      ...state,
+      rng: shuffled.state,
+      bellTower: { available, taken: [] },
+    };
+  }
   const restored: BellTowerCard[] = [];
   for (const t of state.bellTower.taken) {
     const card = lookupBellTowerCard(state, t.cardId);

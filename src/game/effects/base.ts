@@ -2946,7 +2946,8 @@ registerEffect('base.system.resolution-choice', (ctx: EffectContext): EffectResu
   if (meritToSpend > 0 || goldToSpend > 0) {
     const player = working.players.find((p) => p.id === playerId);
     if (!player) throw new Error('resolution-choice: player not found');
-    if (player.resources.meritBadges < meritToSpend) {
+    const tempAvail = player.temporaryMeritBadges ?? 0;
+    if (player.resources.meritBadges + tempAvail < meritToSpend) {
       // Should never happen — the prompt's "reward" option is unavailable in
       // this case. Belt-and-suspenders.
       throw new Error(
@@ -2958,6 +2959,10 @@ registerEffect('base.system.resolution-choice', (ctx: EffectContext): EffectResu
         'resolution-choice: cannot take reward without sufficient Gold',
       );
     }
+    // Spend normal Merit Badges first, then Greed's temporary ones (Renovation).
+    // Each temporary badge used costs 1 IP.
+    const normalSpend = Math.min(player.resources.meritBadges, meritToSpend);
+    const tempSpend = meritToSpend - normalSpend;
     working = {
       ...working,
       players: working.players.map((p) =>
@@ -2965,11 +2970,13 @@ registerEffect('base.system.resolution-choice', (ctx: EffectContext): EffectResu
           ? p
           : {
               ...p,
+              temporaryMeritBadges: tempAvail - tempSpend,
               resources: {
                 ...p.resources,
-                meritBadges: p.resources.meritBadges - meritToSpend,
-                meritBadgesSpent: p.resources.meritBadgesSpent + meritToSpend,
+                meritBadges: p.resources.meritBadges - normalSpend,
+                meritBadgesSpent: p.resources.meritBadgesSpent + normalSpend,
                 gold: p.resources.gold - goldToSpend,
+                influence: Math.max(0, p.resources.influence - tempSpend),
               },
             },
       ),

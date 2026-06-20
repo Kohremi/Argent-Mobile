@@ -25,3 +25,4 @@ import './knights';
 import './ascension';
 import './promo';
 import './archmage';
+import './renovation';

@@ -216,6 +216,13 @@ export interface Player {
    */
   candidateStartingSpellId: SpellCardId;
   resources: ResourceBundle;
+  /**
+   * Temporary Merit Badges (Bell Tower Renovation — Greed). Spent only AFTER
+   * the player's normal `resources.meritBadges`, and each one used costs the
+   * player 1 IP. Discarded (cleared to 0) at round-setup — they live just long
+   * enough to be spent during that round's Resolution. Absent/0 = none.
+   */
+  temporaryMeritBadges?: number;
   mages: OwnedMage[];
   ownedSpells: OwnedSpell[];
   vaultCards: OwnedVaultCard[];
@@ -1407,6 +1414,20 @@ export interface GameState {
     available: BellTowerCard[];
     taken: { cardId: BellTowerCardId; takenBy: PlayerId }[];
   };
+  /**
+   * Master pool of Bell Tower card ids eligible to be dealt this game (the
+   * cards passing the `minPlayers` filter for the player count). Used by the
+   * Bell Tower Renovation module's per-round random deal; informational
+   * otherwise.
+   */
+  bellTowerPool: BellTowerCardId[];
+  /**
+   * Bell Tower Renovation: how many Bell Tower cards are dealt fresh at random
+   * from `bellTowerPool` each round (= player count). `null` = legacy behavior
+   * (the eligible set is all available and is restored each round, not
+   * re-dealt).
+   */
+  bellTowerDealPerRound: number | null;
 
   archmagesApprenticeOwner: PlayerId | null;
   /**
