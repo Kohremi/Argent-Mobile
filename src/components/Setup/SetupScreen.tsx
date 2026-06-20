@@ -1,6 +1,7 @@
 import { useMemo } from 'react';
 import clsx from 'clsx';
 import { listPacks } from '../../content/registry';
+import type { ContentPack } from '../../content/types';
 import {
   ABILITY_DEPARTMENTS,
   PLAYER_COUNT_RANGE,
@@ -20,6 +21,29 @@ import type { Department, GameConfig, Mage, RoomId } from '../../game/types';
  * action-space `description`s in the content packs. A room whose two sides
  * differ in feel carries `{ a, b }`; otherwise a single string covers both.
  */
+/**
+ * One-line content summary for an expansion's setup-screen row. Lists only the
+ * non-empty categories, so content-light packs (e.g. Summer Break, which adds
+ * vault cards, supporters, and round-end events rather than mages/rooms) don't
+ * read as "0 mages · 0 rooms · …". Falls back to a "rules changes" note for a
+ * pack that only adjusts rules.
+ */
+function packContentSummary(pack: ContentPack): string {
+  const parts: string[] = [];
+  const add = (n: number, label: string) => {
+    if (n > 0) parts.push(`${n} ${label}`);
+  };
+  add(pack.mages.length, 'mages');
+  add(pack.rooms.length, 'rooms');
+  add(pack.spells.length, 'spells');
+  add(pack.vaultCards.length, 'vault cards');
+  add(pack.supporters.length, 'supporters');
+  add(pack.voters.length, 'voters');
+  add(pack.bellTowerCards.length, 'bell tower offerings');
+  add(pack.roundEndScenarios?.length ?? 0, 'round-end events');
+  return parts.length > 0 ? parts.join(' · ') : 'rules changes';
+}
+
 const ROOM_OVERVIEWS: Record<string, string | { a?: string; b?: string }> = {
   'Council Chamber':
     'Study for Intelligence & Wisdom, bank Research, and draft Vault cards.',
@@ -248,8 +272,7 @@ export function SetupScreen() {
                       <p className="text-sm text-slate-400">{pack.description}</p>
                     )}
                     <p className="text-xs text-slate-500 mt-1">
-                      {pack.mages.length} mages · {pack.rooms.length} rooms ·{' '}
-                      {pack.spells.length} spells · {pack.voters.length} voters
+                      {packContentSummary(pack)}
                     </p>
                   </div>
                 </label>
