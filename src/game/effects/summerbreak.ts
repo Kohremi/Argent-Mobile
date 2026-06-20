@@ -8,12 +8,13 @@
 // Round 4   "Summer Study Credits" → may swap one owned Mage for a supply Mage
 // Round 5   "Opening Ceremony"     → draft one reward from a shared pool
 
-import { registerEffect } from './registry';
+import { getEffect, hasEffect, registerEffect } from './registry';
 import {
   applySecretSupporterDraw,
   bumpInfluencePatch,
   findPlayer,
   gainResourcePatch,
+  lookupSpellCardDef,
   MAGE_CARD_BY_COLOR,
 } from './helpers';
 import { MAGE_COLORS } from '../types';
@@ -24,7 +25,9 @@ import type {
   GameState,
   GameStatePatch,
   MageColor,
+  MageImmunityBuff,
   Player,
+  SpellCardId,
 } from '../types';
 
 // ============================================================================
@@ -339,4 +342,219 @@ registerEffect('summerbreak.scenario.reward-draft', (ctx): EffectResult => {
         : {}),
     },
   };
+});
+
+// ============================================================================
+// Vault cards (subset). Deferred to a later pass: Planar Ice Cream (insert a
+// random room mid-game) and Beach Brew (a Merit-slot payment reaction) — both
+// need new engine mechanics. Card disposal (treasure exhaust / consumable
+// discard) and the action budget are handled by handlePlayVaultCard, so these
+// effects only apply the reward.
+// ============================================================================
+
+/** Chancellor's Yacht Keys (Treasure, Action) — Gain a secret Supporter. */
+registerEffect('summerbreak.vault.yacht-keys', (ctx): EffectResult => ({
+  kind: 'done',
+  patch: applySecretSupporterDraw(ctx.state, ctx.triggeringPlayerId),
+}));
+
+/**
+ * Builds a round-scoped "your Mages are immune to wounding" buff for the
+ * triggering player. Mirrors the base immunity-buff spells (Moste Holie
+ * Litanies etc.): a `mage-immunity` buff blocking `wound` from any source,
+ * expiring at round end (and unconditionally at the next Resolution start).
+ */
+function wardAgainstWoundingPatch(
+  state: GameState,
+  playerId: string,
+  cardId: string,
+  label: string,
+): GameStatePatch {
+  const buff: MageImmunityBuff = {
+    kind: 'mage-immunity',
+    ownerId: playerId,
+    spellCardId: cardId,
+    label,
+    immuneTo: ['wound'],
+    source: 'any',
+    expiresAt: { kind: 'round-end' },
+  };
+  return { activeBuffs: [...state.activeBuffs, buff] };
+}
+
+/**
+ * Magic Sunblock (Consumable, Fast Action) — Your Mages are immune to wounding
+ * for the rest of the round.
+ */
+registerEffect('summerbreak.vault.magic-sunblock', (ctx): EffectResult => ({
+  kind: 'done',
+  patch: wardAgainstWoundingPatch(
+    ctx.state,
+    ctx.triggeringPlayerId,
+    'summerbreak.vault.magic-sunblock',
+    'Magic Sunblock',
+  ),
+}));
+
+/**
+ * Sorcerer's Beach Towel (Treasure, Action) — Spend 2 Mana to make your Mages
+ * immune to wounding for the rest of the round. No-op (the card still exhausts)
+ * if the player can't afford the 2 Mana.
+ */
+registerEffect('summerbreak.vault.beach-towel', (ctx): EffectResult => {
+  const player = findPlayer(ctx.state, ctx.triggeringPlayerId);
+  if (!player || player.resources.mana < 2) return { kind: 'done', patch: {} };
+  const manaPatch = gainResourcePatch(ctx.state, ctx.triggeringPlayerId, 'mana', -2);
+  const wardPatch = wardAgainstWoundingPatch(
+    ctx.state,
+    ctx.triggeringPlayerId,
+    'summerbreak.vault.beach-towel',
+    "Sorcerer's Beach Towel",
+  );
+  return { kind: 'done', patch: { ...manaPatch, ...wardPatch } };
+});
+
+// ----------------------------------------------------------------------------
+// Divine Beach Hat (Treasure, Action) — Gain 1 Mana and then cast a Spell.
+// Mirrors Memoirs of the Future-Past ("cast a Spell you own"): list the
+// player's researched, affordable, action/fast-timed Spells; on pick, deduct
+// the level's printed Mana, exhaust it, and delegate to its effect. The +1 Mana
+// is granted up front so it can help pay for the cast.
+// ----------------------------------------------------------------------------
+
+type CastableSpell = {
+  spellCardId: SpellCardId;
+  level: 1 | 2 | 3;
+  manaCost: number;
+  effectId: string;
+  oncePerGame: boolean;
+  label: string;
+};
+
+function listCastableSpells(state: GameState, casterId: string): CastableSpell[] {
+  const player = state.players.find((p) => p.id === casterId);
+  if (!player) return [];
+  const out: CastableSpell[] = [];
+  for (const owned of player.ownedSpells) {
+    if (owned.exhausted) continue;
+    const def = lookupSpellCardDef(state, owned.cardId);
+    if (!def) continue;
+    const researchedLevels: (1 | 2 | 3)[] = [];
+    if (owned.intPlaced) researchedLevels.push(1);
+    if (owned.wisPlacedLevel2) researchedLevels.push(2);
+    if (owned.wisPlacedLevel3) researchedLevels.push(3);
+    for (const lvl of researchedLevels) {
+      const lvlDef = def.levels.find((l) => l.level === lvl);
+      if (!lvlDef) continue;
+      if (lvlDef.timing === 'reaction') continue;
+      if (!hasEffect(lvlDef.effectId)) continue;
+      if (lvlDef.oncePerGame && state.oncePerGameSpellsCast.includes(owned.cardId)) {
+        continue;
+      }
+      if (player.resources.mana < lvlDef.manaCost) continue;
+      out.push({
+        spellCardId: owned.cardId,
+        level: lvl,
+        manaCost: lvlDef.manaCost,
+        effectId: lvlDef.effectId,
+        oncePerGame: lvlDef.oncePerGame === true,
+        label: `${def.name} L${lvl} "${lvlDef.title}" (${lvlDef.manaCost} Mana)`,
+      });
+    }
+  }
+  return out;
+}
+
+/** Local copy of base's delegate-composition helper (not exported). */
+function composeWithDelegate(
+  delegate: EffectResult,
+  baseUpdate: GameStatePatch,
+): EffectResult {
+  switch (delegate.kind) {
+    case 'done':
+      return { kind: 'done', patch: { ...baseUpdate, ...delegate.patch } };
+    case 'pause':
+      return { kind: 'pause', patch: { ...baseUpdate, ...(delegate.patch ?? {}) }, pending: delegate.pending };
+    case 'open-reaction':
+      return { kind: 'open-reaction', patch: { ...baseUpdate, ...(delegate.patch ?? {}) }, window: delegate.window };
+  }
+}
+
+registerEffect('summerbreak.vault.divine-beach-hat', (ctx): EffectResult => {
+  const self = 'summerbreak.vault.divine-beach-hat';
+
+  if (!ctx.resumeAnswer) {
+    // Grant the +1 Mana now (so it can fund the cast), then offer the spells.
+    const withMana = gainResourcePatch(ctx.state, ctx.triggeringPlayerId, 'mana', 1);
+    const grantedState: GameState = { ...ctx.state, players: withMana.players ?? ctx.state.players };
+    const castable = listCastableSpells(grantedState, ctx.triggeringPlayerId);
+    if (castable.length === 0) {
+      // No spell to cast — the card just grants the Mana.
+      return { kind: 'done', patch: withMana };
+    }
+    return {
+      kind: 'pause',
+      patch: withMana,
+      pending: {
+        responderId: ctx.triggeringPlayerId,
+        prompt: {
+          kind: 'choose-from-options',
+          options: castable.map((c) => ({
+            id: `${c.spellCardId}::${c.level}`,
+            label: c.label,
+            payload: {},
+          })),
+        },
+        resume: { effectId: self, context: { step: 'cast' } },
+        source: ctx.source,
+      },
+    };
+  }
+
+  if (ctx.resumeContext?.['step'] === 'cast') {
+    if (ctx.resumeAnswer.kind !== 'option-chosen') {
+      throw new Error(`${self} cast expected option-chosen`);
+    }
+    const [spellId, levelStr] = ctx.resumeAnswer.optionId.split('::');
+    const level = Number(levelStr) as 1 | 2 | 3;
+    const candidate = listCastableSpells(ctx.state, ctx.triggeringPlayerId).find(
+      (c) => c.spellCardId === spellId && c.level === level,
+    );
+    if (!candidate) return { kind: 'done', patch: {} };
+    // Deduct the cast's Mana and exhaust the borrowed Spell, then delegate to
+    // the level's effect built on that post-payment state.
+    const paidState: GameState = {
+      ...ctx.state,
+      // Record once-per-game casts so the borrowed Spell can't be repeated.
+      oncePerGameSpellsCast: candidate.oncePerGame
+        ? [...ctx.state.oncePerGameSpellsCast, candidate.spellCardId]
+        : ctx.state.oncePerGameSpellsCast,
+      players: ctx.state.players.map((p) =>
+        p.id !== ctx.triggeringPlayerId
+          ? p
+          : {
+              ...p,
+              resources: { ...p.resources, mana: p.resources.mana - candidate.manaCost },
+              ownedSpells: p.ownedSpells.map((s) =>
+                s.cardId === candidate.spellCardId ? { ...s, exhausted: true } : s,
+              ),
+            },
+      ),
+    };
+    const delegate = getEffect(candidate.effectId)({
+      state: paidState,
+      source: ctx.source,
+      triggeringPlayerId: ctx.triggeringPlayerId,
+      allowReactions: ctx.allowReactions,
+    });
+    // Carry the payment + exhaust + once-per-game bookkeeping as the fallback
+    // patch; the delegate (built on paidState) overrides `players` if it also
+    // touches them, so the deduction survives either way.
+    return composeWithDelegate(delegate, {
+      players: paidState.players,
+      oncePerGameSpellsCast: paidState.oncePerGameSpellsCast,
+    });
+  }
+
+  throw new Error(`${self} unexpected state`);
 });

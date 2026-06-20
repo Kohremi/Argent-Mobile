@@ -199,3 +199,103 @@ describe('Summer Break — setup changes', () => {
     }
   });
 });
+
+// ---- Vault cards ----------------------------------------------------------
+
+function errands2P(patch?: (s: GameState) => GameState): GameState {
+  let s = initGame(TWO);
+  s = {
+    ...s,
+    firstPlayerIndex: 0,
+    phase: { kind: 'errands', round: 1, activePlayerIndex: 0, actionUsed: false, fastActionUsed: false },
+  };
+  if (patch) s = patch(s);
+  return s;
+}
+function addVault(s: GameState, id: string, vaultCardId: string): GameState {
+  return mapPlayer(s, id, (p) => ({ ...p, vaultCards: [...p.vaultCards, { cardId: vaultCardId, exhausted: false }] }));
+}
+function setMana(s: GameState, id: string, mana: number): GameState {
+  return mapPlayer(s, id, (p) => ({ ...p, resources: { ...p.resources, mana } }));
+}
+function playVault(s: GameState, vaultCardId: string): GameState {
+  return applyAction(s, { type: 'PLAY_VAULT_CARD', playerId: 'p1', vaultCardId });
+}
+
+describe("Summer Break — Chancellor's Yacht Keys", () => {
+  it('gains a secret Supporter and exhausts the treasure', () => {
+    let s = errands2P((st) => addVault(st, 'p1', 'summerbreak.vault.yacht-keys'));
+    const deckBefore = s.supporterDeck.length;
+    s = playVault(s, 'summerbreak.vault.yacht-keys');
+    expect(s.supporterDeck.length).toBe(deckBefore - 1);
+    expect(s.players[0]!.vaultCards).toEqual([
+      { cardId: 'summerbreak.vault.yacht-keys', exhausted: true },
+    ]);
+  });
+});
+
+describe('Summer Break — wound-immunity vault cards', () => {
+  it('Magic Sunblock grants a round-long wound-immunity buff (consumable)', () => {
+    let s = errands2P((st) => addVault(st, 'p1', 'summerbreak.vault.magic-sunblock'));
+    s = playVault(s, 'summerbreak.vault.magic-sunblock');
+    const buff = s.activeBuffs.find((b) => b.kind === 'mage-immunity' && b.ownerId === 'p1');
+    expect(buff).toBeDefined();
+    if (buff && buff.kind === 'mage-immunity') {
+      expect(buff.immuneTo).toContain('wound');
+      expect(buff.expiresAt.kind).toBe('round-end');
+    }
+    // Consumable → discarded.
+    expect(s.players[0]!.vaultCards).toEqual([]);
+  });
+
+  it("Sorcerer's Beach Towel spends 2 Mana for the buff", () => {
+    let s = errands2P((st) => setMana(addVault(st, 'p1', 'summerbreak.vault.beach-towel'), 'p1', 3));
+    s = playVault(s, 'summerbreak.vault.beach-towel');
+    expect(s.players[0]!.resources.mana).toBe(1);
+    expect(s.activeBuffs.some((b) => b.kind === 'mage-immunity' && b.ownerId === 'p1')).toBe(true);
+  });
+
+  it("Beach Towel no-ops (but still exhausts) without 2 Mana", () => {
+    let s = errands2P((st) => setMana(addVault(st, 'p1', 'summerbreak.vault.beach-towel'), 'p1', 1));
+    s = playVault(s, 'summerbreak.vault.beach-towel');
+    expect(s.players[0]!.resources.mana).toBe(1);
+    expect(s.activeBuffs.some((b) => b.kind === 'mage-immunity')).toBe(false);
+    expect(s.players[0]!.vaultCards).toEqual([
+      { cardId: 'summerbreak.vault.beach-towel', exhausted: true },
+    ]);
+  });
+});
+
+describe('Summer Break — Divine Beach Hat', () => {
+  it('grants 1 Mana and no prompt when no Spell can be cast', () => {
+    let s = errands2P((st) => setMana(addVault(st, 'p1', 'summerbreak.vault.divine-beach-hat'), 'p1', 0));
+    s = playVault(s, 'summerbreak.vault.divine-beach-hat');
+    expect(s.players[0]!.resources.mana).toBe(1);
+    expect(topPending(s)).toBeUndefined();
+  });
+
+  it('gains 1 Mana then casts an owned researched Spell (exhausting it)', () => {
+    let s = errands2P((st) => {
+      st = setMana(addVault(st, 'p1', 'summerbreak.vault.divine-beach-hat'), 'p1', 0);
+      return mapPlayer(st, 'p1', (p) => ({
+        ...p,
+        ownedSpells: [
+          { cardId: 'base.spell.trance', intPlaced: true, wisPlacedLevel2: false, wisPlacedLevel3: false, exhausted: false },
+        ],
+      }));
+    });
+    s = playVault(s, 'summerbreak.vault.divine-beach-hat');
+    // +1 Mana granted up front, and Trance L1 (cost 0) offered.
+    expect(s.players[0]!.resources.mana).toBe(1);
+    const top = topPending(s)!;
+    expect(top.prompt.kind).toBe('choose-from-options');
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: top.id,
+      answer: { kind: 'option-chosen', optionId: 'base.spell.trance::1', payload: {} },
+    });
+    // Trance grants +2 Mana and is now exhausted: 0 +1 (hat) +2 (trance) = 3.
+    expect(s.players[0]!.resources.mana).toBe(3);
+    expect(s.players[0]!.ownedSpells[0]!.exhausted).toBe(true);
+  });
+});
