@@ -604,7 +604,29 @@ export interface BellTowerCard {
 // Phase machine
 // ============================================================================
 
-export type RoundNumber = 1 | 2 | 3 | 4 | 5;
+export type RoundNumber = 1 | 2 | 3 | 4 | 5 | 6;
+
+/**
+ * A round-end scenario: a pack-provided effect that fires once, in turn order
+ * for every player, at the end of a specific round — AFTER all slot
+ * resolutions and mid-game scoring, right before the next round is prepared.
+ * The Summer Break expansion uses these for its "Students Return" drafts, the
+ * "Summer Study Credits" swap, and the "Opening Ceremony" reward draft. The
+ * engine has no per-pack knowledge: it collects scenarios from the active
+ * packs and runs the matching one via the generic round-end scenario pump.
+ */
+export interface RoundEndScenario {
+  round: RoundNumber;
+  /** Display name (e.g. "Students Return"). */
+  name: string;
+  /**
+   * Effect invoked once per player in turn order. Invoked first with no
+   * `resumeAnswer` to push that player's prompt; re-invoked with the answer to
+   * apply it. Returning `done` with an empty patch is a clean "this player has
+   * nothing to do" skip.
+   */
+  effectId: EffectId;
+}
 
 /**
  * Action kinds tracked by Bend Time's "each must be a different type" rule.
@@ -707,6 +729,18 @@ export type GamePhase =
       slotInProgress?: boolean;
     }
   | { kind: 'mid-game-scoring'; round: RoundNumber }
+  | {
+      /**
+       * A round-end scenario is resolving (Summer Break and similar). The
+       * round number is the round that just ENDED; the scenario runs in turn
+       * order via `pendingRoundEndScenario`, then the engine advances to
+       * `round-setup` for `round + 1`. Progress is driven by RESOLVE_PENDING,
+       * not ADVANCE_PHASE.
+       */
+      kind: 'round-end-scenario';
+      round: RoundNumber;
+      name: string;
+    }
   | { kind: 'final-scoring' }
   | { kind: 'complete'; archmage: PlayerId | null };
 
@@ -1295,6 +1329,26 @@ export interface GameState {
      * DOES fire the orange ability.
      */
     suppressMagePowers?: boolean;
+  } | null;
+  /**
+   * A round-end scenario in progress (Summer Break "Students Return" drafts,
+   * "Summer Study Credits" swap, "Opening Ceremony" reward draft, and future
+   * pack scenarios). Set when a round ends and the active packs provide a
+   * scenario for that round; drained by `drainRoundEndScenarioIfIdle`, which
+   * invokes `effectId` once per id in `remaining` (turn order) and, when
+   * `remaining` empties, clears this and advances to the next `round-setup`.
+   *
+   * `consumedOptionIds` supports "draft without replacement" scenarios (the
+   * reward draft): the effect appends each picked option id here so later
+   * players in the same chain can't take it again.
+   */
+  pendingRoundEndScenario: {
+    round: RoundNumber;
+    effectId: EffectId;
+    name: string;
+    remaining: PlayerId[];
+    source: ResolutionSource;
+    consumedOptionIds?: string[];
   } | null;
   /**
    * The Contract chain (3 Research, all locked to a single department of

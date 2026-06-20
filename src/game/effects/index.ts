@@ -26,3 +26,4 @@ import './ascension';
 import './promo';
 import './archmage';
 import './renovation';
+import './summerbreak';

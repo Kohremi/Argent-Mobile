@@ -75,6 +75,7 @@ export function botDecisionContext(state: GameState): BotDecision | null {
     (state.phase.kind === 'round-setup' ||
       state.phase.kind === 'resolution' ||
       state.phase.kind === 'mid-game-scoring' ||
+      state.phase.kind === 'round-end-scenario' ||
       state.phase.kind === 'final-scoring')
   ) {
     return { kind: 'advance' };

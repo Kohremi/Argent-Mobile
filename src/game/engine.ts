@@ -77,6 +77,7 @@ import type {
   ResolvePendingAction,
   ResumeContinuation,
   Room,
+  RoundEndScenario,
   RoundNumber,
   SerializableContext,
   UseAbilityAction,
@@ -556,6 +557,10 @@ function autoAdvanceIfTurnDone(state: GameState): GameState {
   // one entry per cycle. Its first non-discard pick locks the department
   // for the remaining picks.
   state = drainContractResearchIfIdle(state);
+  // Round-end scenarios (Summer Break) run between mid-game scoring and the
+  // next round-setup. The drain surfaces each player's prompt in turn order
+  // and, when everyone is done, advances the phase to the next round-setup.
+  state = drainRoundEndScenarioIfIdle(state);
   if (state.phase.kind !== 'errands') return state;
   if (!state.phase.actionUsed) return state;
   // Bonus actions (Flare / Dazzle) hold the turn open after the base
@@ -2143,7 +2148,14 @@ function handleChooseCandidate(
     };
   }
 
-  // Everyone has picked. 2-player games hand the draft-order choice to the
+  // Everyone has picked. Some expansions (Summer Break) start players with
+  // only their two candidate Mages — skip the extra snake-draft entirely and
+  // go straight to the initial Mark placement.
+  if (anyPackSkipsInitialMageDraft(allocated)) {
+    return enterInitialMarkPlacement(allocated);
+  }
+
+  // 2-player games hand the draft-order choice to the
   // 2nd leader-picker (the player who just picked, i.e. `action.playerId`).
   // 3+ player games skip the choice and use the leader-pick order as the
   // draft order.
@@ -2162,6 +2174,13 @@ function handleChooseCandidate(
       nextPickIndex: 0,
     },
   };
+}
+
+/** True when any active pack starts players with only their candidate Mages. */
+function anyPackSkipsInitialMageDraft(state: GameState): boolean {
+  return state.activePackIds.some(
+    (id) => getPack(id)?.skipInitialMageDraft === true,
+  );
 }
 
 function handleChooseDraftFirst(
@@ -3027,6 +3046,11 @@ function handleAdvancePhase(state: GameState): GameState {
       return pumpResolutionPhase(state);
     case 'mid-game-scoring':
       return processMidGameScoring(state, state.phase.round);
+    case 'round-end-scenario':
+      // Progress is normally driven by RESOLVE_PENDING (the drain runs in
+      // autoAdvanceIfTurnDone). An explicit ADVANCE_PHASE here just nudges
+      // the drain — idempotent if a prompt is still open.
+      return drainRoundEndScenarioIfIdle(state);
     case 'final-scoring':
       return finalizeGame(state);
     case 'complete':
@@ -3366,12 +3390,121 @@ function processErrandsAdvance(state: GameState): GameState {
   };
 }
 
+/**
+ * Total number of rounds this game runs. The base game is 5; an expansion can
+ * extend it by declaring a higher `totalRounds` (Summer Break uses 6). The
+ * engine takes the MAX across active packs — never switches on a pack id.
+ */
+function finalRoundFor(state: GameState): RoundNumber {
+  let max = 5;
+  for (const packId of state.activePackIds) {
+    const pack = getPack(packId);
+    if (pack?.totalRounds !== undefined && pack.totalRounds > max) {
+      max = pack.totalRounds;
+    }
+  }
+  return max as RoundNumber;
+}
+
+/** The first round-end scenario (across active packs) for the given round. */
+function roundEndScenarioForRound(
+  state: GameState,
+  round: RoundNumber,
+): RoundEndScenario | null {
+  for (const packId of state.activePackIds) {
+    const found = getPack(packId)?.roundEndScenarios?.find(
+      (s) => s.round === round,
+    );
+    if (found) return found;
+  }
+  return null;
+}
+
+/** Player ids in turn order starting from the current first player. */
+function turnOrderPlayerIds(state: GameState): PlayerId[] {
+  const n = state.players.length;
+  const ids: PlayerId[] = [];
+  for (let i = 0; i < n; i++) {
+    const p = state.players[(state.firstPlayerIndex + i) % n];
+    if (p) ids.push(p.id);
+  }
+  return ids;
+}
+
+/**
+ * Drains the active round-end scenario: invokes its effect once per player in
+ * `remaining` (turn order). The effect pushes that player's prompt (pause);
+ * when the player answers, the same effect applies it. Players whose effect
+ * resolves with no prompt are skipped in the same pass. When `remaining`
+ * empties, the scenario is cleared and the engine advances to the next
+ * round's setup. Mirrors `drainPendingPlaceChainIfIdle` but loops so
+ * input-free players don't stall the chain.
+ */
+function drainRoundEndScenarioIfIdle(state: GameState): GameState {
+  let curr = state;
+  const HARD_CAP = 200;
+  for (let i = 0; i < HARD_CAP; i++) {
+    const sc = curr.pendingRoundEndScenario;
+    if (!sc) return curr;
+    if (curr.pendingResolutionStack.length > 0) return curr;
+    if (curr.activeReactionWindows.length > 0) return curr;
+    if (sc.remaining.length === 0) {
+      const next = (sc.round + 1) as RoundNumber;
+      return {
+        ...curr,
+        pendingRoundEndScenario: null,
+        phase: { kind: 'round-setup', round: next },
+      };
+    }
+    const head = sc.remaining[0]!;
+    const advanced: GameState = {
+      ...curr,
+      pendingRoundEndScenario: { ...sc, remaining: sc.remaining.slice(1) },
+    };
+    const source: ResolutionSource = { ...sc.source, triggeringPlayerId: head };
+    const ctx: EffectContext = {
+      state: advanced,
+      source,
+      triggeringPlayerId: head,
+      allowReactions: false,
+    };
+    const result = getEffect(sc.effectId)(ctx);
+    curr = applyEffectResult(advanced, result, ctx);
+  }
+  return curr;
+}
+
 function processMidGameScoring(state: GameState, round: RoundNumber): GameState {
-  if (round < 5) {
+  const finalRound = finalRoundFor(state);
+  if (round < finalRound) {
+    // A round-end scenario (Summer Break and similar) fires AFTER scoring and
+    // BEFORE the next round-setup. It runs in turn order via the pump; once it
+    // finishes, the pump advances to `round-setup` for round + 1.
+    const scenario = roundEndScenarioForRound(state, round);
+    if (scenario) {
+      const firstId = state.players[state.firstPlayerIndex]?.id ?? '';
+      return {
+        ...state,
+        phase: { kind: 'round-end-scenario', round, name: scenario.name },
+        pendingRoundEndScenario: {
+          round,
+          effectId: scenario.effectId,
+          name: scenario.name,
+          remaining: turnOrderPlayerIds(state),
+          source: {
+            kind: 'system',
+            id: scenario.effectId,
+            triggeringPlayerId: firstId,
+            description: scenario.name,
+          },
+          consumedOptionIds: [],
+        },
+      };
+    }
     const next = (round + 1) as RoundNumber;
     return { ...state, phase: { kind: 'round-setup', round: next } };
   }
-  // End of round 5 — game is over. If any player holds a wild-department
+  // End of the final round — game is over. If any player holds a wild-department
   // supporter (White Ash), they must declare a department BEFORE voters
   // are revealed. Push those prompts and transition to 'final-scoring';
   // the wild-department-choice effect will finalize the game once the

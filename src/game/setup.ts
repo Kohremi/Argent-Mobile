@@ -168,6 +168,12 @@ function selectInPlayRooms(
   targetCount: number,
   rng: RngState,
   packId: string,
+  /**
+   * Room names that must always be in play under random layout (e.g. Summer
+   * Break guarantees the Dormitory). Matched by name so whichever side was
+   * flipped for that room is the one that's forced in.
+   */
+  forceIncludeNames: ReadonlySet<string> = new Set(),
 ): { rooms: Room[]; rng: RngState } {
   const ucRooms = allRoomsSideA.filter((r) => r.isUniversityCentral);
   const nonUcRooms = allRoomsSideA.filter((r) => !r.isUniversityCentral);
@@ -176,11 +182,16 @@ function selectInPlayRooms(
       `selectInPlayRooms: targetCount=${targetCount} smaller than number of UC rooms (${ucRooms.length})`,
     );
   }
-  const remaining = targetCount - ucRooms.length;
-  const shuffled = shuffleWithState(nonUcRooms, rng);
+  // Force-included non-UC rooms are seated first; the random draw fills the
+  // remainder from what's left.
+  const forced = nonUcRooms.filter((r) => forceIncludeNames.has(r.name));
+  const forcedNames = new Set(forced.map((r) => r.name));
+  const drawable = nonUcRooms.filter((r) => !forcedNames.has(r.name));
+  const remaining = Math.max(0, targetCount - ucRooms.length - forced.length);
+  const shuffled = shuffleWithState(drawable, rng);
   let nextRng = shuffled.state;
-  const picked = shuffled.value.slice(0, Math.min(remaining, nonUcRooms.length));
-  const selected: Room[] = [...ucRooms, ...picked];
+  const picked = shuffled.value.slice(0, Math.min(remaining, drawable.length));
+  const selected: Room[] = [...ucRooms, ...forced, ...picked];
   // Pad with placeholders if pack didn't have enough non-UC rooms.
   let placeholderIdx = 1;
   while (selected.length < targetCount) {
@@ -386,11 +397,22 @@ export function buildInitialState(config: GameConfig): GameState {
       config.numberOfRooms ?? defaultRoomCountForPlayerCount(playerCount);
     const sidePick = pickRandomSidesForRandom(allRooms, rng);
     rng = sidePick.rng;
+    // Rooms an active pack guarantees under random layout (Summer Break → the
+    // Dormitory). Resolved to room names so the side-flip above decides which
+    // side of each guaranteed room is in play.
+    const guaranteedNames = new Set<string>();
+    for (const pack of packs) {
+      for (const rid of pack.guaranteedRandomRoomIds ?? []) {
+        const room = allRoomsById.get(rid);
+        if (room) guaranteedNames.add(room.name);
+      }
+    }
     const roomSelection = selectInPlayRooms(
       sidePick.rooms,
       targetRoomCount,
       rng,
       'base',
+      guaranteedNames,
     );
     rng = roomSelection.rng;
     const dims = pickGridForRoomCount(roomSelection.rooms.length);
@@ -564,6 +586,7 @@ export function buildInitialState(config: GameConfig): GameState {
     pendingBellTowerLastEvent: null,
     pendingPlaceChain: null,
     pendingContractResearch: null,
+    pendingRoundEndScenario: null,
     pendingRevivalChecks: [],
     pendingMysticismPostCast: [],
     pendingTechnomancyTrigger: [],

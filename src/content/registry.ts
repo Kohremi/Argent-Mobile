@@ -7,6 +7,7 @@ import { ascensionPack } from './packs/ascension';
 import { promoPack } from './packs/promo';
 import { archmagePack } from './packs/archmage';
 import { renovationPack } from './packs/renovation';
+import { summerBreakPack } from './packs/summerbreak';
 
 const packs = new Map<PackId, ContentPack>();
 
@@ -40,3 +41,4 @@ registerPack(ascensionPack);
 registerPack(promoPack);
 registerPack(archmagePack);
 registerPack(renovationPack);
+registerPack(summerBreakPack);

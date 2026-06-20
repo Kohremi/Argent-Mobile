@@ -591,6 +591,8 @@ function describePhase(state: GameState): string {
       return `Round ${p.round} — Resolution (room ${p.pendingRoomIndex + 1}/${state.rooms.length})`;
     case 'mid-game-scoring':
       return `Round ${p.round} — Mid-game scoring`;
+    case 'round-end-scenario':
+      return `Round ${p.round} — ${p.name}`;
     case 'final-scoring':
       return 'Final scoring';
     case 'complete':
