@@ -15,7 +15,7 @@ import {
 } from '../../game/effects/helpers';
 import { useGameStore } from '../../store/gameStore';
 import { useUiStore } from '../../store/uiStore';
-import { DEPT_HUE, PLAYER_AURA } from '../../utils/uiSelectors';
+import { DEPT_HUE, PLAYER_AURA, researchTotals } from '../../utils/uiSelectors';
 import { TIMING_HUE, TIMING_LABEL } from '../Cards/HandFans';
 import { MageToken } from '../Board/MageToken';
 import { PortraitBust } from '../Player/PortraitBust';
@@ -646,7 +646,29 @@ function ResearchSheet({
               {restrict ? `${restrict} only — ` : ''}draft a spell or advance one you own
             </span>
           </p>
-          <ResponderChip state={state} pending={pending} />
+          <div className="flex items-center gap-2">
+            {player && (
+              <span className="flex items-center gap-2 rounded-full bg-night-700 px-2.5 py-1 text-[11px] font-bold ring-1 ring-white/10">
+                {(() => {
+                  const t = researchTotals(player);
+                  return (
+                    <>
+                      <span title="Intelligence — unspent of total (spend 1 INT to draft)">
+                        INT {t.intRemaining}
+                        <span className="text-white/45">/{t.intTotal}</span>
+                      </span>
+                      <span className="text-white/20">·</span>
+                      <span title="Wisdom — unspent of total (spend 1 WIS to advance)">
+                        WIS {t.wisRemaining}
+                        <span className="text-white/45">/{t.wisTotal}</span>
+                      </span>
+                    </>
+                  );
+                })()}
+              </span>
+            )}
+            <ResponderChip state={state} pending={pending} />
+          </div>
         </div>
 
         {showTableau && (
