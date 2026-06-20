@@ -324,7 +324,15 @@ export function buildInitialState(config: GameConfig): GameState {
   const allSpells = packs.flatMap((p) => p.spells);
   const allLegendary = packs.flatMap((p) => p.legendarySpells);
   const allVault = packs.flatMap((p) => p.vaultCards);
-  const allSupporters = packs.flatMap((p) => p.supporters);
+  // Supporters with a `requiresPackIds` gate (e.g. Eloi Claus needs Mancers /
+  // Technomancy) only enter the deck when every required pack is active.
+  const allSupporters = packs
+    .flatMap((p) => p.supporters)
+    .filter(
+      (s) =>
+        !s.requiresPackIds ||
+        s.requiresPackIds.every((id) => activePackIds.includes(id)),
+    );
   const allVoters = packs.flatMap((p) => p.voters);
   const allBellTower = packs.flatMap((p) => p.bellTowerCards);
 

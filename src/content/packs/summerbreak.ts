@@ -1,5 +1,5 @@
 import type { ContentPack } from '../types';
-import type { VaultCard } from '../../game/types';
+import type { Department, SupporterCard, VaultCard } from '../../game/types';
 
 // Summer Break expansion. This first pass ships the rule changes the expansion
 // makes between rounds (docs/summer break.md):
@@ -13,8 +13,10 @@ import type { VaultCard } from '../../game/types';
 //
 // 4 of the 6 vault cards ship here. Deferred (new engine mechanics): Planar Ice
 // Cream (insert a random room mid-game) and Beach Brew (a Merit-slot payment
-// reaction). The 6 department supporters (discard a card instead of paying a
-// Spell's mana cost, resolved at cast time) are also deferred.
+// reaction).
+//
+// The 6 department-discard supporters ship here too: each may be discarded to
+// cast a Spell of its department for free (cast-time waiver in handleCastSpell).
 
 const PACK_ID = 'summerbreak';
 
@@ -69,6 +71,42 @@ const vaultCards: VaultCard[] = [
   },
 ];
 
+// Department-discard supporters. Each may be DISCARDED to cast a Spell of its
+// department for free, instead of paying the Mana cost (resolved at cast time
+// by handleCastSpell via `spellManaWaiverDepartment`). They sit in the office
+// until used, so they ship as `passive` (never played as a normal action). Eloi
+// Claus covers Technomancy and only enters the deck with the Mancers expansion.
+function waiverSupporter(
+  id: string,
+  name: string,
+  department: Department,
+  extra?: Partial<SupporterCard>,
+): SupporterCard {
+  return {
+    id,
+    name,
+    sourcePackId: PACK_ID,
+    department,
+    timing: 'passive',
+    effectId: id,
+    description:
+      'Discard this card instead of paying the Mana cost to cast a Spell of its department.',
+    spellManaWaiverDepartment: department,
+    ...extra,
+  };
+}
+
+const supporters: SupporterCard[] = [
+  waiverSupporter('summerbreak.supporter.sami-rekar', 'Sami Rekar', 'sorcery'),
+  waiverSupporter('summerbreak.supporter.lucca-turlotte', 'Lucca Turlotte', 'mysticism'),
+  waiverSupporter('summerbreak.supporter.irion-juiz', 'Irion Juiz', 'natural-magick'),
+  waiverSupporter('summerbreak.supporter.mindra-dirac', 'Mindra Dirac', 'planar-studies'),
+  waiverSupporter('summerbreak.supporter.irini-grenhart', 'Irini Grenhart', 'divinity'),
+  waiverSupporter('summerbreak.supporter.eloi-claus', 'Eloi Claus', 'technomancy', {
+    requiresPackIds: ['mancers'],
+  }),
+];
+
 export const summerBreakPack: ContentPack = {
   id: PACK_ID,
   name: 'Summer Break',
@@ -80,7 +118,7 @@ export const summerBreakPack: ContentPack = {
   spells: [],
   legendarySpells: [],
   vaultCards,
-  supporters: [],
+  supporters,
   voters: [],
   bellTowerCards: [],
 

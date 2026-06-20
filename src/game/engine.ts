@@ -50,6 +50,7 @@ import type {
   ChooseDraftFirstAction,
   ClaimBellTowerAction,
   ConsortiumVoter,
+  Department,
   DraftMageAction,
   PlaySupporterAction,
   PlayVaultCardAction,
@@ -1685,7 +1686,30 @@ function handleUseAbility(
   return applyEffectResult(state, result, ctx);
 }
 
-function handleCastSpell(state: GameState, action: CastSpellAction): GameState {
+/**
+ * The id of a held supporter the player may discard to waive the Mana cost of a
+ * spell in `dept` (Summer Break department-discard supporters), or null.
+ */
+function findWaiverSupporter(
+  state: GameState,
+  player: { supporters: string[] },
+  dept: Department,
+): string | null {
+  for (const sid of player.supporters) {
+    const def = lookupSupporterCardDef(state, sid);
+    if (def?.spellManaWaiverDepartment === dept) return sid;
+  }
+  return null;
+}
+
+function handleCastSpell(
+  state: GameState,
+  action: CastSpellAction,
+  // Set when re-entering after the player resolved a mana-vs-supporter payment
+  // choice (see resolveSpellPayment). Skips the waiver prompt and applies the
+  // chosen payment.
+  paymentOverride?: { method: 'mana' | 'supporter'; supporterId?: string },
+): GameState {
   if (state.phase.kind !== 'errands') {
     throw new Error('CAST_SPELL: only valid during errands phase');
   }
@@ -1764,15 +1788,70 @@ function handleCastSpell(state: GameState, action: CastSpellAction): GameState {
   const placeAfterCast = player.nextSpellPlacesMage === true;
   const baseCost = player.nextSpellFreeMana ? 0 : discountedCost;
   const effectiveManaCost = baseCost + surchargeTotal;
-  if (player.resources.mana < effectiveManaCost) {
-    throw new Error(
-      `CAST_SPELL: insufficient mana (need ${effectiveManaCost}, have ${player.resources.mana})`,
-    );
-  }
   if (levelDef.timing === 'reaction') {
     throw new Error(
       'CAST_SPELL: reaction-timing spells fire from a reaction window, not as a direct action',
     );
+  }
+
+  // Department-supporter mana waiver (Summer Break). A held supporter whose
+  // `spellManaWaiverDepartment` matches this spell's department can be
+  // DISCARDED instead of paying the Mana. UX per the spec:
+  //   - can't afford the Mana but hold the supporter → auto-discard it,
+  //   - can afford AND hold it → prompt which to spend,
+  //   - can't afford and no supporter → the usual insufficient-mana error.
+  let payWithSupporter = false;
+  let waiverSupporterId: string | null = null;
+  if (paymentOverride) {
+    payWithSupporter = paymentOverride.method === 'supporter';
+    waiverSupporterId = paymentOverride.supporterId ?? null;
+  } else {
+    const supId =
+      effectiveManaCost > 0
+        ? findWaiverSupporter(state, player, cardDef.department)
+        : null;
+    const canAffordMana = player.resources.mana >= effectiveManaCost;
+    if (supId !== null && canAffordMana) {
+      const supDef = lookupSupporterCardDef(state, supId);
+      return pushPending(state, {
+        responderId: action.playerId,
+        prompt: {
+          kind: 'choose-from-options',
+          options: [
+            { id: 'mana', label: `Pay ${effectiveManaCost} Mana`, payload: {} },
+            {
+              id: `supporter::${supId}`,
+              label: `Discard ${supDef?.name ?? 'Supporter'}`,
+              payload: {},
+            },
+          ],
+        },
+        resume: {
+          effectId: '__spell_payment__',
+          context: {
+            spellCardId: action.spellCardId,
+            level: action.level,
+            supporterId: supId,
+          },
+        },
+        source: {
+          kind: 'spell',
+          id: action.spellCardId,
+          triggeringPlayerId: action.playerId,
+          description: `${cardDef.name} L${action.level} — payment`,
+        },
+      });
+    }
+    if (!canAffordMana) {
+      if (supId !== null) {
+        payWithSupporter = true;
+        waiverSupporterId = supId;
+      } else {
+        throw new Error(
+          `CAST_SPELL: insufficient mana (need ${effectiveManaCost}, have ${player.resources.mana})`,
+        );
+      }
+    }
   }
 
   // Consume the appropriate per-turn budget slot (action vs fast-action) per
@@ -1791,12 +1870,17 @@ function handleCastSpell(state: GameState, action: CastSpellAction): GameState {
   // Energy Drain surcharges are added to each buff holder's mana pool — the
   // caster's surcharge spend physically becomes the buff holders' gain.
   const skipExhaust = player.nextSpellSkipsExhaust === true;
+  // When paying with a discarded supporter, no Mana changes hands — so the
+  // caster spends 0 and no Energy Drain surcharge flows to opponents.
+  const manaSpent = payWithSupporter ? 0 : effectiveManaCost;
   const surchargeByPlayer = new Map<string, number>();
-  for (const s of surcharges) {
-    surchargeByPlayer.set(
-      s.casterPlayerId,
-      (surchargeByPlayer.get(s.casterPlayerId) ?? 0) + s.amount,
-    );
+  if (!payWithSupporter) {
+    for (const s of surcharges) {
+      surchargeByPlayer.set(
+        s.casterPlayerId,
+        (surchargeByPlayer.get(s.casterPlayerId) ?? 0) + s.amount,
+      );
+    }
   }
   let next: GameState = {
     ...state,
@@ -1806,11 +1890,11 @@ function handleCastSpell(state: GameState, action: CastSpellAction): GameState {
       : state.oncePerGameSpellsCast,
     players: state.players.map((p) => {
       if (p.id === action.playerId) {
-        return {
+        const cast = {
           ...p,
           resources: {
             ...p.resources,
-            mana: p.resources.mana - effectiveManaCost,
+            mana: p.resources.mana - manaSpent,
           },
           ownedSpells: p.ownedSpells.map((s) =>
             s.cardId !== action.spellCardId
@@ -1820,6 +1904,24 @@ function handleCastSpell(state: GameState, action: CastSpellAction): GameState {
           nextSpellFreeMana: false,
           nextSpellSkipsExhaust: false,
           nextSpellPlacesMage: false,
+        };
+        if (!payWithSupporter || waiverSupporterId === null) return cast;
+        // Discard one copy of the matching supporter as the payment.
+        let removed = false;
+        const supporters = p.supporters.filter((sid) => {
+          if (!removed && sid === waiverSupporterId) {
+            removed = true;
+            return false;
+          }
+          return true;
+        });
+        return {
+          ...cast,
+          supporters,
+          personalDiscard: [
+            ...p.personalDiscard,
+            { kind: 'supporter' as const, cardId: waiverSupporterId },
+          ],
         };
       }
       const gain = surchargeByPlayer.get(p.id) ?? 0;
@@ -2752,7 +2854,9 @@ function handleResolvePending(
   // Pop the prompt before doing anything; effects only see the popped state.
   let curr = popPending(state);
 
-  if (top.reactionWindowId !== undefined) {
+  if (top.resume.effectId === '__spell_payment__') {
+    curr = resolveSpellPayment(curr, top, answer);
+  } else if (top.reactionWindowId !== undefined) {
     curr = resolveReactionPrompt(curr, top, answer);
   } else {
     curr = resolveNormalPending(curr, top, answer);
@@ -2777,6 +2881,30 @@ function handleResolvePending(
   }
 
   return curr;
+}
+
+/**
+ * Resolves a mana-vs-supporter spell payment choice (see handleCastSpell). The
+ * prompt's context carries the spell + level; the answer says which to spend.
+ * Re-enters handleCastSpell with the chosen payment baked in.
+ */
+function resolveSpellPayment(
+  state: GameState,
+  prompt: PendingResolution,
+  answer: ResolutionAnswer,
+): GameState {
+  const c = prompt.resume.context ?? {};
+  const spellCardId = String(c['spellCardId'] ?? '');
+  const level = Number(c['level'] ?? 0) as CastSpellAction['level'];
+  const supporterId = String(c['supporterId'] ?? '');
+  const playerId = prompt.source.triggeringPlayerId;
+  const useSupporter =
+    answer.kind === 'option-chosen' && answer.optionId.startsWith('supporter');
+  return handleCastSpell(
+    state,
+    { type: 'CAST_SPELL', playerId, spellCardId, level },
+    useSupporter ? { method: 'supporter', supporterId } : { method: 'mana' },
+  );
 }
 
 function resolveNormalPending(

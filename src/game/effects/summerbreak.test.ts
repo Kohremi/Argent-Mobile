@@ -299,3 +299,76 @@ describe('Summer Break — Divine Beach Hat', () => {
     expect(s.players[0]!.ownedSpells[0]!.exhausted).toBe(true);
   });
 });
+
+// ---- Department-discard supporters ----------------------------------------
+
+const NM_SPELL = 'base.spell.strength-of-earth'; // Natural Magick, L1 costs 1 Mana
+const IRION = 'summerbreak.supporter.irion-juiz'; // Natural Magick waiver
+const IRINI = 'summerbreak.supporter.irini-grenhart'; // Divinity waiver
+
+function withSpellAndSupporters(s: GameState, supporters: string[]): GameState {
+  return mapPlayer(s, 'p1', (p) => ({
+    ...p,
+    ownedSpells: [
+      { cardId: NM_SPELL, intPlaced: true, wisPlacedLevel2: false, wisPlacedLevel3: false, exhausted: false },
+    ],
+    supporters: [...p.supporters, ...supporters],
+  }));
+}
+function cast(s: GameState): GameState {
+  return applyAction(s, { type: 'CAST_SPELL', playerId: 'p1', spellCardId: NM_SPELL, level: 1 });
+}
+
+describe('Summer Break — department-discard supporters', () => {
+  it('auto-discards the matching supporter to cast when Mana is short', () => {
+    let s = errands2P((st) => setMana(withSpellAndSupporters(st, [IRION]), 'p1', 0));
+    s = cast(s);
+    // No payment prompt — the only way to pay was the supporter, so it auto-fires.
+    expect(topPending(s)).toBeUndefined();
+    expect(s.players[0]!.resources.mana).toBe(0);
+    expect(s.players[0]!.supporters).not.toContain(IRION);
+    expect(s.players[0]!.personalDiscard).toContainEqual({ kind: 'supporter', cardId: IRION });
+    expect(s.players[0]!.ownedSpells[0]!.exhausted).toBe(true);
+  });
+
+  it('prompts Mana-vs-supporter when both are possible; paying Mana keeps the card', () => {
+    let s = errands2P((st) => setMana(withSpellAndSupporters(st, [IRION]), 'p1', 5));
+    s = cast(s);
+    const top = topPending(s)!;
+    if (top.prompt.kind !== 'choose-from-options') throw new Error('expected payment prompt');
+    expect(top.prompt.options.map((o) => o.id)).toEqual(['mana', `supporter::${IRION}`]);
+    s = resolveTop(s, 'mana');
+    expect(s.players[0]!.resources.mana).toBe(4);
+    expect(s.players[0]!.supporters).toContain(IRION);
+    expect(s.players[0]!.ownedSpells[0]!.exhausted).toBe(true);
+  });
+
+  it('prompts; discarding the supporter keeps the Mana', () => {
+    let s = errands2P((st) => setMana(withSpellAndSupporters(st, [IRION]), 'p1', 5));
+    s = cast(s);
+    s = resolveTop(s, `supporter::${IRION}`);
+    expect(s.players[0]!.resources.mana).toBe(5);
+    expect(s.players[0]!.supporters).not.toContain(IRION);
+    expect(s.players[0]!.personalDiscard).toContainEqual({ kind: 'supporter', cardId: IRION });
+  });
+
+  it('a mismatched-department supporter does not enable an unaffordable cast', () => {
+    const s = errands2P((st) => setMana(withSpellAndSupporters(st, [IRINI]), 'p1', 0));
+    expect(() => cast(s)).toThrow(/insufficient mana/);
+  });
+});
+
+describe('Summer Break — supporter deck gating', () => {
+  it('excludes Eloi Claus without the Mancers expansion', () => {
+    const s = initGame(TWO);
+    const all = [...s.supporterDeck, ...s.supporterTableau];
+    expect(all).not.toContain('summerbreak.supporter.eloi-claus');
+    expect(all).toContain('summerbreak.supporter.sami-rekar');
+  });
+
+  it('includes Eloi Claus when Mancers is active', () => {
+    const s = initGame({ activePackIds: ['base', 'mancers', 'summerbreak'], playerNames: ['A', 'B'], rngSeed: 3 });
+    const all = [...s.supporterDeck, ...s.supporterTableau];
+    expect(all).toContain('summerbreak.supporter.eloi-claus');
+  });
+});

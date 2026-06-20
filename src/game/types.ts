@@ -401,6 +401,18 @@ export interface SupporterCard {
   effectId: EffectId;
   /** Human-readable summary of the card's effect, copied from the card. */
   description?: string;
+  /**
+   * Summer Break department-discard supporters (Eloi Claus & co.): set to the
+   * department whose Spells this supporter may be DISCARDED to cast for free
+   * (instead of paying the Mana cost). Read at cast time by `handleCastSpell`.
+   */
+  spellManaWaiverDepartment?: Department;
+  /**
+   * Only include this supporter in the deck when ALL of these packs are also
+   * active. Eloi Claus (Technomancy) requires the Mancers expansion. Absent =
+   * no requirement. Filtered in setup.
+   */
+  requiresPackIds?: PackId[];
 }
 
 export interface MageAbility {
