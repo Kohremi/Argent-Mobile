@@ -2,9 +2,6 @@ import type { PackId } from '../game/types';
 import type { ContentPack } from './types';
 import { baseGamePack } from './packs/base';
 import { mancersPack } from './packs/mancers';
-import { knightsPack } from './packs/knights';
-import { ascensionPack } from './packs/ascension';
-import { promoPack } from './packs/promo';
 import { archmagePack } from './packs/archmage';
 import { renovationPack } from './packs/renovation';
 import { summerBreakPack } from './packs/summerbreak';
@@ -36,9 +33,6 @@ export function listPacks(): ContentPack[] {
 // them) would call `registerPack` themselves.
 registerPack(baseGamePack);
 registerPack(mancersPack);
-registerPack(knightsPack);
-registerPack(ascensionPack);
-registerPack(promoPack);
 registerPack(archmagePack);
 registerPack(renovationPack);
 registerPack(summerBreakPack);

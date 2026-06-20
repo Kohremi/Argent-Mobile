@@ -21,9 +21,6 @@ export type { Effect } from './registry';
 // Side-effect imports — each pack file calls `registerEffect` at module load.
 import './base';
 import './mancers';
-import './knights';
-import './ascension';
-import './promo';
 import './archmage';
 import './renovation';
 import './summerbreak';
