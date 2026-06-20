@@ -6266,6 +6266,47 @@ describe('Adventuring B', () => {
     expect(ids).toEqual(['skip', 'spell', 'supporter', 'vault'].sort());
   });
 
+  it('Ars Magna seizing an occupied Adventuring B slot fires the on-place prompt', () => {
+    let s = setupAdventuringBTest();
+    // Alice gets a red Mage + Mana; Bob occupies an Adventuring B base slot
+    // (seated directly, so his placement doesn't itself fire the hook).
+    s = addMage(s, 'p1', { id: 'alice-red', cardId: 'base.mage.sorcery', color: 'red' });
+    s = mapPlayer(s, 'p1', (p) => ({ ...p, resources: { ...p.resources, mana: 5 } }));
+    s = addMage(s, 'p2', { id: 'bob-mage', cardId: 'base.mage.sorcery', color: 'red' });
+    s = placeMageOnSpace(s, 'p2', 'bob-mage', 'base.room.adventuring.b.slot-2');
+    // Alice Ars Magnas onto Bob's slot (wounds him, takes the slot).
+    s = applyAction(s, {
+      type: 'PLACE_WORKER',
+      playerId: 'p1',
+      mageId: 'alice-red',
+      actionSpaceId: 'base.room.adventuring.b.slot-2',
+    });
+    // Pass the wound reaction; resolve the Infirmary bonus if one is offered.
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'reaction-passed' },
+    });
+    let top = topPending(s);
+    if (top.source.id !== 'base.room.adventuring.b') {
+      if (top.prompt.kind !== 'choose-from-options') {
+        throw new Error('expected the Infirmary bonus prompt');
+      }
+      s = applyAction(s, {
+        type: 'RESOLVE_PENDING',
+        resolutionId: top.id,
+        answer: { kind: 'option-chosen', optionId: top.prompt.options[0]!.id, payload: {} },
+      });
+      top = topPending(s);
+    }
+    // Once the red Mage lands on Adventuring B, the on-place prompt fires.
+    expect(top.source.id).toBe('base.room.adventuring.b');
+    if (top.prompt.kind !== 'choose-from-options') {
+      throw new Error('expected choose-from-options prompt');
+    }
+    expect(top.prompt.options.map((o) => o.id)).toContain('spell');
+  });
+
   it('placing a Mage at Adventuring B via a spell (Living Image) also fires the prompt', () => {
     let s = setupAdventuringBTest();
     // Give p1 the Living Image leader spell (summons a neutral Mage onto a slot).
