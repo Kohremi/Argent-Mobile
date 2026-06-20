@@ -490,6 +490,14 @@ export interface ActionSpace {
   costToActivate?: ActionSpaceCost;
   /** Human-readable summary of the slot's reward, sourced from the room file. */
   description?: string;
+  /**
+   * When true, a Mage occupying this slot loses ALL of its Mage powers while
+   * seated here — green's wound-immunity, blue's spell-immunity, and every
+   * other colour ability. Enforced at the single chokepoint `colorAbilityActive`
+   * (same place the shadow-slot immunity rule lives). Used by the Archmage's
+   * Staff room's center slot. Defaults to false/undefined.
+   */
+  stripsMagePowers?: boolean;
 }
 
 export interface Room {
@@ -560,6 +568,14 @@ export interface ConsortiumVoter {
   isAlwaysFaceUp: boolean;
   revealed: boolean;
   customScoringEffectId?: EffectId;
+  /**
+   * Room-dependent voters are only seeded into the game when at least one of
+   * these rooms is actually in play. Used by voters whose criterion is
+   * meaningless without a specific room — e.g. Uleyle Kimbhe ("holds the
+   * Archmage's Staff") requires the Staff room. Listing both side ids of a
+   * room covers either side being selected. Absent = always eligible.
+   */
+  requiresRoomIds?: RoomId[];
 }
 
 export interface VoterMark {

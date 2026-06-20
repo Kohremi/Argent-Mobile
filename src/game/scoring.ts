@@ -3,11 +3,31 @@ import type {
   ConsortiumVoter,
   ConsortiumVoterId,
   Department,
+  EffectId,
   GameState,
   Player,
   PlayerId,
   ScoringCriterion,
 } from './types';
+
+/**
+ * Custom voter scoring registry. A voter with `criterion: 'custom'` names a
+ * `customScoringEffectId`; content packs register the matching per-player
+ * scoring function here (keyed by that id) so scoring stays pack-agnostic — the
+ * same "no engine code switches on pack.id" rule the effect registry follows.
+ * Returns each player's numeric score for the voter; `computeMostWinner` then
+ * picks the leader the usual way (e.g. the Archmage's Staff holder scores 1, all
+ * others 0). Registered at module-load via the effects side-effect imports.
+ */
+export type CustomScoringFn = (state: GameState, player: Player) => number;
+const customScoringRegistry = new Map<EffectId, CustomScoringFn>();
+
+export function registerCustomScoring(id: EffectId, fn: CustomScoringFn): void {
+  if (customScoringRegistry.has(id)) {
+    throw new Error(`Custom scoring "${id}" is already registered`);
+  }
+  customScoringRegistry.set(id, fn);
+}
 
 /**
  * Returns the player's score for a given criterion.
@@ -19,6 +39,7 @@ export function scorePlayerForCriterion(
   state: GameState,
   player: Player,
   criterion: ScoringCriterion,
+  customScoringEffectId?: EffectId,
 ): number {
   switch (criterion) {
     case 'most-gold':
@@ -60,9 +81,13 @@ export function scorePlayerForCriterion(
       // Resolved by `computeVoterWinner` via second-place ranking; the
       // per-player score here is not used.
       return 0;
-    case 'custom':
-      // TODO: invoke voter.customScoringEffectId via the effect registry
+    case 'custom': {
+      if (customScoringEffectId) {
+        const fn = customScoringRegistry.get(customScoringEffectId);
+        if (fn) return fn(state, player);
+      }
       return 0;
+    }
   }
 }
 
@@ -408,7 +433,7 @@ function computeMostWinner(
 
   const scored = state.players.map((p) => ({
     player: p,
-    score: scorePlayerForCriterion(state, p, criterion),
+    score: scorePlayerForCriterion(state, p, criterion, voter.customScoringEffectId),
   }));
 
   let max = -1;
@@ -549,7 +574,12 @@ export function computeFinalScoring(state: GameState): FinalScoringResult {
           : voter.criterion;
     const scores: Record<PlayerId, number> = {};
     for (const p of state.players) {
-      scores[p.id] = scorePlayerForCriterion(state, p, scoringCriterion);
+      scores[p.id] = scorePlayerForCriterion(
+        state,
+        p,
+        scoringCriterion,
+        voter.customScoringEffectId,
+      );
     }
     voterAwards.push({
       voterId: voter.id,

@@ -3186,10 +3186,37 @@ export function colorAbilityActive(
   if (!actsAsColor(mage, color) || sideForColor(state, color) !== 'A') {
     return false;
   }
+  // A Mage seated on a power-stripping slot (the Archmage's Staff) loses ALL
+  // of its colour powers, including green's wound-immunity and blue's
+  // spell-immunity — the same chokepoint the shadow rule below uses.
+  if (mageOnPowerStrippingSlot(state, mage)) {
+    return false;
+  }
   if (mage.isShadowing && (color === 'green' || color === 'blue')) {
     return false;
   }
   return true;
+}
+
+/**
+ * True when `mage` currently occupies an action-space slot flagged
+ * `stripsMagePowers` (the Archmage's Staff center slot). Such a Mage loses all
+ * of its powers while seated there. Shadow occupants of the slot count too —
+ * the staff slot has no shadow position anyway, but the lookup checks both
+ * positions defensively.
+ */
+export function mageOnPowerStrippingSlot(
+  state: GameState,
+  mage: OwnedMage,
+): boolean {
+  if (mage.location.kind !== 'action-space') return false;
+  const spaceId = mage.location.spaceId;
+  for (const room of state.rooms) {
+    for (const space of room.actionSpaces) {
+      if (space.id === spaceId) return space.stripsMagePowers === true;
+    }
+  }
+  return false;
 }
 
 /** Gold cost of the Divinity Side B "pay to activate a Merit Slot" option. */

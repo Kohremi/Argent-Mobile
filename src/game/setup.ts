@@ -446,7 +446,16 @@ export function buildInitialState(config: GameConfig): GameState {
   const rooms: Room[] = gridOrderedRooms;
 
   // ---- Voters ----
-  let faceDownPool = allVoters.filter((v) => !v.isAlwaysFaceUp);
+  // Room-dependent voters (e.g. Uleyle Kimbhe — "holds the Archmage's Staff")
+  // only enter the pool when at least one of their required rooms is actually
+  // in play. A voter with no `requiresRoomIds` is always eligible.
+  const inPlayRoomIds = new Set(rooms.map((r) => r.id));
+  const eligibleVoters = allVoters.filter(
+    (v) =>
+      !v.requiresRoomIds ||
+      v.requiresRoomIds.some((id) => inPlayRoomIds.has(id)),
+  );
+  let faceDownPool = eligibleVoters.filter((v) => !v.isAlwaysFaceUp);
   if (playerCount === 2) {
     // 2-player variant excludes second-place voters per rulebook.
     faceDownPool = faceDownPool.filter(
@@ -455,7 +464,7 @@ export function buildInitialState(config: GameConfig): GameState {
         v.criterion !== 'second-most-supporters',
     );
   }
-  const faceUpVoters = allVoters
+  const faceUpVoters = eligibleVoters
     .filter((v) => v.isAlwaysFaceUp)
     .map((v): ConsortiumVoter => ({ ...v, revealed: true }));
   const shuffledVoters = shuffleWithState(faceDownPool, rng);

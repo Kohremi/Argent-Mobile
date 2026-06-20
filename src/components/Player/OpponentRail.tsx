@@ -7,6 +7,7 @@ import { usePromptTargets } from '../Prompts/usePromptTargets';
 import { MageToken } from '../Board/MageToken';
 import { PortraitBust } from './PortraitBust';
 import { PlayerBuffBadges } from './PlayerBuffBadges';
+import { StaffBadge } from './StaffBadge';
 import { ResourceIcon } from '../icons';
 import { RESOURCE_ORDER } from './PlayerDock';
 import { getBotPersonality } from '../../game/ai';
@@ -76,6 +77,7 @@ export function OpponentRail() {
             >
               <PortraitBust player={p} state={state} expression="neutral" size={26} />
               <span className="truncate font-display text-sm font-bold">{p.name}</span>
+              <StaffBadge state={state} playerId={p.id} />
               {p.controlledByBot && (
                 <span
                   className="rounded-full bg-night-900/70 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-starlight ring-1 ring-starlight/40"

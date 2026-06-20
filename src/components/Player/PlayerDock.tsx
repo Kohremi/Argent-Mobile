@@ -8,6 +8,7 @@ import { MageToken } from '../Board/MageToken';
 import { HandFans } from '../Cards/HandFans';
 import { PortraitBust } from './PortraitBust';
 import { PlayerBuffBadges } from './PlayerBuffBadges';
+import { StaffBadge } from './StaffBadge';
 import { getBotPersonality } from '../../game/ai';
 
 /**
@@ -115,6 +116,7 @@ export function PlayerDock() {
                 🤖 {getBotPersonality(player.botPersonalityId).name}
               </span>
             )}
+            <StaffBadge state={state} playerId={player.id} />
           </p>
           <p className="text-[10px] uppercase tracking-widest text-white/40">
             {player.controlledByBot
