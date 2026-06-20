@@ -7993,7 +7993,13 @@ function patchWithMaybeInstantReward(
       ),
     };
   }
-  return { kind: 'done', patch };
+  // Adventuring Side B's on-place trigger fires for ANY placement onto its
+  // slots, not just PLACE_WORKER — including spell/item placements (Living
+  // Image, golems, Mystic's Cowl, …) that route through this helper. Mirrors
+  // the engine's `adventuringBPlacedHook` on the PLACE_WORKER path. (Adventuring
+  // B is never an instant room, so this can't collide with the branch above.)
+  const advPatch = adventuringBPlacementHookPatch(working, spaceId, playerId);
+  return { kind: 'done', patch: { ...patch, ...advPatch } };
 }
 
 function openSlotPrompt(

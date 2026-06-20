@@ -6266,6 +6266,58 @@ describe('Adventuring B', () => {
     expect(ids).toEqual(['skip', 'spell', 'supporter', 'vault'].sort());
   });
 
+  it('placing a Mage at Adventuring B via a spell (Living Image) also fires the prompt', () => {
+    let s = setupAdventuringBTest();
+    // Give p1 the Living Image leader spell (summons a neutral Mage onto a slot).
+    s = {
+      ...s,
+      players: s.players.map((p) =>
+        p.id !== 'p1'
+          ? p
+          : {
+              ...p,
+              resources: { ...p.resources, mana: 5 },
+              ownedSpells: [
+                {
+                  cardId: 'base.spell.living-image',
+                  intPlaced: true,
+                  wisPlacedLevel2: false,
+                  wisPlacedLevel3: false,
+                  exhausted: false,
+                },
+              ],
+            },
+      ),
+    };
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.living-image',
+      level: 1,
+    });
+    // Living Image prompts for a target slot — pick the Adventuring B slot.
+    const slotPrompt = topPending(s);
+    if (slotPrompt.prompt.kind !== 'choose-target-action-space') {
+      throw new Error('expected a slot-choice prompt');
+    }
+    const advSlot = slotPrompt.prompt.eligibleSpaceIds.find((id) =>
+      id.startsWith('base.room.adventuring.b'),
+    );
+    expect(advSlot).toBeDefined();
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: slotPrompt.id,
+      answer: { kind: 'space-chosen', spaceId: advSlot!, payload: {} },
+    });
+    // The on-place pick-card-type prompt should now fire (the bug: it didn't).
+    const top = topPending(s);
+    expect(top.source.id).toBe('base.room.adventuring.b');
+    if (top.prompt.kind !== 'choose-from-options') {
+      throw new Error('expected choose-from-options prompt');
+    }
+    expect(top.prompt.options.map((o) => o.id)).toContain('spell');
+  });
+
   it('picking "spell" pops the top of spellDeck into the pool (and not the deck)', () => {
     let s = setupAdventuringBTest();
     const spellTop = s.spellDeck[0]!;
