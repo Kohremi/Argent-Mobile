@@ -3,20 +3,41 @@
 // 4-player all-bot games (one of each personality, random leaders + random
 // non-off-white mages) and calls assertBoardConsistent after EVERY action, so
 // any hand-rolled board mutation that desyncs location vs. occupancy fails here
-// with the exact action that broke it.
+// with the exact action that broke it. Two matrices run: base-only (30 seeds)
+// and every pack active with unrestricted random leaders (12 seeds), so
+// cross-module desyncs are caught alongside base-game ones.
 import { describe, expect, it } from 'vitest';
 import { applyAction, initGame } from './engine';
 import { findBoardInconsistency } from './boardInvariant';
-import { getPack } from '../content/registry';
+import { getPack, listPacks } from '../content/registry';
 import { getBotPersonality } from './ai';
 import { botDecisionContext } from '../utils/uiSelectors';
 import { createRng } from '../utils/rng';
-import type { GameAction, GameState } from './types';
+import type { GameAction, GameState, PackId } from './types';
 
 const PERSONALITIES = ['klank', 'malfoy', 'thickhide', 'darthpotter'] as const;
-const LEADERS = getPack('base')!
-  .candidates.filter((c) => c.startingMageColor !== 'neutral')
-  .map((c) => c.id);
+
+/** A simulation matrix: which packs are active + which leaders may be drafted. */
+interface SimConfig {
+  packIds: PackId[];
+  candidateIds: string[];
+}
+
+// Base-only: the original matrix — base pack, non-neutral leaders.
+const BASE_ONLY: SimConfig = {
+  packIds: ['base'],
+  candidateIds: getPack('base')!
+    .candidates.filter((c) => c.startingMageColor !== 'neutral')
+    .map((c) => c.id),
+};
+
+// Every registered pack active, leaders drafted from ALL packs' candidates with
+// no restriction (neutral-starting leaders included) — exercises module
+// interactions the base-only matrix can't reach.
+const ALL_PACKS: SimConfig = {
+  packIds: listPacks().map((p) => p.id),
+  candidateIds: listPacks().flatMap((p) => p.candidates).map((c) => c.id),
+};
 
 function describeAction(s: GameState, a: GameAction): string {
   if (a.type === 'RESOLVE_PENDING') {
@@ -27,16 +48,21 @@ function describeAction(s: GameState, a: GameAction): string {
 }
 
 /** Runs one all-bot game; returns the first invariant break (or null). */
-function runGameCheckingInvariant(seed: number, seatIds: string[]): string | null {
+function runGameCheckingInvariant(
+  seed: number,
+  seatIds: string[],
+  cfg: SimConfig,
+): string | null {
   const rng = createRng((seed * 2654435761) | 0);
   const rnd = (n: number) => Math.floor(rng() * n);
   let s = initGame({
-    activePackIds: ['base'],
+    activePackIds: cfg.packIds,
     playerNames: ['P0', 'P1', 'P2', 'P3'],
     rngSeed: seed,
     controlledByBot: [true, true, true, true],
     botPersonalityIds: seatIds,
     useCandidateDraft: true,
+    roomLayoutMode: { kind: 'random' },
   });
   let steps = 0;
   while (s.phase.kind !== 'complete' && steps < 40000) {
@@ -54,7 +80,7 @@ function runGameCheckingInvariant(seed: number, seatIds: string[]): string | nul
         case 'candidate-draft': {
           const pid = s.players[s.phase.activePlayerIndex]!.id;
           const taken = new Set(s.players.map((p) => p.candidateId).filter(Boolean));
-          const avail = LEADERS.filter((id) => !taken.has(id));
+          const avail = cfg.candidateIds.filter((id) => !taken.has(id));
           action = { type: 'CHOOSE_CANDIDATE', playerId: pid, candidateId: avail[rnd(avail.length)]! };
           break;
         }
@@ -101,7 +127,18 @@ describe('board invariant — location ↔ slot occupancy never desyncs', () => 
     for (let seed = 1; seed <= 30; seed++) {
       const rot = seed % 4;
       const order = PERSONALITIES.map((_, i) => PERSONALITIES[(i + rot) % 4]!);
-      const result = runGameCheckingInvariant(seed, order);
+      const result = runGameCheckingInvariant(seed, order, BASE_ONLY);
+      if (result) failures.push(result);
+    }
+    expect(failures).toEqual([]);
+  });
+
+  it('holds with every pack active, random layout + unrestricted leaders', () => {
+    const failures: string[] = [];
+    for (let seed = 1; seed <= 12; seed++) {
+      const rot = seed % 4;
+      const order = PERSONALITIES.map((_, i) => PERSONALITIES[(i + rot) % 4]!);
+      const result = runGameCheckingInvariant(seed, order, ALL_PACKS);
       if (result) failures.push(result);
     }
     expect(failures).toEqual([]);
