@@ -88,6 +88,20 @@ export function PlayerDock() {
   const aura = PLAYER_AURA[player.color];
   const research0 = researchTotals(player);
   const bench = player.mages.filter((m) => m.location.kind === 'office');
+
+  // Action budget for this turn. `activePlayer()` is non-null only during
+  // errands, so the phase is always 'errands' here — the guard just narrows
+  // the type. The counts are derived (not hard-coded to 1) so the readout
+  // already reflects a future module that grants more than one per turn:
+  //   regular = base Action (1 until used) + bonus grants (Flare / Dazzle /
+  //             Bend Time, tracked in extraActions)
+  //   fast    = the optional Fast Action, usable only BEFORE the regular one
+  const errands = state.phase.kind === 'errands' ? state.phase : null;
+  const regularActions = errands
+    ? (errands.actionUsed ? 0 : 1) + (errands.extraActions ?? 0)
+    : 0;
+  const fastActions =
+    errands && !errands.actionUsed && !errands.fastActionUsed ? 1 : 0;
   // Wounded mages aren't shown here — they rest in the Infirmary ward on the
   // board (RoomScene bed grid), which renders + targets them and owns their
   // glide animation. Duplicating them here collided the framer-motion
@@ -201,6 +215,7 @@ export function PlayerDock() {
 
       {/* turn controls */}
       <div className="flex items-center gap-2">
+        {errands && <ActionBudget fast={fastActions} regular={regularActions} />}
         <button
           type="button"
           disabled={pendings > 0}
@@ -212,5 +227,41 @@ export function PlayerDock() {
       </div>
       </div>
     </footer>
+  );
+}
+
+/**
+ * Turn action-budget readout: how many Fast / Regular actions the active
+ * player has left this turn. Count-first (not a checkmark) so it reads
+ * correctly if a future module grants more than one of either per turn.
+ */
+function ActionBudget({ fast, regular }: { fast: number; regular: number }) {
+  return (
+    <div className="flex items-center gap-1.5">
+      <BudgetChip label="Fast" count={fast} tone="#7dd3fc" />
+      <BudgetChip label={regular === 1 ? 'Action' : 'Actions'} count={regular} tone="#ffe9a8" />
+    </div>
+  );
+}
+
+/** One budget pill: a glowing count + a label, dimmed once it hits zero. */
+function BudgetChip({ label, count, tone }: { label: string; count: number; tone: string }) {
+  const spent = count === 0;
+  return (
+    <span
+      className={clsx(
+        'flex items-center gap-1 rounded-full bg-night-700 px-2 py-1 text-[9px] font-bold uppercase tracking-widest ring-1 ring-white/10',
+        spent ? 'text-white/35' : 'text-white/70',
+      )}
+      title={`${count} ${label} action${count === 1 ? '' : 's'} remaining this turn`}
+    >
+      <span
+        className="font-arcane text-sm leading-none"
+        style={spent ? undefined : { color: tone, textShadow: `0 0 6px ${tone}99` }}
+      >
+        {count}
+      </span>
+      {label}
+    </span>
   );
 }
