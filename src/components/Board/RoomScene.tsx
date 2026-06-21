@@ -6,10 +6,10 @@ import {
   INFIRMARY_MANA_BED,
   INFIRMARY_REWARD_BEDS,
 } from '../../game/effects/helpers';
-import type { ActionSpace, GameState, OwnedMage, Player, Room } from '../../game/types';
+import type { ActionSpace, GameState, MageColor, OwnedMage, Player, Room } from '../../game/types';
 import { useUiStore } from '../../store/uiStore';
 import { isPoolRoom, PLAYER_AURA, type OccupiedSlotPower } from '../../utils/uiSelectors';
-import { LockIcon, ResourceIcon } from '../icons';
+import { LockIcon, MageIcon, ResourceIcon, type ResourceKind } from '../icons';
 
 /**
  * Distinct ring for "Mage power" placement targets (Ars Magna / Natural Magick
@@ -118,6 +118,13 @@ export function RoomScene({
         <p className="text-[11px] text-slate-300 italic">{room.description}</p>
       )}
 
+      {room.id === 'base.room.astronomy-tower.a' && (
+        <AstronomyTowerTrack state={state} side="A" />
+      )}
+      {room.id === 'base.room.astronomy-tower.b' && (
+        <AstronomyTowerTrack state={state} side="B" />
+      )}
+
       {room.cannotBePlacedInDirectly ? (
         <InfirmarySlots room={room} state={state} />
       ) : spaces.length === 0 ? (
@@ -149,7 +156,146 @@ export function RoomScene({
         </ul>
       )}
 
+      {room.id === 'mancers.room.laboratory.a' && <LaboratoryRewards side="A" />}
+      {room.id === 'mancers.room.laboratory.b' && <LaboratoryRewards side="B" />}
+
       <RoomFxOverlay roomId={room.id} />
+    </div>
+  );
+}
+
+/**
+ * Astronomy Tower reward track. Each cell is either a set of resource parts
+ * (icon + amount) or a free-text label (the special spaces). Mirrors
+ * `ASTRONOMY_A_TRACK` / `ASTRONOMY_B_TRACK` in the engine; the cell the marker
+ * sits on gets a highlighted outline. The marker position is engine truth
+ * (`state.astronomyTowerMarker`).
+ */
+type AstronomyTrackCell = {
+  parts?: { amount: number; kind: ResourceKind }[];
+  text?: string;
+};
+
+const ASTRONOMY_A_TRACK_DISPLAY: AstronomyTrackCell[] = [
+  { parts: [{ amount: 1, kind: 'wisdom' }, { amount: 2, kind: 'mana' }] },
+  { parts: [{ amount: 2, kind: 'research' }] },
+  { parts: [{ amount: 8, kind: 'gold' }] },
+  { parts: [{ amount: 1, kind: 'intelligence' }, { amount: 1, kind: 'research' }] },
+  { parts: [{ amount: 4, kind: 'mana' }] },
+  { parts: [{ amount: 2, kind: 'marks' }] },
+];
+
+const ASTRONOMY_B_TRACK_DISPLAY: AstronomyTrackCell[] = [
+  { text: 'Start' },
+  { parts: [{ amount: 5, kind: 'mana' }] },
+  { parts: [{ amount: 8, kind: 'gold' }] },
+  { parts: [{ amount: 2, kind: 'marks' }] },
+  {
+    parts: [
+      { amount: 1, kind: 'intelligence' },
+      { amount: 1, kind: 'wisdom' },
+      { amount: 1, kind: 'research' },
+    ],
+  },
+  { text: 'Draft 2 Vault' },
+  { text: 'Gain a Mage' },
+  { text: 'Choose any' },
+];
+
+function AstronomyTowerTrack({
+  state,
+  side,
+}: {
+  state: GameState;
+  side: 'A' | 'B';
+}) {
+  const marker = state.astronomyTowerMarker;
+  const track =
+    side === 'A' ? ASTRONOMY_A_TRACK_DISPLAY : ASTRONOMY_B_TRACK_DISPLAY;
+  return (
+    <div className="space-y-1 text-center">
+      <div className="text-[10px] uppercase tracking-wide text-slate-400">
+        Reward track — marker on space {marker + 1}
+        {side === 'B' && ' (resets each round)'}
+      </div>
+      <div className="flex gap-1 justify-center flex-wrap">
+        {track.map((space, i) => {
+          const isMarker = i === marker;
+          return (
+            <div
+              key={i}
+              title={`Space ${i + 1}${isMarker ? ' (marker here)' : ''}`}
+              className={clsx(
+                'w-12 h-12 rounded border-2 flex flex-col items-center justify-center gap-0.5 flex-shrink-0 p-0.5',
+                isMarker
+                  ? 'border-amber-400 bg-amber-400/15 ring-2 ring-amber-400/40'
+                  : 'border-slate-600 bg-slate-950/40',
+              )}
+            >
+              {space.parts?.map((part, j) => (
+                <span
+                  key={j}
+                  className="inline-flex items-center gap-0.5 text-[10px] text-slate-200 leading-none"
+                >
+                  {part.amount}
+                  <ResourceIcon kind={part.kind} size={11} />
+                </span>
+              ))}
+              {space.text && (
+                <span className="text-[8px] text-slate-300 leading-tight text-center">
+                  {space.text}
+                </span>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Tiny per-mage-colour reward key shown at the bottom of each Laboratory side
+ * — the reward depends on which colour Mage is placed. Helps the player
+ * remember which colour grants which reward without consulting the rulebook.
+ */
+function LaboratoryRewards({ side }: { side: 'A' | 'B' }) {
+  const rowsA: Array<{ color: MageColor; label: string; icon: ReactNode }> = [
+    { color: 'red', label: '+2', icon: <ResourceIcon kind="mana" size={11} /> },
+    { color: 'green', label: '+4', icon: <ResourceIcon kind="gold" size={11} /> },
+    { color: 'purple', label: '+1', icon: <ResourceIcon kind="research" size={11} /> },
+    { color: 'grey', label: '+1', icon: <ResourceIcon kind="marks" size={11} /> },
+    { color: 'blue', label: 'Heal+Move', icon: null },
+  ];
+  const rowsB: Array<{ color: MageColor; label: string; icon: ReactNode }> = [
+    { color: 'blue', label: '+3', icon: <ResourceIcon kind="mana" size={11} /> },
+    { color: 'grey', label: '+1', icon: <ResourceIcon kind="marks" size={11} /> },
+    { color: 'green', label: '+1', icon: <ResourceIcon kind="intelligence" size={11} /> },
+    { color: 'purple', label: '+1', icon: <ResourceIcon kind="wisdom" size={11} /> },
+    { color: 'red', label: '+1', icon: <ResourceIcon kind="research" size={11} /> },
+  ];
+  const rows = side === 'A' ? rowsA : rowsB;
+  return (
+    <div className="mt-2 pt-2 border-t border-slate-700/70 space-y-1">
+      <div className="text-[9px] uppercase tracking-wide text-slate-400">
+        Reward by Mage colour
+      </div>
+      <div className="flex flex-wrap gap-x-2 gap-y-1 items-center">
+        {rows.map((r) => (
+          <span
+            key={r.color}
+            className="inline-flex items-center gap-0.5 text-[10px] text-slate-300"
+          >
+            <MageIcon color={r.color} size={12} />
+            <span className="text-slate-500">→</span>
+            <span className="font-medium">{r.label}</span>
+            {r.icon}
+          </span>
+        ))}
+      </div>
+      <div className="text-[9px] text-slate-500 italic">
+        Slot 1 doubles the reward.
+      </div>
     </div>
   );
 }
