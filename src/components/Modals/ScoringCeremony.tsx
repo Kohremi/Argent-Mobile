@@ -1,10 +1,58 @@
 import { useEffect, useMemo, useState } from 'react';
 import clsx from 'clsx';
 import { motion } from 'framer-motion';
+import { STAFF_VOTER_SCORING_ID } from '../../content/packs/archmage';
 import { computeFinalScoring } from '../../game/scoring';
+import type { ConsortiumVoter, ScoringCriterion } from '../../game/types';
 import { useGameStore } from '../../store/gameStore';
 import { PLAYER_AURA } from '../../utils/uiSelectors';
 import { PortraitBust } from '../Player/PortraitBust';
+
+/**
+ * Short "what did this voter want?" blurb, shown on the right of each award
+ * row just before the winning player's name. Two-words-ish so it reads as a
+ * caption, not a sentence. `custom` voters score via a registered effect
+ * rather than a generic "most X" criterion, so they're labelled by effect id
+ * in CUSTOM_VOTER_BLURB instead.
+ */
+const VOTER_CRITERION_BLURB: Record<ScoringCriterion, string> = {
+  'most-supporters': 'most supporters',
+  'most-influence': 'most influence',
+  'second-most-supporters': 'second-most supporters',
+  'second-most-influence': 'second-most influence',
+  'most-mana': 'most mana',
+  'most-gold': 'most gold',
+  'most-marks': 'most marks',
+  'most-intelligence': 'most intelligence',
+  'most-wisdom': 'most wisdom',
+  'most-research': 'most research',
+  'most-treasures': 'most treasures',
+  'most-consumables': 'most consumables',
+  'most-diversity': 'most different',
+  'most-sorcery': 'most sorcery',
+  'most-mysticism': 'most mysticism',
+  'most-natural-magick': 'most natural magick',
+  'most-planar-studies': 'most planar studies',
+  'most-divinity': 'most divinity',
+  'most-technomancy': 'most technomancy',
+  custom: '',
+};
+
+/** Blurbs for `custom`-criterion voters, keyed by their scoring effect id. */
+const CUSTOM_VOTER_BLURB: Record<string, string> = {
+  [STAFF_VOTER_SCORING_ID]: "Archmage's Staff",
+};
+
+/** The short condition blurb for a voter (criterion-based, or effect-based
+ *  for custom voters). Empty string when there's nothing sensible to show. */
+function voterBlurb(voter: ConsortiumVoter): string {
+  if (voter.criterion === 'custom') {
+    return voter.customScoringEffectId
+      ? CUSTOM_VOTER_BLURB[voter.customScoringEffectId] ?? ''
+      : '';
+  }
+  return VOTER_CRITERION_BLURB[voter.criterion];
+}
 
 /**
  * The Election (docs/UI_DESIGN.md §12.D): staged end-game ceremony. Voter
@@ -97,6 +145,8 @@ export function ScoringCeremony() {
         {revealed.map((award) => {
           const winner = state.players.find((p) => p.id === award.winnerPlayerId);
           const aura = winner ? PLAYER_AURA[winner.color] : '#9aa0b4';
+          const voter = state.voters.find((v) => v.id === award.voterId);
+          const blurb = voter ? voterBlurb(voter) : '';
           return (
             <motion.div
               key={award.voterId}
@@ -116,16 +166,23 @@ export function ScoringCeremony() {
                   </span>
                 )}
               </span>
-              {winner ? (
-                <span
-                  className="rounded-full px-2.5 py-0.5 text-xs font-extrabold text-ink-900"
-                  style={{ background: aura }}
-                >
-                  {winner.name}
-                </span>
-              ) : (
-                <span className="text-xs italic text-black/45">no winner</span>
-              )}
+              <span className="flex items-center gap-2">
+                {blurb && (
+                  <span className="text-[10px] font-semibold uppercase tracking-wide text-black/40">
+                    {blurb}
+                  </span>
+                )}
+                {winner ? (
+                  <span
+                    className="rounded-full px-2.5 py-0.5 text-xs font-extrabold text-ink-900"
+                    style={{ background: aura }}
+                  >
+                    {winner.name}
+                  </span>
+                ) : (
+                  <span className="text-xs italic text-black/45">no winner</span>
+                )}
+              </span>
             </motion.div>
           );
         })}
