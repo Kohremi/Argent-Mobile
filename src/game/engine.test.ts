@@ -27584,6 +27584,69 @@ describe('Retribution (Wrath of Heaven L3)', () => {
     );
     expect(retrib).toBeUndefined();
   });
+
+  // Retribution is itself a Spell, so the attacker's immune mages must be
+  // excluded from its targets — a raw "placed and not wounded" filter used to
+  // let it hit them. Drives Retribution to the first target prompt and asserts
+  // which of the attacker's two mages are eligible.
+  function eligibleRetributionTargets(swapBobSecond: (m: OwnedMage) => OwnedMage): string[] {
+    let s = setupRetribution();
+    s = mapPlayer(s, 'p2', (p) => ({
+      ...p,
+      mages: p.mages.map((m) => (m.id === 'bob-grey-2' ? swapBobSecond(m) : m)),
+    }));
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p2',
+      spellCardId: 'base.spell.burn',
+      level: 1,
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'mage-chosen', mageId: 'alice-red' },
+    });
+    const reactionPrompt = topPending(s);
+    if (reactionPrompt.prompt.kind !== 'reaction-window') throw new Error('unreachable');
+    const retrib = reactionPrompt.prompt.reactionOptions.find(
+      (o) => o.effectId === 'base.spell.wrath-of-heaven.l3.react',
+    )!;
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: reactionPrompt.id,
+      answer: { kind: 'reaction-played', effectId: retrib.effectId, reactionContext: {} },
+    });
+    // Alice's own Infirmary bonus from the original Burn can land first.
+    const bonusPrompt = topPending(s);
+    if (bonusPrompt.prompt.kind === 'choose-from-options') {
+      s = applyAction(s, {
+        type: 'RESOLVE_PENDING',
+        resolutionId: bonusPrompt.id,
+        answer: { kind: 'option-chosen', optionId: bonusPrompt.prompt.options[0]!.id, payload: {} },
+      });
+    }
+    const t1 = topPending(s);
+    if (t1.prompt.kind !== 'choose-target-mage') throw new Error('expected target prompt');
+    return [...t1.prompt.eligibleMageIds].sort();
+  }
+
+  it('excludes an opposing Divinity (blue) mage — it is immune to the retaliating Spell', () => {
+    const eligible = eligibleRetributionTargets((m) => ({
+      ...m,
+      cardId: 'base.mage.divinity',
+      color: 'blue',
+    }));
+    expect(eligible).toEqual(['bob-grey-1']);
+  });
+
+  it('excludes a green (Natural Magick) mage — green cannot be wounded', () => {
+    const eligible = eligibleRetributionTargets((m) => ({
+      ...m,
+      cardId: 'base.mage.natural-magick',
+      color: 'green',
+    }));
+    expect(eligible).toEqual(['bob-grey-1']);
+  });
 });
 
 // ============================================================================

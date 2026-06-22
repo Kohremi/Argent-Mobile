@@ -21,8 +21,10 @@ and steers toward the resource criteria it can actually flip) — so a table can
 be any mix of humans and bots, including all-bot games that run headless to
 completion.
 
-The only notable gap is a small set of base spell books with placeholder
-levels (see [Known incomplete](#known-incomplete)).
+Every spell-book level across all packs is wired to a registered effect —
+including the reaction-timing levels, which resolve through their reaction
+effects rather than a cast-time one — so there are no placeholder spells
+(see [Known incomplete](#known-incomplete) for the current focus).
 
 ## Getting started
 
@@ -171,12 +173,17 @@ others can be combined freely.
 
 ## Known incomplete
 
-- A handful of base spell books still have placeholder levels — casting
-  the unwired level throws "effect not registered". **Wrath of Heaven**
-  and **Songs of Springtime** are unwired at every level; **Tome of
-  Protection** (L3), **The Darkness Within** (L2), **Temporal Calculus,
-  6th Ed.** (L2), and **Tardy** (L1) are missing a single level. The card
-  text is shown in the UI so unwired cards remain visible.
+- No spell-book levels are unwired. Every level across all five packs
+  resolves through a registered effect, including the reaction levels
+  (Wrath of Heaven, Songs of Springtime, Tome of Protection L3, The
+  Darkness Within L2, Temporal Calculus 6th Ed. L2, Tardy) — those fire
+  via their `*.react` effects from a reaction window, not a cast-time
+  effect, so the spell-book level's bare `effectId` is intentionally
+  never invoked.
+- Remaining work is behavioural polish and rules edge cases rather than
+  missing content — e.g. making sure retaliation spells respect Mage
+  immunities (a Divinity Mage can't be the target of an opponent's Spell,
+  including Wrath of Heaven's reaction).
 
 ## Determinism
 
