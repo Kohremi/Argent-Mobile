@@ -2949,6 +2949,11 @@ function resolveReactionPrompt(
         `resolveReactionPrompt: reaction effect ${answer.effectId} not in offered options`,
       );
     }
+    if (reactionOption.disabled) {
+      throw new Error(
+        `resolveReactionPrompt: reaction effect ${answer.effectId} is disabled (no legal targets)`,
+      );
+    }
     const window = curr.activeReactionWindows.find((w) => w.id === windowId);
     if (!window) {
       throw new Error(`resolveReactionPrompt: window ${windowId} missing`);
@@ -3086,9 +3091,17 @@ function validateAnswerForPrompt(
         );
       }
       if (answer.kind === 'reaction-played') {
-        if (!prompt.prompt.reactionOptions.some((o) => o.effectId === answer.effectId)) {
+        const chosen = prompt.prompt.reactionOptions.find(
+          (o) => o.effectId === answer.effectId,
+        );
+        if (!chosen) {
           throw new Error(
             `validateAnswer: reaction effect ${answer.effectId} not in options`,
+          );
+        }
+        if (chosen.disabled) {
+          throw new Error(
+            `validateAnswer: reaction effect ${answer.effectId} is disabled (no legal targets)`,
           );
         }
       }

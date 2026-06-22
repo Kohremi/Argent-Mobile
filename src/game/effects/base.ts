@@ -75,6 +75,7 @@ import {
   spellLabel,
   unclaimedLegendaryBooks,
   woundMage,
+  wrathSpellTargets,
   allocateInfirmaryBed,
 } from './helpers';
 import type {
@@ -15998,33 +15999,10 @@ registerEffect(
 // bonus mechanic, not a reaction trigger.
 // ============================================================================
 
-/**
- * Mages owned by `attackerId` that Wrath of Heaven (cast by `responderId`) may
- * legally hit with `effect`. The retaliation is itself a Spell, so it must run
- * through the spell-target gate rather than a raw "placed and not wounded"
- * filter: an opposing Divinity (blue) mage is spell-immune at every level, a
- * green mage is wound-immune (L1/L3), and immunity buffs + locked rooms still
- * protect. `includesShadows: true` keeps the original scope of reaching
- * shadowing mages (they've shed their colour powers, so they stay targetable);
- * the gate drops only the genuinely-immune ones. Scoped to one owner because
- * each Wrath level retaliates against the specific player who attacked.
- */
-function wrathRetributionTargets(
-  state: GameState,
-  responderId: string,
-  attackerId: string,
-  effect: 'wound' | 'banish',
-): string[] {
-  const eligible = new Set(
-    buildHarmfulMageTargets(state, responderId, {
-      source: 'spell',
-      effect,
-      includesShadows: true,
-    }),
-  );
-  const attacker = state.players.find((p) => p.id === attackerId);
-  return attacker?.mages.filter((m) => eligible.has(m.id)).map((m) => m.id) ?? [];
-}
+// `wrathSpellTargets` (imported from ./helpers) gives the attacker's Mages a
+// Wrath reaction may legally hit, through the spell-target gate (Divinity /
+// green / buff / locked-room immunities). The reaction-window builder uses the
+// same helper, so the offered target count matches what these effects wound.
 
 /** Wrath of Heaven L1 "Justice" — Reaction. When one of your Mages is shadowed
  *  or moved by an opponent, wound any placed Mage belonging to that
@@ -16050,7 +16028,7 @@ registerEffect('base.spell.wrath-of-heaven.l1.react', (ctx): EffectResult => {
       return { kind: 'done', patch: { players: paid.players } };
     }
     const attackerId = event.byPlayerId;
-    const targets = wrathRetributionTargets(
+    const targets = wrathSpellTargets(
       paid,
       ctx.triggeringPlayerId,
       attackerId,
@@ -16117,7 +16095,7 @@ registerEffect('base.spell.wrath-of-heaven.l2.react', (ctx): EffectResult => {
       return { kind: 'done', patch: { players: paid.players } };
     }
     const attackerId = event.byPlayerId;
-    const targets = wrathRetributionTargets(
+    const targets = wrathSpellTargets(
       paid,
       ctx.triggeringPlayerId,
       attackerId,
@@ -19644,7 +19622,7 @@ registerEffect('base.spell.wrath-of-heaven.l3.react', (ctx): EffectResult => {
   // buff-protected mage, or one in a locked room is correctly excluded — a raw
   // "placed and not wounded" filter let the retaliation hit immune mages.
   function placedMagesOf(state: GameState, playerId: string): string[] {
-    return wrathRetributionTargets(
+    return wrathSpellTargets(
       state,
       ctx.triggeringPlayerId,
       playerId,

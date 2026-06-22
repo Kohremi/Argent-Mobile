@@ -320,6 +320,10 @@ function ReactionCutIn({ state, pending }: { state: GameState; pending: PendingR
   const setReactionSlotPick = useUiStore((s) => s.setReactionSlotPick);
   if (pending.prompt.kind !== 'reaction-window') return null;
   const { triggerEvents, reactionOptions } = pending.prompt;
+  // Some options can be shown for awareness but not played (e.g. Wrath of
+  // Heaven's retaliation with no legal targets). The responder has a real
+  // choice only when at least one option is actually playable.
+  const hasPlayableOption = reactionOptions.some((o) => !o.disabled);
 
   // Waiting on a destination slot — slim banner; the board is lit.
   if (reactionSlotPick && reactionSlotPick.resolutionId === pending.id) {
@@ -386,7 +390,7 @@ function ReactionCutIn({ state, pending }: { state: GameState; pending: PendingR
               <PortraitBust
                 player={responder}
                 state={state}
-                expression={reactionOptions.length > 0 ? 'determined' : 'worried'}
+                expression={hasPlayableOption ? 'determined' : 'worried'}
                 size={84}
               />
             </motion.span>
@@ -413,7 +417,10 @@ function ReactionCutIn({ state, pending }: { state: GameState; pending: PendingR
               <button
                 key={`${o.effectId}-${o.forMageId ?? i}`}
                 type="button"
+                disabled={o.disabled}
+                title={o.disabled ? 'No legal targets right now' : undefined}
                 onClick={() => {
+                  if (o.disabled) return;
                   if (o.requiresSlotPick) {
                     setReactionSlotPick({ resolutionId: pending.id, effectId: o.effectId });
                     return;
@@ -425,10 +432,15 @@ function ReactionCutIn({ state, pending }: { state: GameState; pending: PendingR
                     ...(o.forMageId ? { forMageId: o.forMageId } : {}),
                   });
                 }}
-                className="rounded-xl bg-gradient-to-b from-starlight to-amber-300 px-3 py-1.5 text-sm font-bold text-ink-900 shadow-card transition hover:-translate-y-0.5"
+                className={clsx(
+                  'rounded-xl px-3 py-1.5 text-sm font-bold shadow-card transition',
+                  o.disabled
+                    ? 'cursor-not-allowed bg-night-800 text-white/35 ring-1 ring-white/10'
+                    : 'bg-gradient-to-b from-starlight to-amber-300 text-ink-900 hover:-translate-y-0.5',
+                )}
               >
                 {o.label}
-                {o.requiresSlotPick && (
+                {!o.disabled && o.requiresSlotPick && (
                   <span className="ml-1 text-[10px] uppercase tracking-wide opacity-60">
                     then pick slot
                   </span>
@@ -440,7 +452,7 @@ function ReactionCutIn({ state, pending }: { state: GameState; pending: PendingR
               onClick={() => resolve({ kind: 'reaction-passed' })}
               className={clsx(
                 'rounded-xl px-4 py-1.5 text-sm font-bold ring-1 transition',
-                reactionOptions.length === 0
+                !hasPlayableOption
                   ? 'bg-gradient-to-b from-starlight to-amber-300 text-ink-900'
                   : 'bg-night-800 text-white/75 ring-white/20 hover:text-white',
               )}

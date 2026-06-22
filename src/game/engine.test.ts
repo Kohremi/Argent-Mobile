@@ -14,6 +14,7 @@ import { baseGamePack } from '../content/packs/base';
 import { mancersPack } from '../content/packs/mancers';
 import { listPacks } from '../content/registry';
 import { klank, malfoy, thickhide, darthPotter } from './ai';
+import { wrathSpellTargets } from './effects/helpers';
 import type {
   ActionSpace,
   Candidate,
@@ -27646,6 +27647,117 @@ describe('Retribution (Wrath of Heaven L3)', () => {
       color: 'green',
     }));
     expect(eligible).toEqual(['bob-grey-1']);
+  });
+
+  // The reaction window communicates how many of the attacker's mages
+  // Retribution can actually wound (0 / 1 / 2), and is shown-but-disabled at
+  // zero so the player can't waste 3 Mana on a guaranteed fizzle. Drives Burn
+  // to wound Alice's mage and returns the Retribution option Alice is offered.
+  function retributionOption(transformBobMages: (m: OwnedMage) => OwnedMage) {
+    let s = setupRetribution();
+    s = mapPlayer(s, 'p2', (p) => ({ ...p, mages: p.mages.map(transformBobMages) }));
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p2',
+      spellCardId: 'base.spell.burn',
+      level: 1,
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'mage-chosen', mageId: 'alice-red' },
+    });
+    const win = topPending(s);
+    if (win.prompt.kind !== 'reaction-window') throw new Error('expected reaction-window');
+    const option = win.prompt.reactionOptions.find(
+      (o) => o.effectId === 'base.spell.wrath-of-heaven.l3.react',
+    );
+    return { state: s, reactionId: win.id, option };
+  }
+
+  it('with two targets: offered, enabled, labelled "two"', () => {
+    const { option } = retributionOption((m) => m); // both Bob mages stay grey
+    expect(option).toBeDefined();
+    expect(option!.disabled).toBeFalsy();
+    expect(option!.label).toContain('two');
+  });
+
+  it('with one target: enabled, stipulates "1 target available"', () => {
+    // Make one of Bob's two mages a blue Divinity (immune) → one grey remains.
+    const { option } = retributionOption((m) =>
+      m.id === 'bob-grey-2' ? { ...m, cardId: 'base.mage.divinity', color: 'blue' } : m,
+    );
+    expect(option).toBeDefined();
+    expect(option!.disabled).toBeFalsy();
+    expect(option!.label).toContain('1 target available');
+  });
+
+  it('with zero targets: shown but disabled, labelled "0 targets available"', () => {
+    // Both of Bob's mages become blue Divinity (immune to the retaliating Spell).
+    const { option } = retributionOption((m) => ({
+      ...m,
+      cardId: 'base.mage.divinity',
+      color: 'blue',
+    }));
+    expect(option).toBeDefined();
+    expect(option!.disabled).toBe(true);
+    expect(option!.label).toContain('0 targets available');
+  });
+
+  it('engine rejects playing Retribution while it is disabled', () => {
+    const { state, reactionId } = retributionOption((m) => ({
+      ...m,
+      cardId: 'base.mage.divinity',
+      color: 'blue',
+    }));
+    expect(() =>
+      applyAction(state, {
+        type: 'RESOLVE_PENDING',
+        resolutionId: reactionId,
+        answer: {
+          kind: 'reaction-played',
+          effectId: 'base.spell.wrath-of-heaven.l3.react',
+          reactionContext: {},
+        },
+      }),
+    ).toThrow(/disabled/);
+  });
+});
+
+// ============================================================================
+// Wrath of Heaven targeting gate — the shared helper used by Justice (L1),
+// Recompense (L2), and Retribution (L3). All three retaliate against a
+// specific attacker, but the retaliation is itself a Spell, so it must respect
+// that attacker's immune Mages.
+// ============================================================================
+
+describe('wrathSpellTargets — reaction retaliation respects Mage immunities', () => {
+  function attackerWithColoredMages(): GameState {
+    let s = initGame(TWO_PLAYER_CONFIG);
+    s = forceLibrarySideA(s);
+    // p1 is the responder/caster; p2 is the attacker with one Mage of each
+    // relevant colour, all placed on action-spaces.
+    s = addMage(s, 'p2', { id: 'atk-blue', cardId: 'base.mage.divinity', color: 'blue' });
+    s = addMage(s, 'p2', { id: 'atk-green', cardId: 'base.mage.natural-magick', color: 'green' });
+    s = addMage(s, 'p2', { id: 'atk-grey', cardId: 'base.mage.mysticism', color: 'grey' });
+    s = placeMageOnSpace(s, 'p2', 'atk-blue', 'base.room.library.a.slot-1');
+    s = placeMageOnSpace(s, 'p2', 'atk-green', 'base.room.library.a.slot-2');
+    s = placeMageOnSpace(s, 'p2', 'atk-grey', 'base.room.library.a.slot-3');
+    return s;
+  }
+
+  it('wound retaliation (Justice / Retribution) excludes opposing Divinity AND green', () => {
+    const s = attackerWithColoredMages();
+    // Blue is spell-immune; green (side A) is wound-immune. Only grey remains.
+    expect(wrathSpellTargets(s, 'p1', 'p2', 'wound')).toEqual(['atk-grey']);
+  });
+
+  it('banish retaliation (Recompense) excludes opposing Divinity but allows green', () => {
+    const s = attackerWithColoredMages();
+    // Blue is spell-immune; green is only WOUND-immune, so it can be banished.
+    expect(wrathSpellTargets(s, 'p1', 'p2', 'banish').sort()).toEqual(
+      ['atk-green', 'atk-grey'].sort(),
+    );
   });
 });
 

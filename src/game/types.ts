@@ -843,6 +843,15 @@ export interface ReactionOption {
    * doesn't exhaust and can save several Mages wounded by the same effect.
    */
   repeatable?: boolean;
+  /**
+   * When true, the option is shown for awareness but cannot be played — the
+   * engine rejects a `reaction-played` for a disabled option and the UI greys
+   * it out. Used when a reaction would currently do nothing, e.g. Wrath of
+   * Heaven's retaliation when the attacker has no eligible (non-immune) Mages:
+   * the player sees they *have* the reaction without being able to waste its
+   * Mana on a guaranteed fizzle. `label` carries the reason (e.g. count).
+   */
+  disabled?: boolean;
 }
 
 export type PendingPrompt =

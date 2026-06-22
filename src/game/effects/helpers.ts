@@ -1509,7 +1509,36 @@ type ReactionOptionShape = {
   requiresSlotPick?: boolean;
   forMageId?: OwnedMageId;
   repeatable?: boolean;
+  disabled?: boolean;
 };
+
+/**
+ * Mages owned by `attackerId` that a Wrath of Heaven reaction cast by
+ * `responderId` may legally hit with `effect`. Runs the attacker's mages
+ * through the spell-target gate — the retaliation is itself a Spell, so an
+ * opposing Divinity (blue) mage is spell-immune, a green mage is wound-immune
+ * (for `wound`), and immunity buffs + locked rooms still protect.
+ * `includesShadows: true` keeps shadowing mages targetable (they've shed their
+ * colour powers). Shared by the Wrath reaction effects (base.ts) and the
+ * reaction-window builder below so the *offered* target count always matches
+ * what the effect will actually wound/banish.
+ */
+export function wrathSpellTargets(
+  state: GameState,
+  responderId: PlayerId,
+  attackerId: PlayerId,
+  effect: 'wound' | 'banish',
+): OwnedMageId[] {
+  const eligible = new Set(
+    buildHarmfulMageTargets(state, responderId, {
+      source: 'spell',
+      effect,
+      includesShadows: true,
+    }),
+  );
+  const attacker = findPlayer(state, attackerId);
+  return attacker?.mages.filter((m) => eligible.has(m.id)).map((m) => m.id) ?? [];
+}
 
 /**
  * Builds reaction options the engine should offer to a responder for a given
@@ -1854,11 +1883,16 @@ export function buildReactionOptionsFor(
       (event.kind === 'mage-moved' || event.kind === 'mage-shadowed') &&
       responder.resources.mana >= 1
     ) {
+      const n = wrathSpellTargets(state, responderId, event.byPlayerId, 'wound').length;
       options.push({
         sourceKind: 'spell',
         sourceId: 'base.spell.wrath-of-heaven',
         effectId: 'base.spell.wrath-of-heaven.l1.react',
-        label: `Cast Justice (wound a mage of the attacker)${labelSuffix(mageId)}`,
+        label:
+          n === 0
+            ? `Cast Justice (0 targets available)${labelSuffix(mageId)}`
+            : `Cast Justice (wound a mage of the attacker)${labelSuffix(mageId)}`,
+        ...(n === 0 ? { disabled: true } : {}),
         ...(multi ? { forMageId: mageId } : {}),
       });
     }
@@ -1871,11 +1905,16 @@ export function buildReactionOptionsFor(
       event.kind === 'mage-banished' &&
       responder.resources.mana >= 1
     ) {
+      const n = wrathSpellTargets(state, responderId, event.byPlayerId, 'banish').length;
       options.push({
         sourceKind: 'spell',
         sourceId: 'base.spell.wrath-of-heaven',
         effectId: 'base.spell.wrath-of-heaven.l2.react',
-        label: `Cast Recompense (banish a mage of the attacker)${labelSuffix(mageId)}`,
+        label:
+          n === 0
+            ? `Cast Recompense (0 targets available)${labelSuffix(mageId)}`
+            : `Cast Recompense (banish a mage of the attacker)${labelSuffix(mageId)}`,
+        ...(n === 0 ? { disabled: true } : {}),
         ...(multi ? { forMageId: mageId } : {}),
       });
     }
@@ -1889,11 +1928,22 @@ export function buildReactionOptionsFor(
       event.kind === 'mage-wounded' &&
       responder.resources.mana >= 3
     ) {
+      // Retribution wounds up to TWO of the attacker's Mages. Show how many it
+      // can actually hit: 0 (disabled — no legal targets), 1 (it will wound a
+      // single Mage, not two), or 2+ (the full effect).
+      const n = wrathSpellTargets(state, responderId, event.byPlayerId, 'wound').length;
+      const label =
+        n === 0
+          ? `Cast Retribution (0 targets available)`
+          : n === 1
+            ? `Cast Retribution (1 target available — wounds 1)`
+            : `Cast Retribution (wound two of the attacker's mages)`;
       options.push({
         sourceKind: 'spell',
         sourceId: 'base.spell.wrath-of-heaven',
         effectId: 'base.spell.wrath-of-heaven.l3.react',
-        label: `Cast Retribution (wound two of the attacker's mages)${labelSuffix(mageId)}`,
+        label: `${label}${labelSuffix(mageId)}`,
+        ...(n === 0 ? { disabled: true } : {}),
         ...(multi ? { forMageId: mageId } : {}),
       });
     }
