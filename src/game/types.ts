@@ -647,6 +647,59 @@ export interface RoundEndScenario {
   effectId: EffectId;
 }
 
+/** Identifier for a Scenario (alternate game mode). */
+export type ScenarioId = string;
+
+/**
+ * Per-round rule for a Scenario. Carries display text plus optional behavior
+ * flags the engine reads at specific hook points (fast-action cost/limit,
+ * resolution order, round-end bonus action, voluntary-pass round). A round with
+ * no flags set simply shows its theme name with no mechanical change.
+ */
+export interface ScenarioRoundRule {
+  round: RoundNumber;
+  /** Theme name for this round (e.g. "Temporal Breakdown"). */
+  name: string;
+  /** UI banner text describing the rule. */
+  description: string;
+  /** Extra Mana charged when taking a Fast Action this round (R2: 1). */
+  fastActionManaSurcharge?: number;
+  /** Max Fast Actions allowed per turn this round (default 1; R3: 2). */
+  maxFastActionsPerTurn?: number;
+  /** Shadowing mages resolve BEFORE normal mages this round (R4). */
+  shadowResolvesFirst?: boolean;
+  /** At round end, each player takes one more Action in turn order (R1). */
+  extraActionRoundEnd?: boolean;
+  /**
+   * No bell-tower cards this round; the round runs until every player
+   * voluntarily passes for the round (R5).
+   */
+  voluntaryPassRound?: boolean;
+}
+
+/**
+ * A Scenario is an alternate game mode that layers a persistent rule change and
+ * per-round rules onto the normal 5-round game. Scenarios are selected
+ * independently of content packs (via `GameConfig.scenarioId`) and live in
+ * their own registry (`src/content/scenarios.ts`). The engine never switches on
+ * a scenario id — it reads the behavior flags off the active scenario's round
+ * rules at well-defined hook points.
+ */
+export interface Scenario {
+  id: ScenarioId;
+  /** Display name (e.g. "Dimensional Rift"). */
+  name: string;
+  /** Summary of the persistent rule alteration. */
+  description: string;
+  /**
+   * Global rule: at the end of each round's errands, every room tile with no
+   * mages flips to its other side (A↔B).
+   */
+  flipEmptyRoomsEachRound?: boolean;
+  /** Per-round rules, indexed by `round`. */
+  rounds: ScenarioRoundRule[];
+}
+
 /**
  * Action kinds tracked by Bend Time's "each must be a different type" rule.
  * The 4 named action categories the rulebook lists; other action-budget
@@ -697,10 +750,28 @@ export type GamePhase =
        */
       actionUsed: boolean;
       /**
-       * True once the active player has spent this turn's optional Fast Action.
-       * Same reset cadence as `actionUsed`.
+       * True once the active player has EXHAUSTED this turn's Fast Action
+       * budget (no Fast Actions remaining). Normally this flips after a single
+       * Fast Action, but a scenario round may raise the per-turn limit (see
+       * `fastActionsUsed`). Same reset cadence as `actionUsed`. Existing
+       * read-sites treat this as "fast actions are spent", which stays correct
+       * under a raised limit.
        */
       fastActionUsed: boolean;
+      /**
+       * Count of Fast Actions taken this turn. Defaults to 0/absent. Compared
+       * against the per-turn limit (1, or a scenario round's
+       * `maxFastActionsPerTurn`). Reset to 0 on every turn change.
+       */
+      fastActionsUsed?: number;
+      /**
+       * Dimensional Rift R1 (Temporal Breakdown): after the bell tower empties,
+       * each player takes one more Action in turn order. While `bonusActionRound`
+       * is set the phase is a bonus pass (Fast Actions disabled);
+       * `bonusActionsRemaining` counts the turns left before resolution begins.
+       */
+      bonusActionRound?: boolean;
+      bonusActionsRemaining?: number;
       /**
        * Bonus Action grants in addition to the base Action. Granted by
        * spells like Flare (+1), Dazzle (+2), and Bend Time (+3). When
@@ -1270,6 +1341,23 @@ export interface GameState {
   players: Player[];
   firstPlayerIndex: number;
   activePackIds: PackId[];
+  /**
+   * Active Scenario (alternate game mode) id, or null for a normal game.
+   * Scenario rules are resolved via the scenario registry; the engine never
+   * switches on this id directly.
+   */
+  scenarioId: ScenarioId | null;
+  /**
+   * Explicit total-rounds choice from setup (5 or 6). Null = derive from packs.
+   * Ignored when a scenario is active (scenarios are always 5-round games).
+   */
+  totalRoundsOverride: RoundNumber | null;
+  /**
+   * Players who have voluntarily passed for the current round (Dimensional Rift
+   * R5 "Time Flux"). Cleared at round-setup. When every player is listed, the
+   * round ends. Absent/empty outside a voluntary-pass round.
+   */
+  passedForRoundPlayerIds?: PlayerId[];
   rngSeed: number;
   rng: RngState;
 
@@ -1646,6 +1734,16 @@ export interface GameConfig {
    * are Side A; this prepares the game for future Side B powers.
    */
   mageAbilitySides?: Partial<Record<Department, MageAbilitySide>>;
+  /**
+   * Optional Scenario (alternate game mode) id. When set, the game runs that
+   * scenario's rules and is always 5 rounds (overrides `totalRounds`).
+   */
+  scenarioId?: ScenarioId;
+  /**
+   * Player-chosen total rounds (5 or 6). Defaults to the pack-derived value
+   * when omitted. Ignored when `scenarioId` is set.
+   */
+  totalRounds?: RoundNumber;
 }
 
 export type RoomLayoutMode =
@@ -1712,6 +1810,15 @@ export interface PlaySupporterAction {
 
 export interface PassTurnAction {
   type: 'PASS_TURN';
+  playerId: PlayerId;
+}
+
+/**
+ * PASS_FOR_ROUND: Dimensional Rift R5 (Time Flux). The player opts out of all
+ * remaining turns this round. When every player has passed, the round ends.
+ */
+export interface PassForRoundAction {
+  type: 'PASS_FOR_ROUND';
   playerId: PlayerId;
 }
 
@@ -1785,6 +1892,7 @@ export type GameAction =
   | RecruitSupporterAction
   | PlaySupporterAction
   | PassTurnAction
+  | PassForRoundAction
   | DiscardBonusActionsAction
   | UseAbilityAction
   | ResolvePendingAction

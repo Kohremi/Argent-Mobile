@@ -4,6 +4,7 @@ import type { GamePhase, GameState } from '../../game/types';
 import { useGameStore } from '../../store/gameStore';
 import { useUiStore } from '../../store/uiStore';
 import { activePlayer, claimableBellCards, PLAYER_AURA } from '../../utils/uiSelectors';
+import { getScenario } from '../../content/scenarios';
 
 /** HUD bar: day dial, phase banner, bell meter, player strip, debug toggle. */
 
@@ -27,6 +28,38 @@ function activeIndex(state: GameState): number | null {
   const p = state.phase;
   if (p.kind === 'errands' || p.kind === 'candidate-draft') return p.activePlayerIndex;
   return null;
+}
+
+/** The round currently in play, if the phase tracks one. */
+function currentRound(phase: GamePhase): number | null {
+  switch (phase.kind) {
+    case 'round-setup':
+    case 'errands':
+    case 'resolution':
+      return phase.round;
+    default:
+      return null;
+  }
+}
+
+/** Scenario chip: scenario name + the active round's rule (with a description
+ *  tooltip). Renders nothing for a normal game. */
+function ScenarioChip({ state }: { state: GameState }) {
+  if (!state.scenarioId) return null;
+  const scenario = getScenario(state.scenarioId);
+  if (!scenario) return null;
+  const round = currentRound(state.phase);
+  const rule =
+    round === null ? null : scenario.rounds.find((r) => r.round === round);
+  return (
+    <span
+      className="rounded-full bg-leyline/15 px-3 py-1 font-display text-sm text-leyline ring-1 ring-leyline/40"
+      title={rule ? `${rule.name} — ${rule.description}` : scenario.description}
+    >
+      {scenario.name}
+      {rule && <span className="ml-2 text-white/80">· {rule.name}</span>}
+    </span>
+  );
 }
 
 /** Bell count chip + claim popover. Claiming a bell is the round's clock:
@@ -124,6 +157,8 @@ export function TopBar() {
       </span>
 
       <BellTowerMeter state={state} />
+
+      <ScenarioChip state={state} />
 
       {/* player strip */}
       <div className="ml-auto flex items-center gap-2">

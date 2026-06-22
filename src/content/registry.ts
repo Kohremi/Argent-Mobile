@@ -5,6 +5,8 @@ import { mancersPack } from './packs/mancers';
 import { archmagePack } from './packs/archmage';
 import { renovationPack } from './packs/renovation';
 import { summerBreakPack } from './packs/summerbreak';
+// Importing this module runs scenario registration as a side effect.
+import './scenarios';
 
 const packs = new Map<PackId, ContentPack>();
 

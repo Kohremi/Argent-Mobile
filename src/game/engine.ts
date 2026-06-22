@@ -3,6 +3,7 @@
 // lives in state.rng, all id generation in state.nextSequenceId.
 
 import { getPack } from '../content/registry';
+import { getScenario } from '../content/scenarios';
 import { shuffleWithState } from '../utils/rng';
 import { validateAction } from './actions';
 import { assertBoardConsistent, findBoardInconsistency } from './boardInvariant';
@@ -66,6 +67,7 @@ import type {
   GameState,
   GameStatePatch,
   OwnedMage,
+  PassForRoundAction,
   PassTurnAction,
   PendingResolution,
   PendingResolutionInput,
@@ -79,8 +81,11 @@ import type {
   ResolvePendingAction,
   ResumeContinuation,
   Room,
+  RoomId,
   RoundEndScenario,
   RoundNumber,
+  Scenario,
+  ScenarioRoundRule,
   SerializableContext,
   UseAbilityAction,
   WorkerOccupancy,
@@ -172,6 +177,9 @@ export function applyAction(state: GameState, action: GameAction): GameState {
       break;
     case 'PASS_TURN':
       next = handlePassTurn(state, action);
+      break;
+    case 'PASS_FOR_ROUND':
+      next = handlePassForRound(state, action);
       break;
     case 'DISCARD_BONUS_ACTIONS':
       next = handleDiscardBonusActions(state, action);
@@ -295,10 +303,45 @@ function consumeActionBudget(
       `${label}: a Fast Action must be taken BEFORE your Regular Action`,
     );
   }
-  if (state.phase.fastActionUsed) {
+  // Dimensional Rift R1: no Fast Actions during the round-end bonus pass.
+  if (state.phase.bonusActionRound) {
+    throw new Error(
+      `${label}: no Fast Actions during the round-end bonus Action`,
+    );
+  }
+  // Dimensional Rift R3 raises the per-turn Fast Action limit (default 1).
+  const fastLimit = scenarioRoundRule(state)?.maxFastActionsPerTurn ?? 1;
+  const fastUsed = state.phase.fastActionsUsed ?? 0;
+  if (fastUsed >= fastLimit) {
     throw new Error(`${label}: you already used your Fast Action this turn`);
   }
-  return { ...state, phase: { ...state.phase, fastActionUsed: true } };
+  // Dimensional Rift R2: a Fast Action costs additional Mana this round.
+  const surcharge = scenarioRoundRule(state)?.fastActionManaSurcharge ?? 0;
+  let players = state.players;
+  if (surcharge > 0) {
+    const idx = state.phase.activePlayerIndex;
+    const active = state.players[idx];
+    if (!active || active.resources.mana < surcharge) {
+      throw new Error(
+        `${label}: a Fast Action costs ${surcharge} extra Mana this round (insufficient Mana)`,
+      );
+    }
+    players = state.players.map((p, i) =>
+      i !== idx
+        ? p
+        : { ...p, resources: { ...p.resources, mana: p.resources.mana - surcharge } },
+    );
+  }
+  const nextFast = fastUsed + 1;
+  return {
+    ...state,
+    players,
+    phase: {
+      ...state.phase,
+      fastActionsUsed: nextFast,
+      fastActionUsed: nextFast >= fastLimit,
+    },
+  };
 }
 
 /**
@@ -823,7 +866,7 @@ function pumpResolutionPhase(state: GameState): GameState {
         continue;
       }
       const space = room.actionSpaces[phase.pendingSpaceIndex];
-      const position = phase.pendingSlotPosition ?? 'base';
+      const position = phase.pendingSlotPosition ?? firstSlotPosition(curr);
       const occupant = currentOccupantAt(space, position);
       if (!space || !occupant) {
         curr = advanceSlotPosition(curr, space);
@@ -837,7 +880,7 @@ function pumpResolutionPhase(state: GameState): GameState {
       continue;
     }
     const space = room.actionSpaces[phase.pendingSpaceIndex];
-    const position = phase.pendingSlotPosition ?? 'base';
+    const position = phase.pendingSlotPosition ?? firstSlotPosition(curr);
     const occupant = currentOccupantAt(space, position);
     if (!space || !occupant) {
       curr = advanceSlotPosition(curr, space);
@@ -883,6 +926,18 @@ function currentOccupantAt(
 }
 
 /**
+ * Which slot position resolves first. Normally base, then shadow. Dimensional
+ * Rift R4 (Reality Inversion) flips this so shadowing mages act first.
+ */
+function firstSlotPosition(state: GameState): 'base' | 'shadow' {
+  return scenarioRoundRule(state)?.shadowResolvesFirst ? 'shadow' : 'base';
+}
+
+function otherSlotPosition(position: 'base' | 'shadow'): 'base' | 'shadow' {
+  return position === 'base' ? 'shadow' : 'base';
+}
+
+/**
  * Moves the position pointer forward when the current slot+position has no
  * occupant: base with no shadow → next slot; base with shadow → shadow;
  * shadow → next slot. `bumpRoom` advances past the current room entirely.
@@ -893,12 +948,16 @@ function advanceSlotPosition(
 ): GameState {
   if (state.phase.kind !== 'resolution') return state;
   const phase = state.phase;
-  const position = phase.pendingSlotPosition ?? 'base';
-  if (position === 'base' && space?.shadowOccupant) {
-    return {
-      ...state,
-      phase: { ...phase, pendingSlotPosition: 'shadow' },
-    };
+  const first = firstSlotPosition(state);
+  const position = phase.pendingSlotPosition ?? first;
+  if (position === first) {
+    const other = otherSlotPosition(first);
+    if (currentOccupantAt(space, other)) {
+      return {
+        ...state,
+        phase: { ...phase, pendingSlotPosition: other },
+      };
+    }
   }
   return advanceResolutionPointer(state, false);
 }
@@ -956,13 +1015,13 @@ function advanceResolutionPointer(state: GameState, bumpRoom: boolean): GameStat
           ...phase,
           pendingRoomIndex: phase.pendingRoomIndex + 1,
           pendingSpaceIndex: 0,
-          pendingSlotPosition: 'base',
+          pendingSlotPosition: firstSlotPosition(state),
           slotInProgress: false,
         }
       : {
           ...phase,
           pendingSpaceIndex: phase.pendingSpaceIndex + 1,
-          pendingSlotPosition: 'base',
+          pendingSlotPosition: firstSlotPosition(state),
           slotInProgress: false,
         },
   };
@@ -979,11 +1038,14 @@ function completeCurrentSpaceResolution(state: GameState): GameState {
   const room = state.rooms[phase.pendingRoomIndex];
   if (!room) return state;
   const space = room.actionSpaces[phase.pendingSpaceIndex];
-  const position = phase.pendingSlotPosition ?? 'base';
+  const first = firstSlotPosition(state);
+  const position = phase.pendingSlotPosition ?? first;
   const occupant = currentOccupantAt(space, position);
   if (!space || !occupant) return advanceSlotPosition(state, space);
 
-  const advancingToShadow = position === 'base' && space.shadowOccupant != null;
+  const other = otherSlotPosition(first);
+  const advancingToOther =
+    position === first && currentOccupantAt(space, other) != null;
 
   // The resolved occupant's errand is done — lift it off the slot back to its
   // office. Routed through the primitive so the slot occupancy and the mage's
@@ -995,12 +1057,12 @@ function completeCurrentSpaceResolution(state: GameState): GameState {
     ...state,
     rooms: removalPatch.rooms ?? state.rooms,
     players: removalPatch.players ?? state.players,
-    phase: advancingToShadow
-      ? { ...phase, pendingSlotPosition: 'shadow', slotInProgress: false }
+    phase: advancingToOther
+      ? { ...phase, pendingSlotPosition: other, slotInProgress: false }
       : {
           ...phase,
           pendingSpaceIndex: phase.pendingSpaceIndex + 1,
-          pendingSlotPosition: 'base',
+          pendingSlotPosition: firstSlotPosition(state),
           slotInProgress: false,
         },
   };
@@ -2421,6 +2483,15 @@ function handlePassTurn(state: GameState, action: PassTurnAction): GameState {
   if (state.phase.kind !== 'errands') {
     throw new Error('PASS_TURN: only valid during errands phase');
   }
+  // Dimensional Rift R5: in a voluntary-pass round there is no plain "pass my
+  // turn" — passing opts you out of the round. Redirect so bots (whose fallback
+  // is PASS_TURN) end the round correctly without per-bot changes.
+  if (scenarioRoundRuleFor(state, state.phase.round)?.voluntaryPassRound) {
+    return handlePassForRound(state, {
+      type: 'PASS_FOR_ROUND',
+      playerId: action.playerId,
+    });
+  }
   if (state.pendingResolutionStack.length > 0) {
     throw new Error('PASS_TURN: resolve pending prompt first');
   }
@@ -2432,6 +2503,34 @@ function handlePassTurn(state: GameState, action: PassTurnAction): GameState {
   }
   const passed: GameState = {
     ...state,
+    phase: { ...state.phase, actionUsed: true },
+  };
+  return processErrandsAdvance(passed);
+}
+
+function handlePassForRound(
+  state: GameState,
+  action: PassForRoundAction,
+): GameState {
+  if (state.phase.kind !== 'errands') {
+    throw new Error('PASS_FOR_ROUND: only valid during errands phase');
+  }
+  if (state.pendingResolutionStack.length > 0) {
+    throw new Error('PASS_FOR_ROUND: resolve pending prompt first');
+  }
+  const activePlayerId = state.players[state.phase.activePlayerIndex]?.id;
+  if (activePlayerId !== action.playerId) {
+    throw new Error(
+      `PASS_FOR_ROUND: not your turn (active=${activePlayerId}, you=${action.playerId})`,
+    );
+  }
+  const already = state.passedForRoundPlayerIds ?? [];
+  const passedForRoundPlayerIds = already.includes(action.playerId)
+    ? already
+    : [...already, action.playerId];
+  const passed: GameState = {
+    ...state,
+    passedForRoundPlayerIds,
     phase: { ...state.phase, actionUsed: true },
   };
   return processErrandsAdvance(passed);
@@ -3216,8 +3315,14 @@ function processRoundSetup(state: GameState, round: RoundNumber): GameState {
     updated = restoreBellTower(updated);
     updated = healInfirmaryMages(updated);
   }
+  // Dimensional Rift R5 (Time Flux): no bell-tower cards this round — the round
+  // runs on voluntary passes instead. Clear the deal and reset the pass list.
+  if (scenarioRoundRuleFor(state, round)?.voluntaryPassRound) {
+    updated = { ...updated, bellTower: { available: [], taken: [] } };
+  }
   return {
     ...updated,
+    passedForRoundPlayerIds: [],
     phase: {
       kind: 'errands',
       round,
@@ -3451,6 +3556,79 @@ function lookupBellTowerCard(
   return null;
 }
 
+/** The same-named room on the opposite side, drawn from the active packs. */
+function oppositeSideRoom(state: GameState, room: Room): Room | null {
+  for (const packId of state.activePackIds) {
+    const pack = getPack(packId);
+    if (!pack) continue;
+    const found = pack.rooms.find(
+      (r) => r.name === room.name && r.side !== room.side,
+    );
+    if (found) return found;
+  }
+  return null;
+}
+
+/**
+ * Dimensional Rift global rule: every room tile with no mages (no base or
+ * shadow occupant on any action space) flips to its other side (A↔B). Used and
+ * occupied rooms stay put. The flipped room is the canonical opposite-side
+ * definition (so its action spaces start empty), and the board grid is updated
+ * to reference the new room id. No-op when the active scenario doesn't enable
+ * the rule, or there's no scenario.
+ */
+function flipEmptyRooms(state: GameState): GameState {
+  if (!activeScenario(state)?.flipEmptyRoomsEachRound) return state;
+  const idRemap = new Map<RoomId, RoomId>();
+  const rooms = state.rooms.map((r) => {
+    const occupied = r.actionSpaces.some(
+      (s) => s.occupant || s.shadowOccupant,
+    );
+    if (occupied) return r;
+    const flipped = oppositeSideRoom(state, r);
+    if (!flipped) return r;
+    idRemap.set(r.id, flipped.id);
+    return flipped;
+  });
+  if (idRemap.size === 0) return state;
+  const grid = state.roomLayout.grid.map((row) =>
+    row.map((cell) => (cell ? (idRemap.get(cell) ?? cell) : cell)),
+  );
+  return { ...state, rooms, roomLayout: { ...state.roomLayout, grid } };
+}
+
+/**
+ * Transitions out of the errands phase into resolution: clears round-scoped
+ * locks/buffs/queues, applies the Dimensional Rift empty-room flip, and sets
+ * the resolution phase. Shared by the normal (bell-tower-empty) end of round,
+ * the R1 round-end bonus pass, and the R5 voluntary-pass round.
+ */
+function enterResolutionPhase(
+  state: GameState,
+  players: GameState['players'],
+  round: RoundNumber,
+): GameState {
+  const cleared: GameState = {
+    ...state,
+    players,
+    roomLocks: [],
+    activeBuffs: [],
+    pendingRevivalChecks: [],
+    pendingMysticismPostCast: [],
+    pendingTechnomancyTrigger: [],
+  };
+  const flipped = flipEmptyRooms(cleared);
+  return {
+    ...flipped,
+    phase: {
+      kind: 'resolution',
+      round,
+      pendingRoomIndex: 0,
+      pendingSpaceIndex: 0,
+    },
+  };
+}
+
 function processErrandsAdvance(state: GameState): GameState {
   if (state.phase.kind !== 'errands') {
     throw new Error('processErrandsAdvance: not in errands phase');
@@ -3475,28 +3653,115 @@ function processErrandsAdvance(state: GameState): GameState {
             },
       )
     : state.players;
+  // Dimensional Rift R5 (Time Flux): the round runs on voluntary passes, not
+  // the bell tower (which is empty all round). Advance to the next player who
+  // hasn't passed, or end the round once everyone has.
+  if (scenarioRoundRuleFor(state, errandsPhase.round)?.voluntaryPassRound) {
+    const passed = state.passedForRoundPlayerIds ?? [];
+    if (passed.length >= state.players.length) {
+      return enterResolutionPhase(state, players, errandsPhase.round);
+    }
+    const n = state.players.length;
+    let next = errandsPhase.activePlayerIndex;
+    for (let i = 0; i < n; i++) {
+      next = (next + 1) % n;
+      const pid = state.players[next]?.id;
+      if (pid && !passed.includes(pid)) break;
+    }
+    const incomingId = state.players[next]?.id;
+    return {
+      ...state,
+      players,
+      activeBuffs: state.activeBuffs.filter(
+        (b) =>
+          !(
+            b.expiresAt.kind === 'turn-start' &&
+            b.expiresAt.playerId === incomingId
+          ),
+      ),
+      roomLocks: state.roomLocks.filter((l) => l.untilTurnStartOf !== incomingId),
+      pendingMysticismPostCast: [],
+      pendingTechnomancyTrigger: [],
+      phase: {
+        kind: 'errands',
+        round: errandsPhase.round,
+        activePlayerIndex: next,
+        actionUsed: false,
+        fastActionUsed: false,
+        extraActions: 0,
+      },
+    };
+  }
   if (state.bellTower.available.length === 0) {
+    const round = errandsPhase.round;
+    // Dimensional Rift R1 (Temporal Breakdown): when the bell tower empties,
+    // each player takes one more Action (no Fast Action) in turn order before
+    // resolution. The pass starts after the player who took the last bell-tower
+    // offering, so that player acts last.
+    if (errandsPhase.bonusActionRound) {
+      // Already mid-bonus-pass: this turn just ended. Advance to the next
+      // player, or fall through to resolution once everyone has acted.
+      const remaining = (errandsPhase.bonusActionsRemaining ?? 0) - 1;
+      if (remaining <= 0) {
+        return enterResolutionPhase(state, players, round);
+      }
+      const next = (errandsPhase.activePlayerIndex + 1) % state.players.length;
+      const incomingId = state.players[next]?.id;
+      return {
+        ...state,
+        players,
+        activeBuffs: state.activeBuffs.filter(
+          (b) =>
+            !(
+              b.expiresAt.kind === 'turn-start' &&
+              b.expiresAt.playerId === incomingId
+            ),
+        ),
+        roomLocks: state.roomLocks.filter((l) => l.untilTurnStartOf !== incomingId),
+        pendingMysticismPostCast: [],
+        pendingTechnomancyTrigger: [],
+        phase: {
+          kind: 'errands',
+          round,
+          activePlayerIndex: next,
+          actionUsed: false,
+          fastActionUsed: true,
+          extraActions: 0,
+          bonusActionRound: true,
+          bonusActionsRemaining: remaining,
+        },
+      };
+    }
+    if (scenarioRoundRuleFor(state, round)?.extraActionRoundEnd) {
+      const n = state.players.length;
+      const lastClaim = state.bellTower.taken[state.bellTower.taken.length - 1];
+      const lastClaimerIdx = lastClaim
+        ? state.players.findIndex((p) => p.id === lastClaim.takenBy)
+        : -1;
+      const startIdx =
+        lastClaimerIdx >= 0 ? (lastClaimerIdx + 1) % n : state.firstPlayerIndex;
+      return {
+        ...state,
+        players,
+        phase: {
+          kind: 'errands',
+          round,
+          activePlayerIndex: startIdx,
+          actionUsed: false,
+          fastActionUsed: true, // no Fast Action in the bonus pass
+          extraActions: 0,
+          bonusActionRound: true,
+          bonusActionsRemaining: n,
+        },
+      };
+    }
     // Per rulebook: locks automatically clear at the start of the
     // Resolution phase. Mages that were inside still complete their
     // Errands (resolution walks slots; lock state isn't checked there).
     // ALL active buffs expire here — "until your next turn" buffs whose
     // caster never got another turn within the round also drop, so
     // nothing bleeds across rounds.
-    return {
-      ...state,
-      players,
-      roomLocks: [],
-      activeBuffs: [],
-      pendingRevivalChecks: [],
-      pendingMysticismPostCast: [],
-      pendingTechnomancyTrigger: [],
-      phase: {
-        kind: 'resolution',
-        round: errandsPhase.round,
-        pendingRoomIndex: 0,
-        pendingSpaceIndex: 0,
-      },
-    };
+    return enterResolutionPhase(state, players, round);
   }
   const next = (errandsPhase.activePlayerIndex + 1) % state.players.length;
   const incomingId = state.players[next]?.id;
@@ -3537,12 +3802,51 @@ function processErrandsAdvance(state: GameState): GameState {
   };
 }
 
+/** The active Scenario (alternate game mode), or null for a normal game. */
+function activeScenario(state: GameState): Scenario | null {
+  return state.scenarioId ? (getScenario(state.scenarioId) ?? null) : null;
+}
+
+/** The scenario round rule for a given round, or null. */
+function scenarioRoundRuleFor(
+  state: GameState,
+  round: RoundNumber,
+): ScenarioRoundRule | null {
+  const scenario = activeScenario(state);
+  if (!scenario) return null;
+  return scenario.rounds.find((r) => r.round === round) ?? null;
+}
+
+/** The current round, read off whichever phase tracks one. */
+function currentRoundOf(state: GameState): RoundNumber | null {
+  const phase = state.phase;
+  if (
+    phase.kind === 'round-setup' ||
+    phase.kind === 'errands' ||
+    phase.kind === 'resolution' ||
+    phase.kind === 'mid-game-scoring' ||
+    phase.kind === 'round-end-scenario'
+  ) {
+    return phase.round;
+  }
+  return null;
+}
+
+/** The scenario round rule for the current phase's round, or null. */
+function scenarioRoundRule(state: GameState): ScenarioRoundRule | null {
+  const round = currentRoundOf(state);
+  return round === null ? null : scenarioRoundRuleFor(state, round);
+}
+
 /**
- * Total number of rounds this game runs. The base game is 5; an expansion can
- * extend it by declaring a higher `totalRounds` (Summer Break uses 6). The
- * engine takes the MAX across active packs — never switches on a pack id.
+ * Total number of rounds this game runs. Scenarios are always 5-round games. For
+ * a normal game, the player's setup choice (`totalRoundsOverride`) wins; absent
+ * that, the engine takes the MAX `totalRounds` across active packs (Summer Break
+ * uses 6) — never switching on a pack id.
  */
 function finalRoundFor(state: GameState): RoundNumber {
+  if (state.scenarioId) return 5;
+  if (state.totalRoundsOverride !== null) return state.totalRoundsOverride;
   let max = 5;
   for (const packId of state.activePackIds) {
     const pack = getPack(packId);

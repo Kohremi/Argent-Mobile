@@ -1,6 +1,7 @@
 import { useMemo } from 'react';
 import clsx from 'clsx';
 import { listPacks } from '../../content/registry';
+import { listScenarios } from '../../content/scenarios';
 import type { ContentPack } from '../../content/types';
 import {
   ABILITY_DEPARTMENTS,
@@ -134,6 +135,10 @@ export function SetupScreen() {
   const toggleCustomRoomSide = useSetupStore((s) => s.toggleCustomRoomSide);
   const mageAbilitySides = useSetupStore((s) => s.mageAbilitySides);
   const setMageAbilitySide = useSetupStore((s) => s.setMageAbilitySide);
+  const roundCount = useSetupStore((s) => s.roundCount);
+  const setRoundCount = useSetupStore((s) => s.setRoundCount);
+  const scenarioId = useSetupStore((s) => s.scenarioId);
+  const setScenario = useSetupStore((s) => s.setScenario);
   const startGame = useGameStore((s) => s.start);
 
   // Index every wired room across the selected packs, grouped by name so
@@ -224,6 +229,8 @@ export function SetupScreen() {
             ? { kind: 'custom', roomIds: customRoomIds }
             : { kind: 'random' },
       mageAbilitySides,
+      ...(scenarioId ? { scenarioId } : {}),
+      totalRounds: roundCount,
     };
     startGame(config);
   };
@@ -280,6 +287,57 @@ export function SetupScreen() {
             );
           })}
         </ul>
+      </section>
+
+      <section className="mb-8">
+        <h2 className="text-xl font-medium mb-3">Game Length & Scenario</h2>
+        <div className="flex items-center gap-3 mb-3">
+          <span className="text-sm text-slate-300 w-28">Rounds</span>
+          <div className="flex gap-2">
+            {([5, 6] as const).map((n) => (
+              <button
+                key={n}
+                type="button"
+                className={clsx(
+                  'px-3 py-1 rounded border text-sm',
+                  roundCount === n
+                    ? 'border-amber-400/60 bg-amber-400/10 text-amber-200'
+                    : 'border-slate-700 bg-slate-900 text-slate-300',
+                  scenarioId !== null && 'opacity-50 cursor-not-allowed',
+                )}
+                disabled={scenarioId !== null}
+                onClick={() => setRoundCount(n)}
+              >
+                {n} rounds
+              </button>
+            ))}
+          </div>
+          {scenarioId !== null && (
+            <span className="text-xs text-slate-500">
+              Scenarios are always 5 rounds.
+            </span>
+          )}
+        </div>
+        <div className="flex items-center gap-3">
+          <span className="text-sm text-slate-300 w-28">Scenario</span>
+          <select
+            className="flex-1 px-3 py-2 rounded border border-slate-700 bg-slate-900 text-sm"
+            value={scenarioId ?? ''}
+            onChange={(e) => setScenario(e.target.value || null)}
+          >
+            <option value="">None — normal game</option>
+            {listScenarios().map((sc) => (
+              <option key={sc.id} value={sc.id}>
+                {sc.name}
+              </option>
+            ))}
+          </select>
+        </div>
+        {scenarioId !== null && (
+          <p className="text-sm text-slate-400 mt-2">
+            {listScenarios().find((sc) => sc.id === scenarioId)?.description}
+          </p>
+        )}
       </section>
 
       <section className="mb-8">

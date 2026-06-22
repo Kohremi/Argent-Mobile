@@ -4,6 +4,7 @@ import type {
   MageAbilitySide,
   PackId,
   RoomId,
+  ScenarioId,
 } from '../game/types';
 
 /** The six magic departments that have worker-Mage abilities, in display
@@ -73,8 +74,18 @@ interface SetupState {
    * Side B selector is forward-looking.
    */
   mageAbilitySides: Record<Department, MageAbilitySide>;
+  /**
+   * Total rounds in play (5 or 6). Defaults to 5. Auto-bumped to 6 when Summer
+   * Break is selected (no scenario), and forced to 5 whenever a scenario is
+   * selected. The user may still override manually when no scenario is active.
+   */
+  roundCount: 5 | 6;
+  /** Selected Scenario (alternate game mode), or null for a normal game. */
+  scenarioId: ScenarioId | null;
   setSelectedPacks: (ids: PackId[]) => void;
   togglePack: (id: PackId) => void;
+  setRoundCount: (n: 5 | 6) => void;
+  setScenario: (id: ScenarioId | null) => void;
   setPlayerName: (index: number, name: string) => void;
   setPlayerControlledByBot: (index: number, controlled: boolean) => void;
   setPlayerBotPersonality: (index: number, personalityId: string) => void;
@@ -122,6 +133,8 @@ export const useSetupStore = create<SetupState>((set) => ({
     'base.room.infirmary.a',
   ],
   mageAbilitySides: defaultMageAbilitySides(),
+  roundCount: 5,
+  scenarioId: null,
 
   setSelectedPacks: (ids) => set({ selectedPackIds: ids }),
 
@@ -132,8 +145,26 @@ export const useSetupStore = create<SetupState>((set) => ({
       const next = s.selectedPackIds.includes(id)
         ? s.selectedPackIds.filter((p) => p !== id)
         : [...s.selectedPackIds, id];
-      return { selectedPackIds: next };
+      // Summer Break is a 6-round game by default; auto-set the toggle when it
+      // is turned on/off, unless a scenario (always 5 rounds) is active.
+      let roundCount = s.roundCount;
+      if (id === 'summerbreak' && s.scenarioId === null) {
+        roundCount = next.includes('summerbreak') ? 6 : 5;
+      }
+      return { selectedPackIds: next, roundCount };
     }),
+
+  setRoundCount: (n) =>
+    set((s) => (s.scenarioId !== null ? s : { roundCount: n })),
+
+  setScenario: (id) =>
+    set((s) => ({
+      scenarioId: id,
+      // Scenarios are always 5-round games. Selecting one forces 5; clearing it
+      // restores the Summer-Break-aware default.
+      roundCount:
+        id !== null ? 5 : s.selectedPackIds.includes('summerbreak') ? 6 : 5,
+    })),
 
   setPlayerName: (index, name) =>
     set((s) => {

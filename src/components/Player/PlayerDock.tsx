@@ -10,6 +10,7 @@ import { PortraitBust } from './PortraitBust';
 import { PlayerBuffBadges } from './PlayerBuffBadges';
 import { StaffBadge } from './StaffBadge';
 import { getBotPersonality } from '../../game/ai';
+import { getScenario } from '../../content/scenarios';
 
 /**
  * Bottom command center for the active player (docs/UI_DESIGN.md §8):
@@ -102,6 +103,14 @@ export function PlayerDock() {
     : 0;
   const fastActions =
     errands && !errands.actionUsed && !errands.fastActionUsed ? 1 : 0;
+  // Dimensional Rift R5 (Time Flux): the round runs on voluntary passes — the
+  // turn control becomes "Pass for this round" instead of "End turn".
+  const voluntaryPass = !!(
+    errands &&
+    state.scenarioId &&
+    getScenario(state.scenarioId)?.rounds.find((r) => r.round === errands.round)
+      ?.voluntaryPassRound
+  );
   // Wounded mages aren't shown here — they rest in the Infirmary ward on the
   // board (RoomScene bed grid), which renders + targets them and owns their
   // glide animation. Duplicating them here collided the framer-motion
@@ -216,14 +225,28 @@ export function PlayerDock() {
       {/* turn controls */}
       <div className="flex items-center gap-2">
         {errands && <ActionBudget fast={fastActions} regular={regularActions} />}
-        <button
-          type="button"
-          disabled={pendings > 0}
-          onClick={() => tryDispatch({ type: 'PASS_TURN', playerId: player.id })}
-          className="rounded-full bg-gradient-to-b from-starlight to-amber-300 px-4 py-1.5 font-display text-sm font-bold text-ink-900 shadow-card transition hover:-translate-y-0.5 hover:shadow-card-lift active:translate-y-0 disabled:opacity-40 disabled:hover:translate-y-0"
-        >
-          End turn
-        </button>
+        {voluntaryPass ? (
+          <button
+            type="button"
+            disabled={pendings > 0}
+            onClick={() =>
+              tryDispatch({ type: 'PASS_FOR_ROUND', playerId: player.id })
+            }
+            title="Opt out of all remaining turns this round. The round ends once every player has passed."
+            className="rounded-full bg-gradient-to-b from-starlight to-amber-300 px-4 py-1.5 font-display text-sm font-bold text-ink-900 shadow-card transition hover:-translate-y-0.5 hover:shadow-card-lift active:translate-y-0 disabled:opacity-40 disabled:hover:translate-y-0"
+          >
+            Pass for this round
+          </button>
+        ) : (
+          <button
+            type="button"
+            disabled={pendings > 0}
+            onClick={() => tryDispatch({ type: 'PASS_TURN', playerId: player.id })}
+            className="rounded-full bg-gradient-to-b from-starlight to-amber-300 px-4 py-1.5 font-display text-sm font-bold text-ink-900 shadow-card transition hover:-translate-y-0.5 hover:shadow-card-lift active:translate-y-0 disabled:opacity-40 disabled:hover:translate-y-0"
+          >
+            End turn
+          </button>
+        )}
       </div>
       </div>
     </footer>
