@@ -19102,6 +19102,61 @@ describe('Spell wiring — Wave 5a (place / move)', () => {
     expect(s.pendingResolutionStack).toHaveLength(0);
   });
 
+  it('Celerity: placing into an instant room (Guilds B) fires the slot reward prompt', () => {
+    // Celerity "places" a Mage, so an instant room must pay out exactly as it
+    // would for a normal PLACE_WORKER. Regression: the effect used to return
+    // the placement patch directly, skipping the instant-reward chain.
+    let s = initGame(TWO_PLAYER_CONFIG);
+    s = forceRoomSide(s, 'Guilds', 'B'); // Guilds B is an instant room
+    s = zeroPlayerResources(s, 'p1');
+    s = addOwnedSpell(s, 'p1', 'base.spell.everyday-paralocation', {
+      intPlaced: true,
+    });
+    s = setMana(s, 'p1', 1);
+    s = addMage(s, 'p1', {
+      id: 'alice-placer',
+      cardId: 'base.mage.divinity',
+      color: 'blue',
+    });
+    s = {
+      ...s,
+      firstPlayerIndex: 0,
+      phase: {
+        kind: 'errands',
+        round: 1,
+        activePlayerIndex: 0,
+        actionUsed: false,
+        fastActionUsed: false,
+      },
+    };
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.everyday-paralocation',
+      level: 1,
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'mage-chosen', mageId: 'alice-placer' },
+    });
+    // Slot picker — place onto a Guilds slot.
+    const guilds = s.rooms.find((r) => r.name === 'Guilds')!;
+    const guildsSlot = guilds.actionSpaces[0]!;
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'space-chosen', spaceId: guildsSlot.id },
+    });
+    // Mage is placed AND the instant-room forfeit-or-reward prompt now fires.
+    expect(findMageById(s, 'alice-placer').location).toEqual({
+      kind: 'action-space',
+      spaceId: guildsSlot.id,
+    });
+    const rewardPrompt = topPending(s);
+    expect(rewardPrompt.resume.effectId).toBe('base.system.resolution-choice');
+  });
+
   it('Celerity: excludes slots in rooms where caster is already at per-round cap', () => {
     let s = initGame(TWO_PLAYER_CONFIG);
     s = forceRoomSide(s, 'Council Chamber', 'A');

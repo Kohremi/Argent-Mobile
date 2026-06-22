@@ -10574,10 +10574,18 @@ registerEffect('base.spell.everyday-paralocation.l1', (ctx): EffectResult => {
       placerMageId,
       spaceId,
     );
-    return {
-      kind: 'done',
-      patch: placePatch,
-    };
+    // Celerity "places" a Mage (a fresh placement from the office), so the
+    // destination slot's instant-room reward must fire just like a normal
+    // PLACE_WORKER — Guilds, Laboratory A, Golem Lab A, etc. Routing through
+    // patchWithMaybeInstantReward surfaces that prompt (and the Adventuring-B
+    // on-place hook). Everyday Paralocation L3 is a MOVE and intentionally
+    // claims no instant reward, which is why only this level needs it.
+    return patchWithMaybeInstantReward(
+      ctx.state,
+      placePatch,
+      spaceId,
+      ctx.triggeringPlayerId,
+    );
   }
   throw new Error(`celerity unexpected step ${String(step)}`);
 });
