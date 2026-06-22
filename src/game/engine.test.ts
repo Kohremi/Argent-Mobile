@@ -19157,6 +19157,206 @@ describe('Spell wiring — Wave 5a (place / move)', () => {
     expect(rewardPrompt.resume.effectId).toBe('base.system.resolution-choice');
   });
 
+  // Every "place a Mage" spell/item must fire the destination slot's
+  // instant-room reward, like a normal placement. These cover the distinct
+  // code paths: plain place (Liquid Lightning), credited place (Immolation),
+  // the wound-and-place factory (Poison → also Bottled Rage / Spellblade), and
+  // the banish-and-place factory (Tidal Wave). Cut Plane / Lightning and You L2
+  // reuse these same primitives.
+  function guildsInstantGame(): GameState {
+    let s = initGame(TWO_PLAYER_CONFIG);
+    s = forceRoomSide(s, 'Guilds', 'B'); // Guilds B is an instant room
+    s = zeroPlayerResources(s, 'p1');
+    s = zeroPlayerResources(s, 'p2');
+    return {
+      ...s,
+      firstPlayerIndex: 0,
+      phase: { kind: 'errands', round: 1, activePlayerIndex: 0, actionUsed: false, fastActionUsed: false },
+    };
+  }
+  const guildsSlotId = (s: GameState): string =>
+    s.rooms.find((r) => r.name === 'Guilds')!.actionSpaces[0]!.id;
+
+  it('Liquid Lightning: placing into an instant room fires the slot reward', () => {
+    let s = guildsInstantGame();
+    s = addVaultCard(s, 'p1', 'base.vault.liquid-lightning');
+    s = addMage(s, 'p1', { id: 'alice-1', cardId: 'base.mage.sorcery', color: 'red' });
+    s = applyAction(s, { type: 'PLAY_VAULT_CARD', playerId: 'p1', vaultCardId: 'base.vault.liquid-lightning' });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'mage-chosen', mageId: 'alice-1' },
+    });
+    const gslot = guildsSlotId(s);
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'space-chosen', spaceId: gslot },
+    });
+    expect(findMageById(s, 'alice-1').location).toEqual({ kind: 'action-space', spaceId: gslot });
+    expect(topPending(s).resume.effectId).toBe('base.system.resolution-choice');
+  });
+
+  it('Immolation (A Brighter Flame L3): placing into an empty instant-room slot fires the reward', () => {
+    let s = guildsInstantGame();
+    s = addOwnedSpell(s, 'p1', 'base.spell.a-brighter-flame', {
+      intPlaced: true,
+      wisPlacedLevel2: true,
+      wisPlacedLevel3: true,
+    });
+    s = setMana(s, 'p1', 3);
+    s = addMage(s, 'p1', { id: 'alice-1', cardId: 'base.mage.sorcery', color: 'red' });
+    s = applyAction(s, { type: 'CAST_SPELL', playerId: 'p1', spellCardId: 'base.spell.a-brighter-flame', level: 3 });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'mage-chosen', mageId: 'alice-1' },
+    });
+    const gslot = guildsSlotId(s);
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'space-chosen', spaceId: gslot },
+    });
+    expect(topPending(s).resume.effectId).toBe('base.system.resolution-choice');
+  });
+
+  it('Poison (Lamentations L2): placing into the wounded mage\'s instant-room slot fires the reward', () => {
+    let s = guildsInstantGame();
+    s = addOwnedSpell(s, 'p1', 'base.spell.the-lamentations-of-sareth', { intPlaced: true, wisPlacedLevel2: true });
+    s = setMana(s, 'p1', 3);
+    s = addMage(s, 'p1', { id: 'alice-1', cardId: 'base.mage.sorcery', color: 'red' });
+    s = addMage(s, 'p2', { id: 'bob-1', cardId: 'base.mage.sorcery', color: 'red' });
+    const gslot = guildsSlotId(s);
+    s = placeMageOnSpace(s, 'p2', 'bob-1', gslot);
+    s = applyAction(s, { type: 'CAST_SPELL', playerId: 'p1', spellCardId: 'base.spell.the-lamentations-of-sareth', level: 2 });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'mage-chosen', mageId: 'bob-1' },
+    });
+    s = applyAction(s, { type: 'RESOLVE_PENDING', resolutionId: topPending(s).id, answer: { kind: 'reaction-passed' } });
+    // Poison suppresses the Infirmary bonus, so the placer prompt is next.
+    const placer = topPending(s);
+    expect(placer.prompt.kind).toBe('choose-target-mage');
+    s = applyAction(s, { type: 'RESOLVE_PENDING', resolutionId: placer.id, answer: { kind: 'mage-chosen', mageId: 'alice-1' } });
+    expect(findMageById(s, 'alice-1').location).toEqual({ kind: 'action-space', spaceId: gslot });
+    expect(topPending(s).resume.effectId).toBe('base.system.resolution-choice');
+  });
+
+  it('Tidal Wave (Book of 100 Seas L2): placing into the banished mage\'s instant-room slot fires the reward', () => {
+    let s = guildsInstantGame();
+    s = addOwnedSpell(s, 'p1', 'base.spell.book-of-one-hundred-seas', { intPlaced: true, wisPlacedLevel2: true });
+    s = setMana(s, 'p1', 2);
+    s = addMage(s, 'p1', { id: 'alice-1', cardId: 'base.mage.sorcery', color: 'red' });
+    s = addMage(s, 'p2', { id: 'bob-1', cardId: 'base.mage.sorcery', color: 'red' });
+    const gslot = guildsSlotId(s);
+    s = placeMageOnSpace(s, 'p2', 'bob-1', gslot);
+    s = applyAction(s, { type: 'CAST_SPELL', playerId: 'p1', spellCardId: 'base.spell.book-of-one-hundred-seas', level: 2 });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'mage-chosen', mageId: 'bob-1' },
+    });
+    s = applyAction(s, { type: 'RESOLVE_PENDING', resolutionId: topPending(s).id, answer: { kind: 'reaction-passed' } });
+    const placer = topPending(s);
+    expect(placer.prompt.kind).toBe('choose-target-mage');
+    s = applyAction(s, { type: 'RESOLVE_PENDING', resolutionId: placer.id, answer: { kind: 'mage-chosen', mageId: 'alice-1' } });
+    expect(findMageById(s, 'alice-1').location).toEqual({ kind: 'action-space', spaceId: gslot });
+    expect(topPending(s).resume.effectId).toBe('base.system.resolution-choice');
+  });
+
+  // Phase 2 — effects with work AFTER the place: the instant reward must
+  // resolve BEFORE the follow-up (lock / bonus cast).
+  it('Meteor (Master Book L2): instant reward fires BEFORE the room locks', () => {
+    let s = guildsInstantGame();
+    s = addOwnedSpell(s, 'p1', 'base.spell.master-book-of-starcalling', { intPlaced: true, wisPlacedLevel2: true });
+    s = setMana(s, 'p1', 4);
+    s = addMage(s, 'p1', { id: 'alice-1', cardId: 'base.mage.sorcery', color: 'red' });
+    const guilds = s.rooms.find((r) => r.name === 'Guilds')!;
+    s = applyAction(s, { type: 'CAST_SPELL', playerId: 'p1', spellCardId: 'base.spell.master-book-of-starcalling', level: 2 });
+    s = applyAction(s, { type: 'RESOLVE_PENDING', resolutionId: topPending(s).id, answer: { kind: 'option-chosen', optionId: guilds.id, payload: {} } });
+    s = applyAction(s, { type: 'RESOLVE_PENDING', resolutionId: topPending(s).id, answer: { kind: 'mage-chosen', mageId: 'alice-1' } });
+    const slotPrompt = topPending(s);
+    if (slotPrompt.prompt.kind !== 'choose-target-action-space') throw new Error('expected slot prompt');
+    const gslot = slotPrompt.prompt.eligibleSpaceIds[0]!;
+    s = applyAction(s, { type: 'RESOLVE_PENDING', resolutionId: slotPrompt.id, answer: { kind: 'space-chosen', spaceId: gslot } });
+    // Reward fires; room is NOT locked yet (lock deferred until after reward).
+    expect(topPending(s).resume.effectId).toBe('base.system.resolution-choice');
+    expect(s.roomLocks).toEqual([]);
+    s = forfeitAtResolution(s);
+    // Now the deferred lock lands.
+    expect(s.roomLocks).toEqual([{ roomId: guilds.id }]);
+    expect(findMageById(s, 'alice-1').location).toEqual({ kind: 'action-space', spaceId: gslot });
+  });
+
+  it('Consecration (Moste Holie L3): each placement fires the reward BEFORE the room locks', () => {
+    let s = guildsInstantGame();
+    s = addOwnedSpell(s, 'p1', 'base.spell.moste-holie-litanies', { intPlaced: true, wisPlacedLevel2: true, wisPlacedLevel3: true });
+    s = setMana(s, 'p1', 6);
+    s = addMage(s, 'p1', { id: 'alice-1', cardId: 'base.mage.sorcery', color: 'red' });
+    const guilds = s.rooms.find((r) => r.name === 'Guilds')!;
+    s = applyAction(s, { type: 'CAST_SPELL', playerId: 'p1', spellCardId: 'base.spell.moste-holie-litanies', level: 3 });
+    s = applyAction(s, { type: 'RESOLVE_PENDING', resolutionId: topPending(s).id, answer: { kind: 'option-chosen', optionId: guilds.id, payload: {} } });
+    // Yes/No → continue
+    s = applyAction(s, { type: 'RESOLVE_PENDING', resolutionId: topPending(s).id, answer: { kind: 'option-chosen', optionId: 'continue', payload: {} } });
+    s = applyAction(s, { type: 'RESOLVE_PENDING', resolutionId: topPending(s).id, answer: { kind: 'mage-chosen', mageId: 'alice-1' } });
+    const slotPrompt = topPending(s);
+    if (slotPrompt.prompt.kind !== 'choose-target-action-space') throw new Error('expected slot prompt');
+    const gslot = slotPrompt.prompt.eligibleSpaceIds[0]!;
+    s = applyAction(s, { type: 'RESOLVE_PENDING', resolutionId: slotPrompt.id, answer: { kind: 'space-chosen', spaceId: gslot } });
+    // Reward fires before the lock.
+    expect(topPending(s).resume.effectId).toBe('base.system.resolution-choice');
+    expect(s.roomLocks).toEqual([]);
+    s = forfeitAtResolution(s);
+    // Only one office mage, so the room locks after the reward resolves.
+    expect(s.roomLocks).toEqual([{ roomId: guilds.id }]);
+    expect(findMageById(s, 'alice-1').location).toEqual({ kind: 'action-space', spaceId: gslot });
+  });
+
+  it('Chain Lightning (Lightning and You L3): instant reward fires BEFORE the bonus cast', () => {
+    let s = guildsInstantGame();
+    s = addOwnedSpell(s, 'p1', 'base.spell.lightning-and-you', { intPlaced: true, wisPlacedLevel2: true, wisPlacedLevel3: true });
+    s = addOwnedSpell(s, 'p1', 'base.spell.burn', { intPlaced: true }); // a bonus spell to cast
+    s = setMana(s, 'p1', 9);
+    s = addMage(s, 'p1', { id: 'alice-1', cardId: 'base.mage.sorcery', color: 'red' });
+    s = addMage(s, 'p2', { id: 'bob-1', cardId: 'base.mage.sorcery', color: 'red' });
+    const guilds = s.rooms.find((r) => r.name === 'Guilds')!;
+    s = placeMageOnSpace(s, 'p2', 'bob-1', guilds.actionSpaces[0]!.id);
+    s = applyAction(s, { type: 'CAST_SPELL', playerId: 'p1', spellCardId: 'base.spell.lightning-and-you', level: 3 });
+    s = applyAction(s, { type: 'RESOLVE_PENDING', resolutionId: topPending(s).id, answer: { kind: 'mage-chosen', mageId: 'bob-1' } });
+    // Drain the wound's reaction window + any Infirmary-bonus prompt.
+    for (let i = 0; i < 4; i++) {
+      const top = topPending(s);
+      if (top.prompt.kind === 'reaction-window') {
+        s = applyAction(s, { type: 'RESOLVE_PENDING', resolutionId: top.id, answer: { kind: 'reaction-passed' } });
+        continue;
+      }
+      if (top.prompt.kind === 'choose-from-options' && top.resume.effectId !== 'base.system.resolution-choice') {
+        s = applyAction(s, { type: 'RESOLVE_PENDING', resolutionId: top.id, answer: { kind: 'option-chosen', optionId: top.prompt.options[0]!.id, payload: {} } });
+        continue;
+      }
+      break;
+    }
+    // Placer mage pick → alice-1.
+    const placer = topPending(s);
+    expect(placer.prompt.kind).toBe('choose-target-mage');
+    s = applyAction(s, { type: 'RESOLVE_PENDING', resolutionId: placer.id, answer: { kind: 'mage-chosen', mageId: 'alice-1' } });
+    // Slot pick → an open Guilds slot (not bob's).
+    const slotPrompt = topPending(s);
+    if (slotPrompt.prompt.kind !== 'choose-target-action-space') throw new Error('expected slot prompt');
+    const gslot = slotPrompt.prompt.eligibleSpaceIds.find((id) => id.startsWith(guilds.id))!;
+    s = applyAction(s, { type: 'RESOLVE_PENDING', resolutionId: slotPrompt.id, answer: { kind: 'space-chosen', spaceId: gslot } });
+    // Instant reward fires first…
+    expect(topPending(s).resume.effectId).toBe('base.system.resolution-choice');
+    s = forfeitAtResolution(s);
+    // …then the "cast another Spell" prompt is surfaced.
+    const castAnother = topPending(s);
+    expect(castAnother.prompt.kind).toBe('choose-from-options');
+    expect(castAnother.resume.context?.['step']).toBe('after-may-cast');
+    expect(findMageById(s, 'alice-1').location).toEqual({ kind: 'action-space', spaceId: gslot });
+  });
+
   it('Celerity: excludes slots in rooms where caster is already at per-round cap', () => {
     let s = initGame(TWO_PLAYER_CONFIG);
     s = forceRoomSide(s, 'Council Chamber', 'A');

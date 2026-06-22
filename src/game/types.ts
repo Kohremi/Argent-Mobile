@@ -1357,6 +1357,16 @@ export interface GameState {
      * DOES fire the orange ability.
      */
     suppressMagePowers?: boolean;
+    /**
+     * When set, the named room is Locked once the chain finishes draining
+     * (after the final placement's instant-room reward has fully resolved).
+     * Used by "place into a room, then lock it" spells (Master Book L2
+     * "Meteor", Moste Holie L3 "Consecration") so the lock lands AFTER the
+     * placements' instant rewards, not before. A `remaining: 0` chain carrying
+     * only this field is a pure deferred lock — it places nothing and just
+     * locks on the next idle drain.
+     */
+    lockRoomOnComplete?: RoomId;
   } | null;
   /**
    * A round-end scenario in progress (Summer Break "Students Return" drafts,

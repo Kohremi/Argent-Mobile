@@ -11,6 +11,7 @@ import { buildInitialState } from './setup';
 import { getEffect, hasEffect, firesInstantReward } from './effects/index';
 import {
   applyCandidateAllocation,
+  applyRoomLockPatch,
   buildReactionOptionsFor,
   buildReactionQueue,
   buildResolutionChoiceOptions,
@@ -417,7 +418,12 @@ function drainPendingPlaceChainIfIdle(state: GameState): GameState {
   if (state.pendingResolutionStack.length > 0) return state;
   if (state.activeReactionWindows.length > 0) return state;
   if (chain.remaining <= 0) {
-    return { ...state, pendingPlaceChain: null };
+    // Chain finished — apply a deferred room lock (Meteor / Consecration) now
+    // that every placement's instant-room reward has resolved, then clear.
+    const lockPatch = chain.lockRoomOnComplete
+      ? applyRoomLockPatch(state, chain.lockRoomOnComplete)
+      : {};
+    return { ...state, ...lockPatch, pendingPlaceChain: null };
   }
   const decremented: GameState = {
     ...state,

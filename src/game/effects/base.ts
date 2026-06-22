@@ -8003,6 +8003,54 @@ function patchWithMaybeInstantReward(
   return { kind: 'done', patch: { ...patch, ...advPatch } };
 }
 
+/**
+ * Place (already in `placePatch`) → fire the slot's instant-room reward →
+ * THEN surface `continuation`. The continuation is pushed onto the stack first
+ * so patchWithMaybeInstantReward can stack the reward prompt on top (LIFO):
+ * the reward resolves, then the follow-up. Used where a placement effect has
+ * more to do after the place — Consecration's next "place another?" prompt and
+ * Chain Lightning's "you may cast another Spell" prompt.
+ */
+function placeThenContinueAfterReward(
+  state: GameState,
+  placePatch: GameStatePatch,
+  spaceId: string,
+  playerId: string,
+  continuation: PendingResolutionInput,
+): EffectResult {
+  const seq = state.nextSequenceId;
+  const patch: GameStatePatch = {
+    ...placePatch,
+    pendingResolutionStack: [
+      ...state.pendingResolutionStack,
+      { ...continuation, id: `r-${seq}` },
+    ],
+    nextSequenceId: seq + 1,
+  };
+  return patchWithMaybeInstantReward(state, patch, spaceId, playerId);
+}
+
+/**
+ * Place (already in `placePatch`) → fire the slot's instant-room reward → THEN
+ * Lock `roomId`. The lock is deferred onto a `remaining: 0` pendingPlaceChain
+ * so the engine's idle drain applies it only after the reward chain settles
+ * (reward-before-lock). Used by "place into a room, then lock it" spells.
+ */
+function placeThenLockAfterReward(
+  state: GameState,
+  placePatch: GameStatePatch,
+  spaceId: string,
+  playerId: string,
+  roomId: string,
+  source: ResolutionSource,
+): EffectResult {
+  const patch: GameStatePatch = {
+    ...placePatch,
+    pendingPlaceChain: { playerId, source, remaining: 0, lockRoomOnComplete: roomId },
+  };
+  return patchWithMaybeInstantReward(state, patch, spaceId, playerId);
+}
+
 function openSlotPrompt(
   ctx: EffectContext,
   placerMageId: string,
@@ -9002,15 +9050,20 @@ registerEffect('base.vault.liquid-lightning', (ctx): EffectResult => {
     if (typeof targetMageId !== 'string') {
       throw new Error('liquid-lightning apply: missing targetMageId');
     }
-    return {
-      kind: 'done',
-      patch: placeOfficeMageOnSpace(
-        ctx.state,
-        ctx.triggeringPlayerId,
-        targetMageId,
-        ctx.resumeAnswer.spaceId,
-      ),
-    };
+    // "Place a Mage" — a fresh placement, so the destination's instant-room
+    // reward fires (Guilds / Laboratory A / Golem Lab A).
+    const placePatch = placeOfficeMageOnSpace(
+      ctx.state,
+      ctx.triggeringPlayerId,
+      targetMageId,
+      ctx.resumeAnswer.spaceId,
+    );
+    return patchWithMaybeInstantReward(
+      ctx.state,
+      placePatch,
+      ctx.resumeAnswer.spaceId,
+      ctx.triggeringPlayerId,
+    );
   }
   throw new Error(`liquid-lightning unexpected step ${String(step)}`);
 });
@@ -9188,15 +9241,20 @@ function woundAndPlaceEffect(opts: {
         // Slot was reclaimed (e.g. Phase Steppers / Invisibility Cloak).
         return { kind: 'done', patch: {} };
       }
-      return {
-        kind: 'done',
-        patch: placeOfficeMageOnSpace(
-          ctx.state,
-          ctx.triggeringPlayerId,
-          ctx.resumeAnswer.mageId,
-          slotId,
-        ),
-      };
+      // Placing one of yours into the (just-vacated) slot is a fresh placement,
+      // so an instant room fires — same as Ars Magna seizing a slot it cleared.
+      const placePatch = placeOfficeMageOnSpace(
+        ctx.state,
+        ctx.triggeringPlayerId,
+        ctx.resumeAnswer.mageId,
+        slotId,
+      );
+      return patchWithMaybeInstantReward(
+        ctx.state,
+        placePatch,
+        slotId,
+        ctx.triggeringPlayerId,
+      );
     }
 
     throw new Error(`${selfEffectId} unexpected step ${String(step)}`);
@@ -10455,15 +10513,20 @@ function banishAndPlaceInSlotEffect(opts: {
       if (!lookup || lookup.space.occupant !== null) {
         return { kind: 'done', patch: {} };
       }
-      return {
-        kind: 'done',
-        patch: placeOfficeMageOnSpace(
-          ctx.state,
-          ctx.triggeringPlayerId,
-          ctx.resumeAnswer.mageId,
-          slotId,
-        ),
-      };
+      // Placing into the banished mage's slot is a fresh placement → instant
+      // room fires (consistent with the wound-and-place factory and Ars Magna).
+      const placePatch = placeOfficeMageOnSpace(
+        ctx.state,
+        ctx.triggeringPlayerId,
+        ctx.resumeAnswer.mageId,
+        slotId,
+      );
+      return patchWithMaybeInstantReward(
+        ctx.state,
+        placePatch,
+        slotId,
+        ctx.triggeringPlayerId,
+      );
     }
     throw new Error(`${selfEffectId} unexpected step ${String(step)}`);
   };
@@ -11047,15 +11110,19 @@ registerEffect('base.spell.lightning-and-you.l2', (ctx): EffectResult => {
     if (typeof placerMageId !== 'string') {
       throw new Error('lightning.l2 apply-place: missing placerMageId');
     }
-    return {
-      kind: 'done',
-      patch: placeOfficeMageOnSpaceCrediting(
-        ctx.state,
-        ctx.triggeringPlayerId,
-        placerMageId,
-        ctx.resumeAnswer.spaceId,
-      ),
-    };
+    const placePatch = placeOfficeMageOnSpaceCrediting(
+      ctx.state,
+      ctx.triggeringPlayerId,
+      placerMageId,
+      ctx.resumeAnswer.spaceId,
+    );
+    // Fresh placement → fire the destination's instant-room reward.
+    return patchWithMaybeInstantReward(
+      ctx.state,
+      placePatch,
+      ctx.resumeAnswer.spaceId,
+      ctx.triggeringPlayerId,
+    );
   }
   throw new Error(`lightning.l2 unexpected step ${String(step)}`);
 });
@@ -11167,16 +11234,19 @@ registerEffect('base.spell.a-brighter-flame.l3', (ctx): EffectResult => {
       .find((s) => s.id === spaceId);
     if (!space) throw new Error(`immolation: space ${spaceId} not found`);
     if (!space.occupant) {
-      // Empty slot — straight place.
-      return {
-        kind: 'done',
-        patch: placeOfficeMageOnSpaceCrediting(
-          ctx.state,
-          ctx.triggeringPlayerId,
-          placerMageId,
-          spaceId,
-        ),
-      };
+      // Empty slot — straight place. Fresh placement → instant room fires.
+      const placePatch = placeOfficeMageOnSpaceCrediting(
+        ctx.state,
+        ctx.triggeringPlayerId,
+        placerMageId,
+        spaceId,
+      );
+      return patchWithMaybeInstantReward(
+        ctx.state,
+        placePatch,
+        spaceId,
+        ctx.triggeringPlayerId,
+      );
     }
     // Occupied slot — wound first, then place after the reaction.
     const wound = woundMage(
@@ -11252,15 +11322,19 @@ function immolationFinalPlace(
   if (!space || space.occupant !== null) {
     return { kind: 'done', patch: {} };
   }
-  return {
-    kind: 'done',
-    patch: placeOfficeMageOnSpaceCrediting(
-      state,
-      ctx.triggeringPlayerId,
-      placerMageId,
-      targetSpaceId,
-    ),
-  };
+  // Taking the wounded mage's slot is a fresh placement → instant room fires.
+  const placePatch = placeOfficeMageOnSpaceCrediting(
+    state,
+    ctx.triggeringPlayerId,
+    placerMageId,
+    targetSpaceId,
+  );
+  return patchWithMaybeInstantReward(
+    state,
+    placePatch,
+    targetSpaceId,
+    ctx.triggeringPlayerId,
+  );
 }
 
 // ============================================================================
@@ -16419,12 +16493,16 @@ registerEffect(
         placerMageId,
         spaceId,
       );
-      const afterPlace: GameState = { ...ctx.state, ...placePatch };
-      const lockPatch = applyRoomLockPatch(afterPlace, roomId);
-      return {
-        kind: 'done',
-        patch: { ...placePatch, ...lockPatch },
-      };
+      // A fresh placement fires the slot's instant-room reward; the room locks
+      // afterward (deferred so the reward resolves before the lock).
+      return placeThenLockAfterReward(
+        ctx.state,
+        placePatch,
+        spaceId,
+        ctx.triggeringPlayerId,
+        roomId,
+        ctx.source,
+      );
     }
     throw new Error(`${self} unexpected step ${String(step)}`);
   },
@@ -16610,14 +16688,41 @@ registerEffect('base.spell.moste-holie-litanies.l3', (ctx): EffectResult => {
     const roomId = String(ctx.resumeContext?.['roomId'] ?? '');
     const placerMageId = String(ctx.resumeContext?.['placerMageId'] ?? '');
     if (!roomId || !placerMageId) return { kind: 'done', patch: {} };
+    const spaceId = ctx.resumeAnswer.spaceId;
     const placePatch = placeOfficeMageOnSpace(
       ctx.state,
       ctx.triggeringPlayerId,
       placerMageId,
-      ctx.resumeAnswer.spaceId,
+      spaceId,
     );
+    // Each placement fires the slot's instant-room reward. Decide against the
+    // post-placement board whether another Mage can follow.
     const afterPlace: GameState = { ...ctx.state, ...placePatch };
-    return mosteHolieMaybePlaceMore({ ...ctx, state: afterPlace }, self, roomId, placePatch);
+    const player = afterPlace.players.find((p) => p.id === ctx.triggeringPlayerId);
+    const officeAvailable =
+      player?.mages.some((m) => m.location.kind === 'office' && !m.isWounded) ?? false;
+    const roomHasSlot =
+      afterPlace.rooms.find((r) => r.id === roomId)?.actionSpaces.some((s) => !s.occupant) ??
+      false;
+    if (officeAvailable && roomHasSlot) {
+      // Reward resolves, then the next "place another?" prompt is surfaced.
+      return placeThenContinueAfterReward(
+        ctx.state,
+        placePatch,
+        spaceId,
+        ctx.triggeringPlayerId,
+        mosteHolieContinuePromptInput(self, roomId, ctx.source, ctx.triggeringPlayerId),
+      );
+    }
+    // Nothing more can be placed — reward resolves, then the room locks.
+    return placeThenLockAfterReward(
+      ctx.state,
+      placePatch,
+      spaceId,
+      ctx.triggeringPlayerId,
+      roomId,
+      ctx.source,
+    );
   }
 
   throw new Error(`${self} unexpected step ${String(step)}`);
@@ -16649,32 +16754,38 @@ function mosteHolieMaybePlaceMore(
       patch: { ...carryPatch, ...applyRoomLockPatch(ctx.state, roomId) },
     };
   }
-  const pending = {
-    responderId: ctx.triggeringPlayerId,
-    prompt: {
-      kind: 'choose-from-options' as const,
-      options: [
-        {
-          id: 'continue',
-          label: 'Place a Mage in this room',
-          payload: {},
-        },
-        {
-          id: 'stop',
-          label: 'Stop (lock the room)',
-          payload: {},
-        },
-      ],
-    },
-    resume: {
-      effectId: self,
-      context: { step: 'maybe-continue', roomId },
-    },
-    source: ctx.source,
-  };
+  const pending = mosteHolieContinuePromptInput(
+    self,
+    roomId,
+    ctx.source,
+    ctx.triggeringPlayerId,
+  );
   return Object.keys(carryPatch).length === 0
     ? { kind: 'pause', pending }
     : { kind: 'pause', patch: carryPatch, pending };
+}
+
+/** The "place another in this room / stop and lock" prompt for Consecration,
+ *  as a reusable prompt input (surfaced inline before any placement, and
+ *  queued under the instant reward after each placement). */
+function mosteHolieContinuePromptInput(
+  self: string,
+  roomId: string,
+  source: ResolutionSource,
+  playerId: string,
+): PendingResolutionInput {
+  return {
+    responderId: playerId,
+    prompt: {
+      kind: 'choose-from-options',
+      options: [
+        { id: 'continue', label: 'Place a Mage in this room', payload: {} },
+        { id: 'stop', label: 'Stop (lock the room)', payload: {} },
+      ],
+    },
+    resume: { effectId: self, context: { step: 'maybe-continue', roomId } },
+    source,
+  };
 }
 
 /** Surfaces the mage picker as `choose-target-mage` so the player can click
@@ -20263,17 +20374,32 @@ registerEffect('base.spell.lightning-and-you.l3', (ctx): EffectResult => {
     if (typeof placerMageId !== 'string') {
       throw new Error(`${self} apply-place: missing placerMageId`);
     }
+    const spaceId = ctx.resumeAnswer.spaceId;
     const placePatch = placeOfficeMageOnSpaceCrediting(
       ctx.state,
       ctx.triggeringPlayerId,
       placerMageId,
-      ctx.resumeAnswer.spaceId,
+      spaceId,
     );
+    // The place is fresh, so it fires the slot's instant-room reward. If a
+    // bonus cast is available, queue "you may cast another Spell" UNDER the
+    // reward so the reward resolves first.
     const afterPlace: GameState = { ...ctx.state, ...placePatch };
-    return chainLightningCastAnotherPrompt(
-      { ...ctx, state: afterPlace },
-      self,
+    const castAnother = chainLightningCastAnotherPrompt({ ...ctx, state: afterPlace }, self);
+    if (castAnother.kind === 'pause') {
+      return placeThenContinueAfterReward(
+        ctx.state,
+        placePatch,
+        spaceId,
+        ctx.triggeringPlayerId,
+        castAnother.pending,
+      );
+    }
+    return patchWithMaybeInstantReward(
+      ctx.state,
       placePatch,
+      spaceId,
+      ctx.triggeringPlayerId,
     );
   }
 
@@ -20539,15 +20665,20 @@ registerEffect(
         .flatMap((r) => r.actionSpaces)
         .find((s) => s.id === spaceId);
       if (!space || space.occupant) return { kind: 'done', patch: {} };
-      return {
-        kind: 'done',
-        patch: placeOfficeMageOnSpace(
-          ctx.state,
-          ctx.triggeringPlayerId,
-          placerMageId,
-          spaceId,
-        ),
-      };
+      // Seating your Mage in the vacated base is a fresh placement → instant
+      // room fires (the opponent being forced to shadow is a move, and doesn't).
+      const placePatch = placeOfficeMageOnSpace(
+        ctx.state,
+        ctx.triggeringPlayerId,
+        placerMageId,
+        spaceId,
+      );
+      return patchWithMaybeInstantReward(
+        ctx.state,
+        placePatch,
+        spaceId,
+        ctx.triggeringPlayerId,
+      );
     }
 
     throw new Error(`${self} unexpected step ${String(step)}`);
