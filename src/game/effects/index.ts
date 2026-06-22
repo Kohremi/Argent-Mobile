@@ -14,9 +14,11 @@ export {
   hasEffect,
   firesInstantReward,
   listEffectIds,
+  registerPlayability,
+  playabilityReason,
   _resetEffectRegistry,
 } from './registry';
-export type { Effect } from './registry';
+export type { Effect, PlayabilityCheck } from './registry';
 
 // Side-effect imports — each pack file calls `registerEffect` at module load.
 import './base';

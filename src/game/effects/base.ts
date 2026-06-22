@@ -6,6 +6,7 @@ import {
   hasEffect,
   firesInstantReward,
   registerEffect,
+  registerPlayability,
 } from './registry';
 import { computeFinalScoring, playerOwnsWildSupporter } from '../scoring';
 import { getPack } from '../../content/registry';
@@ -17680,6 +17681,17 @@ function legendaryBookOptionLabel(
   });
   return `${def.name}\n${lines.join('\n')}`;
 }
+
+registerPlayability('base.vault.sealed-scroll', (state, playerId) => {
+  const player = state.players.find((p) => p.id === playerId);
+  if (!player || player.resources.intelligence < 1) {
+    return 'Requires 1 Intelligence to learn a Legendary Spell';
+  }
+  if (unclaimedLegendaryBooks(state).length === 0) {
+    return 'No Legendary Spells left to learn';
+  }
+  return null;
+});
 
 registerEffect('base.vault.sealed-scroll', (ctx): EffectResult => {
   const player = ctx.state.players.find(

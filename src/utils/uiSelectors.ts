@@ -387,6 +387,57 @@ export function playableSupporters(state: GameState, playerId: string): Set<stri
   return out;
 }
 
+/** Strips the leading "ACTION_NAME: " prefix from an engine error message. */
+function cleanBlockReason(message: string): string {
+  const i = message.indexOf(': ');
+  return i >= 0 ? message.slice(i + 2).split('\n')[0]! : message.split('\n')[0]!;
+}
+
+/**
+ * Per-vault-card playability with a reason (engine dry-run). Value is `null`
+ * when the card is playable right now, or a short player-facing reason (the
+ * engine's rejection message, prefix stripped) when playing it would be
+ * illegal or fizzle. Powers the hand's grey-out + "why not?" flash.
+ */
+export function vaultCardPlayability(
+  state: GameState,
+  playerId: string,
+): Map<string, string | null> {
+  const out = new Map<string, string | null>();
+  const player = state.players.find((p) => p.id === playerId);
+  if (!player) return out;
+  for (const v of player.vaultCards) {
+    if (out.has(v.cardId)) continue;
+    try {
+      applyAction(state, { type: 'PLAY_VAULT_CARD', playerId, vaultCardId: v.cardId });
+      out.set(v.cardId, null);
+    } catch (e) {
+      out.set(v.cardId, cleanBlockReason((e as Error).message));
+    }
+  }
+  return out;
+}
+
+/** Per-supporter playability with a reason (engine dry-run). See above. */
+export function supporterPlayability(
+  state: GameState,
+  playerId: string,
+): Map<string, string | null> {
+  const out = new Map<string, string | null>();
+  const player = state.players.find((p) => p.id === playerId);
+  if (!player) return out;
+  for (const cardId of player.supporters) {
+    if (out.has(cardId)) continue;
+    try {
+      applyAction(state, { type: 'PLAY_SUPPORTER', playerId, supporterCardId: cardId });
+      out.set(cardId, null);
+    } catch (e) {
+      out.set(cardId, cleanBlockReason((e as Error).message));
+    }
+  }
+  return out;
+}
+
 /** Bell tower cards claimable right now (engine dry-run). */
 export function claimableBellCards(state: GameState, playerId: string): Set<string> {
   const out = new Set<string>();

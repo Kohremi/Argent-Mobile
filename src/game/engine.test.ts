@@ -6920,20 +6920,15 @@ describe('PLAY_SUPPORTER', () => {
         },
       ],
     }));
-    let after: GameState | undefined;
-    expect(() => {
-      after = applyAction(s, {
+    // No movable target → the play is blocked (cleanly, not a crash) rather
+    // than wasting the supporter on a fizzle.
+    expect(() =>
+      applyAction(s, {
         type: 'PLAY_SUPPORTER',
         playerId: 'p1',
         supporterCardId: 'base.supporter.yinsei-arlington',
-      });
-    }).not.toThrow();
-    // No movable target → Yinsei resolves with no lingering target prompt.
-    expect(
-      after!.pendingResolutionStack.some(
-        (p) => p.prompt.kind === 'choose-target-mage',
-      ),
-    ).toBe(false);
+      }),
+    ).toThrow(/would have no effect/);
   });
 
   it('Yinsei Arlington moves a Mage that is genuinely on a slot', () => {
@@ -12316,11 +12311,11 @@ describe('Technomancy Supporters (Mancers)', () => {
     expect(s.mageDraftPool.orange).toBe(poolBefore - 1);
   });
 
-  it('Garek Tesias: fizzles when the player cannot pay 3 Gold', () => {
-    let s = setup('mancers.supporter.garek-tesias', 2);
-    s = play(s, 'mancers.supporter.garek-tesias');
-    expect(p1(s).mages.some((m) => m.color === 'orange')).toBe(false);
-    expect(p1(s).resources.gold).toBe(2);
+  it('Garek Tesias: is blocked when the player cannot pay 3 Gold', () => {
+    const s = setup('mancers.supporter.garek-tesias', 2);
+    expect(() => play(s, 'mancers.supporter.garek-tesias')).toThrow(
+      /would have no effect/,
+    );
   });
 
   it('Orman Kasper: pays 3 Gold for the top card of the Vault Deck', () => {
@@ -12407,12 +12402,12 @@ describe('Technomancy Supporters (Mancers)', () => {
     expect(p1(s).mages.filter((m) => m.color === 'red')).toHaveLength(1);
   });
 
-  it('swap supporters fizzle with no prompt when there is no office Mage', () => {
-    let s = setup('mancers.supporter.cin-atalar');
-    // No mages added — nothing to swap.
-    s = play(s, 'mancers.supporter.cin-atalar');
-    expect(s.pendingResolutionStack).toHaveLength(0);
-    expect(p1(s).mages.filter((m) => m.color === 'orange')).toHaveLength(0);
+  it('swap supporters are blocked when there is no office Mage', () => {
+    const s = setup('mancers.supporter.cin-atalar');
+    // No mages added — nothing to swap, so the play is rejected (not wasted).
+    expect(() => play(s, 'mancers.supporter.cin-atalar')).toThrow(
+      /would have no effect/,
+    );
   });
 });
 
@@ -21281,21 +21276,31 @@ describe('Sealed Scroll (legendary draft)', () => {
     expect(unclaimedLegendaryBooks(s)).toHaveLength(4);
   });
 
-  it('fizzles silently when the player has no INT — no prompt, scroll still consumed', () => {
-    let s = setupSealedScroll({ p1Int: 0 });
-    s = applyAction(s, {
-      type: 'PLAY_VAULT_CARD',
-      playerId: 'p1',
-      vaultCardId: 'base.vault.sealed-scroll',
-    });
-    expect(s.pendingResolutionStack).toHaveLength(0);
+  it('is blocked (not wasted) when the player has no INT', () => {
+    const s = setupSealedScroll({ p1Int: 0 });
+    expect(() =>
+      applyAction(s, {
+        type: 'PLAY_VAULT_CARD',
+        playerId: 'p1',
+        vaultCardId: 'base.vault.sealed-scroll',
+      }),
+    ).toThrow(/Intelligence/);
+    // The scroll stays in the player's vault — nothing consumed.
     const p1 = s.players.find((p) => p.id === 'p1')!;
-    expect(p1.vaultCards.find((v) => v.cardId === 'base.vault.sealed-scroll')).toBeUndefined();
     expect(
-      p1.personalDiscard.find(
-        (d) => d.kind === 'consumable' && d.cardId === 'base.vault.sealed-scroll',
-      ),
+      p1.vaultCards.find((v) => v.cardId === 'base.vault.sealed-scroll'),
     ).toBeDefined();
+  });
+
+  it('surfaces the block reason to the UI (prefix stripped, no action name)', async () => {
+    const { vaultCardPlayability } = await import('../utils/uiSelectors');
+    const blocked = vaultCardPlayability(setupSealedScroll({ p1Int: 0 }), 'p1');
+    expect(blocked.get('base.vault.sealed-scroll')).toBe(
+      'Requires 1 Intelligence to learn a Legendary Spell',
+    );
+    // With INT, the same card reads as playable (null reason).
+    const ok = vaultCardPlayability(setupSealedScroll({ p1Int: 1 }), 'p1');
+    expect(ok.get('base.vault.sealed-scroll')).toBeNull();
   });
 
   it('a second Sealed Scroll only lists the books still in the pool', async () => {

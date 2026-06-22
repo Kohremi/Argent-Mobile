@@ -66,6 +66,12 @@ export default {
           from: { backgroundPosition: '200% 0' },
           to: { backgroundPosition: '-200% 0' },
         },
+        'flash-fade': {
+          '0%': { opacity: '0', transform: 'translate(-50%, 4px)' },
+          '15%': { opacity: '1', transform: 'translate(-50%, 0)' },
+          '70%': { opacity: '1', transform: 'translate(-50%, 0)' },
+          '100%': { opacity: '0', transform: 'translate(-50%, -12px)' },
+        },
       },
       animation: {
         breathe: 'breathe 2.4s ease-in-out infinite',
@@ -73,6 +79,7 @@ export default {
         'spin-slow': 'spin-slow 14s linear infinite',
         pop: 'pop .4s cubic-bezier(.34,1.56,.64,1) both',
         shimmer: 'shimmer 2.5s linear infinite',
+        'flash-fade': 'flash-fade 1.5s ease-out forwards',
       },
     },
   },

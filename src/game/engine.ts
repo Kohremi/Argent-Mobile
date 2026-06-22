@@ -9,7 +9,12 @@ import { validateAction } from './actions';
 import { assertBoardConsistent, findBoardInconsistency } from './boardInvariant';
 import { computeFinalScoring, playerOwnsWildSupporter } from './scoring';
 import { buildInitialState } from './setup';
-import { getEffect, hasEffect, firesInstantReward } from './effects/index';
+import {
+  getEffect,
+  hasEffect,
+  firesInstantReward,
+  playabilityReason,
+} from './effects/index';
 import {
   applyCandidateAllocation,
   applyRoomLockPatch,
@@ -87,6 +92,7 @@ import type {
   Scenario,
   ScenarioRoundRule,
   SerializableContext,
+  SkipFastActionAction,
   UseAbilityAction,
   WorkerOccupancy,
 } from './types';
@@ -180,6 +186,9 @@ export function applyAction(state: GameState, action: GameAction): GameState {
       break;
     case 'PASS_FOR_ROUND':
       next = handlePassForRound(state, action);
+      break;
+    case 'SKIP_FAST_ACTION':
+      next = handleSkipFastAction(state, action);
       break;
     case 'DISCARD_BONUS_ACTIONS':
       next = handleDiscardBonusActions(state, action);
@@ -2536,6 +2545,37 @@ function handlePassForRound(
   return processErrandsAdvance(passed);
 }
 
+function handleSkipFastAction(
+  state: GameState,
+  action: SkipFastActionAction,
+): GameState {
+  if (state.phase.kind !== 'errands') {
+    throw new Error('SKIP_FAST_ACTION: only valid during errands phase');
+  }
+  const activePlayerId = state.players[state.phase.activePlayerIndex]?.id;
+  if (activePlayerId !== action.playerId) {
+    throw new Error(
+      `SKIP_FAST_ACTION: not your turn (active=${activePlayerId}, you=${action.playerId})`,
+    );
+  }
+  if (state.phase.actionUsed) {
+    throw new Error(
+      'SKIP_FAST_ACTION: your Regular Action is already spent this turn',
+    );
+  }
+  const limit = scenarioRoundRule(state)?.maxFastActionsPerTurn ?? 1;
+  if ((state.phase.fastActionsUsed ?? 0) >= limit) {
+    throw new Error('SKIP_FAST_ACTION: no Fast Action left to skip');
+  }
+  // Mark the Fast Action budget exhausted without spending one. A subsequent
+  // forced-Fast placement (e.g. a Planar mage) is then charged as the Regular
+  // Action — avoiding any per-round Fast Action surcharge.
+  return {
+    ...state,
+    phase: { ...state.phase, fastActionsUsed: limit, fastActionUsed: true },
+  };
+}
+
 /**
  * DISCARD_BONUS_ACTIONS: drops any remaining bonus actions (extraActions /
  * Bend Time tracker) so the turn auto-advances on the next idle moment.
@@ -2581,6 +2621,15 @@ function handleDiscardBonusActions(
  * Reaction supporters fire from a reaction window; passive supporters
  * (familiars) sit in the office for endgame scoring.
  */
+/**
+ * A `done` result whose patch changes nothing — i.e. the card resolved to a
+ * complete no-op. Used to reject a hand-played supporter / vault card that would
+ * fizzle (no valid target / unmet requirement) before it's wasted.
+ */
+function isNoOpResult(result: EffectResult): boolean {
+  return result.kind === 'done' && Object.keys(result.patch).length === 0;
+}
+
 function handlePlaySupporter(
   state: GameState,
   action: PlaySupporterAction,
@@ -2619,6 +2668,12 @@ function handlePlaySupporter(
     throw new Error(
       `PLAY_SUPPORTER: ${card.name} (${card.timing}) cannot be played as an action`,
     );
+  }
+  // Reject a play that would fizzle (no valid target / unmet requirement) before
+  // the card is spent. Specific cards register a reason via `registerPlayability`.
+  const blockReason = playabilityReason(card.effectId, state, action.playerId);
+  if (blockReason) {
+    throw new Error(`PLAY_SUPPORTER: ${blockReason}`);
   }
 
   state = consumeActionBudget(
@@ -2662,6 +2717,11 @@ function handlePlaySupporter(
     allowReactions: true,
   };
   const result = getEffect(card.effectId)(ctx);
+  // Safety net: a card that resolves to a complete no-op would just be wasted —
+  // block the play (auto-greying it in the UI) instead of silently fizzling.
+  if (isNoOpResult(result)) {
+    throw new Error(`PLAY_SUPPORTER: ${card.name} would have no effect right now`);
+  }
   return applyEffectResult(consumed, result, ctx);
 }
 
@@ -2703,6 +2763,13 @@ function handlePlayVaultCard(
     throw new Error(
       'PLAY_VAULT_CARD: reaction-timing vault cards fire from a reaction window, not as a direct action',
     );
+  }
+
+  // Reject a play that would fizzle (no valid target / unmet requirement) before
+  // the card is spent. Specific cards register a reason via `registerPlayability`.
+  const blockReason = playabilityReason(card.effectId, state, action.playerId);
+  if (blockReason) {
+    throw new Error(`PLAY_VAULT_CARD: ${blockReason}`);
   }
 
   // Find the first unexhausted copy in the player's vault.
@@ -2789,6 +2856,11 @@ function handlePlayVaultCard(
     allowReactions: true,
   };
   const result = getEffect(card.effectId)(ctx);
+  // Safety net: a card that resolves to a complete no-op would just be wasted —
+  // block the play (auto-greying it in the UI) instead of silently fizzling.
+  if (isNoOpResult(result)) {
+    throw new Error(`PLAY_VAULT_CARD: ${card.name} would have no effect right now`);
+  }
   return applyEffectResult(consumed, result, ctx);
 }
 

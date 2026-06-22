@@ -257,13 +257,14 @@ describe('Summer Break — wound-immunity vault cards', () => {
     expect(s.activeBuffs.some((b) => b.kind === 'mage-immunity' && b.ownerId === 'p1')).toBe(true);
   });
 
-  it("Beach Towel no-ops (but still exhausts) without 2 Mana", () => {
-    let s = errands2P((st) => setMana(addVault(st, 'p1', 'summerbreak.vault.beach-towel'), 'p1', 1));
-    s = playVault(s, 'summerbreak.vault.beach-towel');
-    expect(s.players[0]!.resources.mana).toBe(1);
-    expect(s.activeBuffs.some((b) => b.kind === 'mage-immunity')).toBe(false);
+  it('Beach Towel is blocked (not wasted) without 2 Mana', () => {
+    const s = errands2P((st) => setMana(addVault(st, 'p1', 'summerbreak.vault.beach-towel'), 'p1', 1));
+    expect(() => playVault(s, 'summerbreak.vault.beach-towel')).toThrow(
+      /would have no effect/,
+    );
+    // Treasure stays readied (not exhausted) — nothing was spent.
     expect(s.players[0]!.vaultCards).toEqual([
-      { cardId: 'summerbreak.vault.beach-towel', exhausted: true },
+      { cardId: 'summerbreak.vault.beach-towel', exhausted: false },
     ]);
   });
 });

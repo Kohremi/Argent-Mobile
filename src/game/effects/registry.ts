@@ -3,6 +3,8 @@ import type {
   EffectContext,
   EffectId,
   EffectResult,
+  GameState,
+  PlayerId,
   Room,
 } from '../types';
 
@@ -51,7 +53,40 @@ export function listEffectIds(): EffectId[] {
   return Array.from(registry.keys());
 }
 
+/**
+ * A playability check for a hand-played card (supporter / vault card). Returns
+ * `null` when the card can do something useful right now, or a short
+ * player-facing reason (e.g. "Requires 1 Intelligence") when playing it would
+ * fizzle. Consulted by PLAY_SUPPORTER / PLAY_VAULT_CARD before the card is
+ * consumed, so the engine can reject a wasted play and the UI (which dry-runs
+ * the engine) greys the card and can surface the reason.
+ */
+export type PlayabilityCheck = (
+  state: GameState,
+  playerId: PlayerId,
+) => string | null;
+
+const playabilityChecks = new Map<EffectId, PlayabilityCheck>();
+
+export function registerPlayability(id: EffectId, fn: PlayabilityCheck): void {
+  if (playabilityChecks.has(id)) {
+    throw new Error(`Playability check "${id}" is already registered`);
+  }
+  playabilityChecks.set(id, fn);
+}
+
+/** The block reason for `effectId` right now, or null if it's playable. */
+export function playabilityReason(
+  effectId: EffectId,
+  state: GameState,
+  playerId: PlayerId,
+): string | null {
+  const fn = playabilityChecks.get(effectId);
+  return fn ? fn(state, playerId) : null;
+}
+
 /** Test-only helper to clear the registry between tests. */
 export function _resetEffectRegistry(): void {
   registry.clear();
+  playabilityChecks.clear();
 }

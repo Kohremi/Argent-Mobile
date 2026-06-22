@@ -101,15 +101,30 @@ export function PlayerDock() {
   const regularActions = errands
     ? (errands.actionUsed ? 0 : 1) + (errands.extraActions ?? 0)
     : 0;
+  // The scenario rule for the round in play (Dimensional Rift round twists).
+  const scenarioRule =
+    errands && state.scenarioId
+      ? getScenario(state.scenarioId)?.rounds.find((r) => r.round === errands.round)
+      : undefined;
+  // Fast Actions left this turn: the per-turn limit (raised to 2 by Time Stands
+  // Still) minus those already taken. Fast Actions are only usable before the
+  // Regular Action.
+  const fastActionLimit = scenarioRule?.maxFastActionsPerTurn ?? 1;
   const fastActions =
-    errands && !errands.actionUsed && !errands.fastActionUsed ? 1 : 0;
+    errands && !errands.actionUsed
+      ? Math.max(0, fastActionLimit - (errands.fastActionsUsed ?? 0))
+      : 0;
   // Dimensional Rift R5 (Time Flux): the round runs on voluntary passes — the
   // turn control becomes "Pass for this round" instead of "End turn".
-  const voluntaryPass = !!(
+  const voluntaryPass = !!(errands && scenarioRule?.voluntaryPassRound);
+  // When a Fast Action costs extra Mana this round, offer a way to skip it so a
+  // forced-Fast placement (e.g. a Planar mage) is taken as the Regular Action.
+  const fastSurcharge = scenarioRule?.fastActionManaSurcharge ?? 0;
+  const canSkipFast = !!(
     errands &&
-    state.scenarioId &&
-    getScenario(state.scenarioId)?.rounds.find((r) => r.round === errands.round)
-      ?.voluntaryPassRound
+    !errands.actionUsed &&
+    fastActions > 0 &&
+    fastSurcharge > 0
   );
   // Wounded mages aren't shown here — they rest in the Infirmary ward on the
   // board (RoomScene bed grid), which renders + targets them and owns their
@@ -225,6 +240,19 @@ export function PlayerDock() {
       {/* turn controls */}
       <div className="flex items-center gap-2">
         {errands && <ActionBudget fast={fastActions} regular={regularActions} />}
+        {canSkipFast && (
+          <button
+            type="button"
+            disabled={pendings > 0}
+            onClick={() =>
+              tryDispatch({ type: 'SKIP_FAST_ACTION', playerId: player.id })
+            }
+            title={`Forfeit your Fast Action so your next placement counts as your Regular Action — avoids the +${fastSurcharge} Mana Fast Action cost this round.`}
+            className="rounded-full bg-night-700 px-4 py-1.5 font-display text-sm font-bold text-white/80 ring-1 ring-white/15 shadow-card transition hover:-translate-y-0.5 hover:text-white active:translate-y-0 disabled:opacity-40 disabled:hover:translate-y-0"
+          >
+            Skip fast action
+          </button>
+        )}
         {voluntaryPass ? (
           <button
             type="button"

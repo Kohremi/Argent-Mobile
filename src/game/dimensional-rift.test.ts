@@ -240,6 +240,47 @@ describe('Dimensional Rift R3 — two Fast Actions', () => {
 });
 
 // ----------------------------------------------------------------------------
+// Skip Fast Action — decline a forced Fast Action to dodge the surcharge
+// ----------------------------------------------------------------------------
+
+describe('Dimensional Rift — skip fast action', () => {
+  it('exhausts the Fast Action budget without ending the turn', () => {
+    let s = forceErrandsRound(startRiftErrands(['Alice', 'Bob']), 2);
+    s = applyAction(s, { type: 'SKIP_FAST_ACTION', playerId: 'p1' });
+    if (s.phase.kind !== 'errands') throw new Error('expected errands');
+    expect(s.phase.activePlayerIndex).toBe(0); // still p1's turn
+    expect(s.phase.actionUsed).toBe(false); // Regular Action still owed
+    expect(s.phase.fastActionUsed).toBe(true); // fast budget forfeited
+    expect(s.phase.fastActionsUsed).toBe(1);
+  });
+
+  it('blocks a Fast Action once it has been skipped (no surcharge taken)', () => {
+    let s = forceErrandsRound(startRiftErrands(['Alice', 'Bob']), 2);
+    s = setMana(s, 'p1', 5);
+    s = addSupporter(s, 'p1', 'base.supporter.allys-mehrmus');
+    s = applyAction(s, { type: 'SKIP_FAST_ACTION', playerId: 'p1' });
+    expect(() =>
+      applyAction(s, {
+        type: 'PLAY_SUPPORTER',
+        playerId: 'p1',
+        supporterCardId: 'base.supporter.allys-mehrmus',
+      }),
+    ).toThrow(/already used your Fast Action/);
+    // Mana untouched — no surcharge was ever paid.
+    expect(s.players.find((p) => p.id === 'p1')!.resources.mana).toBe(5);
+  });
+
+  it('rejects skipping after the Regular Action is spent', () => {
+    let s = forceErrandsRound(startRiftErrands(['Alice', 'Bob']), 2);
+    if (s.phase.kind !== 'errands') throw new Error('expected errands');
+    s = { ...s, phase: { ...s.phase, actionUsed: true } };
+    expect(() =>
+      applyAction(s, { type: 'SKIP_FAST_ACTION', playerId: 'p1' }),
+    ).toThrow(/Regular Action is already spent/);
+  });
+});
+
+// ----------------------------------------------------------------------------
 // R4 Reality Inversion — shadow mages resolve before base mages
 // ----------------------------------------------------------------------------
 

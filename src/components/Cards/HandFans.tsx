@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import clsx from 'clsx';
 import type { GameState, Player, SpellLevel } from '../../game/types';
 import {
@@ -9,9 +10,9 @@ import { useUiStore } from '../../store/uiStore';
 import {
   castableSpellLevels,
   DEPT_HUE,
-  playableSupporters,
-  playableVaultCards,
   spellLevelManaDisplay,
+  supporterPlayability,
+  vaultCardPlayability,
 } from '../../utils/uiSelectors';
 
 /**
@@ -272,6 +273,7 @@ function HandCard({
   description,
   hue,
   playable,
+  blockReason,
   exhausted,
   onPlay,
   fanIndex,
@@ -283,27 +285,46 @@ function HandCard({
   description?: string | undefined;
   hue: string;
   playable: boolean;
+  /** Why the card can't be played right now (shown as a fading flash on click). */
+  blockReason?: string | undefined;
   exhausted?: boolean;
   onPlay: () => void;
   fanIndex: number;
   fanCount: number;
 }) {
+  // Transient "why not?" flash. `key` restarts the fade animation on re-click.
+  const [flash, setFlash] = useState<{ key: number; text: string } | null>(null);
+  // Clickable when it does something OR has a reason to explain; truly inert
+  // (e.g. an exhausted treasure) stays disabled.
+  const clickable = playable || !!blockReason;
   return (
     <div
       className="relative transition-transform duration-150 hover:z-40"
       style={fanStyle(fanIndex, fanCount, false)}
     >
+      {flash && (
+        <span
+          key={flash.key}
+          className="pointer-events-none absolute -top-5 left-1/2 z-50 animate-flash-fade whitespace-nowrap rounded-full bg-night-900/90 px-2 py-0.5 text-[10px] font-bold text-starlight ring-1 ring-starlight/40"
+          onAnimationEnd={() => setFlash(null)}
+        >
+          {flash.text}
+        </span>
+      )}
       <button
         type="button"
-        disabled={!playable}
-        onClick={onPlay}
-        title={description}
+        disabled={!clickable}
+        onClick={() => {
+          if (playable) onPlay();
+          else if (blockReason) setFlash({ key: Date.now(), text: blockReason });
+        }}
+        title={blockReason ? `${name} — ${blockReason}` : description}
         className={clsx(
           'flex h-[140px] w-[124px] flex-col rounded-xl border-l-4 bg-parchment-50 px-2 py-1.5 text-left shadow-card transition hover:-translate-y-5',
           exhausted && 'opacity-60 saturate-50',
           playable
             ? 'ring-1 ring-leyline/50 hover:scale-105 hover:shadow-card-lift'
-            : 'ring-1 ring-black/10',
+            : 'opacity-70 ring-1 ring-black/10',
         )}
         style={{ borderLeftColor: hue }}
       >
@@ -341,8 +362,8 @@ function FanGroup({ label, children }: { label: string; children: React.ReactNod
 export function HandFans({ state, player }: { state: GameState; player: Player }) {
   const tryDispatch = useUiStore((s) => s.tryDispatch);
   const castable = castableSpellLevels(state, player.id);
-  const vaultOk = playableVaultCards(state, player.id);
-  const suppOk = playableSupporters(state, player.id);
+  const vaultInfo = vaultCardPlayability(state, player.id);
+  const suppInfo = supporterPlayability(state, player.id);
 
   return (
     <div className="flex h-[96px] items-end gap-6 px-2">
@@ -365,6 +386,8 @@ export function HandFans({ state, player }: { state: GameState; player: Player }
         <FanGroup label="vault">
           {player.vaultCards.map((v, i) => {
             const def = lookupVaultCardDef(state, v.cardId);
+            const reason = vaultInfo.get(v.cardId);
+            const playable = reason === null && !v.exhausted;
             return (
               <HandCard
                 key={`${v.cardId}-${i}`}
@@ -373,7 +396,8 @@ export function HandFans({ state, player }: { state: GameState; player: Player }
                 timing={def?.timing}
                 description={def?.description}
                 hue="#ff9f43"
-                playable={vaultOk.has(v.cardId) && !v.exhausted}
+                playable={playable}
+                blockReason={v.exhausted ? undefined : (reason ?? undefined)}
                 exhausted={v.exhausted}
                 fanIndex={i}
                 fanCount={player.vaultCards.length}
@@ -390,6 +414,7 @@ export function HandFans({ state, player }: { state: GameState; player: Player }
           {player.supporters.map((cardId, i) => {
             const def = lookupSupporterCardDef(state, cardId);
             const hue = DEPT_HUE[def?.department ?? 'students'] ?? '#e8e4da';
+            const reason = suppInfo.get(cardId);
             return (
               <HandCard
                 key={`${cardId}-${i}`}
@@ -398,7 +423,8 @@ export function HandFans({ state, player }: { state: GameState; player: Player }
                 timing={def?.timing}
                 description={def?.description}
                 hue={hue}
-                playable={suppOk.has(cardId)}
+                playable={reason === null}
+                blockReason={reason ?? undefined}
                 fanIndex={i}
                 fanCount={player.supporters.length}
                 onPlay={() =>

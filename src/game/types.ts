@@ -1832,6 +1832,18 @@ export interface DiscardBonusActionsAction {
   playerId: PlayerId;
 }
 
+/**
+ * SKIP_FAST_ACTION: forfeits the player's remaining Fast Action(s) for the turn
+ * without taking one. Lets a player decline a forced Fast Action (e.g. a Planar
+ * mage placement, which is otherwise charged as a Fast Action) so their next
+ * placement is charged as the Regular Action instead — useful in rounds where a
+ * Fast Action costs extra Mana (Dimensional Rift R2). Does not end the turn.
+ */
+export interface SkipFastActionAction {
+  type: 'SKIP_FAST_ACTION';
+  playerId: PlayerId;
+}
+
 export interface UseAbilityAction {
   type: 'USE_ABILITY';
   playerId: PlayerId;
@@ -1894,6 +1906,7 @@ export type GameAction =
   | PassTurnAction
   | PassForRoundAction
   | DiscardBonusActionsAction
+  | SkipFastActionAction
   | UseAbilityAction
   | ResolvePendingAction
   | ChooseCandidateAction
