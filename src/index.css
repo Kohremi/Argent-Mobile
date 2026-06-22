@@ -12,6 +12,31 @@ body {
   font-family: 'Nunito Sans', system-ui, sans-serif;
 }
 
+/* Transient "why can't I play this?" flash over a greyed hand card: rises and
+   fades out over ~1.5s. Defined here (not via Tailwind's animation config) so
+   the keyframes are always in the bundle. */
+@keyframes cardFlashFade {
+  0% {
+    opacity: 0;
+    transform: translate(-50%, 4px);
+  }
+  15% {
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
+  70% {
+    opacity: 1;
+    transform: translate(-50%, 0);
+  }
+  100% {
+    opacity: 0;
+    transform: translate(-50%, -12px);
+  }
+}
+.card-flash-fade {
+  animation: cardFlashFade 1.5s ease-out forwards;
+}
+
 /* Thin, unobtrusive scrollbars for board panning / drawers. */
 *::-webkit-scrollbar {
   width: 8px;

@@ -305,7 +305,7 @@ function HandCard({
       {flash && (
         <span
           key={flash.key}
-          className="pointer-events-none absolute -top-5 left-1/2 z-50 animate-flash-fade whitespace-nowrap rounded-full bg-night-900/90 px-2 py-0.5 text-[10px] font-bold text-starlight ring-1 ring-starlight/40"
+          className="card-flash-fade pointer-events-none absolute -top-5 left-1/2 z-50 whitespace-nowrap rounded-full bg-night-900/90 px-2 py-0.5 text-[10px] font-bold text-starlight ring-1 ring-starlight/40"
           onAnimationEnd={() => setFlash(null)}
         >
           {flash.text}
