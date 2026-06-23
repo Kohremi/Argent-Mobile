@@ -7350,6 +7350,30 @@ registerEffect('base.supporter.tanis-trilives', (ctx): EffectResult =>
   }),
 );
 
+// Gold-trade supporters fizzle if the player can't even afford one swap. The
+// generic no-op net misses the multi-tap loops (they bail with an unchanged-but
+// -non-empty `players` patch), so gate them explicitly: require enough Gold for
+// at least one use, or the play is blocked with a clear reason.
+function requireGold(min: number) {
+  return (state: GameState, playerId: PlayerId): string | null => {
+    const p = state.players.find((pl) => pl.id === playerId);
+    return p && p.resources.gold >= min ? null : `Requires ${min} Gold`;
+  };
+}
+
+// Multi-tap "Swap N Gold for …" loops.
+registerPlayability('base.supporter.hai-of-noirwood', requireGold(2));
+registerPlayability('base.supporter.lynssara-yuuno', requireGold(2));
+registerPlayability('base.supporter.raffique-van-anzel', requireGold(2));
+registerPlayability('base.supporter.tanis-trilives', requireGold(1));
+// One-shot "Swap 3 Gold for a Mage" supporters (also need supply; the no-op net
+// still covers the rarer empty-supply case).
+registerPlayability('base.supporter.arec-russel-zane', requireGold(3));
+registerPlayability('base.supporter.kavri-shi-shorec', requireGold(3));
+registerPlayability('base.supporter.lesandra-machan', requireGold(3));
+registerPlayability('base.supporter.pendros-schalla', requireGold(3));
+registerPlayability('base.supporter.wilhelm-barts', requireGold(3));
+
 /**
  * Luras Wythe-Cariolis — Choose a Voter. Each player may place a Mark on
  * that Voter if they have not already done so. Per user guidance: assume

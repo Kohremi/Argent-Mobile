@@ -6878,6 +6878,44 @@ describe('PLAY_SUPPORTER', () => {
     return s;
   }
 
+  it('blocks a gold-trade supporter when no swap is affordable (stays in hand)', () => {
+    const s = setupSupporterTest('base.supporter.tanis-trilives'); // 0 gold
+    expect(() =>
+      applyAction(s, {
+        type: 'PLAY_SUPPORTER',
+        playerId: 'p1',
+        supporterCardId: 'base.supporter.tanis-trilives',
+      }),
+    ).toThrow(/Requires 1 Gold/);
+    expect(s.players.find((p) => p.id === 'p1')!.supporters).toContain(
+      'base.supporter.tanis-trilives',
+    );
+  });
+
+  it('allows a gold-trade supporter once one swap is affordable', () => {
+    let s = setupSupporterTest('base.supporter.tanis-trilives');
+    s = setGold(s, 'p1', 1);
+    s = applyAction(s, {
+      type: 'PLAY_SUPPORTER',
+      playerId: 'p1',
+      supporterCardId: 'base.supporter.tanis-trilives',
+    });
+    // Opens the Swap/Stop loop instead of fizzling.
+    expect(topPending(s).prompt.kind).toBe('choose-from-options');
+  });
+
+  it('blocks a higher-cost gold-trade supporter below its swap cost', () => {
+    let s = setupSupporterTest('base.supporter.lynssara-yuuno');
+    s = setGold(s, 'p1', 1); // needs 2
+    expect(() =>
+      applyAction(s, {
+        type: 'PLAY_SUPPORTER',
+        playerId: 'p1',
+        supporterCardId: 'base.supporter.lynssara-yuuno',
+      }),
+    ).toThrow(/Requires 2 Gold/);
+  });
+
   it('plays a fast-action supporter, consumes the Fast budget, moves card to discard', () => {
     let s = setupSupporterTest('base.supporter.kallistar-flarechild');
     s = applyAction(s, {
