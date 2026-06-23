@@ -829,6 +829,7 @@ function ResearchMoveSheet({
     ? 'Click an empty slot on another spell to drop the WIS token'
     : 'Click a WIS token to pick it up';
 
+  type GemTone = 'int' | 'have' | 'empty' | 'source' | 'leaving' | 'target';
   const Gem = ({
     lvl,
     tone,
@@ -836,31 +837,31 @@ function ResearchMoveSheet({
     onClick,
   }: {
     lvl: number;
-    tone: 'int' | 'have' | 'empty' | 'source' | 'leaving' | 'target';
+    tone: GemTone;
     hue: string;
     onClick?: (() => void) | undefined;
   }) => {
-    const base =
-      'flex h-6 w-6 shrink-0 items-center justify-center rounded-full font-arcane text-[10px] font-bold transition';
+    const interactive = tone === 'source' || tone === 'target';
     const filled = tone === 'int' || tone === 'have' || tone === 'source' || tone === 'leaving';
     const content = (
       <span
         className={clsx(
-          base,
+          'flex shrink-0 items-center justify-center rounded-full font-arcane font-bold transition',
+          interactive ? 'gem-pulse h-7 w-7 text-[11px]' : 'h-6 w-6 text-[10px]',
           tone === 'empty' && 'bg-black/15 text-black/35',
-          tone === 'target' &&
-            'animate-breathe cursor-pointer text-ink-900 ring-2 ring-leyline hover:scale-110',
-          tone === 'source' &&
-            'animate-breathe cursor-pointer text-ink-900 shadow-glow-sm ring-2 ring-white hover:scale-110',
-          tone === 'leaving' && 'text-ink-900 opacity-50 ring-2 ring-rose-400/80',
+          tone === 'target' && 'cursor-pointer text-ink-900 ring-[3px] ring-leyline hover:scale-110',
+          tone === 'source' && 'cursor-pointer text-ink-900 ring-[3px] ring-white hover:scale-110',
+          tone === 'leaving' && 'text-ink-900 opacity-45 ring-2 ring-rose-400',
           (tone === 'int' || tone === 'have') && 'text-ink-900',
         )}
         style={
           tone === 'target'
-            ? ({ background: `${hue}55`, '--glow': `${hue}aa` } as React.CSSProperties)
-            : filled
-              ? ({ background: hue, '--glow': `${hue}aa` } as React.CSSProperties)
-              : undefined
+            ? ({ background: `${hue}66`, '--pulse': '#7ee8facc' } as React.CSSProperties)
+            : tone === 'source'
+              ? ({ background: hue, '--pulse': '#ffffffcc' } as React.CSSProperties)
+              : filled
+                ? ({ background: hue } as React.CSSProperties)
+                : undefined
         }
       >
         {lvl}
@@ -878,7 +879,7 @@ function ResearchMoveSheet({
 
   return (
     <div className="absolute inset-0 z-40 flex items-center justify-center bg-night-900/70 px-4 backdrop-blur-sm">
-      <div className="pointer-events-auto max-h-[88vh] w-full max-w-3xl animate-pop overflow-y-auto rounded-card bg-night-700/95 p-4 ring-1 ring-white/15 shadow-card-lift">
+      <div className="pointer-events-auto max-h-[88vh] w-full max-w-5xl animate-pop overflow-y-auto rounded-card bg-night-700/95 p-4 ring-1 ring-white/15 shadow-card-lift">
         <div className="mb-3 flex items-center justify-between gap-2">
           <p className="font-display text-base font-bold text-starlight">
             🔬 Move Research <span className="text-white/50">▸</span>{' '}
@@ -904,12 +905,29 @@ function ResearchMoveSheet({
             const relevant = atDestPick
               ? isSource || selectableDest
               : selectableSource;
+            // The gem role for a given level row (interactive or static).
+            const roleFor = (lvl: number): GemTone => {
+              if (!atDestPick && lvl !== 1 && selectableSource && lvl === sourceLoseLevel(s)) {
+                return 'source';
+              }
+              if (atDestPick && isSource && lvl !== 1 && lvl === sourceLoseLevel(s)) {
+                return 'leaving';
+              }
+              if (atDestPick && selectableDest && lvl !== 1 && lvl === destGainLevel(s)) {
+                return 'target';
+              }
+              const filled =
+                lvl === 1 ? s.intPlaced : lvl === 2 ? s.wisPlacedLevel2 : s.wisPlacedLevel3;
+              return filled ? (lvl === 1 ? 'int' : 'have') : 'empty';
+            };
             return (
               <div
                 key={s.cardId}
                 className={clsx(
-                  'flex w-[160px] shrink-0 flex-col rounded-xl border-l-4 bg-parchment-50 px-2 py-1.5 shadow-card transition',
-                  relevant ? 'ring-1 ring-leyline/50' : 'opacity-50 ring-1 ring-black/10',
+                  'flex w-[210px] shrink-0 flex-col self-start rounded-xl border-l-4 bg-parchment-50 px-2 py-1.5 shadow-card transition',
+                  relevant
+                    ? 'ring-1 ring-leyline/50'
+                    : 'opacity-45 ring-1 ring-black/10',
                 )}
                 style={{ borderLeftColor: hue }}
               >
@@ -919,60 +937,70 @@ function ResearchMoveSheet({
                 <span className="mt-0.5 text-[8px] font-bold uppercase tracking-wide text-black/45">
                   {def.department}
                 </span>
-                <span className="mt-2 flex items-center gap-1.5">
+                <span className="mt-1 flex flex-col gap-1">
                   {def.levels.map((lv) => {
                     const lvl = lv.level;
-                    const filled =
-                      lvl === 1
-                        ? s.intPlaced
-                        : lvl === 2
-                          ? s.wisPlacedLevel2
-                          : s.wisPlacedLevel3;
-                    // Source stage: the highest WIS on a selectable source lifts.
-                    if (
-                      !atDestPick &&
-                      lvl !== 1 &&
-                      selectableSource &&
-                      lvl === sourceLoseLevel(s)
-                    ) {
-                      return (
-                        <Gem
-                          key={lvl}
-                          lvl={lvl}
-                          tone="source"
-                          hue={hue}
-                          onClick={() => pickSource(s.cardId)}
-                        />
-                      );
-                    }
-                    // Dest stage: the source's token shown leaving.
-                    if (atDestPick && isSource && lvl !== 1 && lvl === sourceLoseLevel(s)) {
-                      return <Gem key={lvl} lvl={lvl} tone="leaving" hue={hue} />;
-                    }
-                    // Dest stage: the next empty slot on an eligible target.
-                    if (
-                      atDestPick &&
-                      selectableDest &&
-                      lvl !== 1 &&
-                      lvl === destGainLevel(s)
-                    ) {
-                      return (
-                        <Gem
-                          key={lvl}
-                          lvl={lvl}
-                          tone="target"
-                          hue={hue}
-                          onClick={() => pickDest(s.cardId)}
-                        />
-                      );
-                    }
+                    const tone = roleFor(lvl);
+                    const onClick =
+                      tone === 'source'
+                        ? () => pickSource(s.cardId)
+                        : tone === 'target'
+                          ? () => pickDest(s.cardId)
+                          : undefined;
+                    const hint =
+                      tone === 'source'
+                        ? 'lift ↑'
+                        : tone === 'target'
+                          ? 'drop here'
+                          : tone === 'leaving'
+                            ? 'moving'
+                            : undefined;
                     return (
-                      <Gem
+                      <span
                         key={lvl}
-                        lvl={lvl}
-                        tone={filled ? (lvl === 1 ? 'int' : 'have') : 'empty'}
-                        hue={hue}
-                      />
+                        className={clsx(
+                          'rounded-md px-1 py-0.5',
+                          tone === 'source' || tone === 'target'
+                            ? 'bg-leyline/15 ring-1 ring-leyline/40'
+                            : tone === 'leaving'
+                              ? 'bg-rose-400/10'
+                              : tone === 'have' || tone === 'int'
+                                ? 'bg-black/[0.04]'
+                                : 'opacity-80',
+                        )}
+                      >
+                        <span className="flex items-center gap-1">
+                          <Gem lvl={lvl} tone={tone} hue={hue} onClick={onClick} />
+                          <span className="truncate text-[9px] font-bold text-ink-900">
+                            {lv.title ?? `Level ${lvl}`}
+                          </span>
+                          {hint && (
+                            <span
+                              className={clsx(
+                                'ml-auto shrink-0 text-[8px] font-extrabold uppercase tracking-wide',
+                                tone === 'leaving' ? 'text-rose-500' : 'text-sky-700',
+                              )}
+                            >
+                              {hint}
+                            </span>
+                          )}
+                          {!hint && (
+                            <span className="ml-auto shrink-0 text-[8px] font-bold text-black/55">
+                              {lv.manaCost > 0 ? `${lv.manaCost}✦` : 'free'}
+                            </span>
+                          )}
+                        </span>
+                        <span className="block text-[8.5px] leading-snug text-black/70">
+                          <span
+                            className="mr-1 font-bold uppercase tracking-wide"
+                            style={{ color: TIMING_HUE[lv.timing] }}
+                          >
+                            {TIMING_LABEL[lv.timing]}
+                            {lv.description ? ' ·' : ''}
+                          </span>
+                          {lv.description}
+                        </span>
+                      </span>
                     );
                   })}
                 </span>

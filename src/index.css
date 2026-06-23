@@ -37,6 +37,23 @@ body {
   animation: cardFlashFade 1.5s ease-out forwards;
 }
 
+/* Attention pulse for an interactive research token (pick-up / drop target).
+   A scale+glow throb reads far more clearly than a faint opacity fade. */
+@keyframes gemPulse {
+  0%,
+  100% {
+    transform: scale(1);
+    box-shadow: 0 0 0 0 var(--pulse, #7ee8fa00);
+  }
+  50% {
+    transform: scale(1.14);
+    box-shadow: 0 0 10px 3px var(--pulse, #7ee8faaa);
+  }
+}
+.gem-pulse {
+  animation: gemPulse 1.1s ease-in-out infinite;
+}
+
 /* Thin, unobtrusive scrollbars for board panning / drawers. */
 *::-webkit-scrollbar {
   width: 8px;
