@@ -31,6 +31,7 @@ import { describeTrigger, playerName, promptDraftsFromShelf, topPending } from '
 const RESEARCH_MENU = 'base.system.spend-research';
 const RESEARCH_DRAFT = 'base.system.research-draft';
 const RESEARCH_ADD_WIS = 'base.system.research-add-wis';
+const RESEARCH_MOVE_WIS = 'base.system.research-move-wis';
 /** Adventuring Side B's revealed-pool draft (composite `kind::cardId` options). */
 const ADVENTURING_B_DRAFT = 'base.room.adventuring-b.draft';
 
@@ -748,6 +749,257 @@ function ResearchSheet({
   );
 }
 
+/**
+ * Visual "move Research" sheet (Research Archive). The textual chain — "Move a
+ * WIS token" → "Take WIS from X" → "Place WIS on Y" — is replaced by two
+ * clicks on the spellbook itself: click a lit WIS token to lift it, then click
+ * an empty slot on another spell to drop it. Unlimited moves (the merit slot)
+ * just loop the sheet until the player clicks Done.
+ */
+function ResearchMoveSheet({
+  state,
+  pending,
+}: {
+  state: GameState;
+  pending: PendingResolution;
+}) {
+  const tryDispatch = useUiStore((s) => s.tryDispatch);
+  if (pending.prompt.kind !== 'choose-from-options') return null;
+  const prompt = pending.prompt;
+  const player = state.players.find((p) => p.id === pending.responderId);
+  if (!player) return null;
+
+  const rctx = pending.resume.context ?? {};
+  const eid = pending.resume.effectId;
+  const step = rctx['step'];
+  const atMoveMenu = eid === RESEARCH_MENU && rctx['moveOnly'] === true;
+  const atDestPick = eid === RESEARCH_MOVE_WIS && step === 'apply';
+  const sourceCardId =
+    atDestPick && typeof rctx['sourceCardId'] === 'string'
+      ? rctx['sourceCardId']
+      : undefined;
+
+  const budgetRaw = Number(rctx['moveBudget'] ?? 0);
+  const budgetLabel = budgetRaw >= 99 ? 'freely' : `up to ${budgetRaw} more`;
+
+  const learned = player.ownedSpells.filter((s) => s.intPlaced);
+  const sourceLoseLevel = (s: OwnedSpell): 2 | 3 | null =>
+    s.wisPlacedLevel3 ? 3 : s.wisPlacedLevel2 ? 2 : null;
+  const destGainLevel = (s: OwnedSpell): 2 | 3 | null =>
+    !s.wisPlacedLevel2 ? 2 : !s.wisPlacedLevel3 ? 3 : null;
+  const hasLevel = (cardId: string, lvl: number) =>
+    !!lookupSpellCardDef(state, cardId)?.levels.some((l) => l.level === lvl);
+  const canReceive = (s: OwnedSpell) =>
+    s.intPlaced &&
+    destGainLevel(s) !== null &&
+    hasLevel(s.cardId, destGainLevel(s)!);
+  const legalDestExists = (srcId: string) =>
+    learned.some((d) => d.cardId !== srcId && canReceive(d));
+
+  const dispatchOption = (resolutionId: string, optionId: string) =>
+    tryDispatch({
+      type: 'RESOLVE_PENDING',
+      resolutionId,
+      answer: { kind: 'option-chosen', optionId, payload: {} },
+    });
+
+  // Picking a source forwards through the chain to the destination step, so the
+  // player only ever clicks token → empty slot. (Dispatches are synchronous, so
+  // the next prompt is already on top when we read it back.)
+  const pickSource = (cardId: string) => {
+    if (atMoveMenu) {
+      if (!dispatchOption(pending.id, 'move-wis')) return;
+      const p2 = topPending(useGameStore.getState().state!);
+      if (
+        p2 &&
+        p2.resume.effectId === RESEARCH_MOVE_WIS &&
+        p2.prompt.kind === 'choose-from-options' &&
+        p2.prompt.options.some((o) => o.id === cardId)
+      ) {
+        dispatchOption(p2.id, cardId);
+      }
+      return;
+    }
+    // Source-pick step (research-move-wis, step 'pick-dest').
+    dispatchOption(pending.id, cardId);
+  };
+  const pickDest = (cardId: string) => dispatchOption(pending.id, cardId);
+
+  const stageText = atDestPick
+    ? 'Click an empty slot on another spell to drop the WIS token'
+    : 'Click a WIS token to pick it up';
+
+  const Gem = ({
+    lvl,
+    tone,
+    hue,
+    onClick,
+  }: {
+    lvl: number;
+    tone: 'int' | 'have' | 'empty' | 'source' | 'leaving' | 'target';
+    hue: string;
+    onClick?: (() => void) | undefined;
+  }) => {
+    const base =
+      'flex h-6 w-6 shrink-0 items-center justify-center rounded-full font-arcane text-[10px] font-bold transition';
+    const filled = tone === 'int' || tone === 'have' || tone === 'source' || tone === 'leaving';
+    const content = (
+      <span
+        className={clsx(
+          base,
+          tone === 'empty' && 'bg-black/15 text-black/35',
+          tone === 'target' &&
+            'animate-breathe cursor-pointer text-ink-900 ring-2 ring-leyline hover:scale-110',
+          tone === 'source' &&
+            'animate-breathe cursor-pointer text-ink-900 shadow-glow-sm ring-2 ring-white hover:scale-110',
+          tone === 'leaving' && 'text-ink-900 opacity-50 ring-2 ring-rose-400/80',
+          (tone === 'int' || tone === 'have') && 'text-ink-900',
+        )}
+        style={
+          tone === 'target'
+            ? ({ background: `${hue}55`, '--glow': `${hue}aa` } as React.CSSProperties)
+            : filled
+              ? ({ background: hue, '--glow': `${hue}aa` } as React.CSSProperties)
+              : undefined
+        }
+      >
+        {lvl}
+      </span>
+    );
+    if (onClick) {
+      return (
+        <button type="button" onClick={onClick} className="leading-none">
+          {content}
+        </button>
+      );
+    }
+    return content;
+  };
+
+  return (
+    <div className="absolute inset-0 z-40 flex items-center justify-center bg-night-900/70 px-4 backdrop-blur-sm">
+      <div className="pointer-events-auto max-h-[88vh] w-full max-w-3xl animate-pop overflow-y-auto rounded-card bg-night-700/95 p-4 ring-1 ring-white/15 shadow-card-lift">
+        <div className="mb-3 flex items-center justify-between gap-2">
+          <p className="font-display text-base font-bold text-starlight">
+            🔬 Move Research <span className="text-white/50">▸</span>{' '}
+            <span className="text-white/90">{stageText}</span>
+            <span className="ml-2 text-[11px] font-normal text-white/45">
+              (move {budgetLabel})
+            </span>
+          </p>
+          <ResponderChip state={state} pending={pending} />
+        </div>
+
+        <div className="flex flex-wrap gap-2">
+          {learned.map((s) => {
+            const def = lookupSpellCardDef(state, s.cardId);
+            if (!def) return null;
+            const hue = DEPT_HUE[def.department] ?? '#ffe9a8';
+            const isSource = s.cardId === sourceCardId;
+            const selectableSource =
+              !atDestPick &&
+              sourceLoseLevel(s) !== null &&
+              legalDestExists(s.cardId);
+            const selectableDest = atDestPick && !isSource && canReceive(s);
+            const relevant = atDestPick
+              ? isSource || selectableDest
+              : selectableSource;
+            return (
+              <div
+                key={s.cardId}
+                className={clsx(
+                  'flex w-[160px] shrink-0 flex-col rounded-xl border-l-4 bg-parchment-50 px-2 py-1.5 shadow-card transition',
+                  relevant ? 'ring-1 ring-leyline/50' : 'opacity-50 ring-1 ring-black/10',
+                )}
+                style={{ borderLeftColor: hue }}
+              >
+                <span className="text-[12px] font-bold leading-tight text-ink-900">
+                  {def.name}
+                </span>
+                <span className="mt-0.5 text-[8px] font-bold uppercase tracking-wide text-black/45">
+                  {def.department}
+                </span>
+                <span className="mt-2 flex items-center gap-1.5">
+                  {def.levels.map((lv) => {
+                    const lvl = lv.level;
+                    const filled =
+                      lvl === 1
+                        ? s.intPlaced
+                        : lvl === 2
+                          ? s.wisPlacedLevel2
+                          : s.wisPlacedLevel3;
+                    // Source stage: the highest WIS on a selectable source lifts.
+                    if (
+                      !atDestPick &&
+                      lvl !== 1 &&
+                      selectableSource &&
+                      lvl === sourceLoseLevel(s)
+                    ) {
+                      return (
+                        <Gem
+                          key={lvl}
+                          lvl={lvl}
+                          tone="source"
+                          hue={hue}
+                          onClick={() => pickSource(s.cardId)}
+                        />
+                      );
+                    }
+                    // Dest stage: the source's token shown leaving.
+                    if (atDestPick && isSource && lvl !== 1 && lvl === sourceLoseLevel(s)) {
+                      return <Gem key={lvl} lvl={lvl} tone="leaving" hue={hue} />;
+                    }
+                    // Dest stage: the next empty slot on an eligible target.
+                    if (
+                      atDestPick &&
+                      selectableDest &&
+                      lvl !== 1 &&
+                      lvl === destGainLevel(s)
+                    ) {
+                      return (
+                        <Gem
+                          key={lvl}
+                          lvl={lvl}
+                          tone="target"
+                          hue={hue}
+                          onClick={() => pickDest(s.cardId)}
+                        />
+                      );
+                    }
+                    return (
+                      <Gem
+                        key={lvl}
+                        lvl={lvl}
+                        tone={filled ? (lvl === 1 ? 'int' : 'have') : 'empty'}
+                        hue={hue}
+                      />
+                    );
+                  })}
+                </span>
+              </div>
+            );
+          })}
+          {learned.length === 0 && (
+            <p className="text-[11px] italic text-white/35">No learned spells.</p>
+          )}
+        </div>
+
+        {atMoveMenu && prompt.options.some((o) => o.id === 'discard') && (
+          <div className="mt-3 flex justify-end">
+            <button
+              type="button"
+              onClick={() => dispatchOption(pending.id, 'discard')}
+              className="rounded-full bg-night-800 px-4 py-1.5 text-xs font-bold text-white/70 ring-1 ring-white/15 transition hover:text-white"
+            >
+              Done moving
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 export function PromptDirector() {
   const state = useGameStore((s) => s.state);
   const tryDispatch = useUiStore((s) => s.tryDispatch);
@@ -775,6 +1027,16 @@ export function PromptDirector() {
       // effect but offer different actions — those fall through to the
       // generic option buttons.
       const eid = pending.resume.effectId;
+      // Research Archive "move a WIS token" flow → visual gem-move sheet. This
+      // covers the move-only menu (resume spend-research with `moveOnly`) and
+      // the source/destination picks (resume research-move-wis).
+      const isMoveMenu =
+        eid === RESEARCH_MENU &&
+        pending.resume.context?.['moveOnly'] === true &&
+        prompt.options.some((o) => o.id === 'move-wis');
+      if (isMoveMenu || eid === RESEARCH_MOVE_WIS) {
+        return <ResearchMoveSheet state={state} pending={pending} />;
+      }
       const isStandardResearchMenu =
         eid === RESEARCH_MENU &&
         prompt.options.some((o) => o.id === 'draft' || o.id === 'add-wis');
