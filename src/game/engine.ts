@@ -25,6 +25,7 @@ import {
   colorAbilityActive,
   sideForColor,
   buildSnakeDraftOrder,
+  bumpInfluencePatch,
   canArsMagnaTakeSpace,
   countPlayerMagesInRoom,
   describeSpaceSource,
@@ -2841,7 +2842,7 @@ function handlePlayVaultCard(
 
   if (!hasEffect(card.effectId)) {
     // Effect not yet wired — card is still spent.
-    return consumed;
+    return grantVaultUseIp(consumed, action.playerId);
   }
   const source: ResolutionSource = {
     kind: 'vault-card',
@@ -2861,7 +2862,20 @@ function handlePlayVaultCard(
   if (isNoOpResult(result)) {
     throw new Error(`PLAY_VAULT_CARD: ${card.name} would have no effect right now`);
   }
-  return applyEffectResult(consumed, result, ctx);
+  return grantVaultUseIp(
+    applyEffectResult(consumed, result, ctx),
+    action.playerId,
+  );
+}
+
+/**
+ * Talismans R3 / R5 ("Research and Merit" / "Research Review Committee"): each
+ * time a player uses a Vault card this round, they gain 1 IP. No-op outside a
+ * round whose scenario rule sets `vaultUseGrantsIp`.
+ */
+function grantVaultUseIp(state: GameState, playerId: PlayerId): GameState {
+  if (!scenarioRoundRule(state)?.vaultUseGrantsIp) return state;
+  return { ...state, ...bumpInfluencePatch(state, playerId, 1) };
 }
 
 function handleClaimBellTower(
@@ -3174,6 +3188,12 @@ function resolveReactionPrompt(
     const reactionResult = reactionEffect(reactionCtx);
     curr = applyEffectResult(curr, reactionResult, reactionCtx);
 
+    // Talismans R3 / R5: using a Vault card grants its owner 1 IP — reaction
+    // treasures (Sacred Shield, Hourglass of Fate) count, each time they fire.
+    if (reactionOption.sourceKind === 'vault-card') {
+      curr = grantVaultUseIp(curr, responderId);
+    }
+
     // Repeatable reactions (Sacred Shield) keep the responder in the queue so
     // they may react again — but only while a repeatable option remains (e.g.
     // another of their Mages is still wounded and they can still pay). Once
@@ -3378,6 +3398,11 @@ function handleAdvancePhase(state: GameState): GameState {
 
 function processRoundSetup(state: GameState, round: RoundNumber): GameState {
   let updated = state;
+  // Talismans of Magic: hand each player their school's Synthesis Treasure at
+  // the start of round 1 (neutral leaders are prompted to pick one).
+  if (round === 1) {
+    updated = grantStartingScenarioItems(updated);
+  }
   if (round > 1) {
     updated = clearArchmagesApprentice(updated);
     updated = resetAstronomyTowerBMarker(updated);
@@ -3401,6 +3426,72 @@ function processRoundSetup(state: GameState, round: RoundNumber): GameState {
       activePlayerIndex: state.firstPlayerIndex,
       actionUsed: false,
       fastActionUsed: false,
+    },
+  };
+}
+
+/**
+ * Talismans of Magic — grants each player their school's Synthesis Treasure at
+ * round-1 setup. Magic-department leaders get their item automatically (two of
+ * the same school each get their own copy). A neutral (Students) leader is
+ * pushed a `choose-from-options` prompt to pick one of the items not tied to any
+ * school in play (the `talismans.scenario.choose-starting-item` effect applies
+ * the pick). No-op when the active scenario doesn't grant starting items.
+ */
+function grantStartingScenarioItems(state: GameState): GameState {
+  const byDept = activeScenario(state)?.startingItemsByDepartment;
+  if (!byDept) return state;
+
+  const neutralPlayerIds: PlayerId[] = [];
+  const players = state.players.map((p) => {
+    const candidate = p.candidateId ? lookupCandidate(state, p.candidateId) : null;
+    const dept = candidate?.department;
+    if (!dept) return p;
+    const itemId = byDept[dept];
+    if (!itemId) {
+      // Students / neutral leaders have no school item — prompt them instead.
+      if (dept === 'students') neutralPlayerIds.push(p.id);
+      return p;
+    }
+    return {
+      ...p,
+      vaultCards: [...p.vaultCards, { cardId: itemId, exhausted: false }],
+    };
+  });
+
+  let next: GameState = { ...state, players };
+  for (const pid of neutralPlayerIds) {
+    next = pushPending(next, buildStartingItemPrompt(next, pid));
+  }
+  return next;
+}
+
+/** Builds the neutral-leader "pick a starting item" prompt (Talismans). */
+function buildStartingItemPrompt(
+  state: GameState,
+  playerId: PlayerId,
+): PendingResolutionInput {
+  const pool = activeScenario(state)?.startingItemPool ?? [];
+  const owned = new Set(
+    state.players.flatMap((p) => p.vaultCards.map((v) => v.cardId)),
+  );
+  const available = pool.filter((id) => !owned.has(id));
+  return {
+    responderId: playerId,
+    prompt: {
+      kind: 'choose-from-options',
+      options: available.map((id) => ({
+        id,
+        label: lookupVaultCardDef(state, id)?.name ?? id,
+        payload: {},
+      })),
+    },
+    resume: { effectId: 'talismans.scenario.choose-starting-item', context: {} },
+    source: {
+      kind: 'system',
+      id: 'talismans.scenario.choose-starting-item',
+      triggeringPlayerId: playerId,
+      description: 'Choose your starting Synthesis item',
     },
   };
 }
@@ -3929,11 +4020,24 @@ function finalRoundFor(state: GameState): RoundNumber {
   return max as RoundNumber;
 }
 
-/** The first round-end scenario (across active packs) for the given round. */
+/**
+ * The round-end reward effect for the given round — from the active Scenario
+ * first (Talismans' per-round rewards), then any active pack's
+ * `roundEndScenarios` (Summer Break). Run once per player after that round's
+ * scoring by the round-end pump.
+ */
 function roundEndScenarioForRound(
   state: GameState,
   round: RoundNumber,
 ): RoundEndScenario | null {
+  const rule = scenarioRoundRuleFor(state, round);
+  if (rule?.roundEndEffectId) {
+    return {
+      round,
+      name: rule.roundEndName ?? rule.name,
+      effectId: rule.roundEndEffectId,
+    };
+  }
   for (const packId of state.activePackIds) {
     const found = getPack(packId)?.roundEndScenarios?.find(
       (s) => s.round === round,

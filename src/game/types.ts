@@ -675,6 +675,21 @@ export interface ScenarioRoundRule {
    * voluntarily passes for the round (R5).
    */
   voluntaryPassRound?: boolean;
+  /**
+   * A round-end reward effect run once per player in turn order AFTER this
+   * round's scoring (e.g. Talismans R1 "+5 Gold", R2 "draw 2 keep 1"). Routed
+   * through the same pump as a pack `roundEndScenario`. Never fires on the final
+   * round.
+   */
+  roundEndEffectId?: EffectId;
+  /** Display name for the round-end reward phase (defaults to `name`). */
+  roundEndName?: string;
+  /**
+   * Ongoing this round: each time a Vault card is used (played as an Action /
+   * Fast Action, or fired as a reaction), its owner gains 1 IP (Talismans
+   * R3 / R5).
+   */
+  vaultUseGrantsIp?: boolean;
 }
 
 /**
@@ -696,6 +711,24 @@ export interface Scenario {
    * mages flips to its other side (A↔B).
    */
   flipEmptyRoomsEachRound?: boolean;
+  /**
+   * Packs this scenario depends on (their content must be in play). The setup
+   * screen auto-enables and locks these on when the scenario is selected (e.g.
+   * Talismans requires Mancers for its Synthesis Treasures).
+   */
+  requiresPackIds?: PackId[];
+  /** Room names removed from the in-play pool (matched by `Room.name`). */
+  bannedRoomNames?: string[];
+  /** Room names always forced into play (matched by `Room.name`). */
+  guaranteedRoomNames?: string[];
+  /**
+   * Starting Vault card each player receives, keyed by their school
+   * (department). Granted at round-1 setup. A `students` / neutral leader picks
+   * interactively from `startingItemPool` instead (Talismans).
+   */
+  startingItemsByDepartment?: Partial<Record<Department, VaultCardId>>;
+  /** Full pool a neutral leader may choose a starting item from (Talismans). */
+  startingItemPool?: VaultCardId[];
   /** Per-round rules, indexed by `round`. */
   rounds: ScenarioRoundRule[];
 }

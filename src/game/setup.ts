@@ -1,4 +1,5 @@
 import { requirePack } from '../content/registry';
+import { getScenario } from '../content/scenarios';
 import type {
   BellTowerCard,
   ConsortiumVoter,
@@ -338,6 +339,11 @@ export function buildInitialState(config: GameConfig): GameState {
 
   assertEveryRoomHasBothSides(allRooms);
 
+  // Active scenario (alternate game mode) may ban rooms or guarantee others.
+  const scenario = config.scenarioId ? getScenario(config.scenarioId) : undefined;
+  const bannedRoomNames = new Set(scenario?.bannedRoomNames ?? []);
+  const scenarioGuaranteedNames = new Set(scenario?.guaranteedRoomNames ?? []);
+
   let rng = createRngState(rngSeed);
 
   // ---- Room selection + grid placement ----
@@ -368,15 +374,18 @@ export function buildInitialState(config: GameConfig): GameState {
     } else {
       orderedIds = inputIds;
     }
-    selectedRooms = orderedIds.map((rid) => {
-      const r = allRoomsById.get(rid);
-      if (!r) {
-        throw new Error(
-          `buildInitialState: room ${rid} not found in any active pack`,
-        );
-      }
-      return r;
-    });
+    selectedRooms = orderedIds
+      .map((rid) => {
+        const r = allRoomsById.get(rid);
+        if (!r) {
+          throw new Error(
+            `buildInitialState: room ${rid} not found in any active pack`,
+          );
+        }
+        return r;
+      })
+      // Scenario-banned rooms are stripped even from an explicit selection.
+      .filter((r) => !bannedRoomNames.has(r.name));
     const dims = pickGridForRoomCount(selectedRooms.length);
     cols = dims.cols;
     rows = dims.rows;
@@ -403,7 +412,10 @@ export function buildInitialState(config: GameConfig): GameState {
     // one-sided room.
     const targetRoomCount =
       config.numberOfRooms ?? defaultRoomCountForPlayerCount(playerCount);
-    const sidePick = pickRandomSidesForRandom(allRooms, rng);
+    // Scenario-banned rooms (e.g. Talismans bans the Synthesis Workshop) never
+    // enter the random pool.
+    const selectableRooms = allRooms.filter((r) => !bannedRoomNames.has(r.name));
+    const sidePick = pickRandomSidesForRandom(selectableRooms, rng);
     rng = sidePick.rng;
     // Rooms an active pack guarantees under random layout (Summer Break → the
     // Dormitory). Resolved to room names so the side-flip above decides which
@@ -415,6 +427,8 @@ export function buildInitialState(config: GameConfig): GameState {
         if (room) guaranteedNames.add(room.name);
       }
     }
+    // Scenario-guaranteed rooms (e.g. Talismans forces Student Stores).
+    for (const name of scenarioGuaranteedNames) guaranteedNames.add(name);
     const roomSelection = selectInPlayRooms(
       sidePick.rooms,
       targetRoomCount,

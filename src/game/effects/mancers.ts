@@ -4216,6 +4216,11 @@ registerEffect('mancers.vault.nature-mages-cap', (ctx): EffectResult => {
       return { kind: 'done', patch: {} };
     }
     const vacatedSpaceId = target.location.spaceId;
+    // The destination must be a DIFFERENT slot than the Mage's own — otherwise
+    // the placer would overwrite the just-moved Mage on the same slot. (A
+    // shadowing target leaves its base slot reading as "open", so this guards
+    // the degenerate move-onto-self case.)
+    if (destSpaceId === vacatedSpaceId) return { kind: 'done', patch: {} };
     // Move the opponent's Mage, then place yours in the vacated slot.
     const moved = moveMageToSpace(ctx.state, targetMageId, destSpaceId, playerId);
     let working: GameState = { ...ctx.state, ...moved.patch };
@@ -4243,7 +4248,17 @@ registerEffect('mancers.vault.nature-mages-cap', (ctx): EffectResult => {
     }
     const targetMageId = ctx.resumeAnswer.mageId;
     const roomId = roomIdOfMage(ctx.state, targetMageId);
-    const dests = roomId ? openSlotsInRoom(ctx.state, roomId) : [];
+    const targetMage = ctx.state.players
+      .flatMap((p) => p.mages)
+      .find((m) => m.id === targetMageId);
+    const currentSpaceId =
+      targetMage?.location.kind === 'action-space'
+        ? targetMage.location.spaceId
+        : null;
+    // "Another open slot in the same room" — never the Mage's own slot.
+    const dests = (roomId ? openSlotsInRoom(ctx.state, roomId) : []).filter(
+      (id) => id !== currentSpaceId,
+    );
     if (dests.length === 0) return { kind: 'done', patch: {} };
     return {
       kind: 'pause',
@@ -4293,11 +4308,12 @@ registerEffect('mancers.vault.nature-mages-cap', (ctx): EffectResult => {
   }
   const targets = ctx.state.players
     .flatMap((p) => (p.id === playerId ? [] : p.mages))
-    .filter(
-      (m) =>
-        m.location.kind === 'action-space' &&
-        openSlotsInRoom(ctx.state, roomIdOfMage(ctx.state, m.id) ?? '').length > 0,
-    )
+    .filter((m) => {
+      if (m.location.kind !== 'action-space') return false;
+      // Needs an open slot in the room OTHER than the Mage's own.
+      const open = openSlotsInRoom(ctx.state, roomIdOfMage(ctx.state, m.id) ?? '');
+      return open.some((id) => id !== (m.location as { spaceId: string }).spaceId);
+    })
     .map((m) => m.id);
   if (targets.length === 0) return { kind: 'done', patch: {} };
   return {

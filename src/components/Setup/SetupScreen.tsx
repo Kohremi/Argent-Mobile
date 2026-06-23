@@ -338,6 +338,17 @@ export function SetupScreen() {
             {listScenarios().find((sc) => sc.id === scenarioId)?.description}
           </p>
         )}
+        {scenarioId !== null &&
+          (listScenarios().find((sc) => sc.id === scenarioId)?.requiresPackIds
+            ?.length ?? 0) > 0 && (
+            <p className="text-xs text-amber-300/80 mt-1">
+              Requires the{' '}
+              {listScenarios()
+                .find((sc) => sc.id === scenarioId)!
+                .requiresPackIds!.join(', ')}{' '}
+              pack (auto-enabled).
+            </p>
+          )}
       </section>
 
       <section className="mb-8">

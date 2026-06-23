@@ -1,4 +1,5 @@
 import type { Scenario, ScenarioId } from '../game/types';
+import { SYNTHESIS_BY_DEPARTMENT, ALL_SYNTHESIS_IDS } from './packs/mancers';
 
 /**
  * Scenario registry. Scenarios are alternate game modes selected independently
@@ -80,3 +81,64 @@ export const dimensionalRift: Scenario = {
 };
 
 registerScenario(dimensionalRift);
+
+/**
+ * Scenario 2 — Talismans of Magic.
+ *
+ * Requires the Mancers pack: every player begins with the Synthesis Treasure
+ * matching their school, the Synthesis Workshop is banned (Student Stores is
+ * always in play instead), and the round-end rewards revolve around Vault cards
+ * and research.
+ */
+export const talismansOfMagic: Scenario = {
+  id: 'talismans-of-magic',
+  name: 'Talismans of Magic',
+  description:
+    'Every mage begins with the Synthesis Treasure of their school. The ' +
+    'Synthesis Workshop is banned (Student Stores is always in play). Each ' +
+    'round rewards research and the Vault.',
+  requiresPackIds: ['mancers'],
+  bannedRoomNames: ['Synthesis Workshop'],
+  guaranteedRoomNames: ['Student Stores'],
+  startingItemsByDepartment: SYNTHESIS_BY_DEPARTMENT,
+  startingItemPool: ALL_SYNTHESIS_IDS,
+  rounds: [
+    {
+      round: 1,
+      name: 'Research Grants',
+      description: 'Round end: every player receives 5 Gold.',
+      roundEndEffectId: 'talismans.scenario.research-grants',
+      roundEndName: 'Research Grants',
+    },
+    {
+      round: 2,
+      name: 'Opening the Vaults',
+      description: 'Round end: each player draws two Vault cards and keeps one.',
+      roundEndEffectId: 'talismans.scenario.opening-vaults',
+      roundEndName: 'Opening the Vaults',
+    },
+    {
+      round: 3,
+      name: 'Research and Merit',
+      description: 'Each time you use a Vault card this round, gain 1 IP.',
+      vaultUseGrantsIp: true,
+    },
+    {
+      round: 4,
+      name: 'Student Testing Incentives',
+      description:
+        'Round end: each player may retrieve one Consumable from their discard ' +
+        'into their vault.',
+      roundEndEffectId: 'talismans.scenario.testing-incentives',
+      roundEndName: 'Student Testing Incentives',
+    },
+    {
+      round: 5,
+      name: 'Research Review Committee',
+      description: 'Each time you use a Vault card this round, gain 1 IP.',
+      vaultUseGrantsIp: true,
+    },
+  ],
+};
+
+registerScenario(talismansOfMagic);

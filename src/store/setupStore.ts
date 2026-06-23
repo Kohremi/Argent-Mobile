@@ -6,6 +6,7 @@ import type {
   RoomId,
   ScenarioId,
 } from '../game/types';
+import { getScenario } from '../content/scenarios';
 
 /** The six magic departments that have worker-Mage abilities, in display
  *  order. Technomancy is from the Mancers expansion. */
@@ -142,6 +143,12 @@ export const useSetupStore = create<SetupState>((set) => ({
     set((s) => {
       // Base pack cannot be toggled off.
       if (id === 'base') return s;
+      // A pack the active scenario requires is locked on (e.g. Talismans needs
+      // Mancers for its Synthesis Treasures).
+      const required = s.scenarioId
+        ? (getScenario(s.scenarioId)?.requiresPackIds ?? [])
+        : [];
+      if (required.includes(id)) return s;
       const next = s.selectedPackIds.includes(id)
         ? s.selectedPackIds.filter((p) => p !== id)
         : [...s.selectedPackIds, id];
@@ -158,13 +165,22 @@ export const useSetupStore = create<SetupState>((set) => ({
     set((s) => (s.scenarioId !== null ? s : { roundCount: n })),
 
   setScenario: (id) =>
-    set((s) => ({
-      scenarioId: id,
-      // Scenarios are always 5-round games. Selecting one forces 5; clearing it
-      // restores the Summer-Break-aware default.
-      roundCount:
-        id !== null ? 5 : s.selectedPackIds.includes('summerbreak') ? 6 : 5,
-    })),
+    set((s) => {
+      // Auto-enable any packs the scenario requires (Talismans → Mancers).
+      const required = id ? (getScenario(id)?.requiresPackIds ?? []) : [];
+      const selectedPackIds = [...s.selectedPackIds];
+      for (const pid of required) {
+        if (!selectedPackIds.includes(pid)) selectedPackIds.push(pid);
+      }
+      return {
+        scenarioId: id,
+        selectedPackIds,
+        // Scenarios are always 5-round games. Selecting one forces 5; clearing
+        // it restores the Summer-Break-aware default.
+        roundCount:
+          id !== null ? 5 : selectedPackIds.includes('summerbreak') ? 6 : 5,
+      };
+    }),
 
   setPlayerName: (index, name) =>
     set((s) => {

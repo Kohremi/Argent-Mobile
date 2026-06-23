@@ -26,3 +26,4 @@ import './mancers';
 import './archmage';
 import './renovation';
 import './summerbreak';
+import './talismans';
