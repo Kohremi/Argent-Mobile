@@ -4239,30 +4239,33 @@ function finalRoundFor(state: GameState): RoundNumber {
 }
 
 /**
- * The round-end reward effect for the given round — from the active Scenario
- * first (Talismans' per-round rewards), then any active pack's
- * `roundEndScenarios` (Summer Break). Run once per player after that round's
- * scoring by the round-end pump.
+ * The round-end reward effects for the given round — the active Scenario's
+ * per-round reward first (Talismans / Well of Souls), then every active pack's
+ * matching `roundEndScenarios` entry (Summer Break). A round can yield more
+ * than one: when a Scenario and Summer Break are BOTH active they each fire,
+ * in sequence, once per player. Run after that round's scoring by the round-end
+ * pump. Order matters only for which prompt a player answers first.
  */
-function roundEndScenarioForRound(
+function roundEndScenariosForRound(
   state: GameState,
   round: RoundNumber,
-): RoundEndScenario | null {
+): RoundEndScenario[] {
+  const out: RoundEndScenario[] = [];
   const rule = scenarioRoundRuleFor(state, round);
   if (rule?.roundEndEffectId) {
-    return {
+    out.push({
       round,
       name: rule.roundEndName ?? rule.name,
       effectId: rule.roundEndEffectId,
-    };
+    });
   }
   for (const packId of state.activePackIds) {
     const found = getPack(packId)?.roundEndScenarios?.find(
       (s) => s.round === round,
     );
-    if (found) return found;
+    if (found) out.push(found);
   }
-  return null;
+  return out;
 }
 
 /** Player ids in turn order starting from the current first player. */
@@ -4294,6 +4297,36 @@ function drainRoundEndScenarioIfIdle(state: GameState): GameState {
     if (curr.pendingResolutionStack.length > 0) return curr;
     if (curr.activeReactionWindows.length > 0) return curr;
     if (sc.remaining.length === 0) {
+      // The active effect finished for every player. If another round-end
+      // effect is queued for this same round (Scenario + Summer Break both
+      // active), shift it into the active slot and run it once per player too.
+      const [nextEffect, ...rest] = sc.queued ?? [];
+      if (nextEffect) {
+        curr = {
+          ...curr,
+          phase: {
+            kind: 'round-end-scenario',
+            round: sc.round,
+            name: nextEffect.name,
+          },
+          pendingRoundEndScenario: {
+            round: sc.round,
+            effectId: nextEffect.effectId,
+            name: nextEffect.name,
+            remaining: turnOrderPlayerIds(curr),
+            source: {
+              kind: 'system',
+              id: nextEffect.effectId,
+              triggeringPlayerId:
+                curr.players[curr.firstPlayerIndex]?.id ?? '',
+              description: nextEffect.name,
+            },
+            consumedOptionIds: nextEffect.consumedOptionIds ?? [],
+            queued: rest,
+          },
+        };
+        continue;
+      }
       const next = (sc.round + 1) as RoundNumber;
       return {
         ...curr,
@@ -4325,24 +4358,30 @@ function processMidGameScoring(state: GameState, round: RoundNumber): GameState 
     // A round-end scenario (Summer Break and similar) fires AFTER scoring and
     // BEFORE the next round-setup. It runs in turn order via the pump; once it
     // finishes, the pump advances to `round-setup` for round + 1.
-    const scenario = roundEndScenarioForRound(state, round);
-    if (scenario) {
+    const scenarios = roundEndScenariosForRound(state, round);
+    const active = scenarios[0];
+    if (active) {
       const firstId = state.players[state.firstPlayerIndex]?.id ?? '';
       return {
         ...state,
-        phase: { kind: 'round-end-scenario', round, name: scenario.name },
+        phase: { kind: 'round-end-scenario', round, name: active.name },
         pendingRoundEndScenario: {
           round,
-          effectId: scenario.effectId,
-          name: scenario.name,
+          effectId: active.effectId,
+          name: active.name,
           remaining: turnOrderPlayerIds(state),
           source: {
             kind: 'system',
-            id: scenario.effectId,
+            id: active.effectId,
             triggeringPlayerId: firstId,
-            description: scenario.name,
+            description: active.name,
           },
           consumedOptionIds: [],
+          queued: scenarios.slice(1).map((s) => ({
+            effectId: s.effectId,
+            name: s.name,
+            consumedOptionIds: [],
+          })),
         },
       };
     }

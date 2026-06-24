@@ -13,6 +13,7 @@ import type {
   GameState,
   OwnedMage,
   OwnedSpell,
+  PackId,
   Player,
 } from './types';
 
@@ -282,7 +283,7 @@ describe('Well of Souls — round-end rewards', () => {
 
 const PERSONALITIES = ['klank', 'malfoy', 'thickhide', 'darthpotter'] as const;
 
-function runGame(seed: number): string | null {
+function runGame(seed: number, extraPacks: PackId[] = []): string | null {
   const rng = createRng((seed * 2654435761) | 0);
   const rnd = (n: number) => Math.floor(rng() * n);
   const draftCandidates = getPack('base')!.candidates.filter(
@@ -291,7 +292,7 @@ function runGame(seed: number): string | null {
   const candidateIds = draftCandidates.map((c) => c.id);
   const deptOf = new Map(draftCandidates.map((c) => [c.id, c.department]));
   let s = initGame({
-    activePackIds: ['base'],
+    activePackIds: ['base', ...extraPacks],
     playerNames: ['P0', 'P1', 'P2', 'P3'],
     rngSeed: seed,
     controlledByBot: [true, true, true, true],
@@ -372,6 +373,44 @@ describe('Well of Souls — full all-bot games', () => {
     const failures: string[] = [];
     for (let seed = 1; seed <= 6; seed++) {
       const result = runGame(seed);
+      if (result) failures.push(result);
+    }
+    expect(failures).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Scenario + Summer Break — round-end effects STACK (both fire each round).
+// Selecting a Scenario doesn't remove an already-enabled Summer Break pack, so
+// a round can carry two round-end effects: the Scenario's reward AND Summer
+// Break's. They must run in sequence, once per player, not shadow each other.
+// ---------------------------------------------------------------------------
+
+describe('Well of Souls + Summer Break — stacked round-end effects', () => {
+  it('R1 fires BOTH the scenario research and the Summer Break mage draft', () => {
+    let s = initGame(CONFIG(['A', 'B'], { activePackIds: ['base', 'summerbreak'] }));
+    s = { ...s, firstPlayerIndex: 0, phase: { kind: 'mid-game-scoring', round: 1 } };
+    s = applyAction(s, { type: 'ADVANCE_PHASE' });
+
+    // Well of Souls R1 reward (research-2) ran for every player...
+    expect(s.researchQueue.filter((e) => e.playerId === 'p1')).toHaveLength(2);
+    expect(s.researchQueue.filter((e) => e.playerId === 'p2')).toHaveLength(2);
+
+    // ...AND the Summer Break "Students Return" mage draft is now in progress
+    // (a queued second effect — before the fix this never surfaced).
+    expect(s.phase.kind).toBe('round-end-scenario');
+    const top = topPending(s)!;
+    expect(top.responderId).toBe('p1');
+    const labels = (top.prompt as { options: { label: string }[] }).options.map(
+      (o) => o.label,
+    );
+    expect(labels.some((l) => l.includes('Draft a'))).toBe(true);
+  });
+
+  it('combined all-bot games complete without stalling or desyncing', () => {
+    const failures: string[] = [];
+    for (let seed = 1; seed <= 6; seed++) {
+      const result = runGame(seed, ['summerbreak']);
       if (result) failures.push(result);
     }
     expect(failures).toEqual([]);

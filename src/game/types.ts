@@ -1524,6 +1524,20 @@ export interface GameState {
     remaining: PlayerId[];
     source: ResolutionSource;
     consumedOptionIds?: string[];
+    /**
+     * Further round-end effects for the SAME round, waiting to run after the
+     * active one finishes. A round can carry more than one effect when a
+     * Scenario and a pack (e.g. Summer Break) both provide a round-end reward:
+     * each runs once per player, in sequence. When the active effect's
+     * `remaining` empties, the pump shifts the first queued entry into the
+     * active slot (resetting `remaining` to turn order); when both this and the
+     * queue are exhausted it advances to the next round-setup.
+     */
+    queued?: {
+      effectId: EffectId;
+      name: string;
+      consumedOptionIds?: string[];
+    }[];
   } | null;
   /**
    * The Contract chain (3 Research, all locked to a single department of
