@@ -5,6 +5,7 @@ import { useGameStore } from '../../store/gameStore';
 import { useUiStore } from '../../store/uiStore';
 import { activePlayer, claimableBellCards, PLAYER_AURA } from '../../utils/uiSelectors';
 import { getScenario } from '../../content/scenarios';
+import { getPack } from '../../content/registry';
 
 /** HUD bar: day dial, phase banner, bell meter, player strip, debug toggle. */
 
@@ -58,6 +59,55 @@ function ScenarioChip({ state }: { state: GameState }) {
     >
       {scenario.name}
       {rule && <span className="ml-2 text-white/80">· {rule.name}</span>}
+    </span>
+  );
+}
+
+/** One-line description of each Summer Break round-end scenario. */
+const SUMMER_BREAK_BLURBS: Record<string, string> = {
+  'Students Return': 'Round end: draft a Mage from the supply.',
+  'Summer Study Credits':
+    'Round end: you may swap one of your Mages for one from the supply.',
+  'Opening Ceremony': 'Round end: draft one reward from a shared pool.',
+};
+
+/** The last round that has a round-end (the final round has none). Mirrors the
+ *  engine's `finalRoundFor`: scenarios cap at 5, else the setup override, else
+ *  the largest `totalRounds` across active packs. */
+function finalRound(state: GameState): number {
+  if (state.scenarioId) return 5;
+  if (state.totalRoundsOverride !== null) return state.totalRoundsOverride;
+  let max = 5;
+  for (const id of state.activePackIds) {
+    const t = getPack(id)?.totalRounds;
+    if (t !== undefined && t > max) max = t;
+  }
+  return max;
+}
+
+/** Summer Break chip: shows when the pack is active, plus the round-end
+ *  scenario coming at the end of the current round (suppressed on the final
+ *  round, which has none). Independent of the Scenario chip — both can show. */
+function SummerBreakChip({ state }: { state: GameState }) {
+  if (!state.activePackIds.includes('summerbreak')) return null;
+  const pack = getPack('summerbreak');
+  if (!pack) return null;
+  const round = currentRound(state.phase);
+  const reward =
+    round !== null && round < finalRound(state)
+      ? pack.roundEndScenarios?.find((s) => s.round === round)
+      : undefined;
+  return (
+    <span
+      className="rounded-full bg-player-gold/15 px-3 py-1 font-display text-sm text-player-gold ring-1 ring-player-gold/40"
+      title={
+        reward
+          ? `${reward.name} — ${SUMMER_BREAK_BLURBS[reward.name] ?? ''}`.trim()
+          : pack.description
+      }
+    >
+      ☀ Summer Break
+      {reward && <span className="ml-2 text-white/80">· {reward.name}</span>}
     </span>
   );
 }
@@ -159,6 +209,8 @@ export function TopBar() {
       <BellTowerMeter state={state} />
 
       <ScenarioChip state={state} />
+
+      <SummerBreakChip state={state} />
 
       {/* player strip */}
       <div className="ml-auto flex items-center gap-2">
