@@ -3254,9 +3254,17 @@ function CandidateDraftScreen({
   const activePlayer = state.players[activeIdx];
   const candidates = collectAvailableCandidates(state);
   const taken = new Map<string, string>();
+  // Department exclusivity: one school per player — picking either leader locks
+  // the whole department for everyone else.
+  const takenDept = new Map<Department, string>();
   for (const p of state.players) {
-    if (p.candidateId) taken.set(p.candidateId, p.name);
+    if (!p.candidateId) continue;
+    taken.set(p.candidateId, p.name);
+    const cand = candidates.find((c) => c.id === p.candidateId);
+    if (cand) takenDept.set(cand.department, p.name);
   }
+  const isCandidateSelectable = (c: Candidate): boolean =>
+    !taken.has(c.id) && !takenDept.has(c.department);
 
   // Build the spell lookup once (each candidate's innate starter spell).
   const spellById = new Map<string, SpellCard>();
@@ -3359,7 +3367,7 @@ function CandidateDraftScreen({
                 type="button"
                 onClick={() => {
                   if (!activePlayer) return;
-                  const available = candidates.filter((c) => !taken.has(c.id));
+                  const available = candidates.filter(isCandidateSelectable);
                   if (available.length === 0) return;
                   const pick =
                     available[Math.floor(Math.random() * available.length)]!;
@@ -3377,7 +3385,8 @@ function CandidateDraftScreen({
               <button
                 type="button"
                 disabled={
-                  !highlightedCandidate || taken.has(highlightedCandidate.id)
+                  !highlightedCandidate ||
+                  !isCandidateSelectable(highlightedCandidate)
                 }
                 onClick={() => {
                   if (!highlightedCandidate || !activePlayer) return;
@@ -3398,83 +3407,146 @@ function CandidateDraftScreen({
           )}
         </div>
 
-        {departmentOrder.map((dept) => {
-          const pair = byDept.get(dept) ?? [];
-          if (pair.length === 0) return null;
-          return (
-            <div key={dept}>
-              <h3 className="text-sm font-semibold text-slate-300 uppercase tracking-wide mb-1.5">
-                {departmentLabel[dept]}
-              </h3>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                {pair.map((c) =>
-                  renderCandidateCard({
-                    c,
-                    spell: spellById.get(c.starterSpellId) ?? null,
-                    deptLabel: departmentLabel[dept],
-                    isHighlighted: highlighted === c.id,
-                    takenBy: taken.get(c.id),
-                    onClick: () => {
-                      if (taken.has(c.id)) return;
-                      setHighlighted((cur) => (cur === c.id ? null : c.id));
-                    },
-                  }),
-                )}
-              </div>
-            </div>
-          );
-        })}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+          {departmentOrder.map((dept) => {
+            const leaders = byDept.get(dept) ?? [];
+            if (leaders.length === 0) return null;
+            return renderDepartmentBox({
+              dept,
+              deptLabel: departmentLabel[dept],
+              leaders,
+              spellOf: (c) => spellById.get(c.starterSpellId) ?? null,
+              highlightedId: highlighted,
+              takenByDept: takenDept.get(dept),
+              takenByCandidate: taken,
+              onSelect: (candidateId) => {
+                setHighlighted((cur) => (cur === candidateId ? null : candidateId));
+              },
+            });
+          })}
+        </div>
       </section>
     </div>
   );
 }
 
-function renderCandidateCard(args: {
-  c: Candidate;
-  spell: SpellCard | null;
+/**
+ * One department = one box. Both of the school's leaders sit side by side; the
+ * selected leader's innate spell previews in the panel below. Because a school
+ * may be led by only one player, the whole box locks once any player has taken
+ * either leader.
+ */
+function renderDepartmentBox(args: {
+  dept: Department;
   deptLabel: string;
-  isHighlighted: boolean;
+  leaders: Candidate[];
+  spellOf: (c: Candidate) => SpellCard | null;
+  highlightedId: string | null;
+  takenByDept: string | undefined;
+  takenByCandidate: Map<string, string>;
+  onSelect: (candidateId: string) => void;
+}) {
+  const {
+    dept,
+    deptLabel,
+    leaders,
+    spellOf,
+    highlightedId,
+    takenByDept,
+    takenByCandidate,
+    onSelect,
+  } = args;
+  const locked = takenByDept !== undefined;
+  const highlightedHere =
+    leaders.find((c) => c.id === highlightedId) ?? null;
+  const previewSpell = highlightedHere ? spellOf(highlightedHere) : null;
+  return (
+    <div
+      key={dept}
+      className={clsx(
+        'rounded-lg border p-2.5 space-y-2 transition-colors',
+        locked
+          ? 'border-slate-800 bg-slate-900/40 opacity-60'
+          : highlightedHere
+            ? 'border-amber-400/70 bg-amber-400/5 ring-1 ring-amber-400/30'
+            : 'border-slate-700 bg-slate-900',
+      )}
+    >
+      <div className="flex items-center justify-between gap-2">
+        <h3 className="text-sm font-semibold text-slate-300 uppercase tracking-wide">
+          {deptLabel}
+        </h3>
+        {locked && (
+          <span className="text-[10px] text-amber-300/70 shrink-0">
+            Taken by {takenByDept}
+          </span>
+        )}
+      </div>
+
+      <div
+        className={clsx(
+          'grid gap-2',
+          leaders.length === 2 ? 'grid-cols-2' : 'grid-cols-1',
+        )}
+      >
+        {leaders.map((c) =>
+          renderLeaderTile({
+            c,
+            isActive: highlightedHere?.id === c.id,
+            // The other leader of a department a different player already took.
+            takenBy: takenByCandidate.get(c.id),
+            disabled: locked,
+            onClick: () => {
+              if (locked) return;
+              onSelect(c.id);
+            },
+          }),
+        )}
+      </div>
+
+      {renderLeaderSpellPanel(highlightedHere, previewSpell)}
+    </div>
+  );
+}
+
+/** A single selectable leader inside a department box. */
+function renderLeaderTile(args: {
+  c: Candidate;
+  isActive: boolean;
   takenBy: string | undefined;
+  disabled: boolean;
   onClick: () => void;
 }) {
-  const { c, spell, deptLabel, isHighlighted, takenBy, onClick } = args;
+  const { c, isActive, takenBy, disabled, onClick } = args;
   const mageColor =
     c.startingMageColor === 'neutral' ? 'off-white' : c.startingMageColor;
-  const level1 = spell?.levels[0];
-  const timingLabel =
-    level1 === undefined
-      ? null
-      : level1.timing === 'fast-action'
-        ? 'Fast Action'
-        : level1.timing === 'reaction'
-          ? 'Reaction'
-          : 'Action';
   return (
     <button
       key={c.id}
       type="button"
       onClick={onClick}
-      disabled={takenBy !== undefined}
+      disabled={disabled}
       className={clsx(
-        'text-left p-2 rounded border space-y-1.5 w-full transition-colors',
-        takenBy
-          ? 'border-slate-800 bg-slate-900/40 opacity-60 cursor-not-allowed'
-          : isHighlighted
+        'text-left p-2 rounded border w-full transition-colors',
+        disabled
+          ? 'border-slate-800 bg-slate-900/40 cursor-not-allowed'
+          : isActive
             ? 'border-amber-400 bg-amber-400/10 ring-2 ring-amber-400/40'
-            : 'border-slate-700 bg-slate-900 hover:border-slate-500',
+            : 'border-slate-700 bg-slate-900/60 hover:border-slate-500',
       )}
     >
-      {/* Portrait square + name / department. */}
       <div className="flex items-center gap-2">
-        <CandidatePortrait candidate={c} size={44} />
+        <CandidatePortrait candidate={c} size={40} />
         <div className="min-w-0 flex-1">
           <div className="flex items-center justify-between gap-1">
             <h4 className="text-sm font-semibold truncate">{c.name}</h4>
             <span className="inline-flex items-center gap-1 shrink-0">
-              {/* The two starting Mages this leader brings (in-game meeple). */}
-              <span className="inline-flex items-center -space-x-1" title={`Starts with ×2 ${c.startingMageColor} Mages`}>
-                <MageToken color={mageColor} size={20} />
-                <MageToken color={mageColor} size={20} />
+              <span
+                className="inline-flex items-center -space-x-1"
+                title={`Starts with ×2 ${c.startingMageColor} Mages`}
+              >
+                <MageToken color={mageColor} size={18} />
+                <MageToken color={mageColor} size={18} />
               </span>
               {c.startingExtraMeritBadge && (
                 <span className="inline-flex items-center gap-0.5 text-[10px]">
@@ -3487,40 +3559,60 @@ function renderCandidateCard(args: {
           {c.title && (
             <p className="text-[10px] text-slate-400 truncate">{c.title}</p>
           )}
-          <p className="text-[10px] uppercase tracking-wide text-slate-500">
-            {deptLabel}
-          </p>
+          {takenBy && (
+            <p className="text-[10px] text-amber-300/70 truncate">
+              chosen by {takenBy}
+            </p>
+          )}
         </div>
       </div>
-
-      {/* Innate spell — styled like an in-game spell card. */}
-      {spell && level1 ? (
-        <div className="rounded border border-violet-500/40 bg-violet-500/5 p-1.5 space-y-0.5">
-          <div className="flex items-baseline justify-between gap-2">
-            <span className="text-xs font-medium text-violet-200 truncate">
-              {spell.name}
-            </span>
-            <span className="text-[10px] text-slate-400 inline-flex items-center gap-1 shrink-0">
-              {timingLabel}
-              {' · '}
-              <ResourceIcon kind="mana" size={11} />
-              {level1.manaCost}
-            </span>
-          </div>
-          <p className="text-[11px] text-slate-200/90 italic leading-snug">
-            {level1.description}
-          </p>
-        </div>
-      ) : (
-        <p className="text-[11px] text-slate-500 italic">
-          spell: {c.starterSpellId}
-        </p>
-      )}
-
-      {takenBy && (
-        <p className="text-[10px] text-amber-300/70">chosen by {takenBy}</p>
-      )}
     </button>
+  );
+}
+
+/** The shared spell-preview panel below a department's two leaders. */
+function renderLeaderSpellPanel(
+  candidate: Candidate | null,
+  spell: SpellCard | null,
+) {
+  if (!candidate) {
+    return (
+      <p className="text-[11px] text-slate-500 italic px-1 py-2">
+        Select a leader to preview their spell.
+      </p>
+    );
+  }
+  const level1 = spell?.levels[0];
+  if (!spell || !level1) {
+    return (
+      <p className="text-[11px] text-slate-500 italic px-1 py-2">
+        spell: {candidate.starterSpellId}
+      </p>
+    );
+  }
+  const timingLabel =
+    level1.timing === 'fast-action'
+      ? 'Fast Action'
+      : level1.timing === 'reaction'
+        ? 'Reaction'
+        : 'Action';
+  return (
+    <div className="rounded border border-violet-500/40 bg-violet-500/5 p-2 space-y-0.5">
+      <div className="flex items-baseline justify-between gap-2">
+        <span className="text-xs font-medium text-violet-200 truncate">
+          {spell.name}
+        </span>
+        <span className="text-[10px] text-slate-400 inline-flex items-center gap-1 shrink-0">
+          {timingLabel}
+          {' · '}
+          <ResourceIcon kind="mana" size={11} />
+          {level1.manaCost}
+        </span>
+      </div>
+      <p className="text-[11px] text-slate-200/90 italic leading-snug">
+        {level1.description}
+      </p>
+    </div>
   );
 }
 
