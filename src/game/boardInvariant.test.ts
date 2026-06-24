@@ -17,11 +17,6 @@ import type { GameAction, GameState, PackId } from './types';
 
 const PERSONALITIES = ['klank', 'malfoy', 'thickhide', 'darthpotter'] as const;
 
-/** candidate id → department, for enforcing one-school-per-player in the draft. */
-const DEPT_OF_CANDIDATE = new Map(
-  listPacks().flatMap((p) => p.candidates.map((c) => [c.id, c.department] as const)),
-);
-
 /** A simulation matrix: which packs are active + which leaders may be drafted. */
 interface SimConfig {
   packIds: PackId[];
@@ -84,13 +79,8 @@ function runGameCheckingInvariant(
       switch (s.phase.kind) {
         case 'candidate-draft': {
           const pid = s.players[s.phase.activePlayerIndex]!.id;
-          const takenIds = new Set(s.players.map((p) => p.candidateId).filter(Boolean));
-          const takenDepts = new Set(
-            [...takenIds].map((id) => DEPT_OF_CANDIDATE.get(id)),
-          );
-          const avail = cfg.candidateIds.filter(
-            (id) => !takenIds.has(id) && !takenDepts.has(DEPT_OF_CANDIDATE.get(id)),
-          );
+          const taken = new Set(s.players.map((p) => p.candidateId).filter(Boolean));
+          const avail = cfg.candidateIds.filter((id) => !taken.has(id));
           action = { type: 'CHOOSE_CANDIDATE', playerId: pid, candidateId: avail[rnd(avail.length)]! };
           break;
         }

@@ -25,6 +25,7 @@ import {
   colorAbilityActive,
   sideForColor,
   buildSnakeDraftOrder,
+  allocateInfirmaryBed,
   bumpInfluencePatch,
   canArsMagnaTakeSpace,
   countPlayerMagesInRoom,
@@ -352,6 +353,24 @@ function consumeActionBudget(
       fastActionUsed: nextFast >= fastLimit,
     },
   };
+}
+
+/**
+ * Non-mutating predicate: would `consumeActionBudget(state, kind)` succeed for
+ * the timing's budget slot? Used to gate the Well of Souls sacrifice prompt so
+ * it isn't offered (and the cast doesn't dry-run as castable) when the slot is
+ * already spent. Ignores the Fast-Action Mana surcharge (a payment concern).
+ */
+function actionBudgetAvailable(state: GameState, kind: ActionBudgetKind): boolean {
+  if (state.phase.kind !== 'errands') return false;
+  if (kind === 'action') {
+    if (!state.phase.actionUsed) return true;
+    return (state.phase.extraActions ?? 0) > 0; // a bonus action covers it
+  }
+  if (state.phase.actionUsed) return false; // Fast Action must precede the Action
+  if (state.phase.bonusActionRound) return false;
+  const fastLimit = scenarioRoundRule(state)?.maxFastActionsPerTurn ?? 1;
+  return (state.phase.fastActionsUsed ?? 0) < fastLimit;
 }
 
 /**
@@ -1787,6 +1806,11 @@ function handleCastSpell(
   // choice (see resolveSpellPayment). Skips the waiver prompt and applies the
   // chosen payment.
   paymentOverride?: { method: 'mana' | 'supporter'; supporterId?: string },
+  // The Well of Souls "sacrifice a Mage to cut cost" decision (see
+  // resolveSpellSacrifice). `undefined` = not yet asked (offer the prompt);
+  // `false` = cast normally; `true` = a Mage was already sacrificed to the
+  // Infirmary by the resume handler, so apply the cost discount + pay in Mana.
+  sacrificed?: boolean,
 ): GameState {
   if (state.phase.kind !== 'errands') {
     throw new Error('CAST_SPELL: only valid during errands phase');
@@ -1820,8 +1844,10 @@ function handleCastSpell(
 
   // Unique (leader) spells have no L2/L3 to research; their L1 is always
   // available since `intPlaced` is set at candidate allocation. Regular
-  // spell books still gate on the research flags.
-  if (!cardDef.unique) {
+  // spell books still gate on the research flags — unless the active scenario
+  // round lifts it (Well of Souls R4/R5: cast any level, even un-researched).
+  const castAnyLevel = scenarioRoundRule(state)?.castAnyLevel === true;
+  if (!cardDef.unique && !castAnyLevel) {
     if (action.level === 1 && !owned.intPlaced) {
       throw new Error(`CAST_SPELL: spell L1 not researched`);
     }
@@ -1861,15 +1887,88 @@ function handleCastSpell(
   if (mysticismDiscount > 0 && discountedCost >= 1) {
     discountedCost = Math.max(1, discountedCost - mysticismDiscount);
   }
+  // Scenario round cost reduction (Well of Souls R5: all Spell cost −1, min 0).
+  // Applied AFTER the mysticism floor so it can take a 1-Mana spell down to free.
+  const scenarioCostReduction = scenarioRoundRule(state)?.spellCostReduction ?? 0;
+  if (scenarioCostReduction > 0) {
+    discountedCost = Math.max(0, discountedCost - scenarioCostReduction);
+  }
   const surcharges = spellManaSurchargesAgainst(state, action.playerId);
   const surchargeTotal = surcharges.reduce((sum, s) => sum + s.amount, 0);
   const placeAfterCast = player.nextSpellPlacesMage === true;
   const baseCost = player.nextSpellFreeMana ? 0 : discountedCost;
-  const effectiveManaCost = baseCost + surchargeTotal;
+  let effectiveManaCost = baseCost + surchargeTotal;
   if (levelDef.timing === 'reaction') {
     throw new Error(
       'CAST_SPELL: reaction-timing spells fire from a reaction window, not as a direct action',
     );
+  }
+
+  // The Well of Souls — sacrifice an office Mage to the Infirmary to cut this
+  // Spell's cost by up to `sacrificeDiscount`. When already sacrificed (resume),
+  // the Mage is in the Infirmary; apply the discount here. On the first pass,
+  // offer the choice (which also makes a Spell up to `sacrificeDiscount` Mana
+  // over budget castable). No-op outside a scenario that sets the discount.
+  const sacrificeDiscount =
+    activeScenario(state)?.sacrificeMageForSpellDiscount ?? 0;
+  if (sacrificed === true && sacrificeDiscount > 0) {
+    effectiveManaCost = Math.max(0, effectiveManaCost - sacrificeDiscount);
+  }
+  if (
+    sacrificeDiscount > 0 &&
+    paymentOverride === undefined &&
+    sacrificed === undefined &&
+    // Don't offer (or dry-run as castable) when the spell's budget slot is
+    // already spent — let the normal consumeActionBudget check reject it.
+    actionBudgetAvailable(
+      state,
+      levelDef.timing === 'fast-action' ? 'fast-action' : 'action',
+    )
+  ) {
+    const officeMages = player.mages.filter(
+      (m) => m.location.kind === 'office' && !m.isWounded,
+    );
+    const canAfford = player.resources.mana >= effectiveManaCost;
+    const shortfall = effectiveManaCost - player.resources.mana;
+    if (
+      officeMages.length > 0 &&
+      effectiveManaCost > 0 &&
+      (canAfford || shortfall <= sacrificeDiscount)
+    ) {
+      // "Cast normally" listed FIRST so bots (which favour the first / a named
+      // option) don't churn on Cancel or sacrifice Mages they don't need to.
+      const options = [
+        ...(canAfford
+          ? [
+              {
+                id: 'cast-normal',
+                label: `Cast normally (${effectiveManaCost} Mana)`,
+                payload: {},
+              },
+            ]
+          : []),
+        {
+          id: 'sacrifice',
+          label: `Sacrifice a Mage (−up to ${sacrificeDiscount} Mana)`,
+          payload: {},
+        },
+        { id: 'cancel', label: 'Cancel', payload: {} },
+      ];
+      return pushPending(state, {
+        responderId: action.playerId,
+        prompt: { kind: 'choose-from-options', options },
+        resume: {
+          effectId: '__spell_sacrifice__',
+          context: { spellCardId: action.spellCardId, level: action.level },
+        },
+        source: {
+          kind: 'spell',
+          id: action.spellCardId,
+          triggeringPlayerId: action.playerId,
+          description: `${cardDef.name} L${action.level} — sacrifice?`,
+        },
+      });
+    }
   }
 
   // Department-supporter mana waiver (Summer Break). A held supporter whose
@@ -1883,6 +1982,15 @@ function handleCastSpell(
   if (paymentOverride) {
     payWithSupporter = paymentOverride.method === 'supporter';
     waiverSupporterId = paymentOverride.supporterId ?? null;
+  } else if (sacrificed === true) {
+    // Sacrifice path: cost already cut; pay the remainder in Mana (the Mage is
+    // already in the Infirmary, so we can't re-enter a waiver prompt). The
+    // sacrifice was only offered when affordable post-discount.
+    if (player.resources.mana < effectiveManaCost) {
+      throw new Error(
+        `CAST_SPELL: insufficient mana (need ${effectiveManaCost}, have ${player.resources.mana})`,
+      );
+    }
   } else {
     const supId =
       effectiveManaCost > 0
@@ -2301,18 +2409,6 @@ function handleChooseCandidate(
   if (taken) {
     throw new Error(
       `CHOOSE_CANDIDATE: candidate "${action.candidateId}" already taken`,
-    );
-  }
-  // A department may be led by only one player: picking either of its leaders
-  // locks the whole school, so no opponent can take its other leader.
-  const departmentTaken = state.players.some((p) => {
-    if (p.id === action.playerId || !p.candidateId) return false;
-    const other = lookupCandidate(state, p.candidateId);
-    return other?.department === candidate.department;
-  });
-  if (departmentTaken) {
-    throw new Error(
-      `CHOOSE_CANDIDATE: the ${candidate.department} department is already taken`,
     );
   }
 
@@ -3059,6 +3155,10 @@ function handleResolvePending(
 
   if (top.resume.effectId === '__spell_payment__') {
     curr = resolveSpellPayment(curr, top, answer);
+  } else if (top.resume.effectId === '__spell_sacrifice__') {
+    curr = resolveSpellSacrifice(curr, top, answer);
+  } else if (top.resume.effectId === '__spell_sacrifice_mage__') {
+    curr = resolveSpellSacrificeMage(curr, top, answer);
   } else if (top.reactionWindowId !== undefined) {
     curr = resolveReactionPrompt(curr, top, answer);
   } else {
@@ -3107,6 +3207,100 @@ function resolveSpellPayment(
     state,
     { type: 'CAST_SPELL', playerId, spellCardId, level },
     useSupporter ? { method: 'supporter', supporterId } : { method: 'mana' },
+  );
+}
+
+/**
+ * Resolves the Well of Souls "sacrifice a Mage to reduce this Spell's cost"
+ * choice (see handleCastSpell). Cancel aborts (nothing was spent yet); "Cast
+ * normally" re-enters the cast unchanged; "Sacrifice" surfaces a Mage pick.
+ */
+function resolveSpellSacrifice(
+  state: GameState,
+  prompt: PendingResolution,
+  answer: ResolutionAnswer,
+): GameState {
+  const c = prompt.resume.context ?? {};
+  const spellCardId = String(c['spellCardId'] ?? '');
+  const level = Number(c['level'] ?? 0) as CastSpellAction['level'];
+  const playerId = prompt.source.triggeringPlayerId;
+  const action: CastSpellAction = { type: 'CAST_SPELL', playerId, spellCardId, level };
+  if (answer.kind !== 'option-chosen') {
+    throw new Error('resolveSpellSacrifice expected option-chosen');
+  }
+  if (answer.optionId === 'cancel') return state; // abort; budget untouched
+  if (answer.optionId === 'cast-normal') {
+    return handleCastSpell(state, action, undefined, false);
+  }
+  // 'sacrifice' → pick which office Mage to send to the Infirmary.
+  const player = state.players.find((p) => p.id === playerId);
+  const officeMages =
+    player?.mages
+      .filter((m) => m.location.kind === 'office' && !m.isWounded)
+      .map((m) => m.id) ?? [];
+  if (officeMages.length === 0) {
+    return handleCastSpell(state, action, undefined, false);
+  }
+  return pushPending(state, {
+    responderId: playerId,
+    prompt: {
+      kind: 'choose-target-mage',
+      eligibleMageIds: officeMages,
+      label: 'Sacrifice which Mage? (sent to the Infirmary, no bonus)',
+    },
+    resume: {
+      effectId: '__spell_sacrifice_mage__',
+      context: { spellCardId, level },
+    },
+    source: prompt.source,
+  });
+}
+
+/**
+ * Applies the chosen sacrifice (office Mage → Infirmary, wounded, no bonus —
+ * mirrors Burnout) then re-enters the cast with the cost discount applied.
+ */
+function resolveSpellSacrificeMage(
+  state: GameState,
+  prompt: PendingResolution,
+  answer: ResolutionAnswer,
+): GameState {
+  const c = prompt.resume.context ?? {};
+  const spellCardId = String(c['spellCardId'] ?? '');
+  const level = Number(c['level'] ?? 0) as CastSpellAction['level'];
+  const playerId = prompt.source.triggeringPlayerId;
+  if (answer.kind !== 'mage-chosen') {
+    throw new Error('resolveSpellSacrificeMage expected mage-chosen');
+  }
+  const mageId = answer.mageId;
+  const afterInfirmary: GameState = {
+    ...state,
+    players: state.players.map((p) =>
+      p.id !== playerId
+        ? p
+        : {
+            ...p,
+            mages: p.mages.map((m) =>
+              m.id !== mageId
+                ? m
+                : {
+                    ...m,
+                    isWounded: true,
+                    isShadowing: false,
+                    location: {
+                      kind: 'infirmary' as const,
+                      bed: allocateInfirmaryBed(state),
+                    },
+                  },
+            ),
+          },
+    ),
+  };
+  return handleCastSpell(
+    afterInfirmary,
+    { type: 'CAST_SPELL', playerId, spellCardId, level },
+    undefined,
+    true,
   );
 }
 

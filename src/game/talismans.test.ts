@@ -363,12 +363,10 @@ const PERSONALITIES = ['klank', 'malfoy', 'thickhide', 'darthpotter'] as const;
 function runTalismansGame(seed: number): string | null {
   const rng = createRng((seed * 2654435761) | 0);
   const rnd = (n: number) => Math.floor(rng() * n);
-  const allCandidates = [
+  const candidateIds = [
     ...getPack('base')!.candidates,
     ...getPack('mancers')!.candidates,
-  ];
-  const candidateIds = allCandidates.map((c) => c.id);
-  const deptOf = new Map(allCandidates.map((c) => [c.id, c.department]));
+  ].map((c) => c.id);
   let s = initGame({
     activePackIds: ['base', 'mancers'],
     playerNames: ['P0', 'P1', 'P2', 'P3'],
@@ -402,13 +400,8 @@ function runTalismansGame(seed: number): string | null {
       switch (s.phase.kind) {
         case 'candidate-draft': {
           const pid = s.players[s.phase.activePlayerIndex]!.id;
-          const takenIds = new Set(s.players.map((p) => p.candidateId).filter(Boolean));
-          const takenDepts = new Set(
-            [...takenIds].map((id) => deptOf.get(id)),
-          );
-          const avail = candidateIds.filter(
-            (id) => !takenIds.has(id) && !takenDepts.has(deptOf.get(id)),
-          );
+          const taken = new Set(s.players.map((p) => p.candidateId).filter(Boolean));
+          const avail = candidateIds.filter((id) => !taken.has(id));
           action = { type: 'CHOOSE_CANDIDATE', playerId: pid, candidateId: avail[rnd(avail.length)]! };
           break;
         }

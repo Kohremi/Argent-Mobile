@@ -4211,16 +4211,15 @@ registerEffect('mancers.vault.nature-mages-cap', (ctx): EffectResult => {
       placer.location.kind !== 'office' ||
       !target ||
       target.location.kind !== 'action-space' ||
-      // Only a BASE occupant frees up the slot you "take its place" in. A
-      // shadowing Mage's base is still held by another Mage, so placing yours
-      // there would collide.
-      target.isShadowing ||
       !destOpen
     ) {
       return { kind: 'done', patch: {} };
     }
     const vacatedSpaceId = target.location.spaceId;
-    // Defensive: never place onto the slot the Mage still occupies.
+    // The destination must be a DIFFERENT slot than the Mage's own — otherwise
+    // the placer would overwrite the just-moved Mage on the same slot. (A
+    // shadowing target leaves its base slot reading as "open", so this guards
+    // the degenerate move-onto-self case.)
     if (destSpaceId === vacatedSpaceId) return { kind: 'done', patch: {} };
     // Move the opponent's Mage, then place yours in the vacated slot.
     const moved = moveMageToSpace(ctx.state, targetMageId, destSpaceId, playerId);
@@ -4310,9 +4309,7 @@ registerEffect('mancers.vault.nature-mages-cap', (ctx): EffectResult => {
   const targets = ctx.state.players
     .flatMap((p) => (p.id === playerId ? [] : p.mages))
     .filter((m) => {
-      // Only base occupants can be displaced — a shadowing Mage doesn't free a
-      // slot to take its place in.
-      if (m.location.kind !== 'action-space' || m.isShadowing) return false;
+      if (m.location.kind !== 'action-space') return false;
       // Needs an open slot in the room OTHER than the Mage's own.
       const open = openSlotsInRoom(ctx.state, roomIdOfMage(ctx.state, m.id) ?? '');
       return open.some((id) => id !== (m.location as { spaceId: string }).spaceId);

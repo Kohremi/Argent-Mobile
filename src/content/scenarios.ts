@@ -142,3 +142,62 @@ export const talismansOfMagic: Scenario = {
 };
 
 registerScenario(talismansOfMagic);
+
+/**
+ * Scenario 3 — The Well of Souls.
+ *
+ * A death/sacrifice + research theme. Persistent rule: when casting a Spell, the
+ * caster may send one office Mage to the Infirmary (no bonus) to reduce that
+ * Spell's cost by up to 3 — which also lets them cast a Spell up to 3 Mana over
+ * their pool. Each round adds research rewards or loosens casting.
+ */
+export const wellOfSouls: Scenario = {
+  id: 'well-of-souls',
+  name: 'The Well of Souls',
+  description:
+    'When casting a Spell you may sacrifice an office Mage to the Infirmary (no ' +
+    'bonus) to reduce its cost by up to 3. Each round the dead whisper new power.',
+  sacrificeMageForSpellDiscount: 3,
+  rounds: [
+    {
+      round: 1,
+      name: 'Rumours of Hauntings',
+      description: 'Round end: each player gains 2 Research.',
+      roundEndEffectId: 'wellofsouls.scenario.research-2',
+      roundEndName: 'Rumours of Hauntings',
+    },
+    {
+      round: 2,
+      name: 'Visions in the Night',
+      description: 'Round end: each player gains 1 Intelligence or 1 Wisdom.',
+      roundEndEffectId: 'wellofsouls.scenario.int-or-wis',
+      roundEndName: 'Visions in the Night',
+    },
+    {
+      round: 3,
+      name: 'Whispers in the Shadows',
+      description: 'Round end: each player gains 1 Research.',
+      roundEndEffectId: 'wellofsouls.scenario.research-1',
+      roundEndName: 'Whispers in the Shadows',
+    },
+    {
+      round: 4,
+      name: 'Power Unleashed',
+      description:
+        'You may cast any level of the Spells in your office this round, even ' +
+        'ones you have not researched.',
+      castAnyLevel: true,
+    },
+    {
+      round: 5,
+      name: 'All Mysteries Revealed',
+      description:
+        'All Spell cost is reduced by 1 (minimum 0), and you may cast any level ' +
+        'of the Spells in your office, even un-researched ones.',
+      castAnyLevel: true,
+      spellCostReduction: 1,
+    },
+  ],
+};
+
+registerScenario(wellOfSouls);

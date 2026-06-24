@@ -1,7 +1,6 @@
 
 Scenarios.  Scenarios change the rules or mechanics of the normal game a bit, and add a flavored round end bonus or mechanic.  these are 5 round games just like the base game. 
 
-Before beginnging - Add a round toggle to the very first setup page, with only two options 5 and 6 rounds.  5 is default.  summer break flips it to 6.  summer break + a scenario flips it to 5.  this can be changed after packs are selected.  this also allows a normal game with 6 rounds for an epic game.
 
 Scenarios have a theme, a change to the normal rules, and new round ending rewards or mechanics.
 
@@ -46,3 +45,4 @@ Round 2: Visions in the Night: Round End: In turn order, each player gains 1 INT
 Round 3: Whispers in the Shadows: Round End: In turn order, each player gains 1 Research.
 Round 4: Power Unleashed: Ongoing for this Round: You may cast any level of the spells in your office this round, even ones you have not researched.
 Round 5: All Mysteries Revealed : Ongoing for this Round: All Spell cost is reduced by 1 to a minimum of 0.  Ongoing for this Round: You may cast any level of the spells in your office this round, even ones you have not researched.
+Scenario 3 has been implemented.

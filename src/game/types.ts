@@ -690,6 +690,16 @@ export interface ScenarioRoundRule {
    * R3 / R5).
    */
   vaultUseGrantsIp?: boolean;
+  /**
+   * Ongoing this round: every Spell's Mana cost is reduced by this much, floored
+   * at 0 (Well of Souls R5: 1).
+   */
+  spellCostReduction?: number;
+  /**
+   * Ongoing this round: a player may cast any level of the Spells in their office
+   * even if that level isn't researched (Well of Souls R4 / R5).
+   */
+  castAnyLevel?: boolean;
 }
 
 /**
@@ -729,6 +739,12 @@ export interface Scenario {
   startingItemsByDepartment?: Partial<Record<Department, VaultCardId>>;
   /** Full pool a neutral leader may choose a starting item from (Talismans). */
   startingItemPool?: VaultCardId[];
+  /**
+   * Persistent (all-round) rule: when casting a Spell, the caster may send one
+   * office Mage to the Infirmary (no Infirmary bonus) to reduce that Spell's Mana
+   * cost by up to this much (Well of Souls: 3).
+   */
+  sacrificeMageForSpellDiscount?: number;
   /** Per-round rules, indexed by `round`. */
   rounds: ScenarioRoundRule[];
 }
