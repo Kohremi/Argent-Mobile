@@ -4,10 +4,10 @@ Orientation for any agent working in this repository. Read this before making
 changes; it explains how the game is structured and where things live so you
 can make correct edits without re-deriving the architecture each time.
 
-> This file is the architectural source of truth. [README.md](README.md) is
-> user-facing and has drifted in places (e.g. it lists the Mancers pack as a
-> stub — it is now substantially implemented). When the two disagree, trust the
-> code, then update whichever doc is wrong.
+> This file is the architectural source of truth; [README.md](README.md) is the
+> user-facing overview and [docs/scenarios.md](docs/scenarios.md) documents the
+> scenario system. When any of them disagree, trust the code, then update
+> whichever doc is wrong.
 
 ---
 
@@ -26,7 +26,7 @@ Vitest. No backend.
 ```sh
 npm run dev        # Vite dev server (http://localhost:5173)
 npm run typecheck  # tsc --noEmit  — run this after any change
-npm run test       # vitest run    — full suite (~910 tests, runs in a few seconds)
+npm run test       # vitest run    — full suite (~1,100 tests, runs in a few seconds)
 npm run build      # typecheck + production build
 ```
 
@@ -82,22 +82,26 @@ src/
       index.ts               # re-exports registry + side-effect-imports every pack's effects
       helpers.ts             # shared primitives: wound/banish/move/shadow, target builders,
                              #   reaction-option builder, immunity checks, etc.
-      base.ts                # base-pack effect impls   (~21k lines, 300+ effects)
+      base.ts                # base-pack effect impls (~21k lines, 300+ effects)
       mancers.ts             # Mancers expansion effects (~4k lines, 70+ effects)
-      knights.ts/ascension.ts/promo.ts  # still empty stubs
+      archmage.ts renovation.ts summerbreak.ts   # other expansion-pack effects
+      talismans.ts wellofsouls.ts keytotheuniversity.ts \
+        politicalstruggle.ts assassins.ts        # scenario effects (see docs/scenarios.md)
     ai/                      # AI bot personalities — pure decision policies (§4a)
       types.ts               # BotPersonality contract
       index.ts               # registry + setup picker options
+      common.ts              # shared bot plumbing (RNG, board lookups, merit budgeting)
       klank.ts               # greedy tiered cascade
       thickhide.ts           # mostly-random with a few instincts
       malfoy.ts              # grab Mana, then research toward big spells
+      darthpotter.ts         # win-optimising: reads revealed voters, flips criteria
   content/
     types.ts                 # ContentPack interface
     registry.ts              # registerPack + getPack/requirePack/listPacks (eager)
+    scenarios.ts             # Scenario registry — the 6 alternate game modes (§9a)
     packs/
       base.ts                # base pack data (rooms, mages, spells, vault, supporters, voters…)
-      mancers.ts             # Mancers data
-      knights.ts/ascension.ts/promo.ts  # stubs (empty arrays)
+      mancers.ts archmage.ts renovation.ts summerbreak.ts   # expansion-pack data
   store/                     # Zustand — the React<->engine boundary
     gameStore.ts             # holds GameState; dispatch = applyAction
     uiStore.ts               # presentation-only state (selection, toasts, FX, drawers)
@@ -149,6 +153,13 @@ Personalities self-register in [src/game/ai/index.ts](src/game/ai/index.ts)
   opponent-only harmful targeting).
 - **Malfoy** — grab the best Mana seat once per round, then pivot to Research
   for big spells; all trumped by casting disruptive spells on opponents.
+- **DarthPotter** — win-optimising: reads the revealed voters and steers toward
+  the resource criteria it can actually flip.
+
+Shared plumbing common to all four (seeded RNG, board lookups, merit budgeting,
+the reaction-window save, the gain-mark "alternative" fallback) lives in
+[src/game/ai/common.ts](src/game/ai/common.ts); each personality file holds only
+its decision policy.
 
 Shared rules they all honor: only ever aim harmful effects at opponents, and
 never occupy more Merit seats than Merit Badges held this round.
@@ -350,6 +361,19 @@ Create `src/content/packs/<id>.ts` exporting a `ContentPack`, register it in
 `src/game/effects/<id>.ts`, and side-effect-import it in
 [src/game/effects/index.ts](src/game/effects/index.ts). No engine edits.
 
+### 9a. A new scenario (alternate game mode)
+
+Scenarios are a parallel data-driven system to packs, fully documented in
+[docs/scenarios.md](docs/scenarios.md) — read it before adding one. In short: a
+`Scenario` ([src/content/scenarios.ts](src/content/scenarios.ts)) carries typed
+behaviour flags for its persistent rule and each round; the engine reads those
+flags at fixed hook points and **never switches on a scenario id**. Adding a
+scenario whose mechanics already exist is pure data; a genuinely new mechanic is
+"one new flag in [types.ts](src/game/types.ts) + one engine hook that reads it",
+with round-end rewards routed through the same pump as a pack's
+`roundEndScenarios` (so scenarios and packs compose). All six are implemented
+and each ships a `src/game/<scenario>.test.ts` with a headless all-bot game.
+
 ## 10. UI layer
 
 - **gameStore** holds `GameState`; `dispatch(action)` = `applyAction`. The UI
@@ -390,12 +414,14 @@ Every game must be reproducible from `(rngSeed, action[])`. Therefore:
 ## 13. Status (as of this writing)
 
 - **base** pack: playable end-to-end (draft → 5 rounds → scoring). 300+ effects
-  wired; a handful of cards still surface text but throw on trigger.
-- **mancers** pack: substantially implemented (70+ effects: Golem Lab,
-  University Tavern, Technomancy, Black Chronicle, Eternal Engine, treasures…).
-- **knights / ascension / promo**: empty stubs (data arrays + effect modules
-  exist but are empty).
-- **AI bots**: Klank, Thickhide, and Malfoy ([src/game/ai/](src/game/ai/)) can
-  fill any seat; all-bot tables run to completion (§4a).
-- ~910 Vitest specs pass; the bulk live in
-  [src/game/engine.test.ts](src/game/engine.test.ts).
+  wired; every spell-book level resolves through a registered effect.
+- **expansion packs**: mancers, archmage, renovation, and summerbreak — all
+  implemented and freely combinable.
+- **scenarios**: all six alternate game modes implemented (§9a,
+  [docs/scenarios.md](docs/scenarios.md)).
+- **AI bots**: Klank, Thickhide, Malfoy, and DarthPotter
+  ([src/game/ai/](src/game/ai/)) can fill any seat; all-bot tables run to
+  completion (§4a).
+- ~1,100 Vitest specs pass; the bulk live in
+  [src/game/engine.test.ts](src/game/engine.test.ts), with a per-scenario test
+  file and a seeded board-invariant fuzzer alongside.

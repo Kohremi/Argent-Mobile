@@ -86,10 +86,10 @@ Scenario 6 has been implemented.
 
 ---
 
-# How scenarios are implemented (read before adding scenarios 4–6)
+# How scenarios are implemented
 
-This section documents the data-driven architecture the three shipped scenarios
-use, so new scenarios follow the same pattern instead of inventing new ones.
+This section documents the data-driven architecture all six scenarios use, so
+any future scenario follows the same pattern instead of inventing new ones.
 
 ## The one rule that governs everything
 
