@@ -20,10 +20,24 @@
 //     any action that would otherwise force her to wound herself.
 //
 // Randomness is seeded from the GameState so a given state always yields the
-// same choice (reproducible / testable) while varying across the game.
+// same choice (reproducible / testable) while varying across the game. Shared
+// plumbing (seeded RNG, board lookups, merit budgeting, the self-wound guard,
+// the reaction save) lives in `./common`.
 
+import {
+  HARMFUL_TARGET_RE,
+  type Rng,
+  chooseReaction,
+  findSpace,
+  forcesSelfWound,
+  isMeritSlot,
+  isMoveResearchOption,
+  makeRng,
+  meritBadgesCommitted,
+  ownMageIds,
+  pickRandom,
+} from './common';
 import { applyAction } from '../engine';
-import { createRng, type Rng } from '../../utils/rng';
 import {
   castableSpellLevels,
   claimableBellCards,
@@ -36,174 +50,18 @@ import type {
   ActionSpace,
   GameAction,
   GameState,
-  PendingPrompt,
   PendingResolution,
   Player,
   PlayerId,
   ResolutionAnswer,
-  Room,
 } from '../types';
 import type { BotPersonality } from './types';
-
-/**
- * Option ids on a research menu that REARRANGE already placed Research (relocate
- * a WIS/INT token between Spells). Bots never do this, so they're filtered out —
- * leaving "Done moving Research" (`discard`) as the move-only menu's choice.
- */
-function isMoveResearchOption(id: string): boolean {
-  return id === 'move-wis' || id === 'move-int';
-}
-
-/**
- * Choose a LEGAL reaction answer for an open reaction window, verified by
- * dry-running each candidate (engine-truth). The engine only offers reactions
- * Thickhide owns and can pay, but a multi-Mage window can still reject a naive
- * play: e.g. Mystic Amulet over a window whose FIRST event is an opponent's
- * Mage — with no `forMageId` the engine matches event[0] and the reaction
- * throws "only protects your own Mage". So we try the option's own forMageId,
- * then each of her affected Mages, and commit only to an answer the engine
- * accepts; if none do, she passes (always legal). A repeatable option (Sacred
- * Shield) is tried first so she keeps her slot and can save several Mages; the
- * rest are tried in random order (her usual idiom). `reactionContext: {}`
- * resolves a slot-pick reaction by keeping the Mage on its original slot.
- */
-function chooseReaction(
-  state: GameState,
-  pending: PendingResolution,
-  rng: Rng,
-): ResolutionAnswer {
-  const prompt = pending.prompt;
-  if (prompt.kind !== 'reaction-window' || prompt.reactionOptions.length === 0) {
-    return { kind: 'reaction-passed' };
-  }
-  const ownAffected = prompt.triggerEvents
-    .filter((e) => 'ownerId' in e && e.ownerId === pending.responderId && 'mageId' in e)
-    .map((e) => (e as { mageId: string }).mageId);
-  const legal = (answer: ResolutionAnswer): boolean => {
-    try {
-      applyAction(state, { type: 'RESOLVE_PENDING', resolutionId: pending.id, answer });
-      return true;
-    } catch {
-      return false;
-    }
-  };
-  // Repeatable first, then the rest shuffled (her random idiom).
-  const repeatables = prompt.reactionOptions.filter((o) => o.repeatable);
-  const rest = prompt.reactionOptions.filter((o) => !o.repeatable);
-  for (let i = rest.length - 1; i > 0; i--) {
-    const j = Math.floor(rng() * (i + 1));
-    [rest[i], rest[j]] = [rest[j]!, rest[i]!];
-  }
-  for (const o of [...repeatables, ...rest]) {
-    const targets = o.forMageId ? [o.forMageId] : [undefined, ...ownAffected];
-    for (const forMageId of targets) {
-      const answer: ResolutionAnswer = {
-        kind: 'reaction-played',
-        effectId: o.effectId,
-        reactionContext: {},
-        ...(forMageId ? { forMageId } : {}),
-      };
-      if (legal(answer)) return answer;
-    }
-  }
-  return { kind: 'reaction-passed' };
-}
 
 type Category = 'place' | 'spell' | 'vault' | 'supporter' | 'bell';
 
 interface Candidate {
   action: GameAction;
   category: Category;
-}
-
-/** A PRNG seeded from the state + a salt, so choices are reproducible. */
-function makeRng(state: GameState, salt: string): Rng {
-  let h = (state.rngSeed | 0) ^ Math.imul(state.nextSequenceId + 1, 2654435761);
-  for (let i = 0; i < salt.length; i++) {
-    h = Math.imul(h ^ salt.charCodeAt(i), 16777619);
-  }
-  return createRng(h);
-}
-
-function pickRandom<T>(arr: T[], rng: Rng): T {
-  return arr[Math.floor(rng() * arr.length)] ?? arr[0]!;
-}
-
-function findSpace(
-  state: GameState,
-  spaceId: string,
-): { room: Room; space: ActionSpace } | null {
-  for (const room of state.rooms) {
-    const space = room.actionSpaces.find((s) => s.id === spaceId);
-    if (space) return { room, space };
-  }
-  return null;
-}
-
-function isMeritSlot(space: ActionSpace): boolean {
-  return space.slotType === 'merit' || space.slotType === 'shadow-merit';
-}
-
-/** Merit Badges already committed to merit seats this round (charged at Resolution). */
-function meritBadgesCommitted(state: GameState, playerId: PlayerId): number {
-  let committed = 0;
-  for (const room of state.rooms) {
-    for (const sp of room.actionSpaces) {
-      if (!isMeritSlot(sp)) continue;
-      const cost = sp.costToActivate?.meritBadges ?? 1;
-      if (sp.occupant?.ownerId === playerId) committed += cost;
-      if (sp.shadowOccupant?.ownerId === playerId) committed += cost;
-    }
-  }
-  return committed;
-}
-
-/** Wound/banish target prompts — the negative effects she only aims at rivals. */
-const HARMFUL_TARGET_RE = /\b(wound|banish)\b/i;
-
-/** The set of Mage ids owned by `playerId`. */
-function ownMageIds(state: GameState, playerId: PlayerId): Set<string> {
-  const player = state.players.find((p) => p.id === playerId);
-  return new Set(player?.mages.map((m) => m.id) ?? []);
-}
-
-/**
- * A `choose-target-mage` prompt that wounds or banishes — i.e. a NEGATIVE
- * effect Thickhide should only ever aim at an opponent. Detected from the
- * prompt's banner, which the engine labels "Wound which Mage?" / "Banish which
- * Mage?" / "Choose a Mage to wound" / etc. Prompts that already restrict their
- * eligible list to opponents (Arcane Surge) and beneficial self-target prompts
- * ("Place which of your Mages…") carry no such label, so they're unaffected.
- */
-function isHarmfulTargetPrompt(
-  prompt: Extract<PendingPrompt, { kind: 'choose-target-mage' }>,
-): boolean {
-  return HARMFUL_TARGET_RE.test(prompt.label ?? '');
-}
-
-/**
- * True when taking `action` would immediately force Thickhide into a harmful
- * (wound / banish) target pick whose only eligible Mages are her OWN — there
- * are no opponents to hit and the prompt can't be passed. Rather than turn the
- * effect on herself she declines to attempt it, so such actions are dropped
- * from her candidate pool. Engine-truth: we dry-run the action and inspect the
- * prompt it leaves on top of the stack (same approach as `isFastAction`).
- */
-function forcesSelfWound(state: GameState, action: GameAction, botId: PlayerId): boolean {
-  let next: GameState;
-  try {
-    next = applyAction(state, action);
-  } catch {
-    return false;
-  }
-  const top = next.pendingResolutionStack[next.pendingResolutionStack.length - 1];
-  if (!top || top.responderId !== botId) return false;
-  const prompt = top.prompt;
-  if (prompt.kind !== 'choose-target-mage') return false;
-  // An optional leg can simply be passed at prompt time, so it's not a dead end.
-  if (!isHarmfulTargetPrompt(prompt) || prompt.canPass) return false;
-  const own = ownMageIds(next, botId);
-  return prompt.eligibleMageIds.every((id) => own.has(id));
 }
 
 /**
@@ -368,6 +226,15 @@ function legalCards(
   return legal.length > 0 ? legal : [...cardIds];
 }
 
+/** Fisher–Yates shuffle in place, seeded — Thickhide's "try reactions at random". */
+function shuffle<T>(arr: T[], rng: Rng): T[] {
+  for (let i = arr.length - 1; i > 0; i--) {
+    const j = Math.floor(rng() * (i + 1));
+    [arr[i], arr[j]] = [arr[j]!, arr[i]!];
+  }
+  return arr;
+}
+
 // ============================================================================
 // Prompt answers — always take the reward (forfeit only when forced); otherwise
 // choose at random among the legal options.
@@ -399,7 +266,7 @@ function answerPendingResolution(
 
     case 'choose-target-mage': {
       if (prompt.eligibleMageIds.length === 0) return { kind: 'pass' };
-      if (isHarmfulTargetPrompt(prompt)) {
+      if (HARMFUL_TARGET_RE.test(prompt.label ?? '')) {
         // Negative effect: only ever wound/banish an OPPONENT's Mage. With no
         // opponent eligible she declines the effect when the prompt allows it;
         // if it can't be passed she's already committed (an action that would
@@ -439,9 +306,10 @@ function answerPendingResolution(
 
     case 'reaction-window':
       // Always react when a reaction is available — every offered option is a
-      // defensive save of one of her own Mages. The pick is dry-run-verified
-      // (correct forMageId, else pass) so it's always legal.
-      return chooseReaction(state, pending, rng);
+      // defensive save of one of her own Mages. Non-repeatable options are tried
+      // in random order (her usual idiom); the pick is dry-run-verified (correct
+      // forMageId, else pass) so it's always legal.
+      return chooseReaction(state, pending, (rest) => shuffle(rest, rng));
 
     case 'confirm':
       return { kind: 'confirmed' };

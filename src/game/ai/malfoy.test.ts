@@ -271,6 +271,35 @@ describe('Malfoy — Errands priority cascade', () => {
     const a = malfoy.chooseErrandsAction(s, pid);
     expect(a).toMatchObject({ type: 'PLACE_WORKER', actionSpaceId: plainId });
   });
+
+  it('gathers INT/WIS fuel before Research when holding <2 unspent research', () => {
+    let s = clearDescriptions(seatMages(errandsGame(), 0, ['a1']));
+    // Flush with Mana (skips the Mana tier) but no research fuel in hand.
+    s = setResources(s, 0, { mana: 6, intelligence: 0, wisdom: 0 });
+    const pid = s.players[0]!.id;
+    const [research, intSeat] = [...eligiblePlacementSlots(s, pid, 'a1')].filter(
+      (id) => !isMeritSlotId(s, id),
+    );
+    s = setDesc(s, research!, 'Gain 2 Research');
+    s = setDesc(s, intSeat!, 'Gain 1 INT');
+
+    const a = malfoy.chooseErrandsAction(s, pid);
+    expect(a).toMatchObject({ type: 'PLACE_WORKER', actionSpaceId: intSeat });
+  });
+
+  it('converts at a Research seat once holding ≥2 unspent research', () => {
+    let s = clearDescriptions(seatMages(errandsGame(), 0, ['a1']));
+    s = setResources(s, 0, { mana: 6, intelligence: 2, wisdom: 0 });
+    const pid = s.players[0]!.id;
+    const [research, intSeat] = [...eligiblePlacementSlots(s, pid, 'a1')].filter(
+      (id) => !isMeritSlotId(s, id),
+    );
+    s = setDesc(s, research!, 'Gain 2 Research');
+    s = setDesc(s, intSeat!, 'Gain 1 INT');
+
+    const a = malfoy.chooseErrandsAction(s, pid);
+    expect(a).toMatchObject({ type: 'PLACE_WORKER', actionSpaceId: research });
+  });
 });
 
 describe('Malfoy — prompt answers', () => {
@@ -317,6 +346,86 @@ describe('Malfoy — prompt answers', () => {
       mk({ kind: 'choose-spell-level', spellId: 'x', availableLevels: [1, 3, 2] }),
     );
     expect(ans).toEqual({ kind: 'level-chosen', level: 3 });
+  });
+
+  it('hits an opponent Mage, never his own, on a wound prompt', () => {
+    let s = seatMages(errandsGame(), 0, ['own']);
+    s = seatMages(s, 1, ['opp']);
+    const pending: PendingResolution = {
+      id: 'r-own-vs-opp',
+      responderId: s.players[0]!.id,
+      prompt: { kind: 'choose-target-mage', eligibleMageIds: ['own', 'opp'], label: 'Choose a Mage to wound', canPass: true },
+      resume: { effectId: 'base.system.noop', context: {} },
+      source: { kind: 'system', id: 't', triggeringPlayerId: s.players[0]!.id, description: 't' },
+    };
+    expect(malfoy.answerPendingResolution(s, pending)).toEqual({ kind: 'mage-chosen', mageId: 'opp' });
+  });
+
+  it('passes a wound prompt when only his own Mages are eligible', () => {
+    const s = seatMages(errandsGame(), 0, ['own']);
+    const pending: PendingResolution = {
+      id: 'r-self-only',
+      responderId: s.players[0]!.id,
+      prompt: { kind: 'choose-target-mage', eligibleMageIds: ['own'], label: 'Choose a Mage to wound', canPass: true },
+      resume: { effectId: 'base.system.noop', context: {} },
+      source: { kind: 'system', id: 't', triggeringPlayerId: s.players[0]!.id, description: 't' },
+    };
+    expect(malfoy.answerPendingResolution(s, pending)).toEqual({ kind: 'pass' });
+  });
+
+  it('among rival Mages, hits the one on the more valuable seat', () => {
+    let s = clearDescriptions(errandsGame());
+    const seats = s.rooms.flatMap((r) => r.actionSpaces.map((sp) => sp.id));
+    const [rich, poor] = [seats[0]!, seats[1]!];
+    s = occupy(s, 1, 'rich-mage', rich);
+    s = occupy(s, 1, 'poor-mage', poor);
+    s = setDesc(setDesc(s, rich, 'Gain 4 Mana'), poor, 'Gain 1 Gold');
+
+    const pending: PendingResolution = {
+      id: 'r-target',
+      responderId: s.players[0]!.id,
+      prompt: { kind: 'choose-target-mage', eligibleMageIds: ['poor-mage', 'rich-mage'], label: 'Choose a Mage to wound', canPass: true },
+      resume: { effectId: 'base.system.noop', context: {} },
+      source: { kind: 'system', id: 't', triggeringPlayerId: s.players[0]!.id, description: 't' },
+    };
+    const ans = malfoy.answerPendingResolution(s, pending);
+    expect(ans).toEqual({ kind: 'mage-chosen', mageId: 'rich-mage' });
+  });
+
+  it('prefers the higher-Influence rival when victims sit on equal seats', () => {
+    let s = initGame({
+      activePackIds: ['base'],
+      playerNames: ['Draco', 'Harry', 'Ron'],
+      rngSeed: 7,
+      controlledByBot: [true, true, true],
+    });
+    s = { ...s, phase: { kind: 'errands', round: 1, activePlayerIndex: 0, actionUsed: false, fastActionUsed: false } };
+    s = seatMages(s, 1, ['opp1']);
+    s = seatMages(s, 2, ['opp2']);
+    // Both rival Mages are off-seat (office), so seat value is equal — the
+    // tie breaks toward the rival who's leading on Influence.
+    s = {
+      ...s,
+      players: s.players.map((p, i) =>
+        i === 1
+          ? { ...p, resources: { ...p.resources, influence: 1 } }
+          : i === 2
+            ? { ...p, resources: { ...p.resources, influence: 5 } }
+            : p,
+      ),
+    };
+    const opp1 = 'opp1';
+    const opp2 = 'opp2';
+
+    const pending: PendingResolution = {
+      id: 'r-leader',
+      responderId: s.players[0]!.id,
+      prompt: { kind: 'choose-target-mage', eligibleMageIds: [opp1, opp2], label: 'Choose a Mage to wound', canPass: true },
+      resume: { effectId: 'base.system.noop', context: {} },
+      source: { kind: 'system', id: 't', triggeringPlayerId: s.players[0]!.id, description: 't' },
+    };
+    const ans = malfoy.answerPendingResolution(s, pending);
+    expect(ans).toEqual({ kind: 'mage-chosen', mageId: opp2 });
   });
 
   it('passes a pass-only reaction window', () => {

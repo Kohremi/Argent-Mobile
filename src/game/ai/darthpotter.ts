@@ -3,10 +3,10 @@
 // Pure decision functions (engine truth in, legal GameAction / ResolutionAnswer
 // out), same contract as the other personalities — legality is always enumerated
 // with the engine's own dry-run selectors so a bot can never attempt an illegal
-// move. DarthPotter inherits ALL of Klank's safeguards (merit-badge budgeting,
-// disruption detection, research gating, bell-tower fallback) plus the shared
-// "always use a reaction" / "never rearrange Research" rules and Thickhide's
-// "never wound your own Mage" guard.
+// move. DarthPotter inherits ALL of the shared safeguards in `./common`
+// (merit-badge budgeting, disruption detection, the reaction save, the
+// "never rearrange Research" / "always use a reaction" / "never wound your own
+// Mage" rules) — this file is its voter-aware win policy.
 //
 // What makes DarthPotter different is that it plays to WIN the vote. The game is
 // won by collecting the most votes from the Consortium, and each revealed voter
@@ -32,24 +32,29 @@
 //   4. PLACE    — otherwise any seat.
 //   5. BELL     — can't place a Mage → take a Bell Tower card (ends the round).
 
-import { applyAction } from '../engine';
-import { createRng, type Rng } from '../../utils/rng';
+import {
+  INT_WIS_RE,
+  SUPPORTER_DRAFT_RE,
+  chooseReaction,
+  disruptiveCardActions,
+  findSpace,
+  firstLegalCard,
+  isMeritSlot,
+  isMoveResearchOption,
+  makeRng,
+  maxAmount,
+  meritBadgesCommitted,
+  pickRandom,
+  providesResearch,
+  unspentResearch,
+} from './common';
 import { scorePlayerForCriterion } from '../scoring';
 import {
-  lookupSpellCardDef,
-  lookupSupporterCardDef,
-  lookupVaultCardDef,
-} from '../effects/helpers';
-import {
-  castableSpellLevels,
   claimableBellCards,
   eligiblePlacementSlots,
   eligibleShadowPlacementSlots,
-  playableSupporters,
-  playableVaultCards,
 } from '../../utils/uiSelectors';
 import type {
-  ActionSpace,
   ConsortiumVoter,
   GameAction,
   GameState,
@@ -57,81 +62,9 @@ import type {
   Player,
   PlayerId,
   ResolutionAnswer,
-  Room,
   ScoringCriterion,
 } from '../types';
 import type { BotPersonality } from './types';
-
-// ============================================================================
-// Shared plumbing (mirrors Klank — kept self-contained per personality).
-// ============================================================================
-
-/** A PRNG seeded from the state + a salt, so within-tier picks are reproducible. */
-function makeRng(state: GameState, salt: string): Rng {
-  let h = (state.rngSeed | 0) ^ Math.imul(state.nextSequenceId + 1, 2654435761);
-  for (let i = 0; i < salt.length; i++) {
-    h = Math.imul(h ^ salt.charCodeAt(i), 16777619);
-  }
-  return createRng(h);
-}
-
-function pickRandom<T>(arr: T[], rng: Rng): T {
-  return arr[Math.floor(rng() * arr.length)] ?? arr[0]!;
-}
-
-function findSpace(
-  state: GameState,
-  spaceId: string,
-): { room: Room; space: ActionSpace } | null {
-  for (const room of state.rooms) {
-    const space = room.actionSpaces.find((s) => s.id === spaceId);
-    if (space) return { room, space };
-  }
-  return null;
-}
-
-/** Unspent research currency in hand (INT + WIS pool, not yet placed on spells). */
-function unspentResearch(player: Player): number {
-  return player.resources.intelligence + player.resources.wisdom;
-}
-
-/** Merit / shadow-merit seats cost a Merit Badge to activate (paid at Resolution). */
-function isMeritSlot(space: ActionSpace): boolean {
-  return space.slotType === 'merit' || space.slotType === 'shadow-merit';
-}
-
-/** Merit Badges already committed to merit seats this round (charged at Resolution). */
-function meritBadgesCommitted(state: GameState, playerId: PlayerId): number {
-  let committed = 0;
-  for (const room of state.rooms) {
-    for (const sp of room.actionSpaces) {
-      if (!isMeritSlot(sp)) continue;
-      const cost = sp.costToActivate?.meritBadges ?? 1;
-      if (sp.occupant?.ownerId === playerId) committed += cost;
-      if (sp.shadowOccupant?.ownerId === playerId) committed += cost;
-    }
-  }
-  return committed;
-}
-
-// --- Reward classification from a slot's human-readable summary -------------
-
-const RESEARCH_RE = /\bresearch\b/;
-const SUPPORTER_DRAFT_RE = /draft[^.]*supporter/;
-const INT_WIS_RE = /\bint\b|intelligence|\bwis\b|wisdom/;
-
-function providesResearch(desc: string): boolean {
-  return RESEARCH_RE.test(desc);
-}
-
-/** Largest "<n> mana"/"<n> gold" amount named in the reward text. */
-function maxAmount(desc: string, unit: 'mana' | 'gold'): number {
-  let best = 0;
-  for (const m of desc.matchAll(new RegExp(`(\\d+)\\s*${unit}`, 'g'))) {
-    best = Math.max(best, Number(m[1]));
-  }
-  return best;
-}
 
 const INFLUENCE_RE = /influence|\bip\b/;
 
@@ -170,81 +103,6 @@ function enumeratePlacements(state: GameState, player: Player): PlacementOption[
     for (const spaceId of eligibleShadowPlacementSlots(state, player.id, mage.id)) {
       make(mage.id, spaceId, true);
     }
-  }
-  return out;
-}
-
-// --- Disruption detection for spells / items (verbatim Klank logic) ---------
-
-const HARMFUL_LABEL_RE = /wound|banish|move|shadow|displace/i;
-const DISRUPT_VERB_RE = /\b(wound|banish|shadow|displace|move)\b/i;
-const GLOBAL_DISRUPT_RE = /\bsteal\b|lose (their|its) power|may not cast|more mana|extra mana/i;
-
-function actionDisruptsOpponent(
-  state: GameState,
-  player: Player,
-  action: GameAction,
-  sourceText: string,
-): boolean {
-  let next: GameState;
-  try {
-    next = applyAction(state, action);
-  } catch {
-    return false;
-  }
-  const me = player.id;
-  const ownIds = new Set(player.mages.map((m) => m.id));
-
-  for (const w of next.activeReactionWindows) {
-    for (const e of w.triggerEvents) {
-      if (
-        (e.kind === 'mage-wounded' ||
-          e.kind === 'mage-banished' ||
-          e.kind === 'mage-moved' ||
-          e.kind === 'mage-shadowed') &&
-        e.byPlayerId === me &&
-        e.ownerId !== me
-      ) {
-        return true;
-      }
-    }
-  }
-
-  const top = next.pendingResolutionStack[next.pendingResolutionStack.length - 1];
-  if (top && top.responderId === me && top.prompt.kind === 'choose-target-mage') {
-    const eligible = top.prompt.eligibleMageIds;
-    const opponentEligible = eligible.some((id) => !ownIds.has(id));
-    const opponentsOnly = eligible.length > 0 && eligible.every((id) => !ownIds.has(id));
-    const harmful =
-      opponentsOnly ||
-      HARMFUL_LABEL_RE.test(top.prompt.label ?? '') ||
-      DISRUPT_VERB_RE.test(sourceText);
-    if (opponentEligible && harmful) return true;
-  }
-
-  return GLOBAL_DISRUPT_RE.test(sourceText);
-}
-
-/** Castable spells + playable items whose effect wounds or disrupts an opponent. */
-function disruptiveCardActions(state: GameState, player: Player): GameAction[] {
-  const out: GameAction[] = [];
-  for (const [spellCardId, levels] of castableSpellLevels(state, player.id)) {
-    const def = lookupSpellCardDef(state, spellCardId);
-    for (const level of levels) {
-      const text = def?.levels.find((l) => l.level === level)?.description ?? '';
-      const action: GameAction = { type: 'CAST_SPELL', playerId: player.id, spellCardId, level };
-      if (actionDisruptsOpponent(state, player, action, text)) out.push(action);
-    }
-  }
-  for (const vaultCardId of playableVaultCards(state, player.id)) {
-    const text = lookupVaultCardDef(state, vaultCardId)?.description ?? '';
-    const action: GameAction = { type: 'PLAY_VAULT_CARD', playerId: player.id, vaultCardId };
-    if (actionDisruptsOpponent(state, player, action, text)) out.push(action);
-  }
-  for (const supporterCardId of playableSupporters(state, player.id)) {
-    const text = lookupSupporterCardDef(state, supporterCardId)?.description ?? '';
-    const action: GameAction = { type: 'PLAY_SUPPORTER', playerId: player.id, supporterCardId };
-    if (actionDisruptsOpponent(state, player, action, text)) out.push(action);
   }
   return out;
 }
@@ -432,91 +290,11 @@ function chooseErrandsAction(state: GameState, playerId: PlayerId): GameAction {
 
 // ============================================================================
 // Prompt answers — a valid answer for EVERY prompt kind, voter-aware where it
-// matters, with Klank/Thickhide safeguards layered over safe defaults.
+// matters, with the shared safeguards layered over safe defaults.
 // ============================================================================
-
-/** Research-rearrange option ids — bots never shuffle placed Research. */
-function isMoveResearchOption(id: string): boolean {
-  return id === 'move-wis' || id === 'move-int';
-}
 
 /** Wound/banish target prompts — negative effects only ever aimed at rivals. */
 const HARMFUL_TARGET_RE = /\b(wound|banish)\b/i;
-
-/**
- * First eligible card whose pick is actually LEGAL, found by dry-running the
- * resolution (engine-truth — the same safeguard Klank/Thickhide use for
- * actions). A `choose-vault-card` BUY prompt can list cards the bot can't
- * afford; picking the first blindly would throw an illegal-move error, so we
- * skip any candidate the engine rejects. Falls back to the first id if none
- * dry-run cleanly (no worse than before, and never an *extra* illegal move).
- */
-function firstLegalCard(
-  state: GameState,
-  pending: PendingResolution,
-  cardIds: readonly string[],
-): string | undefined {
-  for (const cardId of cardIds) {
-    try {
-      applyAction(state, {
-        type: 'RESOLVE_PENDING',
-        resolutionId: pending.id,
-        answer: { kind: 'card-chosen', cardId },
-      });
-      return cardId;
-    } catch {
-      // Illegal (e.g. an unaffordable buy) — try the next candidate.
-    }
-  }
-  return cardIds[0];
-}
-
-/**
- * Choose a LEGAL reaction answer for an open reaction window, verified by
- * dry-running each candidate (engine-truth). The engine only offers reactions
- * the bot owns and can pay, but a multi-Mage window can still reject a naive
- * play: e.g. Mystic Amulet over a window whose FIRST event is an opponent's
- * Mage — with no `forMageId` the engine matches event[0] and the reaction
- * throws "only protects your own Mage". So we try the option's own forMageId,
- * then each of the responder's affected Mages, and commit only to an answer the
- * engine accepts; if none do, we pass (always legal). A repeatable option
- * (Sacred Shield) is preferred so it keeps its slot and can save several Mages.
- * `reactionContext: {}` resolves a slot-pick reaction by keeping the Mage on
- * its original slot.
- */
-function chooseReaction(state: GameState, pending: PendingResolution): ResolutionAnswer {
-  const prompt = pending.prompt;
-  if (prompt.kind !== 'reaction-window' || prompt.reactionOptions.length === 0) {
-    return { kind: 'reaction-passed' };
-  }
-  const ownAffected = prompt.triggerEvents
-    .filter((e) => 'ownerId' in e && e.ownerId === pending.responderId && 'mageId' in e)
-    .map((e) => (e as { mageId: string }).mageId);
-  const legal = (answer: ResolutionAnswer): boolean => {
-    try {
-      applyAction(state, { type: 'RESOLVE_PENDING', resolutionId: pending.id, answer });
-      return true;
-    } catch {
-      return false;
-    }
-  };
-  const ordered = [...prompt.reactionOptions].sort(
-    (a, b) => Number(b.repeatable ?? false) - Number(a.repeatable ?? false),
-  );
-  for (const o of ordered) {
-    const targets = o.forMageId ? [o.forMageId] : [undefined, ...ownAffected];
-    for (const forMageId of targets) {
-      const answer: ResolutionAnswer = {
-        kind: 'reaction-played',
-        effectId: o.effectId,
-        reactionContext: {},
-        ...(forMageId ? { forMageId } : {}),
-      };
-      if (legal(answer)) return answer;
-    }
-  }
-  return { kind: 'reaction-passed' };
-}
 
 /**
  * Choose which voter to Mark. A mark wins a TIE on that voter, so it's worth the
@@ -594,7 +372,7 @@ function answerPendingResolution(
       const opponent = prompt.eligibleMageIds.find((id) => !ownIds.has(id));
       if (opponent !== undefined) return { kind: 'mage-chosen', mageId: opponent };
       // No opponent eligible. For a wound/banish prompt that can be declined,
-      // never turn the effect on our own Mage — pass instead (Thickhide guard).
+      // never turn the effect on our own Mage — pass instead.
       if (HARMFUL_TARGET_RE.test(prompt.label ?? '') && prompt.canPass) {
         return { kind: 'pass' };
       }

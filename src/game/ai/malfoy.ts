@@ -1,139 +1,82 @@
-// Malfoy — a cloned-from-Klank personality with a Mana-then-big-spells plan.
+// Malfoy — a disruption-first personality built on Klank's safe baseline.
 //
 // Pure decision functions (engine truth in, legal GameAction / ResolutionAnswer
-// out), same contract as Klank — see klank.ts. Malfoy's Errands priority:
+// out), same contract as the other personalities — legality is always enumerated
+// with the engine's own dry-run selectors so a bot can never attempt an illegal
+// move. The shared plumbing (seeded RNG, board lookups, merit budgeting,
+// reaction saves, the self-wound guard) lives in `./common`; this file is
+// Malfoy's policy: BOARD DISRUPTION and WOUNDING, fuelled by RESEARCH and MANA
+// for ever-bigger Spells.
 //
-//   0. TRUMP — cast a harmful, disruptive Spell on an opponent. This beats
-//      everything below; if he can hurt a rival with a Spell, he does.
-//   1. MANA   — take the best open seat that grants ≥2 Mana, ONCE per round
-//      (and, when a seat offers Mana OR Gold, he takes the Mana).
-//   2. RESEARCH — he's really after big Spells, so once he's flush with Mana
-//      (≥6) OR there are no more 2+ Mana seats left, he pivots to a Research
-//      seat. (After his one Mana grab he's also chasing Research.)
-//   3. INT/WIS — if he can't get Research, he settles for an INT or WIS seat.
-//   4. otherwise place anywhere; if he can't place a Mage, take a Bell Tower
+// Errands priority cascade (each tier fails over to the next):
+//   0. DISRUPT — the single highest-impact way to hurt a rival, considered
+//      across ALL channels (not just Spells): a Spell, a Vault/Consumable card,
+//      a Supporter, OR a placement that seizes / over-shadows an opponent's
+//      seat. Options are ranked by impact (banish > wound > shadow/move >
+//      global control) and then by how juicy the target is (the rival's
+//      Influence — the vote tiebreaker — plus the value of the seat the victim
+//      sits on). This beats everything below.
+//   1. MANA — the best open seat granting ≥2 Mana, ONCE per round, while still
+//      mana-hungry. He pivots off Mana once flush (≥6) or no 2+ Mana seat is
+//      left (he's saving Mana for big casts, not hoarding forever).
+//   2. RESEARCH ENGINE — he wants big Spells, so he builds the research engine:
+//      with ≥2 unspent INT+WIS to convert he takes a Research seat; otherwise he
+//      gathers the INT/WIS fuel FIRST (and still takes Research if that's all
+//      that's open).
+//   3. otherwise place anywhere; if he can't place a Mage, take a Bell Tower
 //      card (which keeps the round advancing toward its end).
 //
-// Within-tier picks are seeded from the state, so they're reproducible yet
-// vary across the game. "Once per round" is read off the board: a placed Mage
-// sits on its seat until Resolution, so "already grabbed Mana this round" =
-// "Malfoy already occupies a 2+ Mana seat".
+// Within-tier picks are seeded from the state, so they're reproducible yet vary
+// across the game. "Once per round" is read off the board: a placed Mage sits on
+// its seat until Resolution, so "already grabbed Mana this round" = "Malfoy
+// already occupies a 2+ Mana seat".
 
-import { applyAction } from '../engine';
-import { createRng, type Rng } from '../../utils/rng';
-import { lookupSpellCardDef } from '../effects/helpers';
+import {
+  DISRUPT_VERB_RE,
+  GLOBAL_DISRUPT_RE,
+  HARMFUL_LABEL_RE,
+  HARMFUL_TARGET_RE,
+  INT_WIS_RE,
+  chooseReaction,
+  findSpace,
+  firstLegalCard,
+  forcesSelfWound,
+  isMeritSlot,
+  isMoveResearchOption,
+  makeRng,
+  maxAmount,
+  meritBadgesCommitted,
+  pickRandom,
+  providesResearch,
+  unspentResearch,
+} from './common';
 import {
   castableSpellLevels,
   claimableBellCards,
   eligiblePlacementSlots,
   eligibleShadowPlacementSlots,
+  playableSupporters,
+  playableVaultCards,
 } from '../../utils/uiSelectors';
+import {
+  lookupSpellCardDef,
+  lookupSupporterCardDef,
+  lookupVaultCardDef,
+} from '../effects/helpers';
+import { applyAction } from '../engine';
 import type {
-  ActionSpace,
   GameAction,
   GameState,
   PendingResolution,
   Player,
   PlayerId,
   ResolutionAnswer,
-  Room,
 } from '../types';
 import type { BotPersonality } from './types';
 
-/**
- * Option ids on a research menu that REARRANGE already placed Research (relocate
- * a WIS/INT token between Spells). Bots never do this, so they're filtered out —
- * leaving "Done moving Research" (`discard`) as the move-only menu's choice.
- */
-function isMoveResearchOption(id: string): boolean {
-  return id === 'move-wis' || id === 'move-int';
-}
-
-/**
- * Choose a LEGAL reaction answer for an open reaction window, verified by
- * dry-running each candidate (engine-truth). The engine only offers reactions
- * Malfoy owns and can pay, but a multi-Mage window can still reject a naive
- * play: e.g. Mystic Amulet over a window whose FIRST event is an opponent's
- * Mage — with no `forMageId` the engine matches event[0] and the reaction
- * throws "only protects your own Mage". So we try the option's own forMageId,
- * then each of the responder's affected Mages, and commit only to an answer the
- * engine accepts; if none do, we pass (always legal). A repeatable option
- * (Sacred Shield) is preferred so he keeps his slot and can save several Mages.
- * `reactionContext: {}` resolves a slot-pick reaction by keeping the Mage on
- * its original slot.
- */
-function chooseReaction(state: GameState, pending: PendingResolution): ResolutionAnswer {
-  const prompt = pending.prompt;
-  if (prompt.kind !== 'reaction-window' || prompt.reactionOptions.length === 0) {
-    return { kind: 'reaction-passed' };
-  }
-  const ownAffected = prompt.triggerEvents
-    .filter((e) => 'ownerId' in e && e.ownerId === pending.responderId && 'mageId' in e)
-    .map((e) => (e as { mageId: string }).mageId);
-  const legal = (answer: ResolutionAnswer): boolean => {
-    try {
-      applyAction(state, { type: 'RESOLVE_PENDING', resolutionId: pending.id, answer });
-      return true;
-    } catch {
-      return false;
-    }
-  };
-  const ordered = [...prompt.reactionOptions].sort(
-    (a, b) => Number(b.repeatable ?? false) - Number(a.repeatable ?? false),
-  );
-  for (const o of ordered) {
-    const targets = o.forMageId ? [o.forMageId] : [undefined, ...ownAffected];
-    for (const forMageId of targets) {
-      const answer: ResolutionAnswer = {
-        kind: 'reaction-played',
-        effectId: o.effectId,
-        reactionContext: {},
-        ...(forMageId ? { forMageId } : {}),
-      };
-      if (legal(answer)) return answer;
-    }
-  }
-  return { kind: 'reaction-passed' };
-}
-
 // ============================================================================
-// Errands turn — Mana grab → big-spell research, all trumped by disruption.
+// Reward / target classification (Malfoy-specific helpers over shared regexes).
 // ============================================================================
-
-/** A PRNG seeded from the state + a salt, so within-tier picks are reproducible. */
-function makeRng(state: GameState, salt: string): Rng {
-  let h = (state.rngSeed | 0) ^ Math.imul(state.nextSequenceId + 1, 2654435761);
-  for (let i = 0; i < salt.length; i++) {
-    h = Math.imul(h ^ salt.charCodeAt(i), 16777619);
-  }
-  return createRng(h);
-}
-
-function pickRandom<T>(arr: T[], rng: Rng): T {
-  return arr[Math.floor(rng() * arr.length)] ?? arr[0]!;
-}
-
-function findSpace(
-  state: GameState,
-  spaceId: string,
-): { room: Room; space: ActionSpace } | null {
-  for (const room of state.rooms) {
-    const space = room.actionSpaces.find((s) => s.id === spaceId);
-    if (space) return { room, space };
-  }
-  return null;
-}
-
-// --- Reward classification from a slot's human-readable summary -------------
-// The ActionSpace `description` is the room file's reward summary (the same
-// text a human reads off the slot), so Malfoy classifies seats by keyword.
-
-const RESEARCH_RE = /\bresearch\b/;
-const INT_WIS_RE = /\bint\b|intelligence|\bwis\b|wisdom/;
-
-function providesResearch(desc: string): boolean {
-  return RESEARCH_RE.test(desc);
-}
 
 function providesIntWis(desc: string): boolean {
   return INT_WIS_RE.test(desc);
@@ -141,34 +84,47 @@ function providesIntWis(desc: string): boolean {
 
 /** Largest fixed "<n> mana" amount named in the reward text (0 if none). */
 function manaAmount(desc: string): number {
-  let best = 0;
-  for (const m of desc.matchAll(/(\d+)\s*mana/g)) best = Math.max(best, Number(m[1]));
-  return best;
+  return maxAmount(desc, 'mana');
 }
 
-/** Merit / shadow-merit seats cost a Merit Badge to activate (paid at Resolution). */
-function isMeritSlot(space: ActionSpace): boolean {
-  return space.slotType === 'merit' || space.slotType === 'shadow-merit';
+/** Rough "how much is this seat worth" score, for valuing a victim's seat. */
+function seatRewardValue(desc: string): number {
+  let v = manaAmount(desc) + maxAmount(desc, 'gold') * 0.5;
+  if (providesResearch(desc)) v += 2;
+  if (providesIntWis(desc)) v += 1;
+  if (/supporter/.test(desc)) v += 2;
+  return v;
 }
 
-/** Merit Badges already committed to merit seats this round (charged at Resolution). */
-function meritBadgesCommitted(state: GameState, playerId: PlayerId): number {
-  let committed = 0;
-  for (const room of state.rooms) {
-    for (const sp of room.actionSpaces) {
-      if (!isMeritSlot(sp)) continue;
-      const cost = sp.costToActivate?.meritBadges ?? 1;
-      if (sp.occupant?.ownerId === playerId) committed += cost;
-      if (sp.shadowOccupant?.ownerId === playerId) committed += cost;
-    }
+/** Current Influence of a player (the vote tiebreaker — our "who's leading" proxy). */
+function influenceOf(state: GameState, playerId: PlayerId): number {
+  return state.players.find((p) => p.id === playerId)?.resources.influence ?? 0;
+}
+
+/** The player who owns `mageId`, if any. */
+function ownerOfMage(state: GameState, mageId: string): Player | undefined {
+  return state.players.find((p) => p.mages.some((m) => m.id === mageId));
+}
+
+/** Lower-cased reward summary of the seat `mageId` currently occupies ('' if none). */
+function seatDescOfMage(state: GameState, mageId: string): string {
+  for (const p of state.players) {
+    const mage = p.mages.find((m) => m.id === mageId);
+    if (!mage) continue;
+    if (mage.location.kind !== 'action-space') return '';
+    return (findSpace(state, mage.location.spaceId)?.space.description ?? '').toLowerCase();
   }
-  return committed;
+  return '';
 }
 
 interface PlacementOption {
   action: GameAction;
   /** Lower-cased reward summary for the target slot. */
   desc: string;
+  /** True when the placement seizes/over-shadows an OPPONENT-occupied slot. */
+  disrupts: boolean;
+  /** Owner of the seat's current occupant when `disrupts` (for target valuation). */
+  victimOwnerId?: PlayerId;
 }
 
 function enumeratePlacements(state: GameState, player: Player): PlacementOption[] {
@@ -184,11 +140,15 @@ function enumeratePlacements(state: GameState, player: Player): PlacementOption[
       const cost = found.space.costToActivate?.meritBadges ?? 1;
       if (cost > meritBudget) return; // can't pay the Badge — skip this seat
     }
+    const occupant = found?.space.occupant ?? null;
+    const disrupts = occupant !== null && occupant.ownerId !== player.id;
     out.push({
       action: shadow
         ? { type: 'PLACE_WORKER', playerId: player.id, mageId, actionSpaceId: spaceId, isShadowing: true }
         : { type: 'PLACE_WORKER', playerId: player.id, mageId, actionSpaceId: spaceId },
       desc: (found?.space.description ?? '').toLowerCase(),
+      disrupts,
+      ...(disrupts && occupant ? { victimOwnerId: occupant.ownerId } : {}),
     });
   };
   for (const mage of player.mages) {
@@ -200,7 +160,9 @@ function enumeratePlacements(state: GameState, player: Player): PlacementOption[
       make(mage.id, spaceId, true);
     }
   }
-  return out;
+  // Never line up a move that would FORCE Malfoy to wound/banish his own Mage
+  // because no opponent is targetable (he won't turn the effect on himself).
+  return out.filter((p) => !forcesSelfWound(state, p.action, player.id));
 }
 
 /** True once Malfoy already occupies a 2+ Mana seat this round (his one grab). */
@@ -218,50 +180,69 @@ function alreadyTookManaSeat(state: GameState, playerId: PlayerId): boolean {
   return false;
 }
 
-// --- Disruption detection for spells ----------------------------------------
+// --- Disruption scoring (Malfoy ranks his strikes; he doesn't just pick any) -
 
-/** Target-prompt labels that name a harmful effect. */
-const HARMFUL_LABEL_RE = /wound|banish|move|shadow|displace/i;
-/** Card text describing a targeted disruption of a Mage. */
-const DISRUPT_VERB_RE = /\b(wound|banish|shadow|displace|move)\b/i;
-/** Card text describing global control that disrupts opponents without a Mage target. */
-const GLOBAL_DISRUPT_RE = /\bsteal\b|lose (their|its) power|may not cast|more mana|extra mana/i;
+/** Harm severity of a recorded board event (bigger = nastier disruption). */
+const EVENT_IMPACT: Record<string, number> = {
+  'mage-banished': 4,
+  'mage-wounded': 3,
+  'mage-shadowed': 2,
+  'mage-moved': 2,
+};
+
+/** Harm severity implied by a verb in a prompt label / card text (0 if none). */
+function verbImpact(text: string): number {
+  if (/\bbanish\b/i.test(text)) return 4;
+  if (/\bwound\b/i.test(text)) return 3;
+  if (/\bshadow\b/i.test(text)) return 2;
+  if (/\b(move|displace)\b/i.test(text)) return 2;
+  return 0;
+}
+
+/** How juicy a victim Mage is: its owner's Influence + the value of its seat. */
+function mageThreat(state: GameState, mageId: string): number {
+  const owner = ownerOfMage(state, mageId);
+  return (owner ? owner.resources.influence : 0) + seatRewardValue(seatDescOfMage(state, mageId));
+}
 
 /**
- * True when casting `action` would wound or disrupt an OPPONENT. Engine-truth:
- * dry-run the cast and inspect the result —
- *   (a) a reaction window already records a harmful event on a rival's Mage,
+ * Disruption value of `action` against an OPPONENT, or 0 if it doesn't disrupt
+ * one. Engine-truth: dry-run the action and read the result —
+ *   (a) a reaction window already recorded a harmful event on a rival's Mage,
  *   (b) the next prompt asks Malfoy to pick an opponent's Mage to hit, or
- *   (c) the Spell's text is global control (Mesmerize / Silence / Energy Drain
- *       / steal) that hurts opponents without targeting a Mage.
+ *   (c) the source text is global control (Mesmerize / Silence / steal …).
+ * Score = impact·100 + best target's threat, so a bigger HIT always outranks a
+ * lesser one, and among equal hits he goes for the juiciest target.
  */
-function actionDisruptsOpponent(
+function disruptionScore(
   state: GameState,
   player: Player,
   action: GameAction,
   sourceText: string,
-): boolean {
+): number {
   let next: GameState;
   try {
     next = applyAction(state, action);
   } catch {
-    return false;
+    return 0;
   }
   const me = player.id;
   const ownIds = new Set(player.mages.map((m) => m.id));
+  let impact = 0;
+  let targetThreat = 0;
 
   // (a) Already harmed an opponent's Mage (a reaction window just opened).
   for (const w of next.activeReactionWindows) {
     for (const e of w.triggerEvents) {
       if (
-        (e.kind === 'mage-wounded' ||
-          e.kind === 'mage-banished' ||
-          e.kind === 'mage-moved' ||
-          e.kind === 'mage-shadowed') &&
+        'ownerId' in e &&
+        'byPlayerId' in e &&
         e.byPlayerId === me &&
-        e.ownerId !== me
+        e.ownerId !== me &&
+        EVENT_IMPACT[e.kind]
       ) {
-        return true;
+        impact = Math.max(impact, EVENT_IMPACT[e.kind]!);
+        targetThreat = Math.max(targetThreat, influenceOf(next, e.ownerId));
       }
     }
   }
@@ -270,32 +251,82 @@ function actionDisruptsOpponent(
   const top = next.pendingResolutionStack[next.pendingResolutionStack.length - 1];
   if (top && top.responderId === me && top.prompt.kind === 'choose-target-mage') {
     const eligible = top.prompt.eligibleMageIds;
-    const opponentEligible = eligible.some((id) => !ownIds.has(id));
-    const opponentsOnly = eligible.length > 0 && eligible.every((id) => !ownIds.has(id));
+    const opponentEligible = eligible.filter((id) => !ownIds.has(id));
+    const opponentsOnly = eligible.length > 0 && opponentEligible.length === eligible.length;
     const harmful =
       opponentsOnly ||
       HARMFUL_LABEL_RE.test(top.prompt.label ?? '') ||
       DISRUPT_VERB_RE.test(sourceText);
-    if (opponentEligible && harmful) return true;
+    if (opponentEligible.length > 0 && harmful) {
+      const verb = Math.max(verbImpact(top.prompt.label ?? ''), verbImpact(sourceText));
+      impact = Math.max(impact, verb || 1);
+      for (const id of opponentEligible) {
+        targetThreat = Math.max(targetThreat, mageThreat(next, id));
+      }
+    }
   }
 
   // (c) Global control that disrupts opponents without a Mage target.
-  return GLOBAL_DISRUPT_RE.test(sourceText);
+  if (GLOBAL_DISRUPT_RE.test(sourceText)) impact = Math.max(impact, 1.5);
+
+  return impact === 0 ? 0 : impact * 100 + targetThreat;
 }
 
-/** Castable Spells whose effect wounds or disrupts an opponent. */
-function disruptiveSpellActions(state: GameState, player: Player): GameAction[] {
-  const out: GameAction[] = [];
+interface ScoredAction {
+  action: GameAction;
+  score: number;
+}
+
+/**
+ * Every way Malfoy can disrupt a rival this turn, scored: a Spell, a
+ * Vault/Consumable card, a Supporter, or a placement that seizes / over-shadows
+ * an opponent's seat. A seize that doesn't itself wound still counts as mild
+ * board disruption (taking the rival's spot), valued by the victim's standing
+ * and seat.
+ */
+function disruptiveActions(
+  state: GameState,
+  player: Player,
+  placements: PlacementOption[],
+): ScoredAction[] {
+  const out: ScoredAction[] = [];
+  const add = (action: GameAction, score: number) => {
+    if (score > 0) out.push({ action, score });
+  };
+
+  for (const p of placements) {
+    let score = disruptionScore(state, player, p.action, p.desc);
+    if (p.disrupts) {
+      const seize =
+        100 + (p.victimOwnerId ? influenceOf(state, p.victimOwnerId) : 0) + seatRewardValue(p.desc);
+      score = Math.max(score, seize);
+    }
+    add(p.action, score);
+  }
   for (const [spellCardId, levels] of castableSpellLevels(state, player.id)) {
     const def = lookupSpellCardDef(state, spellCardId);
     for (const level of levels) {
       const text = def?.levels.find((l) => l.level === level)?.description ?? '';
       const action: GameAction = { type: 'CAST_SPELL', playerId: player.id, spellCardId, level };
-      if (actionDisruptsOpponent(state, player, action, text)) out.push(action);
+      add(action, disruptionScore(state, player, action, text));
     }
+  }
+  for (const vaultCardId of playableVaultCards(state, player.id)) {
+    const text = lookupVaultCardDef(state, vaultCardId)?.description ?? '';
+    const action: GameAction = { type: 'PLAY_VAULT_CARD', playerId: player.id, vaultCardId };
+    add(action, disruptionScore(state, player, action, text));
+  }
+  for (const supporterCardId of playableSupporters(state, player.id)) {
+    const text = lookupSupporterCardDef(state, supporterCardId)?.description ?? '';
+    const action: GameAction = { type: 'PLAY_SUPPORTER', playerId: player.id, supporterCardId };
+    add(action, disruptionScore(state, player, action, text));
   }
   return out;
 }
+
+// ============================================================================
+// Errands turn — disruption first, then Mana, then the research engine.
+// ============================================================================
 
 function chooseErrandsAction(state: GameState, playerId: PlayerId): GameAction {
   const player = state.players.find((p) => p.id === playerId);
@@ -303,9 +334,15 @@ function chooseErrandsAction(state: GameState, playerId: PlayerId): GameAction {
   const rng = makeRng(state, playerId);
   const placements = enumeratePlacements(state, player);
 
-  // 0) TRUMP — cast a harmful, disruptive Spell on an opponent.
-  const disruptiveSpells = disruptiveSpellActions(state, player);
-  if (disruptiveSpells.length > 0) return pickRandom(disruptiveSpells, rng);
+  // 0) DISRUPT — the highest-impact strike at a rival, across every channel.
+  const disrupt = disruptiveActions(state, player, placements);
+  if (disrupt.length > 0) {
+    const best = Math.max(...disrupt.map((d) => d.score));
+    return pickRandom(
+      disrupt.filter((d) => d.score === best).map((d) => d.action),
+      rng,
+    );
+  }
 
   // Mana seats worth grabbing: an open slot granting ≥2 Mana.
   const manaSeats = placements.filter((p) => manaAmount(p.desc) >= 2);
@@ -322,15 +359,18 @@ function chooseErrandsAction(state: GameState, playerId: PlayerId): GameAction {
     ).action;
   }
 
-  // 2) Research — to fuel big Spells.
+  // 2) Research engine — to fuel big Spells. With fuel in hand (≥2 unspent
+  //    INT+WIS) he CONVERTS at a Research seat; otherwise he gathers INT/WIS
+  //    fuel first, still taking a Research seat if that's all that's open.
   const research = placements.filter((p) => providesResearch(p.desc));
-  if (research.length > 0) return pickRandom(research, rng).action;
-
-  // 3) INT / WIS — if he can't research.
   const intWis = placements.filter((p) => providesIntWis(p.desc) && !providesResearch(p.desc));
-  if (intWis.length > 0) return pickRandom(intWis, rng).action;
+  const haveFuel = unspentResearch(player) >= 2;
+  const researchTiers = haveFuel ? [research, intWis] : [intWis, research];
+  for (const tier of researchTiers) {
+    if (tier.length > 0) return pickRandom(tier, rng).action;
+  }
 
-  // 4) Otherwise drop a Mage into any seat; if he can't place, take a Bell card.
+  // 3) Otherwise drop a Mage into any seat; if he can't place, take a Bell card.
   if (placements.length > 0) return pickRandom(placements, rng).action;
   const bells = [...claimableBellCards(state, playerId)];
   if (bells.length > 0) {
@@ -339,36 +379,10 @@ function chooseErrandsAction(state: GameState, playerId: PlayerId): GameAction {
   return { type: 'PASS_TURN', playerId };
 }
 
-/**
- * First eligible card whose pick is actually LEGAL, found by dry-running the
- * resolution (engine-truth — the same safeguard we use for actions). A
- * `choose-vault-card` BUY prompt can list cards Malfoy can't afford; picking the
- * first blindly would throw an illegal-move error, so we skip any candidate the
- * engine rejects. Falls back to the first id if none dry-run cleanly.
- */
-function firstLegalCard(
-  state: GameState,
-  pending: PendingResolution,
-  cardIds: readonly string[],
-): string | undefined {
-  for (const cardId of cardIds) {
-    try {
-      applyAction(state, {
-        type: 'RESOLVE_PENDING',
-        resolutionId: pending.id,
-        answer: { kind: 'card-chosen', cardId },
-      });
-      return cardId;
-    } catch {
-      // Illegal (e.g. an unaffordable buy) — try the next candidate.
-    }
-  }
-  return cardIds[0];
-}
-
 // ============================================================================
-// Prompt answers — cloned from Klank, but Malfoy takes MANA over Gold and the
-// biggest Spell level (he's building toward big casts).
+// Prompt answers — cloned from Klank, but Malfoy takes MANA over Gold, the
+// biggest Spell level (he's building toward big casts), and hits the JUICIEST
+// rival Mage — never his own.
 // ============================================================================
 
 function answerPendingResolution(
@@ -395,9 +409,27 @@ function answerPendingResolution(
     case 'choose-target-mage': {
       const responder = state.players.find((p) => p.id === pending.responderId);
       const ownIds = new Set(responder?.mages.map((m) => m.id) ?? []);
-      // Harmful target prompts dominate — prefer an opponent's mage.
-      const opponent = prompt.eligibleMageIds.find((id) => !ownIds.has(id));
-      const target = opponent ?? prompt.eligibleMageIds[0];
+      // Harmful target prompts dominate — hit the juiciest OPPONENT Mage (the
+      // rival's Influence plus the value of the seat we'd deny).
+      const opponents = prompt.eligibleMageIds.filter((id) => !ownIds.has(id));
+      if (opponents.length > 0) {
+        let best = opponents[0]!;
+        let bestVal = -1;
+        for (const id of opponents) {
+          const v = mageThreat(state, id);
+          if (v > bestVal) {
+            bestVal = v;
+            best = id;
+          }
+        }
+        return { kind: 'mage-chosen', mageId: best };
+      }
+      // No opponent eligible: for a wound/banish prompt that can be declined,
+      // never turn the effect on his own Mage — pass instead.
+      if (HARMFUL_TARGET_RE.test(prompt.label ?? '') && prompt.canPass) {
+        return { kind: 'pass' };
+      }
+      const target = prompt.eligibleMageIds[0];
       if (target === undefined) return { kind: 'pass' };
       return { kind: 'mage-chosen', mageId: target };
     }

@@ -3,8 +3,10 @@
 // Pure decision functions: given a GameState (engine truth) they return a legal
 // GameAction / ResolutionAnswer. They never touch React or the store — the
 // `useKlankDriver` hook wires them up and paces dispatch. Legality is enumerated
-// with the same engine dry-run selectors the human UI uses (src/utils/uiSelectors),
-// so a bot can never attempt a move the rules forbid.
+// with the same engine dry-run selectors the human UI uses, so a bot can never
+// attempt a move the rules forbid. The shared plumbing (seeded RNG, board
+// lookups, merit budgeting, disruption detection, reaction saves) lives in
+// `./common`; this file is just Klank's policy.
 //
 // Klank plays a strict priority cascade each Errands turn:
 //   1. RESEARCH — if he holds ≥2 unspent INT+WIS, place into a space that
@@ -19,164 +21,40 @@
 // Each tier "fails over" to the next. Picks within a tier are seeded from the
 // state, so they're reproducible yet vary across the game.
 
-import { applyAction } from '../engine';
-import { createRng, type Rng } from '../../utils/rng';
 import {
-  lookupSpellCardDef,
-  lookupSupporterCardDef,
-  lookupVaultCardDef,
-} from '../effects/helpers';
+  INT_WIS_RE,
+  SUPPORTER_DRAFT_RE,
+  chooseReaction,
+  disruptiveCardActions,
+  findSpace,
+  firstLegalCard,
+  isMeritSlot,
+  isMoveResearchOption,
+  makeRng,
+  maxAmount,
+  meritBadgesCommitted,
+  pickRandom,
+  providesResearch,
+  unspentResearch,
+} from './common';
 import {
-  castableSpellLevels,
   claimableBellCards,
   eligiblePlacementSlots,
   eligibleShadowPlacementSlots,
-  playableSupporters,
-  playableVaultCards,
 } from '../../utils/uiSelectors';
 import type {
-  ActionSpace,
   GameAction,
   GameState,
   PendingResolution,
   Player,
   PlayerId,
   ResolutionAnswer,
-  Room,
 } from '../types';
 import type { BotPersonality } from './types';
-
-/**
- * Option ids on a `choose-from-options` research menu that REARRANGE already
- * placed Research (relocate a WIS/INT token between Spells). Bots never do this
- * — they can't judge it strategically — so these are filtered out of the menu,
- * leaving "Done moving Research" (`discard`) as the move-only menu's choice.
- */
-function isMoveResearchOption(id: string): boolean {
-  return id === 'move-wis' || id === 'move-int';
-}
-
-/**
- * Choose a LEGAL reaction answer for an open reaction window, verified by
- * dry-running each candidate (engine-truth). The engine only offers reactions
- * the bot owns and can pay, and a reaction protects one of the bot's OWN Mages,
- * so the bot reacts whenever it can. But a multi-Mage window can still reject a
- * naive play: e.g. Mystic Amulet over a window whose FIRST event is an
- * opponent's Mage — with no `forMageId` the engine matches event[0] and the
- * reaction throws "only protects your own Mage". So we try the option's own
- * forMageId, then each of the responder's affected Mages, and commit only to an
- * answer the engine accepts; if none do, we pass (always legal). A repeatable
- * option (Sacred Shield) is preferred so the bot keeps its slot and can save
- * several Mages. `reactionContext: {}` resolves a slot-pick reaction by keeping
- * the Mage on its original slot.
- */
-function chooseReaction(state: GameState, pending: PendingResolution): ResolutionAnswer {
-  const prompt = pending.prompt;
-  if (prompt.kind !== 'reaction-window' || prompt.reactionOptions.length === 0) {
-    return { kind: 'reaction-passed' };
-  }
-  const ownAffected = prompt.triggerEvents
-    .filter((e) => 'ownerId' in e && e.ownerId === pending.responderId && 'mageId' in e)
-    .map((e) => (e as { mageId: string }).mageId);
-  const legal = (answer: ResolutionAnswer): boolean => {
-    try {
-      applyAction(state, { type: 'RESOLVE_PENDING', resolutionId: pending.id, answer });
-      return true;
-    } catch {
-      return false;
-    }
-  };
-  // Prefer a repeatable option (saves more than one Mage), then the rest.
-  const ordered = [...prompt.reactionOptions].sort(
-    (a, b) => Number(b.repeatable ?? false) - Number(a.repeatable ?? false),
-  );
-  for (const o of ordered) {
-    const targets = o.forMageId ? [o.forMageId] : [undefined, ...ownAffected];
-    for (const forMageId of targets) {
-      const answer: ResolutionAnswer = {
-        kind: 'reaction-played',
-        effectId: o.effectId,
-        reactionContext: {},
-        ...(forMageId ? { forMageId } : {}),
-      };
-      if (legal(answer)) return answer;
-    }
-  }
-  return { kind: 'reaction-passed' };
-}
 
 // ============================================================================
 // Errands turn — a tiered priority cascade (see file header).
 // ============================================================================
-
-/** A PRNG seeded from the state + a salt, so within-tier picks are reproducible. */
-function makeRng(state: GameState, salt: string): Rng {
-  let h = (state.rngSeed | 0) ^ Math.imul(state.nextSequenceId + 1, 2654435761);
-  for (let i = 0; i < salt.length; i++) {
-    h = Math.imul(h ^ salt.charCodeAt(i), 16777619);
-  }
-  return createRng(h);
-}
-
-function pickRandom<T>(arr: T[], rng: Rng): T {
-  return arr[Math.floor(rng() * arr.length)] ?? arr[0]!;
-}
-
-function findSpace(
-  state: GameState,
-  spaceId: string,
-): { room: Room; space: ActionSpace } | null {
-  for (const room of state.rooms) {
-    const space = room.actionSpaces.find((s) => s.id === spaceId);
-    if (space) return { room, space };
-  }
-  return null;
-}
-
-/** Unspent research currency in hand (INT + WIS pool, not yet placed on spells). */
-function unspentResearch(player: Player): number {
-  return player.resources.intelligence + player.resources.wisdom;
-}
-
-/** Merit / shadow-merit seats cost a Merit Badge to activate (paid at Resolution). */
-function isMeritSlot(space: ActionSpace): boolean {
-  return space.slotType === 'merit' || space.slotType === 'shadow-merit';
-}
-
-/** Merit Badges already committed to merit seats this round (charged at Resolution). */
-function meritBadgesCommitted(state: GameState, playerId: PlayerId): number {
-  let committed = 0;
-  for (const room of state.rooms) {
-    for (const sp of room.actionSpaces) {
-      if (!isMeritSlot(sp)) continue;
-      const cost = sp.costToActivate?.meritBadges ?? 1;
-      if (sp.occupant?.ownerId === playerId) committed += cost;
-      if (sp.shadowOccupant?.ownerId === playerId) committed += cost;
-    }
-  }
-  return committed;
-}
-
-// --- Reward classification from a slot's human-readable summary -------------
-// The ActionSpace `description` is the room file's reward summary (the same text
-// a human reads off the slot), so Klank classifies seats by keyword.
-
-const RESEARCH_RE = /\bresearch\b/;
-const SUPPORTER_DRAFT_RE = /draft[^.]*supporter/;
-const INT_WIS_RE = /\bint\b|intelligence|\bwis\b|wisdom/;
-
-function providesResearch(desc: string): boolean {
-  return RESEARCH_RE.test(desc);
-}
-
-/** Largest "<n> mana"/"<n> gold" amount named in the reward text. */
-function maxAmount(desc: string, unit: 'mana' | 'gold'): number {
-  let best = 0;
-  for (const m of desc.matchAll(new RegExp(`(\\d+)\\s*${unit}`, 'g'))) {
-    best = Math.max(best, Number(m[1]));
-  }
-  return best;
-}
 
 /**
  * Tier-3 "value" weight of a placement reward; 0 means it isn't a value seat.
@@ -236,95 +114,6 @@ function enumeratePlacements(state: GameState, player: Player): PlacementOption[
   return out;
 }
 
-// --- Disruption detection for spells / items --------------------------------
-
-/** Target-prompt labels that name a harmful effect. */
-const HARMFUL_LABEL_RE = /wound|banish|move|shadow|displace/i;
-/** Card text describing a targeted disruption of a Mage. */
-const DISRUPT_VERB_RE = /\b(wound|banish|shadow|displace|move)\b/i;
-/** Card text describing global control that disrupts opponents without a Mage target. */
-const GLOBAL_DISRUPT_RE = /\bsteal\b|lose (their|its) power|may not cast|more mana|extra mana/i;
-
-/**
- * True when taking `action` would wound or disrupt an OPPONENT. Engine-truth:
- * dry-run the action and inspect the result —
- *   (a) a reaction window already records a harmful event on a rival's Mage,
- *   (b) the next prompt asks Klank to pick an opponent's Mage to hit, or
- *   (c) the source card's text is global control (Mesmerize / Silence / Energy
- *       Drain / steal) that hurts opponents without targeting a Mage.
- */
-function actionDisruptsOpponent(
-  state: GameState,
-  player: Player,
-  action: GameAction,
-  sourceText: string,
-): boolean {
-  let next: GameState;
-  try {
-    next = applyAction(state, action);
-  } catch {
-    return false;
-  }
-  const me = player.id;
-  const ownIds = new Set(player.mages.map((m) => m.id));
-
-  // (a) Already harmed an opponent's Mage (a reaction window just opened).
-  for (const w of next.activeReactionWindows) {
-    for (const e of w.triggerEvents) {
-      if (
-        (e.kind === 'mage-wounded' ||
-          e.kind === 'mage-banished' ||
-          e.kind === 'mage-moved' ||
-          e.kind === 'mage-shadowed') &&
-        e.byPlayerId === me &&
-        e.ownerId !== me
-      ) {
-        return true;
-      }
-    }
-  }
-
-  // (b) About to choose an opponent's Mage to hit.
-  const top = next.pendingResolutionStack[next.pendingResolutionStack.length - 1];
-  if (top && top.responderId === me && top.prompt.kind === 'choose-target-mage') {
-    const eligible = top.prompt.eligibleMageIds;
-    const opponentEligible = eligible.some((id) => !ownIds.has(id));
-    const opponentsOnly = eligible.length > 0 && eligible.every((id) => !ownIds.has(id));
-    const harmful =
-      opponentsOnly ||
-      HARMFUL_LABEL_RE.test(top.prompt.label ?? '') ||
-      DISRUPT_VERB_RE.test(sourceText);
-    if (opponentEligible && harmful) return true;
-  }
-
-  // (c) Global control that disrupts opponents without a Mage target.
-  return GLOBAL_DISRUPT_RE.test(sourceText);
-}
-
-/** Castable spells + playable items whose effect wounds or disrupts an opponent. */
-function disruptiveCardActions(state: GameState, player: Player): GameAction[] {
-  const out: GameAction[] = [];
-  for (const [spellCardId, levels] of castableSpellLevels(state, player.id)) {
-    const def = lookupSpellCardDef(state, spellCardId);
-    for (const level of levels) {
-      const text = def?.levels.find((l) => l.level === level)?.description ?? '';
-      const action: GameAction = { type: 'CAST_SPELL', playerId: player.id, spellCardId, level };
-      if (actionDisruptsOpponent(state, player, action, text)) out.push(action);
-    }
-  }
-  for (const vaultCardId of playableVaultCards(state, player.id)) {
-    const text = lookupVaultCardDef(state, vaultCardId)?.description ?? '';
-    const action: GameAction = { type: 'PLAY_VAULT_CARD', playerId: player.id, vaultCardId };
-    if (actionDisruptsOpponent(state, player, action, text)) out.push(action);
-  }
-  for (const supporterCardId of playableSupporters(state, player.id)) {
-    const text = lookupSupporterCardDef(state, supporterCardId)?.description ?? '';
-    const action: GameAction = { type: 'PLAY_SUPPORTER', playerId: player.id, supporterCardId };
-    if (actionDisruptsOpponent(state, player, action, text)) out.push(action);
-  }
-  return out;
-}
-
 function chooseErrandsAction(state: GameState, playerId: PlayerId): GameAction {
   const player = state.players.find((p) => p.id === playerId);
   if (!player) return { type: 'PASS_TURN', playerId };
@@ -367,34 +156,6 @@ function chooseErrandsAction(state: GameState, playerId: PlayerId): GameAction {
   }
 
   return { type: 'PASS_TURN', playerId };
-}
-
-/**
- * First eligible card whose pick is actually LEGAL, found by dry-running the
- * resolution (engine-truth — the same safeguard we use for actions). A
- * `choose-vault-card` BUY prompt can list cards the bot can't afford; picking
- * the first blindly would throw an illegal-move error, so we skip any candidate
- * the engine rejects. Falls back to the first id if none dry-run cleanly (no
- * worse than before, and never an *extra* illegal move).
- */
-function firstLegalCard(
-  state: GameState,
-  pending: PendingResolution,
-  cardIds: readonly string[],
-): string | undefined {
-  for (const cardId of cardIds) {
-    try {
-      applyAction(state, {
-        type: 'RESOLVE_PENDING',
-        resolutionId: pending.id,
-        answer: { kind: 'card-chosen', cardId },
-      });
-      return cardId;
-    } catch {
-      // Illegal (e.g. an unaffordable buy) — try the next candidate.
-    }
-  }
-  return cardIds[0];
 }
 
 // ============================================================================
