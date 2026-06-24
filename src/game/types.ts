@@ -609,6 +609,18 @@ export interface VoterMark {
   playerId: PlayerId;
 }
 
+/**
+ * Political Struggle: a "place a Support Marker in this faction" choice offered
+ * alongside the voters on a gain-mark prompt. `id` is a synthetic target id
+ * (e.g. `support:green`) returned via the normal `voter-chosen` answer and
+ * intercepted in `applyGainMark`; `groupId` is the faction it backs.
+ */
+export interface MarkSupportOption {
+  id: string;
+  groupId: string;
+  label: string;
+}
+
 export interface BellTowerCard {
   id: BellTowerCardId;
   name: string;
@@ -762,6 +774,24 @@ export interface Scenario {
    * University: 7 / 4).
    */
   influenceVictory?: { soleVoterIp: number; tiedVoterIp: number };
+  /**
+   * Political Struggle: the voters are organised into two factions, each led by
+   * the voter matching `leaderCriterion` plus a share of the face-down voters
+   * (assigned in setup → `GameState.voterGroups`). When a player would place a
+   * Mark they may instead place a Support Marker into one faction
+   * (`GameState.supportMarkers`). At final scoring the faction with strictly
+   * more Support Markers has each of its voters worth `winningVoteMultiplier`
+   * votes (a tie resolves normally). `color` is a UI ring hint per faction.
+   */
+  supportGroups?: {
+    groups: {
+      id: string;
+      name: string;
+      leaderCriterion: ScoringCriterion;
+      color: string;
+    }[];
+    winningVoteMultiplier: number;
+  };
   /** Per-round rules, indexed by `round`. */
   rounds: ScenarioRoundRule[];
 }
@@ -1039,7 +1069,17 @@ export type PendingPrompt =
       availableLevels: (1 | 2 | 3)[];
     }
   | { kind: 'choose-deck'; eligibleDecks: ('spell' | 'vault' | 'supporter')[] }
-  | { kind: 'choose-voter'; eligibleVoterIds: ConsortiumVoterId[] }
+  | {
+      kind: 'choose-voter';
+      eligibleVoterIds: ConsortiumVoterId[];
+      /**
+       * Political Struggle: in addition to marking a voter, the player may place
+       * a Support Marker into one faction. Present only on self-gain-mark prompts
+       * while that scenario is active; each option's `id` is a synthetic target
+       * resolved through the same `voter-chosen` answer (see `applyGainMark`).
+       */
+      supportOptions?: MarkSupportOption[];
+    }
   | {
       kind: 'reaction-window';
       /**
@@ -1628,6 +1668,17 @@ export interface GameState {
 
   voters: ConsortiumVoter[];
   voterMarks: VoterMark[];
+  /**
+   * Political Struggle only: faction id per voter (`voterId → groupId`), set in
+   * setup. Absent in every other game.
+   */
+  voterGroups?: Record<ConsortiumVoterId, string>;
+  /**
+   * Political Struggle only: running Support Marker total per faction
+   * (`groupId → count`). Bumped by `applyGainMark` when a player places support
+   * instead of a voter mark; read at final scoring for the vote multiplier.
+   */
+  supportMarkers?: Record<string, number>;
 
   spellDeck: SpellCardId[];
   spellTableau: SpellCardId[];

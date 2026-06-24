@@ -2,6 +2,7 @@
 // without having to reach into engine internals.
 
 import { getPack } from '../../content/registry';
+import { getScenario } from '../../content/scenarios';
 import type {
   ActionSpace,
   ActionSpaceId,
@@ -17,9 +18,11 @@ import type {
   InfirmaryBedId,
   MageAbilitySide,
   MageColor,
+  MarkSupportOption,
   OwnedMage,
   OwnedMageId,
   OwnedSpell,
+  PendingPrompt,
   PendingResolution,
   PendingResolutionInput,
   Player,
@@ -2785,6 +2788,60 @@ export function eligibleVotersForMark(
   );
 }
 
+/** Synthetic `choose-voter` target prefix for "place a Support Marker" picks
+ *  (Political Struggle). The suffix is the faction id. */
+export const SUPPORT_TARGET_PREFIX = 'support:';
+
+/** Builds the synthetic gain-mark target id that places support in `groupId`. */
+export function supportTargetId(groupId: string): string {
+  return `${SUPPORT_TARGET_PREFIX}${groupId}`;
+}
+
+/** Returns the faction id if `id` is a Support-Marker target, else null. */
+export function parseSupportTarget(id: string): string | null {
+  return id.startsWith(SUPPORT_TARGET_PREFIX)
+    ? id.slice(SUPPORT_TARGET_PREFIX.length)
+    : null;
+}
+
+/**
+ * The "place a Support Marker in this faction" options for a gain-mark prompt,
+ * or undefined when the active scenario has no factions (Political Struggle is
+ * the only one today). Each option resolves through the normal `voter-chosen`
+ * answer; `applyGainMark` intercepts the synthetic id.
+ */
+export function supportOptionsFor(
+  state: GameState,
+): MarkSupportOption[] | undefined {
+  const sc = state.scenarioId ? getScenario(state.scenarioId) : undefined;
+  if (!sc?.supportGroups) return undefined;
+  return sc.supportGroups.groups.map((g) => ({
+    id: supportTargetId(g.id),
+    groupId: g.id,
+    label: `Support ${g.name}`,
+  }));
+}
+
+/**
+ * Builds the `choose-voter` prompt for a "Gain a Mark" effect — the eligible
+ * (un-marked) voters plus, in Political Struggle, the Support-Marker options.
+ * Returns null when the player has marked every voter (the effect fizzles, as
+ * it always has); the Support options ride along only when a voter is offered.
+ */
+export function buildGainMarkChooseVoterPrompt(
+  state: GameState,
+  playerId: PlayerId,
+): Extract<PendingPrompt, { kind: 'choose-voter' }> | null {
+  const eligible = eligibleVotersForMark(state, playerId);
+  if (eligible.length === 0) return null;
+  const supportOptions = supportOptionsFor(state);
+  return {
+    kind: 'choose-voter',
+    eligibleVoterIds: eligible.map((v) => v.id),
+    ...(supportOptions ? { supportOptions } : {}),
+  };
+}
+
 /**
  * Places a Mark for a player on a Voter. Records the placement in
  * `voterMarks` and bumps the player's `marks` resource (which is what the
@@ -2792,12 +2849,26 @@ export function eligibleVotersForMark(
  *
  * Per the rulebook, a player can hold at most one Mark on any given Voter.
  * Throws if the player already has a mark on this voter.
+ *
+ * Political Struggle: a synthetic `support:<faction>` target places a Support
+ * Marker into that faction instead — no `voterMarks` entry and no `marks` bump
+ * (so converting a mark to support forgoes Most-Marks progress).
  */
 export function applyGainMark(
   state: GameState,
   playerId: PlayerId,
   voterId: ConsortiumVoterId,
 ): GameStatePatch {
+  const supportGroup = parseSupportTarget(voterId);
+  if (supportGroup !== null) {
+    const current = state.supportMarkers ?? {};
+    return {
+      supportMarkers: {
+        ...current,
+        [supportGroup]: (current[supportGroup] ?? 0) + 1,
+      },
+    };
+  }
   if (
     state.voterMarks.some((m) => m.voterId === voterId && m.playerId === playerId)
   ) {

@@ -719,6 +719,28 @@ function computeInfluenceVictoryScoring(
 }
 
 /**
+ * Political Struggle: the faction (support group) with strictly more Support
+ * Markers, or null if tied / no support placed (then voters resolve normally).
+ */
+function winningSupportGroup(state: GameState): string | null {
+  const sm = state.supportMarkers;
+  if (!sm) return null;
+  let best = -1;
+  let leader: string | null = null;
+  let tie = false;
+  for (const [groupId, count] of Object.entries(sm)) {
+    if (count > best) {
+      best = count;
+      leader = groupId;
+      tie = false;
+    } else if (count === best) {
+      tie = true;
+    }
+  }
+  return tie || best <= 0 ? null : leader;
+}
+
+/**
  * Sums voter awards per player and applies the game-end tiebreaker chain:
  *   1. Most votes wins outright.
  *   2. Tied → most total Influence (per rulebook).
@@ -728,12 +750,23 @@ function computeInfluenceVictoryScoring(
  *
  * Influence-victory scenarios (Key to the University) take a different path:
  * voters grant IP instead of votes and the winner is the most-Influence player.
+ * Political Struggle keeps this path but weights the winning faction's voters.
  */
 export function computeFinalScoring(state: GameState): FinalScoringResult {
   const scenario = state.scenarioId ? getScenario(state.scenarioId) : undefined;
   if (scenario?.influenceVictory) {
     return computeInfluenceVictoryScoring(state, scenario.influenceVictory);
   }
+
+  // Political Struggle: the winning faction's voters each cast extra votes.
+  const supportGroups = scenario?.supportGroups;
+  const winningGroup = supportGroups ? winningSupportGroup(state) : null;
+  const voteWeightFor = (voter: ConsortiumVoter): number =>
+    supportGroups &&
+    winningGroup !== null &&
+    state.voterGroups?.[voter.id] === winningGroup
+      ? supportGroups.winningVoteMultiplier
+      : 1;
 
   const votesPerPlayer: Record<PlayerId, number> = {};
   const influencePerPlayer: Record<PlayerId, number> = {};
@@ -745,8 +778,9 @@ export function computeFinalScoring(state: GameState): FinalScoringResult {
   const voterAwards: VoterAward[] = [];
   for (const voter of state.voters) {
     const { winner, tiebreaker } = computeVoterWinner(state, voter);
+    const effectiveVotes = voter.votes * voteWeightFor(voter);
     if (winner !== null) {
-      votesPerPlayer[winner] = (votesPerPlayer[winner] ?? 0) + voter.votes;
+      votesPerPlayer[winner] = (votesPerPlayer[winner] ?? 0) + effectiveVotes;
     }
     // For Second-Most voters we score on the base criterion so the UI
     // displays the same value the selection logic considered.
@@ -768,7 +802,7 @@ export function computeFinalScoring(state: GameState): FinalScoringResult {
     voterAwards.push({
       voterId: voter.id,
       voterName: voter.name,
-      votes: voter.votes,
+      votes: effectiveVotes,
       winnerPlayerId: winner,
       scores,
       ...(tiebreaker ? { tiebreaker } : {}),

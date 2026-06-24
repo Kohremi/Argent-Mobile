@@ -29,3 +29,4 @@ import './summerbreak';
 import './talismans';
 import './wellofsouls';
 import './keytotheuniversity';
+import './politicalstruggle';

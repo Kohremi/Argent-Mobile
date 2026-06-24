@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import clsx from 'clsx';
+import { getScenario } from '../../content/scenarios';
 import type { ConsortiumVoter, GameState } from '../../game/types';
 import { useGameStore } from '../../store/gameStore';
 import { activePlayer, PLAYER_AURA } from '../../utils/uiSelectors';
@@ -122,9 +123,70 @@ function VoterTile({ state, voter }: { state: GameState; voter: ConsortiumVoter 
   );
 }
 
+/**
+ * Political Struggle: one faction column — a colored frame, the faction's
+ * voters, a running Support Marker tally, and (while a gain-mark prompt is live)
+ * a button to place a Support Marker into this faction instead of a voter mark.
+ */
+function FactionSection({
+  state,
+  group,
+}: {
+  state: GameState;
+  group: { id: string; name: string; color: string };
+}) {
+  const { supportOptions, pickVoter } = usePromptTargets();
+  const voters = state.voters.filter(
+    (v) => state.voterGroups?.[v.id] === group.id,
+  );
+  const support = state.supportMarkers?.[group.id] ?? 0;
+  const option = supportOptions.find((o) => o.groupId === group.id);
+
+  return (
+    <div
+      className="flex flex-col gap-1.5 rounded-card border-2 p-1.5"
+      style={{ borderColor: group.color }}
+    >
+      <div className="flex items-center justify-between px-0.5">
+        <span
+          className="font-display text-xs font-bold"
+          style={{ color: group.color }}
+        >
+          {group.name} faction
+        </span>
+        <span
+          className="rounded-full px-1.5 text-[10px] font-extrabold text-ink-900"
+          style={{ background: group.color }}
+          title={`${support} Support Marker${support === 1 ? '' : 's'}`}
+        >
+          support {support}
+        </span>
+      </div>
+      {option && (
+        <button
+          type="button"
+          onClick={() => pickVoter(option.id)}
+          className="animate-breathe rounded-card px-2 py-1 text-[11px] font-bold text-ink-900 ring-2 ring-leyline transition hover:scale-[1.02]"
+          style={{ background: group.color }}
+        >
+          + Support {group.name}
+        </button>
+      )}
+      {voters.map((v) => (
+        <VoterTile key={v.id} state={state} voter={v} />
+      ))}
+    </div>
+  );
+}
+
 export function CouncilTower() {
   const state = useGameStore((s) => s.state);
   if (!state || state.voters.length === 0) return null;
+
+  // Political Struggle organises voters into two colored factions.
+  const scenario = state.scenarioId ? getScenario(state.scenarioId) : undefined;
+  const groups = scenario?.supportGroups?.groups;
+  const factioned = !!(state.voterGroups && groups);
 
   return (
     <aside className="z-20 flex w-52 shrink-0 flex-col gap-1.5 overflow-y-auto p-2">
@@ -134,9 +196,13 @@ export function CouncilTower() {
           {state.voters.length} voters
         </span>
       </p>
-      {state.voters.map((v) => (
-        <VoterTile key={v.id} state={state} voter={v} />
-      ))}
+      {factioned
+        ? groups!.map((g) => (
+            <FactionSection key={g.id} state={state} group={g} />
+          ))
+        : state.voters.map((v) => (
+            <VoterTile key={v.id} state={state} voter={v} />
+          ))}
     </aside>
   );
 }

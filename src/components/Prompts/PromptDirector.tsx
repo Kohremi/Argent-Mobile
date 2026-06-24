@@ -1272,12 +1272,17 @@ export function PromptDirector() {
       );
     case 'choose-voter':
       // The Consortium panel lights up its eligible voters (usePromptTargets);
-      // the player clicks one there. We just show the banner here.
+      // the player clicks one there. We just show the banner here. In Political
+      // Struggle the panel also offers "place a Support Marker" faction buttons.
       return (
         <TargetBanner
           state={state}
           pending={pending}
-          text="Choose a voter in the Consortium →"
+          text={
+            prompt.supportOptions?.length
+              ? 'Mark a voter, or place a Support Marker →'
+              : 'Choose a voter in the Consortium →'
+          }
         />
       );
     case 'reaction-window':

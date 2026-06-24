@@ -12,11 +12,12 @@ import {
   banishMage,
   buildBanishTargets,
   buildBurnTargets,
+  buildGainMarkChooseVoterPrompt,
   buildReactionQueue,
   bumpInfluencePatch,
   canArsMagnaTakeSpace,
-  eligibleVotersForMark,
   gainResourcePatch,
+  supportOptionsFor,
   gainResourcesPatch,
   healMageToSpace,
   isRoomLocked,
@@ -483,11 +484,11 @@ function runReward(
     };
   }
   if (reward.kind === 'mark') {
-    const eligible = eligibleVotersForMark(
+    const prompt = buildGainMarkChooseVoterPrompt(
       ctx.state,
       ctx.triggeringPlayerId,
     );
-    if (eligible.length === 0) {
+    if (!prompt) {
       return { kind: 'done', patch: carryPatch };
     }
     const remaining = reward.count - 1;
@@ -501,10 +502,7 @@ function runReward(
       patch: carryPatch,
       pending: {
         responderId: ctx.triggeringPlayerId,
-        prompt: {
-          kind: 'choose-voter',
-          eligibleVoterIds: eligible.map((v) => v.id),
-        },
+        prompt,
         resume: { effectId: selfEffectId, context },
         source: ctx.source,
       },
@@ -756,7 +754,13 @@ registerEffect(
       patch: goldPatch,
       pending: {
         responderId: ctx.triggeringPlayerId,
-        prompt: { kind: 'choose-voter', eligibleVoterIds: stillEligible },
+        prompt: {
+          kind: 'choose-voter',
+          eligibleVoterIds: stillEligible,
+          ...(supportOptionsFor(ctx.state) && {
+            supportOptions: supportOptionsFor(ctx.state)!,
+          }),
+        },
         resume: { effectId: self, context: { step: 'mark' } },
         source: ctx.source,
       },
@@ -893,16 +897,16 @@ registerEffect(
       }
       // Gain a Mark — open the voter pick (fizzles if every voter is
       // already marked by this player).
-      const eligible = eligibleVotersForMark(ctx.state, ctx.triggeringPlayerId);
-      if (eligible.length === 0) return { kind: 'done', patch: {} };
+      const prompt = buildGainMarkChooseVoterPrompt(
+        ctx.state,
+        ctx.triggeringPlayerId,
+      );
+      if (!prompt) return { kind: 'done', patch: {} };
       return {
         kind: 'pause',
         pending: {
           responderId: ctx.triggeringPlayerId,
-          prompt: {
-            kind: 'choose-voter',
-            eligibleVoterIds: eligible.map((v) => v.id),
-          },
+          prompt,
           resume: { effectId: self, context: { step: 'after-voter' } },
           source: ctx.source,
         },
@@ -962,13 +966,16 @@ registerEffect('mancers.spell.insight-beyond-sight.l2', (ctx): EffectResult => {
       throw new Error(`${self} choose expected option-chosen`);
     }
     if (ctx.resumeAnswer.optionId === 'mark') {
-      const eligible = eligibleVotersForMark(ctx.state, ctx.triggeringPlayerId);
-      if (eligible.length === 0) return { kind: 'done', patch: {} };
+      const prompt = buildGainMarkChooseVoterPrompt(
+        ctx.state,
+        ctx.triggeringPlayerId,
+      );
+      if (!prompt) return { kind: 'done', patch: {} };
       return {
         kind: 'pause',
         pending: {
           responderId: ctx.triggeringPlayerId,
-          prompt: { kind: 'choose-voter', eligibleVoterIds: eligible.map((v) => v.id) },
+          prompt,
           resume: { effectId: self, context: { step: 'after-voter' } },
           source: ctx.source,
         },

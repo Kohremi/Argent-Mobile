@@ -8,9 +8,9 @@ import {
   applyGainMark,
   applySecretSupporterDraw,
   banishMage,
+  buildGainMarkChooseVoterPrompt,
   buildHarmfulMageTargets,
   buildReactionQueue,
-  eligibleVotersForMark,
   findPlayer,
   gainResourcePatch,
   moveMageToSpace,
@@ -91,16 +91,16 @@ registerEffect('renovation.bell.pride', (ctx): EffectResult => ({
 
 registerEffect('renovation.bell.secrecy', (ctx): EffectResult => {
   if (!ctx.resumeAnswer) {
-    const eligible = eligibleVotersForMark(ctx.state, ctx.triggeringPlayerId);
-    if (eligible.length === 0) return { kind: 'done', patch: {} };
+    const prompt = buildGainMarkChooseVoterPrompt(
+      ctx.state,
+      ctx.triggeringPlayerId,
+    );
+    if (!prompt) return { kind: 'done', patch: {} };
     return {
       kind: 'pause',
       pending: {
         responderId: ctx.triggeringPlayerId,
-        prompt: {
-          kind: 'choose-voter',
-          eligibleVoterIds: eligible.map((v) => v.id),
-        },
+        prompt,
         resume: { effectId: 'renovation.bell.secrecy', context: {} },
         source: ctx.source,
       },

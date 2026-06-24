@@ -61,6 +61,17 @@ Round 5: Awards Ceremony - No effect.
 Scenario 4 has been implemented.
 
 
+Scenario 5 Political Struggle
+This scenario orders the voters into two groups, one group is the most influence voter and 5 face down outlined in green, the other group is led by the most supporter voter and 5 facw down outlined in purple.  when placing a mark the player can instead place a Support Marker in one group or the other.  At the end of the game the group with more Support tokens it was given has voters each worth 2 votes instead of one.  in the case of a tie in support markers resolve normally.  the importance is a clear UI on the voter side of the board for this scenario
+Round 1: Tensions Escalate - Round End: In turn order each player gains a mark.
+Round 2: Tensions Escalate - Round End: In turn order each player gains a mark.
+Round 3: Tensions Escalate - Round End: In turn order each player gains a mark.
+Round 4: Tensions Escalate - Round End: In turn order each player gains a mark.
+Round 5: Reckoning Day - No Effect.
+Scenario 5 has been implemented.
+
+
+
 ---
 
 # How scenarios are implemented (read before adding scenarios 4–6)

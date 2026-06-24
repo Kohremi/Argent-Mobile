@@ -38,6 +38,7 @@ import {
   buildArsMagnaTargets,
   buildBanishTargets,
   buildBurnTargets,
+  buildGainMarkChooseVoterPrompt,
   buildHarmfulMageTargets,
   buildMageShadowedEvent,
   buildNonSpellHarmfulTargets,
@@ -3073,14 +3074,11 @@ function spawnGainMarkPrompt(
   playerId: string,
   source: ResolutionSource,
 ): PendingResolutionInput | null {
-  const eligible = eligibleVotersForMark(state, playerId);
-  if (eligible.length === 0) return null;
+  const prompt = buildGainMarkChooseVoterPrompt(state, playerId);
+  if (!prompt) return null;
   return {
     responderId: playerId,
-    prompt: {
-      kind: 'choose-voter',
-      eligibleVoterIds: eligible.map((v) => v.id),
-    },
+    prompt,
     resume: { effectId: 'base.system.gain-mark', context: {} },
     source,
   };
@@ -3868,8 +3866,8 @@ function chapelBMarkChain(
   total: number,
   carryPatch: GameStatePatch = {},
 ): EffectResult {
-  const eligible = eligibleVotersForMark(ctx.state, ctx.triggeringPlayerId);
-  if (eligible.length === 0) {
+  const prompt = buildGainMarkChooseVoterPrompt(ctx.state, ctx.triggeringPlayerId);
+  if (!prompt) {
     return { kind: 'done', patch: carryPatch };
   }
   const remaining = total - 1;
@@ -3878,10 +3876,7 @@ function chapelBMarkChain(
     patch: carryPatch,
     pending: {
       responderId: ctx.triggeringPlayerId,
-      prompt: {
-        kind: 'choose-voter',
-        eligibleVoterIds: eligible.map((v) => v.id),
-      },
+      prompt,
       resume: {
         effectId: selfEffectId,
         context: { step: 'after-mark', remaining },

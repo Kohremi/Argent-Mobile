@@ -1,3 +1,4 @@
+import type { MarkSupportOption } from '../../game/types';
 import { useGameStore } from '../../store/gameStore';
 import { useUiStore } from '../../store/uiStore';
 import { promptDraftsFromShelf, reactionDestinationSlots, topPending } from './promptHelpers';
@@ -16,6 +17,9 @@ export interface PromptTargets {
   spaceTargets: Set<string>;
   /** Voter ids pickable right now (choose-voter — click the Consortium). */
   voterTargets: Set<string>;
+  /** Political Struggle: "place a Support Marker in this faction" options on the
+   *  current gain-mark prompt (empty otherwise). Picked via `pickVoter(opt.id)`. */
+  supportOptions: MarkSupportOption[];
   /** Card ids draftable right now by clicking the board's tableau shelf
    *  (choose-vault-card / choose-supporter-card whose cards are shown). */
   cardTargets: Set<string>;
@@ -26,11 +30,13 @@ export interface PromptTargets {
 }
 
 const EMPTY = new Set<string>();
+const NO_SUPPORT: MarkSupportOption[] = [];
 const NONE: PromptTargets = {
   mageTargets: EMPTY,
   spaceTargets: EMPTY,
   voterTargets: EMPTY,
   cardTargets: EMPTY,
+  supportOptions: NO_SUPPORT,
   pickMage: () => {},
   pickSpace: () => {},
   pickVoter: () => {},
@@ -86,6 +92,7 @@ export function usePromptTargets(): PromptTargets {
     return {
       ...NONE,
       voterTargets: new Set(pending.prompt.eligibleVoterIds),
+      supportOptions: pending.prompt.supportOptions ?? NO_SUPPORT,
       pickVoter: (voterId) =>
         tryDispatch({
           type: 'RESOLVE_PENDING',

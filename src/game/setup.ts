@@ -3,6 +3,7 @@ import { getScenario } from '../content/scenarios';
 import type {
   BellTowerCard,
   ConsortiumVoter,
+  ConsortiumVoterId,
   Department,
   GameConfig,
   GamePhase,
@@ -529,6 +530,29 @@ export function buildInitialState(config: GameConfig): GameState {
     .map((v): ConsortiumVoter => ({ ...v, revealed: false }));
   const voters: ConsortiumVoter[] = [...faceUpVoters, ...drawnFaceDown];
 
+  // ---- Voter factions (Political Struggle) ----
+  // Organise the voters into the scenario's two factions: each leader voter
+  // (matched by criterion) plus an even split of the remaining (face-down)
+  // voters. Stored as voterId → groupId; Support Markers start at 0 per faction.
+  let voterGroups: Record<ConsortiumVoterId, string> | undefined;
+  let supportMarkers: Record<string, number> | undefined;
+  if (scenario?.supportGroups) {
+    const groups = scenario.supportGroups.groups;
+    voterGroups = {};
+    supportMarkers = {};
+    for (const g of groups) supportMarkers[g.id] = 0;
+    // Leaders first (the always-face-up criterion voters).
+    for (const v of voters) {
+      const leadG = groups.find((g) => g.leaderCriterion === v.criterion);
+      if (leadG) voterGroups[v.id] = leadG.id;
+    }
+    // Split the rest evenly between the factions, in order.
+    const rest = voters.filter((v) => !(v.id in voterGroups!));
+    rest.forEach((v, i) => {
+      voterGroups![v.id] = groups[i % groups.length]!.id;
+    });
+  }
+
   // ---- Bell Tower ----
   // The eligible pool is every active pack's Bell Tower card passing the
   // player-count filter (Renovation cards ship with minPlayers 2, so they join
@@ -599,6 +623,8 @@ export function buildInitialState(config: GameConfig): GameState {
     roomLayout,
     voters,
     voterMarks: [],
+    ...(voterGroups ? { voterGroups } : {}),
+    ...(supportMarkers ? { supportMarkers } : {}),
     spellDeck,
     spellTableau,
     vaultDeck,

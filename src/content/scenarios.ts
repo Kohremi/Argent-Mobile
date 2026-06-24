@@ -261,3 +261,78 @@ export const keyToTheUniversity: Scenario = {
 };
 
 registerScenario(keyToTheUniversity);
+
+/**
+ * Scenario 5 — Political Struggle.
+ *
+ * The Consortium splits into two factions: Green (led by the Most Influence
+ * voter) and Purple (led by the Most Supporters voter), each with 5 face-down
+ * voters. Whenever a player would place a Mark they may instead place a Support
+ * Marker into one faction. At the election the faction with more Support Markers
+ * has each of its voters worth 2 votes (a tie resolves normally). Each round
+ * tensions escalate, handing every player another Mark to spend or convert.
+ */
+export const politicalStruggle: Scenario = {
+  id: 'political-struggle',
+  name: 'Political Struggle',
+  description:
+    'The voters split into a Green faction (Most Influence) and a Purple faction ' +
+    '(Most Supporters). When you would place a Mark you may instead place a ' +
+    'Support Marker in a faction; the faction with more Support has each of its ' +
+    'voters worth 2 votes at the election.',
+  supportGroups: {
+    groups: [
+      {
+        id: 'green',
+        name: 'Green',
+        leaderCriterion: 'most-influence',
+        color: '#34d399',
+      },
+      {
+        id: 'purple',
+        name: 'Purple',
+        leaderCriterion: 'most-supporters',
+        color: '#a78bfa',
+      },
+    ],
+    winningVoteMultiplier: 2,
+  },
+  rounds: [
+    {
+      round: 1,
+      name: 'Tensions Escalate',
+      description: 'Round end: in turn order each player gains a Mark.',
+      roundEndEffectId: 'political.scenario.gain-mark',
+      roundEndName: 'Tensions Escalate',
+    },
+    {
+      round: 2,
+      name: 'Tensions Escalate',
+      description: 'Round end: in turn order each player gains a Mark.',
+      roundEndEffectId: 'political.scenario.gain-mark',
+      roundEndName: 'Tensions Escalate',
+    },
+    {
+      round: 3,
+      name: 'Tensions Escalate',
+      description: 'Round end: in turn order each player gains a Mark.',
+      roundEndEffectId: 'political.scenario.gain-mark',
+      roundEndName: 'Tensions Escalate',
+    },
+    {
+      round: 4,
+      name: 'Tensions Escalate',
+      description: 'Round end: in turn order each player gains a Mark.',
+      roundEndEffectId: 'political.scenario.gain-mark',
+      roundEndName: 'Tensions Escalate',
+    },
+    {
+      round: 5,
+      name: 'Reckoning Day',
+      description:
+        'No effect — the election is held and the dominant faction counts double.',
+    },
+  ],
+};
+
+registerScenario(politicalStruggle);
