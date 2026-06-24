@@ -2797,6 +2797,25 @@ describe('Candidate draft', () => {
     ).toThrow(/already taken/);
   });
 
+  it('rejects picking the OTHER leader of an already-taken department', () => {
+    let s = initGame(DRAFT_CONFIG_4P);
+    s = withFirstPlayer(s, 0);
+    // p1 takes a Sorcery leader.
+    s = applyAction(s, {
+      type: 'CHOOSE_CANDIDATE',
+      playerId: 'p1',
+      candidateId: 'base.candidate.larimore-burman',
+    });
+    // p2 may not take the OTHER Sorcery leader — the school is locked.
+    expect(() =>
+      applyAction(s, {
+        type: 'CHOOSE_CANDIDATE',
+        playerId: 'p2',
+        candidateId: 'base.candidate.rihki-kanhamme',
+      }),
+    ).toThrow(/sorcery department is already taken/);
+  });
+
   it('rejects picking out of turn', () => {
     let s = initGame(DRAFT_CONFIG_4P);
     s = withFirstPlayer(s, 0);

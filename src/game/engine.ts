@@ -2411,6 +2411,18 @@ function handleChooseCandidate(
       `CHOOSE_CANDIDATE: candidate "${action.candidateId}" already taken`,
     );
   }
+  // A department may be led by only one player: picking either of its leaders
+  // locks the whole school, so no opponent can take its other leader.
+  const departmentTaken = state.players.some((p) => {
+    if (p.id === action.playerId || !p.candidateId) return false;
+    const other = lookupCandidate(state, p.candidateId);
+    return other?.department === candidate.department;
+  });
+  if (departmentTaken) {
+    throw new Error(
+      `CHOOSE_CANDIDATE: the ${candidate.department} department is already taken`,
+    );
+  }
 
   const allocated = applyCandidateAllocation(state, action.playerId, candidate);
 
