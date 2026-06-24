@@ -49,6 +49,7 @@ import {
   pickRandom,
   providesResearch,
   unspentResearch,
+  markAlternativeAnswer,
 } from './common';
 import {
   castableSpellLevels,
@@ -459,7 +460,8 @@ function answerPendingResolution(
 
     case 'choose-voter': {
       const voterId = prompt.eligibleVoterIds[0];
-      if (voterId === undefined) return { kind: 'pass' };
+      if (voterId === undefined)
+        return markAlternativeAnswer(prompt) ?? { kind: 'pass' };
       return { kind: 'voter-chosen', voterId };
     }
 

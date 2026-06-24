@@ -1279,9 +1279,13 @@ export function PromptDirector() {
           state={state}
           pending={pending}
           text={
-            prompt.supportOptions?.length
-              ? 'Mark a voter, or place a Support Marker →'
-              : 'Choose a voter in the Consortium →'
+            prompt.hitOptions?.length
+              ? prompt.eligibleVoterIds.length === 0
+                ? 'Place a Hit on a voter →'
+                : 'Mark a voter, or place a Hit →'
+              : prompt.supportOptions?.length
+                ? 'Mark a voter, or place a Support Marker →'
+                : 'Choose a voter in the Consortium →'
           }
         />
       );

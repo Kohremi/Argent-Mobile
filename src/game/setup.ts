@@ -553,6 +553,18 @@ export function buildInitialState(config: GameConfig): GameState {
     });
   }
 
+  // ---- Voter Hits + replacement deck (Assassins) ----
+  // The undrawn remainder of the shuffled face-down pool becomes the deck that
+  // refills voters assassinated by hits. Hits start empty.
+  let voterHits: Record<ConsortiumVoterId, number> | undefined;
+  let voterDeck: ConsortiumVoter[] | undefined;
+  if (scenario?.hitMechanic) {
+    voterHits = {};
+    voterDeck = shuffledVoters.value
+      .slice(10 + excludedFaceUpCount)
+      .map((v): ConsortiumVoter => ({ ...v, revealed: false }));
+  }
+
   // ---- Bell Tower ----
   // The eligible pool is every active pack's Bell Tower card passing the
   // player-count filter (Renovation cards ship with minPlayers 2, so they join
@@ -625,6 +637,8 @@ export function buildInitialState(config: GameConfig): GameState {
     voterMarks: [],
     ...(voterGroups ? { voterGroups } : {}),
     ...(supportMarkers ? { supportMarkers } : {}),
+    ...(voterHits ? { voterHits } : {}),
+    ...(voterDeck ? { voterDeck } : {}),
     spellDeck,
     spellTableau,
     vaultDeck,

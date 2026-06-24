@@ -36,6 +36,7 @@ import {
   meritBadgesCommitted,
   ownMageIds,
   pickRandom,
+  markAlternativeAnswer,
 } from './common';
 import { applyAction } from '../engine';
 import {
@@ -300,7 +301,8 @@ function answerPendingResolution(
       return { kind: 'deck-chosen', deck: pickRandom([...prompt.eligibleDecks], rng) };
 
     case 'choose-voter': {
-      if (prompt.eligibleVoterIds.length === 0) return { kind: 'pass' };
+      if (prompt.eligibleVoterIds.length === 0)
+        return markAlternativeAnswer(prompt) ?? { kind: 'pass' };
       return { kind: 'voter-chosen', voterId: pickRandom([...prompt.eligibleVoterIds], rng) };
     }
 

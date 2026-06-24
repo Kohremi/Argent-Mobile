@@ -336,3 +336,60 @@ export const politicalStruggle: Scenario = {
 };
 
 registerScenario(politicalStruggle);
+
+/**
+ * Scenario 6 — Assassins.
+ *
+ * Whenever a player gains a Mark they may instead place a Hit on a face-down
+ * voter (face-up leaders can't be targeted); Hits may only be placed in rounds
+ * 1–4. At the end of rounds 1–4 a voter struck 3+ times is assassinated —
+ * discarded (its Marks removed) and replaced by a fresh face-down voter from the
+ * deck (never to return). Each round shifts the conspiracy.
+ */
+export const assassins: Scenario = {
+  id: 'assassins',
+  name: 'Assassins',
+  description:
+    'When you gain a Mark you may instead place a Hit on a face-down voter. A ' +
+    'voter struck 3 times is assassinated — discarded and replaced. Hits may ' +
+    'only be placed in rounds 1–4.',
+  hitMechanic: { discardThreshold: 3 },
+  rounds: [
+    {
+      round: 1,
+      name: 'Preparations Made',
+      description: 'Round end: each player gains a Mark — it cannot be a Hit.',
+      roundEndEffectId: 'assassins.scenario.gain-mark-no-hit',
+      roundEndName: 'Preparations Made',
+    },
+    {
+      round: 2,
+      name: 'Choosing Targets',
+      description:
+        'Round end: each player gains a Mark that can only be placed as a Hit.',
+      roundEndEffectId: 'assassins.scenario.gain-hit-only',
+      roundEndName: 'Choosing Targets',
+    },
+    {
+      round: 3,
+      name: 'Carrying out the Deed',
+      description:
+        'As an Action, send a Mage to the Infirmary (no bonus) to place a Hit ' +
+        'on up to two different voters.',
+      infirmaryStrikeAction: true,
+    },
+    {
+      round: 4,
+      name: 'Disposing of Evidence',
+      description: 'Each time you place a Hit this round, lose 1 IP.',
+      loseIpPerHit: 1,
+    },
+    {
+      round: 5,
+      name: 'Just Deserts',
+      description: 'Hits can no longer be placed — the deeds are done.',
+    },
+  ],
+};
+
+registerScenario(assassins);

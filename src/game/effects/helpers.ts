@@ -19,6 +19,7 @@ import type {
   MageAbilitySide,
   MageColor,
   MarkSupportOption,
+  VoterHitOption,
   OwnedMage,
   OwnedMageId,
   OwnedSpell,
@@ -2822,23 +2823,82 @@ export function supportOptionsFor(
   }));
 }
 
+/** Synthetic `choose-voter` target prefix for "place a Hit" picks (Assassins).
+ *  The suffix is the voter id. */
+export const HIT_TARGET_PREFIX = 'hit:';
+
+/** Builds the synthetic gain-mark target id that places a Hit on `voterId`. */
+export function hitTargetId(voterId: ConsortiumVoterId): string {
+  return `${HIT_TARGET_PREFIX}${voterId}`;
+}
+
+/** Returns the voter id if `id` is a Hit target, else null. */
+export function parseHitTarget(id: string): string | null {
+  return id.startsWith(HIT_TARGET_PREFIX)
+    ? id.slice(HIT_TARGET_PREFIX.length)
+    : null;
+}
+
+/** Current round number if the phase carries one (errands / round-setup /
+ *  round-end-scenario / mid-game-scoring), else null. */
+function currentRoundOf(state: GameState): number | null {
+  return 'round' in state.phase ? state.phase.round : null;
+}
+
+/**
+ * The "place a Hit on this voter" options for a gain-mark prompt (Assassins), or
+ * undefined when the scenario has no hit mechanic, the round is outside 1–4, or
+ * there is nothing hittable. Targets face-down voters (face-up leaders can't be
+ * hit) not in `exclude` (the same voter can't be hit twice in one action).
+ */
+export function hitOptionsFor(
+  state: GameState,
+  exclude: readonly string[] = [],
+): VoterHitOption[] | undefined {
+  const sc = state.scenarioId ? getScenario(state.scenarioId) : undefined;
+  if (!sc?.hitMechanic) return undefined;
+  const round = currentRoundOf(state);
+  if (round === null || round < 1 || round > 4) return undefined;
+  const ex = new Set(exclude);
+  const targets = state.voters.filter(
+    (v) => !v.isAlwaysFaceUp && !v.revealed && !ex.has(v.id),
+  );
+  if (targets.length === 0) return undefined;
+  return targets.map((v) => ({ id: hitTargetId(v.id), voterId: v.id }));
+}
+
 /**
  * Builds the `choose-voter` prompt for a "Gain a Mark" effect — the eligible
- * (un-marked) voters plus, in Political Struggle, the Support-Marker options.
- * Returns null when the player has marked every voter (the effect fizzles, as
- * it always has); the Support options ride along only when a voter is offered.
+ * (un-marked) voters plus any scenario alternatives (Political Struggle's
+ * Support-Marker options, Assassins' Hit options). Returns null only when there
+ * is nothing to offer at all (the effect fizzles).
+ *
+ * `markMode` controls Assassins' per-source variants: `'mark-only'` (R1) omits
+ * Hits, `'hit-only'` (R2) omits normal voter marks. `excludeHitVoterIds` hides
+ * voters already hit earlier in the same multi-hit action.
  */
 export function buildGainMarkChooseVoterPrompt(
   state: GameState,
   playerId: PlayerId,
+  opts: {
+    markMode?: 'either' | 'mark-only' | 'hit-only';
+    excludeHitVoterIds?: readonly string[];
+  } = {},
 ): Extract<PendingPrompt, { kind: 'choose-voter' }> | null {
-  const eligible = eligibleVotersForMark(state, playerId);
-  if (eligible.length === 0) return null;
+  const markMode = opts.markMode ?? 'either';
+  const eligible =
+    markMode === 'hit-only' ? [] : eligibleVotersForMark(state, playerId);
   const supportOptions = supportOptionsFor(state);
+  const hitOptions =
+    markMode === 'mark-only'
+      ? undefined
+      : hitOptionsFor(state, opts.excludeHitVoterIds ?? []);
+  if (eligible.length === 0 && !supportOptions && !hitOptions) return null;
   return {
     kind: 'choose-voter',
     eligibleVoterIds: eligible.map((v) => v.id),
     ...(supportOptions ? { supportOptions } : {}),
+    ...(hitOptions ? { hitOptions } : {}),
   };
 }
 
@@ -2853,6 +2913,10 @@ export function buildGainMarkChooseVoterPrompt(
  * Political Struggle: a synthetic `support:<faction>` target places a Support
  * Marker into that faction instead — no `voterMarks` entry and no `marks` bump
  * (so converting a mark to support forgoes Most-Marks progress).
+ *
+ * Assassins: a synthetic `hit:<voterId>` target places a Hit on that voter
+ * (`voterHits`) instead — and in a round with `loseIpPerHit` (R4) also costs the
+ * placer that much Influence (floored at 0).
  */
 export function applyGainMark(
   state: GameState,
@@ -2868,6 +2932,33 @@ export function applyGainMark(
         [supportGroup]: (current[supportGroup] ?? 0) + 1,
       },
     };
+  }
+  const hitVoter = parseHitTarget(voterId);
+  if (hitVoter !== null) {
+    const current = state.voterHits ?? {};
+    const patch: GameStatePatch = {
+      voterHits: { ...current, [hitVoter]: (current[hitVoter] ?? 0) + 1 },
+    };
+    const round = currentRoundOf(state);
+    const sc = state.scenarioId ? getScenario(state.scenarioId) : undefined;
+    const ipLoss =
+      round !== null
+        ? sc?.rounds.find((r) => r.round === round)?.loseIpPerHit ?? 0
+        : 0;
+    if (ipLoss > 0) {
+      patch.players = state.players.map((p) =>
+        p.id !== playerId
+          ? p
+          : {
+              ...p,
+              resources: {
+                ...p.resources,
+                influence: Math.max(0, p.resources.influence - ipLoss),
+              },
+            },
+      );
+    }
+    return patch;
   }
   if (
     state.voterMarks.some((m) => m.voterId === voterId && m.playerId === playerId)

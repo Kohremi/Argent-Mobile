@@ -3614,6 +3614,64 @@ function handleAdvancePhase(state: GameState): GameState {
   }
 }
 
+/**
+ * Assassins: at round end (processed at the next round's setup, so rounds 1–4
+ * and never round 5) every voter struck `discardThreshold`+ times is
+ * assassinated — removed from the lineup with its Marks (owners' Mark resource
+ * refunded), and replaced by a fresh face-down voter from `voterDeck`. A
+ * discarded voter never returns; if the deck is empty the lineup shrinks.
+ */
+function applyAssassinDiscards(state: GameState): GameState {
+  const hitMechanic = activeScenario(state)?.hitMechanic;
+  if (!hitMechanic || !state.voterHits) return state;
+  const threshold = hitMechanic.discardThreshold;
+  const hits = { ...state.voterHits };
+  const deck = [...(state.voterDeck ?? [])];
+  let voterMarks = state.voterMarks;
+  let players = state.players;
+  const newVoters: ConsortiumVoter[] = [];
+  let changed = false;
+  for (const v of state.voters) {
+    if ((hits[v.id] ?? 0) < threshold) {
+      newVoters.push(v);
+      continue;
+    }
+    changed = true;
+    const removed = voterMarks.filter((m) => m.voterId === v.id);
+    if (removed.length > 0) {
+      const byPlayer = new Map<PlayerId, number>();
+      for (const m of removed) {
+        byPlayer.set(m.playerId, (byPlayer.get(m.playerId) ?? 0) + 1);
+      }
+      players = players.map((p) => {
+        const n = byPlayer.get(p.id) ?? 0;
+        return n === 0
+          ? p
+          : {
+              ...p,
+              resources: {
+                ...p.resources,
+                marks: Math.max(0, p.resources.marks - n),
+              },
+            };
+      });
+      voterMarks = voterMarks.filter((m) => m.voterId !== v.id);
+    }
+    delete hits[v.id];
+    const repl = deck.shift();
+    if (repl) newVoters.push({ ...repl, revealed: false });
+  }
+  if (!changed) return state;
+  return {
+    ...state,
+    voters: newVoters,
+    voterDeck: deck,
+    voterHits: hits,
+    voterMarks,
+    players,
+  };
+}
+
 function processRoundSetup(state: GameState, round: RoundNumber): GameState {
   let updated = state;
   // Talismans of Magic: hand each player their school's Synthesis Treasure at
@@ -3622,6 +3680,8 @@ function processRoundSetup(state: GameState, round: RoundNumber): GameState {
     updated = grantStartingScenarioItems(updated);
   }
   if (round > 1) {
+    // Assassins: resolve the just-ended round's hits before refreshing.
+    updated = applyAssassinDiscards(updated);
     updated = clearArchmagesApprentice(updated);
     updated = resetAstronomyTowerBMarker(updated);
     updated = returnSummonedMagesToSupply(updated);

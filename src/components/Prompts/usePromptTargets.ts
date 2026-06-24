@@ -20,6 +20,9 @@ export interface PromptTargets {
   /** Political Struggle: "place a Support Marker in this faction" options on the
    *  current gain-mark prompt (empty otherwise). Picked via `pickVoter(opt.id)`. */
   supportOptions: MarkSupportOption[];
+  /** Assassins: voter ids that can be Hit right now (click the hit box). */
+  hitTargets: Set<string>;
+  pickHit: (voterId: string) => void;
   /** Card ids draftable right now by clicking the board's tableau shelf
    *  (choose-vault-card / choose-supporter-card whose cards are shown). */
   cardTargets: Set<string>;
@@ -37,10 +40,12 @@ const NONE: PromptTargets = {
   voterTargets: EMPTY,
   cardTargets: EMPTY,
   supportOptions: NO_SUPPORT,
+  hitTargets: EMPTY,
   pickMage: () => {},
   pickSpace: () => {},
   pickVoter: () => {},
   pickCard: () => {},
+  pickHit: () => {},
 };
 
 export function usePromptTargets(): PromptTargets {
@@ -89,16 +94,29 @@ export function usePromptTargets(): PromptTargets {
   }
 
   if (pending.prompt.kind === 'choose-voter') {
+    const hitOptions = pending.prompt.hitOptions ?? [];
+    const hitById = new Map(hitOptions.map((o) => [o.voterId, o.id] as const));
     return {
       ...NONE,
       voterTargets: new Set(pending.prompt.eligibleVoterIds),
       supportOptions: pending.prompt.supportOptions ?? NO_SUPPORT,
+      hitTargets: new Set(hitById.keys()),
       pickVoter: (voterId) =>
         tryDispatch({
           type: 'RESOLVE_PENDING',
           resolutionId: pending.id,
           answer: { kind: 'voter-chosen', voterId },
         }),
+      pickHit: (voterId) => {
+        const optionId = hitById.get(voterId);
+        if (optionId) {
+          tryDispatch({
+            type: 'RESOLVE_PENDING',
+            resolutionId: pending.id,
+            answer: { kind: 'voter-chosen', voterId: optionId },
+          });
+        }
+      },
     };
   }
 

@@ -27,6 +27,7 @@ import type {
   ActionSpace,
   GameAction,
   GameState,
+  PendingPrompt,
   PendingResolution,
   Player,
   PlayerId,
@@ -35,6 +36,21 @@ import type {
 } from '../types';
 
 export type { Rng };
+
+/**
+ * Fallback for a gain-mark `choose-voter` prompt when no normal voter is
+ * markable — Assassins R2 ("hit-only") gives an empty `eligibleVoterIds` with
+ * only `hitOptions`, and a player who has marked every voter still gets a
+ * Political Struggle support option. Place the first available alternative
+ * (its synthetic id resolves through the same `voter-chosen` answer). Returns
+ * null when there's nothing to do, so the caller can pass.
+ */
+export function markAlternativeAnswer(
+  prompt: Extract<PendingPrompt, { kind: 'choose-voter' }>,
+): ResolutionAnswer | null {
+  const alt = prompt.hitOptions?.[0]?.id ?? prompt.supportOptions?.[0]?.id;
+  return alt ? { kind: 'voter-chosen', voterId: alt } : null;
+}
 
 // ============================================================================
 // Seeded RNG + board lookups.

@@ -179,6 +179,51 @@ function FactionSection({
   );
 }
 
+/**
+ * Assassins: the "Place Hit" box shown to the left of each face-down voter — a
+ * dagger + the running hit count, clickable (glowing) while a gain-mark prompt
+ * lets this voter be hit. Face-up leaders can't be hit, so they get a spacer to
+ * keep the rows aligned.
+ */
+function HitBox({ state, voter }: { state: GameState; voter: ConsortiumVoter }) {
+  const { hitTargets, pickHit } = usePromptTargets();
+  const hittable = !voter.isAlwaysFaceUp && !voter.revealed;
+  if (!hittable) return <div className="w-9 shrink-0" />;
+  const count = state.voterHits?.[voter.id] ?? 0;
+  const targeted = hitTargets.has(voter.id);
+  return (
+    <button
+      type="button"
+      disabled={!targeted}
+      onClick={() => pickHit(voter.id)}
+      title={targeted ? 'Place a Hit on this voter' : `Hits: ${count}`}
+      className={clsx(
+        'flex w-9 shrink-0 flex-col items-center justify-center rounded-card ring-1 transition',
+        targeted
+          ? 'animate-breathe cursor-pointer bg-rose-900/50 shadow-glow-sm ring-2 ring-rose-400 hover:scale-105'
+          : 'bg-night-700/60 ring-white/10',
+      )}
+      style={targeted ? ({ '--glow': '#fb718588' } as React.CSSProperties) : undefined}
+    >
+      <span className="text-base leading-none">🗡</span>
+      <span className="font-arcane text-sm text-rose-200">{count}</span>
+    </button>
+  );
+}
+
+/** Voter row with an optional left-hand Hit box (Assassins). */
+function VoterRow({ state, voter }: { state: GameState; voter: ConsortiumVoter }) {
+  if (!state.voterHits) return <VoterTile state={state} voter={voter} />;
+  return (
+    <div className="flex items-stretch gap-1">
+      <HitBox state={state} voter={voter} />
+      <div className="min-w-0 flex-1">
+        <VoterTile state={state} voter={voter} />
+      </div>
+    </div>
+  );
+}
+
 export function CouncilTower() {
   const state = useGameStore((s) => s.state);
   if (!state || state.voters.length === 0) return null;
@@ -201,7 +246,7 @@ export function CouncilTower() {
             <FactionSection key={g.id} state={state} group={g} />
           ))
         : state.voters.map((v) => (
-            <VoterTile key={v.id} state={state} voter={v} />
+            <VoterRow key={v.id} state={state} voter={v} />
           ))}
     </aside>
   );

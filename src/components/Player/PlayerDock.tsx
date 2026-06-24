@@ -126,6 +126,15 @@ export function PlayerDock() {
     fastActions > 0 &&
     fastSurcharge > 0
   );
+  // Assassins R3 (Carrying out the Deed): an extra Action that sends an office
+  // Mage to the Infirmary to place up to two Hits. Offered only with the Action
+  // in hand and a Mage available to send.
+  const canInfirmaryStrike = !!(
+    errands &&
+    scenarioRule?.infirmaryStrikeAction &&
+    regularActions > 0 &&
+    player.mages.some((m) => m.location.kind === 'office')
+  );
   // Wounded mages aren't shown here — they rest in the Infirmary ward on the
   // board (RoomScene bed grid), which renders + targets them and owns their
   // glide animation. Duplicating them here collided the framer-motion
@@ -251,6 +260,23 @@ export function PlayerDock() {
             className="rounded-full bg-night-700 px-4 py-1.5 font-display text-sm font-bold text-white/80 ring-1 ring-white/15 shadow-card transition hover:-translate-y-0.5 hover:text-white active:translate-y-0 disabled:opacity-40 disabled:hover:translate-y-0"
           >
             Skip fast action
+          </button>
+        )}
+        {canInfirmaryStrike && (
+          <button
+            type="button"
+            disabled={pendings > 0}
+            onClick={() =>
+              tryDispatch({
+                type: 'USE_ABILITY',
+                playerId: player.id,
+                abilityId: 'assassins.scenario.infirmary-strike',
+              })
+            }
+            title="Send an office Mage to the Infirmary (no bonus) to place a Hit on up to two different voters. Costs your Action."
+            className="rounded-full bg-rose-800 px-4 py-1.5 font-display text-sm font-bold text-white shadow-card ring-1 ring-rose-400/50 transition hover:-translate-y-0.5 active:translate-y-0 disabled:opacity-40"
+          >
+            🗡 Infirmary Strike
           </button>
         )}
         {voluntaryPass ? (

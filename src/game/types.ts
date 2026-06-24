@@ -621,6 +621,16 @@ export interface MarkSupportOption {
   label: string;
 }
 
+/**
+ * Assassins: a "place a Hit on this voter" choice offered alongside the voters
+ * on a gain-mark prompt. `id` is a synthetic `hit:<voterId>` target returned via
+ * the normal `voter-chosen` answer and intercepted in `applyGainMark`.
+ */
+export interface VoterHitOption {
+  id: string;
+  voterId: ConsortiumVoterId;
+}
+
 export interface BellTowerCard {
   id: BellTowerCardId;
   name: string;
@@ -712,6 +722,17 @@ export interface ScenarioRoundRule {
    * even if that level isn't researched (Well of Souls R4 / R5).
    */
   castAnyLevel?: boolean;
+  /**
+   * Ongoing this round: as an Action, a player may send an office Mage to the
+   * Infirmary (no bonus) to place a Hit on up to two different voters (Assassins
+   * R3). Surfaced as a PlayerDock action that fires `assassins.scenario.infirmary-strike`.
+   */
+  infirmaryStrikeAction?: boolean;
+  /**
+   * Ongoing this round: each time a player places a Hit this round they lose this
+   * much Influence, floored at 0 (Assassins R4: 1).
+   */
+  loseIpPerHit?: number;
 }
 
 /**
@@ -792,6 +813,14 @@ export interface Scenario {
     }[];
     winningVoteMultiplier: number;
   };
+  /**
+   * Assassins: whenever a player gains a Mark they may instead place a Hit on a
+   * face-down voter (tracked in `GameState.voterHits`); hits may only be placed
+   * in rounds 1–4. At the end of rounds 1–4 every voter with at least
+   * `discardThreshold` hits is discarded (its marks removed) and replaced by a
+   * new face-down voter drawn from `GameState.voterDeck`.
+   */
+  hitMechanic?: { discardThreshold: number };
   /** Per-round rules, indexed by `round`. */
   rounds: ScenarioRoundRule[];
 }
@@ -1079,6 +1108,12 @@ export type PendingPrompt =
        * resolved through the same `voter-chosen` answer (see `applyGainMark`).
        */
       supportOptions?: MarkSupportOption[];
+      /**
+       * Assassins: in addition to (or instead of) marking, the player may place a
+       * Hit on a face-down voter. Each option's `id` is a synthetic `hit:<voterId>`
+       * target resolved through the same `voter-chosen` answer (see `applyGainMark`).
+       */
+      hitOptions?: VoterHitOption[];
     }
   | {
       kind: 'reaction-window';
@@ -1679,6 +1714,18 @@ export interface GameState {
    * instead of a voter mark; read at final scoring for the vote multiplier.
    */
   supportMarkers?: Record<string, number>;
+  /**
+   * Assassins only: Hit count per voter (`voterId → count`). Bumped by
+   * `applyGainMark` when a player places a Hit; a voter reaching the scenario's
+   * `discardThreshold` is discarded + replaced at round end.
+   */
+  voterHits?: Record<ConsortiumVoterId, number>;
+  /**
+   * Assassins only: face-down voters not yet in play, drawn to replace voters
+   * discarded by hits. The undrawn remainder of the setup pool; never refilled
+   * (so a discarded voter never returns and the lineup can shrink).
+   */
+  voterDeck?: ConsortiumVoter[];
 
   spellDeck: SpellCardId[];
   spellTableau: SpellCardId[];

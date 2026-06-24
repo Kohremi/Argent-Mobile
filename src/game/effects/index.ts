@@ -30,3 +30,4 @@ import './talismans';
 import './wellofsouls';
 import './keytotheuniversity';
 import './politicalstruggle';
+import './assassins';

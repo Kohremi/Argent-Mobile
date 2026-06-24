@@ -47,6 +47,7 @@ import {
   pickRandom,
   providesResearch,
   unspentResearch,
+  markAlternativeAnswer,
 } from './common';
 import { scorePlayerForCriterion } from '../scoring';
 import {
@@ -404,7 +405,8 @@ function answerPendingResolution(
       return { kind: 'deck-chosen', deck: prompt.eligibleDecks[0] ?? 'spell' };
 
     case 'choose-voter': {
-      if (prompt.eligibleVoterIds.length === 0) return { kind: 'pass' };
+      if (prompt.eligibleVoterIds.length === 0)
+        return markAlternativeAnswer(prompt) ?? { kind: 'pass' };
       const voterId = me
         ? bestVoterToMark(state, me, prompt.eligibleVoterIds)
         : prompt.eligibleVoterIds[0];

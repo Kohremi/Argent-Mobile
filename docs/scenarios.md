@@ -72,6 +72,18 @@ Scenario 5 has been implemented.
 
 
 
+
+Scenario 6: Assassins
+During this scenario, whenever you gain a Mark, you can use that Mark normally, or place a hit against any Voter instead (face up voters cannot be targeted).  If you gain multiple marks in a single action, you can only place a Hit against each voter once during that action.  You can only place hits in rounds 1-4.
+At the end of each round, excluding round 5 a voter with 3 or more hits is discarded and replaced by a new face down voter from the deck all marks are discarded from the discarded voter.  Once a voter is discarded it cannot be redrawn that game, even if there are no more voters to replace a hit/discarded voter.
+Round 1: Preparations Made - Round End: In turn order, each player gains a Mark, this mark cannot be used as a Hit.
+Round 2: Choosing Targets - Round End: In turn order, each player gains a Mark.  This mark can ONLY be used as a Hit on a voter.
+Round 3: Carrying out the Deed - Ongoing for this round - As an Action, you may send a Mage to the iunfirmary without gaining an infirmary bonus, if you do place a Hit on up to two different voters.
+Round 4: Disposing of Evidence - Ongoing for this Round - each time you place a hit during this round, lose 1 IP.
+Round 5: Just Desserts - Ongoing for this round - Hits cannot be placed.
+Scenario 6 has been implemented.
+
+
 ---
 
 # How scenarios are implemented (read before adding scenarios 4–6)
