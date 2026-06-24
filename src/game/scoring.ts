@@ -1,4 +1,5 @@
 import { getPack } from '../content/registry';
+import { getScenario } from '../content/scenarios';
 import type {
   ConsortiumVoter,
   ConsortiumVoterId,
@@ -532,6 +533,15 @@ export interface VoterAward {
    * value first". Absent when the top score was already unique.
    */
   tiebreaker?: VoterTiebreaker;
+  /**
+   * Influence-victory scenarios only (Key to the University): the players this
+   * voter granted IP to — its sole criterion-winner, or every player tied on
+   * the criterion. Each receives `influenceEach` IP. Empty/absent in normal
+   * (vote-based) games.
+   */
+  influenceWinners?: PlayerId[];
+  /** IP each `influenceWinners` member gained from this voter (7 sole / 4 tied). */
+  influenceEach?: number;
 }
 
 export interface FinalScoringResult {
@@ -544,6 +554,168 @@ export interface FinalScoringResult {
    * archmage." Set to 'votes' when a single leader emerges from votes alone.
    */
   tiebreaker: 'votes' | 'influence' | 'influence-arrival' | 'none';
+  /**
+   * Total Influence per player. In a normal game this is each player's base
+   * `resources.influence`; in an influence-victory scenario (Key to the
+   * University) it's the base IP plus every voter's IP award — i.e. the value
+   * the `archmage` is decided on. Always populated.
+   */
+  influencePerPlayer: Record<PlayerId, number>;
+  /** True when this was scored as an influence-victory game (voters grant IP). */
+  influenceVictory?: boolean;
+}
+
+/**
+ * Influence-victory scoring (Key to the University): every player tied at the
+ * top score (>0) for a voter's criterion. Unlike `computeVoterWinner`, this
+ * applies NO marks/influence tiebreak — all tied players are rewarded (each
+ * gains the scenario's `tiedVoterIp`). `second-most-*` criteria return the
+ * whole second tier (these are normally excluded by the scenario, but the
+ * helper stays correct for composability).
+ */
+function computeVoterTopScorers(
+  state: GameState,
+  voter: ConsortiumVoter,
+): PlayerId[] {
+  if (state.players.length === 0) return [];
+  const baseCriterion: ScoringCriterion =
+    voter.criterion === 'second-most-influence'
+      ? 'most-influence'
+      : voter.criterion === 'second-most-supporters'
+        ? 'most-supporters'
+        : voter.criterion;
+  const isSecondMost = baseCriterion !== voter.criterion;
+  const scored = state.players.map((p) => ({
+    player: p,
+    score: scorePlayerForCriterion(
+      state,
+      p,
+      baseCriterion,
+      voter.customScoringEffectId,
+    ),
+  }));
+  let top = -1;
+  for (const s of scored) if (s.score > top) top = s.score;
+  if (top <= 0) return [];
+  let tierScore = top;
+  if (isSecondMost) {
+    let second = -1;
+    for (const s of scored) {
+      if (s.score < top && s.score > second) second = s.score;
+    }
+    if (second <= 0) return [];
+    tierScore = second;
+  }
+  return scored.filter((s) => s.score === tierScore).map((s) => s.player.id);
+}
+
+/**
+ * Picks the player with the most total Influence from `totals` (the game-end
+ * winner in an influence-victory game). Ties fall back to who REACHED their
+ * Influence first (lowest `influenceArrivalSeq`), then no winner. Mirrors the
+ * vote-game `resolveByInfluence` chain but ranks on the supplied totals (base
+ * IP + voter IP awards) rather than `resources.influence` alone.
+ */
+function resolveByInfluenceTotals(
+  state: GameState,
+  totals: Record<PlayerId, number>,
+): { winner: PlayerId | null; via: 'influence' | 'influence-arrival' | 'none' } {
+  let best = -1;
+  let leaders: Player[] = [];
+  for (const p of state.players) {
+    const t = totals[p.id] ?? 0;
+    if (t > best) {
+      best = t;
+      leaders = [p];
+    } else if (t === best) {
+      leaders.push(p);
+    }
+  }
+  if (best <= 0) return { winner: null, via: 'none' };
+  if (leaders.length === 1) return { winner: leaders[0]!.id, via: 'influence' };
+
+  const withArrival = leaders.filter((p) => p.influenceArrivalSeq > 0);
+  if (withArrival.length === 0) return { winner: null, via: 'none' };
+  let bestSeq = Infinity;
+  let seqLeaders: Player[] = [];
+  for (const p of withArrival) {
+    if (p.influenceArrivalSeq < bestSeq) {
+      bestSeq = p.influenceArrivalSeq;
+      seqLeaders = [p];
+    } else if (p.influenceArrivalSeq === bestSeq) {
+      seqLeaders.push(p);
+    }
+  }
+  if (seqLeaders.length === 1) {
+    return { winner: seqLeaders[0]!.id, via: 'influence-arrival' };
+  }
+  return { winner: null, via: 'none' };
+}
+
+/**
+ * Final scoring for an influence-victory scenario (Key to the University). Each
+ * voter grants IP instead of votes: its sole criterion-winner gains
+ * `soleVoterIp`, or every player tied on the criterion gains `tiedVoterIp`.
+ * The winner is then whoever has the most total Influence (base + awards).
+ */
+function computeInfluenceVictoryScoring(
+  state: GameState,
+  cfg: { soleVoterIp: number; tiedVoterIp: number },
+): FinalScoringResult {
+  const votesPerPlayer: Record<PlayerId, number> = {};
+  const influencePerPlayer: Record<PlayerId, number> = {};
+  for (const p of state.players) {
+    votesPerPlayer[p.id] = 0;
+    influencePerPlayer[p.id] = p.resources.influence;
+  }
+
+  const voterAwards: VoterAward[] = [];
+  for (const voter of state.voters) {
+    const winners = computeVoterTopScorers(state, voter);
+    const ipEach =
+      winners.length === 0
+        ? 0
+        : winners.length === 1
+          ? cfg.soleVoterIp
+          : cfg.tiedVoterIp;
+    for (const id of winners) {
+      influencePerPlayer[id] = (influencePerPlayer[id] ?? 0) + ipEach;
+    }
+    const scoringCriterion =
+      voter.criterion === 'second-most-influence'
+        ? 'most-influence'
+        : voter.criterion === 'second-most-supporters'
+          ? 'most-supporters'
+          : voter.criterion;
+    const scores: Record<PlayerId, number> = {};
+    for (const p of state.players) {
+      scores[p.id] = scorePlayerForCriterion(
+        state,
+        p,
+        scoringCriterion,
+        voter.customScoringEffectId,
+      );
+    }
+    voterAwards.push({
+      voterId: voter.id,
+      voterName: voter.name,
+      votes: 0,
+      winnerPlayerId: winners.length === 1 ? winners[0]! : null,
+      scores,
+      influenceWinners: winners,
+      influenceEach: ipEach,
+    });
+  }
+
+  const { winner, via } = resolveByInfluenceTotals(state, influencePerPlayer);
+  return {
+    votesPerPlayer,
+    archmage: winner,
+    voterAwards,
+    tiebreaker: via,
+    influencePerPlayer,
+    influenceVictory: true,
+  };
 }
 
 /**
@@ -553,10 +725,22 @@ export interface FinalScoringResult {
  *   3. Still tied → player who REACHED that Influence value first
  *      (lowest `influenceArrivalSeq`).
  *   4. Still tied → no archmage.
+ *
+ * Influence-victory scenarios (Key to the University) take a different path:
+ * voters grant IP instead of votes and the winner is the most-Influence player.
  */
 export function computeFinalScoring(state: GameState): FinalScoringResult {
+  const scenario = state.scenarioId ? getScenario(state.scenarioId) : undefined;
+  if (scenario?.influenceVictory) {
+    return computeInfluenceVictoryScoring(state, scenario.influenceVictory);
+  }
+
   const votesPerPlayer: Record<PlayerId, number> = {};
-  for (const p of state.players) votesPerPlayer[p.id] = 0;
+  const influencePerPlayer: Record<PlayerId, number> = {};
+  for (const p of state.players) {
+    votesPerPlayer[p.id] = 0;
+    influencePerPlayer[p.id] = p.resources.influence;
+  }
 
   const voterAwards: VoterAward[] = [];
   for (const voter of state.voters) {
@@ -597,7 +781,13 @@ export function computeFinalScoring(state: GameState): FinalScoringResult {
     if (v > maxVotes) maxVotes = v;
   }
   if (maxVotes === 0) {
-    return { votesPerPlayer, archmage: null, voterAwards, tiebreaker: 'none' };
+    return {
+      votesPerPlayer,
+      archmage: null,
+      voterAwards,
+      tiebreaker: 'none',
+      influencePerPlayer,
+    };
   }
 
   const voteLeaders = state.players.filter(
@@ -609,6 +799,7 @@ export function computeFinalScoring(state: GameState): FinalScoringResult {
       archmage: voteLeaders[0]!.id,
       voterAwards,
       tiebreaker: 'votes',
+      influencePerPlayer,
     };
   }
 
@@ -620,10 +811,17 @@ export function computeFinalScoring(state: GameState): FinalScoringResult {
       archmage: ipResult.winner,
       voterAwards,
       tiebreaker: ipResult.via,
+      influencePerPlayer,
     };
   }
 
-  return { votesPerPlayer, archmage: null, voterAwards, tiebreaker: 'none' };
+  return {
+    votesPerPlayer,
+    archmage: null,
+    voterAwards,
+    tiebreaker: 'none',
+    influencePerPlayer,
+  };
 }
 
 export function resolveMidGameScoring(state: GameState): GameState {

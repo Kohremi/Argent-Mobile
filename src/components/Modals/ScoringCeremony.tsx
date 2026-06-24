@@ -82,11 +82,28 @@ export function ScoringCeremony() {
   const done = stage >= totalStages;
   const archmage = state.players.find((p) => p.id === result.archmage);
 
-  // Running vote totals across the awards revealed so far.
+  // Influence-victory scenarios (Key to the University) score in IP, not votes:
+  // voters grant Influence and the podium tracks each player's total IP.
+  const iv = result.influenceVictory ?? false;
+
+  // Running totals across the awards revealed so far. In an influence game the
+  // tally starts at each player's earned Influence and ticks up by each voter's
+  // IP award; in a normal game it counts votes from each award's winner.
   const running = new Map<string, number>();
-  for (const award of revealed) {
-    if (award.winnerPlayerId) {
-      running.set(award.winnerPlayerId, (running.get(award.winnerPlayerId) ?? 0) + award.votes);
+  if (iv) {
+    for (const p of state.players) {
+      running.set(p.id, p.resources.influence);
+    }
+    for (const award of revealed) {
+      for (const id of award.influenceWinners ?? []) {
+        running.set(id, (running.get(id) ?? 0) + (award.influenceEach ?? 0));
+      }
+    }
+  } else {
+    for (const award of revealed) {
+      if (award.winnerPlayerId) {
+        running.set(award.winnerPlayerId, (running.get(award.winnerPlayerId) ?? 0) + award.votes);
+      }
     }
   }
 
@@ -104,7 +121,7 @@ export function ScoringCeremony() {
       <div className="mb-5 flex items-end gap-3">
         {state.players.map((p) => {
           const aura = PLAYER_AURA[p.color];
-          const votes = running.get(p.id) ?? 0;
+          const score = running.get(p.id) ?? 0;
           const isArchmage = done && result.archmage === p.id;
           return (
             <motion.div
@@ -127,14 +144,16 @@ export function ScoringCeremony() {
                 {p.name}
               </span>
               <motion.span
-                key={votes}
+                key={score}
                 initial={{ scale: 1.6 }}
                 animate={{ scale: 1 }}
                 className="font-arcane text-2xl text-white/95"
               >
-                {votes}
+                {score}
               </motion.span>
-              <span className="text-[9px] uppercase tracking-widest text-white/40">votes</span>
+              <span className="text-[9px] uppercase tracking-widest text-white/40">
+                {iv ? 'IP' : 'votes'}
+              </span>
             </motion.div>
           );
         })}
@@ -147,6 +166,12 @@ export function ScoringCeremony() {
           const aura = winner ? PLAYER_AURA[winner.color] : '#9aa0b4';
           const voter = state.voters.find((v) => v.id === award.voterId);
           const blurb = voter ? voterBlurb(voter) : '';
+          // In an influence game a single voter can pay several tied players.
+          const ipWinners = iv
+            ? (award.influenceWinners ?? [])
+                .map((id) => state.players.find((p) => p.id === id))
+                .filter((p): p is NonNullable<typeof p> => !!p)
+            : [];
           return (
             <motion.div
               key={award.voterId}
@@ -157,9 +182,11 @@ export function ScoringCeremony() {
             >
               <span className="text-sm font-bold">
                 {award.voterName}
-                <span className="ml-1.5 rounded-full bg-ink-900/10 px-1.5 text-[10px] font-extrabold">
-                  {award.votes}🗳
-                </span>
+                {!iv && (
+                  <span className="ml-1.5 rounded-full bg-ink-900/10 px-1.5 text-[10px] font-extrabold">
+                    {award.votes}🗳
+                  </span>
+                )}
                 {award.tiebreaker && (
                   <span className="ml-1.5 text-[9px] uppercase tracking-widest text-black/40">
                     tiebreak: {award.tiebreaker}
@@ -172,7 +199,26 @@ export function ScoringCeremony() {
                     {blurb}
                   </span>
                 )}
-                {winner ? (
+                {iv ? (
+                  ipWinners.length > 0 ? (
+                    <>
+                      <span className="text-[10px] font-extrabold uppercase tracking-wide text-emerald-700">
+                        +{award.influenceEach} IP{ipWinners.length > 1 ? ' each' : ''}
+                      </span>
+                      {ipWinners.map((w) => (
+                        <span
+                          key={w.id}
+                          className="rounded-full px-2.5 py-0.5 text-xs font-extrabold text-ink-900"
+                          style={{ background: PLAYER_AURA[w.color] }}
+                        >
+                          {w.name}
+                        </span>
+                      ))}
+                    </>
+                  ) : (
+                    <span className="text-xs italic text-black/45">no winner</span>
+                  )
+                ) : winner ? (
                   <span
                     className="rounded-full px-2.5 py-0.5 text-xs font-extrabold text-ink-900"
                     style={{ background: aura }}

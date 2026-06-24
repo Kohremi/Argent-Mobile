@@ -28,3 +28,4 @@ import './renovation';
 import './summerbreak';
 import './talismans';
 import './wellofsouls';
+import './keytotheuniversity';

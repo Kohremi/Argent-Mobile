@@ -745,6 +745,23 @@ export interface Scenario {
    * cost by up to this much (Well of Souls: 3).
    */
   sacrificeMageForSpellDiscount?: number;
+  /**
+   * Voter criteria removed from the Consortium pool at setup (matched on
+   * `ConsortiumVoter.criterion`). Any removed always-face-up voter is replaced
+   * by an extra face-down draw so the total voter count is preserved (Key to
+   * the University removes `most-influence` + `second-most-influence` so the IP
+   * leader isn't rewarded with yet more IP).
+   */
+  excludedVoterCriteria?: ScoringCriterion[];
+  /**
+   * Influence-victory (VP-style) game: at final scoring, each voter grants IP
+   * instead of casting votes — its sole criterion-winner gains `soleVoterIp`,
+   * or, when several players tie on the criterion, each tied player gains
+   * `tiedVoterIp` (the per-voter tie is NOT broken by marks/influence). The game
+   * winner is then the player with the most total Influence (Key to the
+   * University: 7 / 4).
+   */
+  influenceVictory?: { soleVoterIp: number; tiedVoterIp: number };
   /** Per-round rules, indexed by `round`. */
   rounds: ScenarioRoundRule[];
 }

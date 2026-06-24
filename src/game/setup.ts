@@ -499,7 +499,18 @@ export function buildInitialState(config: GameConfig): GameState {
       !v.requiresRoomIds ||
       v.requiresRoomIds.some((id) => inPlayRoomIds.has(id)),
   );
-  let faceDownPool = eligibleVoters.filter((v) => !v.isAlwaysFaceUp);
+  // A scenario may pull certain criteria out of the Consortium entirely (Key to
+  // the University removes the Most/Second-Most Influence voters). Each removed
+  // always-face-up voter is replaced by an extra face-down draw, so the total
+  // voter count is preserved ("an extra face-down voter").
+  const excludedCriteria = new Set(scenario?.excludedVoterCriteria ?? []);
+  const scenarioVoters = excludedCriteria.size
+    ? eligibleVoters.filter((v) => !excludedCriteria.has(v.criterion))
+    : eligibleVoters;
+  const excludedFaceUpCount = eligibleVoters.filter(
+    (v) => v.isAlwaysFaceUp && excludedCriteria.has(v.criterion),
+  ).length;
+  let faceDownPool = scenarioVoters.filter((v) => !v.isAlwaysFaceUp);
   if (playerCount === 2) {
     // 2-player variant excludes second-place voters per rulebook.
     faceDownPool = faceDownPool.filter(
@@ -508,13 +519,13 @@ export function buildInitialState(config: GameConfig): GameState {
         v.criterion !== 'second-most-supporters',
     );
   }
-  const faceUpVoters = eligibleVoters
+  const faceUpVoters = scenarioVoters
     .filter((v) => v.isAlwaysFaceUp)
     .map((v): ConsortiumVoter => ({ ...v, revealed: true }));
   const shuffledVoters = shuffleWithState(faceDownPool, rng);
   rng = shuffledVoters.state;
   const drawnFaceDown = shuffledVoters.value
-    .slice(0, 10)
+    .slice(0, 10 + excludedFaceUpCount)
     .map((v): ConsortiumVoter => ({ ...v, revealed: false }));
   const voters: ConsortiumVoter[] = [...faceUpVoters, ...drawnFaceDown];
 

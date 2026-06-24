@@ -201,3 +201,63 @@ export const wellOfSouls: Scenario = {
 };
 
 registerScenario(wellOfSouls);
+
+/**
+ * Scenario 4 — Key to the University.
+ *
+ * A victory-point game: whoever has the most total Influence at the end wins.
+ * The Most Influence and Second-Most Influence voters are removed (replaced by
+ * an extra face-down voter) so the IP leader isn't rewarded with more IP. At the
+ * election, each voter grants Influence instead of votes — 7 IP to its sole
+ * criterion-winner, or 4 IP to each of several tied players (no marks/influence
+ * tiebreak). Each round adds an IP-based recognition award.
+ */
+export const keyToTheUniversity: Scenario = {
+  id: 'key-to-the-university',
+  name: 'Key to the University',
+  description:
+    'A race for Influence — most IP at the end wins. The Influence voters are ' +
+    'removed, and at the election every voter grants 7 IP to its winner (4 IP ' +
+    'each when tied) instead of a vote.',
+  excludedVoterCriteria: ['most-influence', 'second-most-influence'],
+  influenceVictory: { soleVoterIp: 7, tiedVoterIp: 4 },
+  rounds: [
+    {
+      round: 1,
+      name: 'Recognition for Merit',
+      description: 'Round end: gain 1 IP for each unused Merit Badge.',
+      roundEndEffectId: 'key.scenario.merit-recognition',
+      roundEndName: 'Recognition for Merit',
+    },
+    {
+      round: 2,
+      name: 'Recognition for Merit',
+      description: 'Round end: gain 1 IP for each unused Merit Badge.',
+      roundEndEffectId: 'key.scenario.merit-recognition',
+      roundEndName: 'Recognition for Merit',
+    },
+    {
+      round: 3,
+      name: 'Recognition for Research',
+      description:
+        'Round end: the player(s) with the most total Research gain 3 IP.',
+      roundEndEffectId: 'key.scenario.research-recognition',
+      roundEndName: 'Recognition for Research',
+    },
+    {
+      round: 4,
+      name: 'Recognition for Involvement',
+      description:
+        'Round end: the player(s) with the most total Marks gain 3 IP.',
+      roundEndEffectId: 'key.scenario.involvement-recognition',
+      roundEndName: 'Recognition for Involvement',
+    },
+    {
+      round: 5,
+      name: 'Awards Ceremony',
+      description: 'No effect — the game ends and the most-Influence player wins.',
+    },
+  ],
+};
+
+registerScenario(keyToTheUniversity);

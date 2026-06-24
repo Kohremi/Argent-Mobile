@@ -48,6 +48,19 @@ Round 5: All Mysteries Revealed : Ongoing for this Round: All Spell cost is redu
 Scenario 3 has been implemented.
 
 
+
+Scenario 4: Key to the University
+This scenario is played like a traditional Victory Point-Based Game.  Whoever has the most influence at the end of the game wins.
+Most Influence and 2nd Most Influence Voters are removed from the possible pool of voters.  So there is an extra face down voter.
+Voters are award like normal, but instead of a vote, the player gains 7 IP.  Ties for voters are not decided by marks then influence, instead all tied players score 4 IP for the voter, instead of the regular 7IP.
+Round 1: Recognition for Merit - Round End: Gain 1 IP per unused merit badge.
+Round 2: Recognition for Merit - Round End: Gain 1 IP per unused merit badge.
+Round 3: Recognition for Research - The player or players with the most total research gains 3 IP. (all tied players gain this benefit)
+Round 4: Recognition for Involvement - The player or players with the most total marks gains 3 IP. (all tied players gain this benefit)
+Round 5: Awards Ceremony - No effect.
+Scenario 4 has been implemented.
+
+
 ---
 
 # How scenarios are implemented (read before adding scenarios 4–6)
