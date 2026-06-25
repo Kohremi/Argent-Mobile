@@ -3227,6 +3227,88 @@ function collectAvailableCandidates(state: GameState): Candidate[] {
   return out;
 }
 
+/**
+ * Shared chrome for the pre-game flow (leader draft, mage draft, mark
+ * placement) so those screens match the SetupScreen aesthetic: a gradient
+ * canvas, a sticky translucent command bar with the title + actions, and a
+ * centered `max-w-6xl` body that stacks cards.
+ */
+function DraftShell({
+  title,
+  subtitle,
+  actions,
+  children,
+}: {
+  title: string;
+  subtitle?: React.ReactNode;
+  actions?: React.ReactNode;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="min-h-full bg-gradient-to-b from-slate-950 to-slate-900 text-slate-100">
+      <header className="sticky top-0 z-10 border-b border-slate-700/60 bg-slate-950/80 backdrop-blur">
+        <div className="mx-auto flex max-w-6xl flex-wrap items-center gap-x-6 gap-y-3 px-6 py-3">
+          <div className="mr-auto">
+            <h1 className="text-xl font-semibold leading-tight">{title}</h1>
+            {subtitle && <p className="text-xs text-slate-400">{subtitle}</p>}
+          </div>
+          {actions}
+        </div>
+      </header>
+      <main className="mx-auto max-w-6xl space-y-4 px-6 pb-16 pt-5">
+        {children}
+      </main>
+    </div>
+  );
+}
+
+/** A titled card matching SetupScreen's section cards. */
+function DraftCard({
+  title,
+  headerRight,
+  className,
+  children,
+}: {
+  title?: string;
+  headerRight?: React.ReactNode;
+  className?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <section
+      className={clsx(
+        'rounded-xl border border-slate-700/70 bg-slate-900/40 p-4 shadow-sm',
+        className,
+      )}
+    >
+      {(title || headerRight) && (
+        <div className="mb-3 flex items-center justify-between gap-3">
+          {title && (
+            <h2 className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-300">
+              {title}
+            </h2>
+          )}
+          {headerRight}
+        </div>
+      )}
+      {children}
+    </section>
+  );
+}
+
+/** Secondary "Back to setup" button shared across the pre-game screens. */
+function BackToSetupButton({ onClick }: { onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className="rounded-md bg-slate-800 px-3 py-2 text-sm text-slate-200 hover:bg-slate-700"
+    >
+      Back to setup
+    </button>
+  );
+}
+
 function CandidateDraftScreen({
   state,
   dispatch,
@@ -3309,60 +3391,18 @@ function CandidateDraftScreen({
     : null;
 
   return (
-    <div className="min-h-full p-6 max-w-5xl mx-auto space-y-5">
-      <header className="flex items-center justify-between flex-wrap gap-3">
-        <div>
-          <h1 className="text-2xl font-semibold">Argent — candidate draft</h1>
-          <p className="text-slate-400 text-sm">
-            {activePlayer?.name ?? '?'} is choosing a faction leader. Click a
-            leader to preview, then confirm with the Pick button.
-          </p>
-        </div>
-        <button
-          type="button"
-          onClick={reset}
-          className="px-3 py-1.5 rounded bg-slate-800 hover:bg-slate-700 text-sm"
-        >
-          Back to setup
-        </button>
-      </header>
-
-      <section>
-        <h2 className="text-lg font-medium mb-2">Players</h2>
-        <ul className="grid grid-cols-1 md:grid-cols-2 gap-2 text-sm">
-          {state.players.map((p, i) => (
-            <li
-              key={p.id}
-              className={clsx(
-                'p-2 rounded border',
-                i === activeIdx
-                  ? 'border-amber-400/60 bg-amber-400/5'
-                  : 'border-slate-700 bg-slate-900',
-              )}
-            >
-              <div className="flex items-center justify-between">
-                <span className="font-medium">{p.name}</span>
-                {i === activeIdx && (
-                  <span className="text-xs px-2 py-0.5 rounded bg-amber-500 text-slate-950">
-                    choosing
-                  </span>
-                )}
-              </div>
-              <div className="text-xs text-slate-500">
-                {p.candidateId
-                  ? `picked: ${p.candidateId.split('.').pop()}`
-                  : 'no pick yet'}
-              </div>
-            </li>
-          ))}
-        </ul>
-      </section>
-
-      <section className="space-y-3">
-        <div className="flex items-center justify-between flex-wrap gap-2">
-          <h2 className="text-lg font-medium">Faction Leaders</h2>
+    <DraftShell
+      title="Faction Leader Draft"
+      subtitle={
+        <>
+          {activePlayer?.name ?? '?'} is choosing a leader — click one to
+          preview, then confirm with Pick.
+        </>
+      }
+      actions={
+        <div className="flex flex-wrap items-center gap-2">
           {activePlayer && (
-            <div className="flex items-center gap-2 flex-wrap">
+            <>
               <button
                 type="button"
                 onClick={() => {
@@ -3378,9 +3418,9 @@ function CandidateDraftScreen({
                   });
                   setHighlighted(null);
                 }}
-                className="px-3 py-2 rounded bg-slate-700 text-slate-100 font-medium hover:bg-slate-600"
+                className="rounded-md bg-slate-800 px-3 py-2 text-sm font-medium text-slate-100 hover:bg-slate-700"
               >
-                🎲 Random pick ({activePlayer.name})
+                🎲 Random
               </button>
               <button
                 type="button"
@@ -3397,17 +3437,50 @@ function CandidateDraftScreen({
                   });
                   setHighlighted(null);
                 }}
-                className="px-4 py-2 rounded bg-amber-500 text-slate-950 font-medium hover:bg-amber-400 disabled:opacity-40 disabled:cursor-not-allowed"
+                className="rounded-md bg-amber-500 px-5 py-2 text-sm font-semibold text-slate-950 shadow hover:bg-amber-400 disabled:cursor-not-allowed disabled:opacity-40"
               >
                 {highlightedCandidate
-                  ? `Pick ${highlightedCandidate.name} (as ${activePlayer.name})`
-                  : `Pick (as ${activePlayer.name}) — select a leader first`}
+                  ? `Pick ${highlightedCandidate.name} ▸`
+                  : 'Pick ▸'}
               </button>
-            </div>
+            </>
           )}
+          <BackToSetupButton onClick={reset} />
         </div>
+      }
+    >
+      <DraftCard title="Players">
+        <ul className="grid grid-cols-1 gap-2 text-sm sm:grid-cols-2 lg:grid-cols-3">
+          {state.players.map((p, i) => (
+            <li
+              key={p.id}
+              className={clsx(
+                'rounded-lg border p-2.5',
+                i === activeIdx
+                  ? 'border-amber-400/60 bg-amber-400/5'
+                  : 'border-slate-700 bg-slate-900',
+              )}
+            >
+              <div className="flex items-center justify-between gap-2">
+                <span className="font-medium">{p.name}</span>
+                {i === activeIdx && (
+                  <span className="rounded bg-amber-500 px-2 py-0.5 text-xs text-slate-950">
+                    choosing
+                  </span>
+                )}
+              </div>
+              <div className="text-xs text-slate-500">
+                {p.candidateId
+                  ? `picked: ${p.candidateId.split('.').pop()}`
+                  : 'no pick yet'}
+              </div>
+            </li>
+          ))}
+        </ul>
+      </DraftCard>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+      <DraftCard title="Faction Leaders">
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
           {departmentOrder.map((dept) => {
             const leaders = byDept.get(dept) ?? [];
             if (leaders.length === 0) return null;
@@ -3425,8 +3498,8 @@ function CandidateDraftScreen({
             });
           })}
         </div>
-      </section>
-    </div>
+      </DraftCard>
+    </DraftShell>
   );
 }
 
@@ -3436,6 +3509,22 @@ function CandidateDraftScreen({
  * may be led by only one player, the whole box locks once any player has taken
  * either leader.
  */
+/**
+ * Signature colour per department, used to softly tint each leader card on the
+ * draft. Mirrors the mage-robe palette in MageToken so a department reads in
+ * the same hue as its worker meeple.
+ */
+const DEPARTMENT_TINT: Record<Department, string> = {
+  sorcery: '#ff5d5d',
+  'natural-magick': '#5fd068',
+  mysticism: '#9aa0b4',
+  'planar-studies': '#b16cea',
+  divinity: '#5aa9e6',
+  technomancy: '#ff9f43',
+  students: '#e8c878',
+  wild: '#d9b3ff',
+};
+
 function renderDepartmentBox(args: {
   dept: Department;
   deptLabel: string;
@@ -3460,20 +3549,34 @@ function renderDepartmentBox(args: {
   const highlightedHere =
     leaders.find((c) => c.id === highlightedId) ?? null;
   const previewSpell = highlightedHere ? spellOf(highlightedHere) : null;
+  const tint = DEPARTMENT_TINT[dept];
+  // Soft department-colour fill. Locked cards drop the tint and dim. When
+  // highlighted, the amber selection border/ring (className) wins over the
+  // inline border colour, but the (slightly stronger) tinted fill stays.
+  const tintStyle: React.CSSProperties | undefined = locked
+    ? undefined
+    : {
+        backgroundColor: `${tint}${highlightedHere ? '26' : '17'}`,
+        ...(highlightedHere ? {} : { borderColor: `${tint}66` }),
+      };
   return (
     <div
       key={dept}
+      style={tintStyle}
       className={clsx(
         'rounded-lg border p-2.5 space-y-2 transition-colors',
         locked
           ? 'border-slate-800 bg-slate-900/40 opacity-60'
           : highlightedHere
-            ? 'border-amber-400/70 bg-amber-400/5 ring-1 ring-amber-400/30'
-            : 'border-slate-700 bg-slate-900',
+            ? 'border-amber-400/70 ring-1 ring-amber-400/30'
+            : '',
       )}
     >
       <div className="flex items-center justify-between gap-2">
-        <h3 className="text-sm font-semibold text-slate-300 uppercase tracking-wide">
+        <h3
+          className="text-sm font-semibold uppercase tracking-wide"
+          style={{ color: locked ? undefined : tint }}
+        >
           {deptLabel}
         </h3>
         {locked && (
@@ -3632,27 +3735,20 @@ function MageDraftFirstChoiceScreen({
   if (!chooser || !other) return null;
 
   return (
-    <div className="min-h-full p-6 max-w-3xl mx-auto space-y-5">
-      <header className="flex items-center justify-between flex-wrap gap-3">
-        <div>
-          <h1 className="text-2xl font-semibold">Argent — mage draft (order)</h1>
-          <p className="text-slate-400 text-sm">
-            {playerDisplayName(state, chooser)} chose their leader second and
-            picks who drafts first.
-          </p>
-        </div>
-        <button
-          type="button"
-          onClick={reset}
-          className="px-3 py-1.5 rounded bg-slate-800 hover:bg-slate-700 text-sm"
-        >
-          Back to setup
-        </button>
-      </header>
-      <section className="rounded border border-slate-700 bg-slate-900 p-4 space-y-3">
-        <p className="text-sm text-slate-300">
-          The draft order will be a snake: A, B, B, A, A, B (each player gets
-          3 picks).
+    <DraftShell
+      title="Mage Draft — Choose Order"
+      subtitle={
+        <>
+          {playerDisplayName(state, chooser)} chose their leader second and
+          picks who drafts first.
+        </>
+      }
+      actions={<BackToSetupButton onClick={reset} />}
+    >
+      <DraftCard title="Who drafts first?">
+        <p className="mb-3 text-sm text-slate-300">
+          The draft order is a snake: A, B, B, A, A, B (each player gets 3
+          picks).
         </p>
         <div className="flex flex-wrap gap-2">
           <button
@@ -3664,7 +3760,7 @@ function MageDraftFirstChoiceScreen({
                 draftFirst: true,
               })
             }
-            className="px-3 py-2 rounded bg-amber-500 text-slate-950 hover:bg-amber-400"
+            className="rounded-md bg-amber-500 px-5 py-2 text-sm font-semibold text-slate-950 shadow hover:bg-amber-400"
           >
             Draft first ({chooser.name} starts)
           </button>
@@ -3677,14 +3773,14 @@ function MageDraftFirstChoiceScreen({
                 draftFirst: false,
               })
             }
-            className="px-3 py-2 rounded bg-slate-700 hover:bg-slate-600 text-slate-100"
+            className="rounded-md bg-slate-800 px-4 py-2 text-sm text-slate-100 hover:bg-slate-700"
           >
             Pass first pick to {other.name}
           </button>
         </div>
-      </section>
+      </DraftCard>
       <MageDraftPoolPanel state={state} />
-    </div>
+    </DraftShell>
   );
 }
 
@@ -3703,29 +3799,20 @@ function MageDraftScreen({
   const activePlayer = activeIdx !== undefined ? state.players[activeIdx] : undefined;
 
   return (
-    <div className="min-h-full p-6 max-w-4xl mx-auto space-y-5">
-      <header className="flex items-center justify-between flex-wrap gap-3">
-        <div>
-          <h1 className="text-2xl font-semibold">Argent — mage draft</h1>
-          <p className="text-slate-400 text-sm">
-            Pick {phase.nextPickIndex + 1} of {phase.pickOrder.length} —{' '}
-            {activePlayer ? playerDisplayName(state, activePlayer) : '?'} is
-            choosing
-          </p>
-        </div>
-        <button
-          type="button"
-          onClick={reset}
-          className="px-3 py-1.5 rounded bg-slate-800 hover:bg-slate-700 text-sm"
-        >
-          Back to setup
-        </button>
-      </header>
-
-      <section>
-        <h2 className="text-lg font-medium mb-2">Pool</h2>
+    <DraftShell
+      title="Mage Draft"
+      subtitle={
+        <>
+          Pick {phase.nextPickIndex + 1} of {phase.pickOrder.length} —{' '}
+          {activePlayer ? playerDisplayName(state, activePlayer) : '?'} is
+          choosing
+        </>
+      }
+      actions={<BackToSetupButton onClick={reset} />}
+    >
+      <DraftCard title="Pool">
         {activePlayer ? (
-          <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-4">
             {(() => {
               // Base colours plus Technomancy (orange) when Mancers is
               // active. Orange piece supply lives only in the Mancers
@@ -3769,13 +3856,13 @@ function MageDraftScreen({
                     })
                   }
                   className={clsx(
-                    'rounded border p-3 text-left text-sm space-y-1',
+                    'space-y-1 rounded-lg border p-3 text-left text-sm transition-colors',
                     'border-slate-700 bg-slate-900 hover:border-amber-400/60 hover:bg-slate-800',
-                    'disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:border-slate-700 disabled:hover:bg-slate-900',
+                    'disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:border-slate-700 disabled:hover:bg-slate-900',
                   )}
                 >
                   <div className="flex items-center gap-2">
-                    <MageIcon color={color} size={36} />
+                    <MageToken color={color} size={40} />
                     <div className="flex flex-col flex-1 min-w-0">
                       <div className="flex items-baseline justify-between gap-2">
                         <span className="font-medium capitalize">{color}</span>
@@ -3793,59 +3880,59 @@ function MageDraftScreen({
             })}
           </div>
         ) : (
-          <p className="text-sm text-slate-500 italic">no active picker</p>
+          <p className="text-sm italic text-slate-500">no active picker</p>
         )}
-      </section>
+      </DraftCard>
 
-      <section>
-        <h2 className="text-lg font-medium mb-2">Pick order</h2>
-        <ol className="text-xs text-slate-400 space-y-0.5">
-          {phase.pickOrder.map((idx, i) => {
-            const p = state.players[idx];
-            const isCurrent = i === phase.nextPickIndex;
-            const isPast = i < phase.nextPickIndex;
-            return (
+      <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+        <DraftCard title="Pick order">
+          <ol className="space-y-0.5 text-xs text-slate-400">
+            {phase.pickOrder.map((idx, i) => {
+              const p = state.players[idx];
+              const isCurrent = i === phase.nextPickIndex;
+              const isPast = i < phase.nextPickIndex;
+              return (
+                <li
+                  key={i}
+                  className={clsx(
+                    isCurrent && 'font-medium text-amber-300',
+                    isPast && 'text-slate-600 line-through',
+                  )}
+                >
+                  {i + 1}. {p?.name ?? '?'}
+                  {isCurrent ? ' ← current' : ''}
+                </li>
+              );
+            })}
+          </ol>
+        </DraftCard>
+
+        <DraftCard title="Players">
+          <ul className="space-y-2 text-sm">
+            {state.players.map((p) => (
               <li
-                key={i}
-                className={clsx(
-                  isCurrent && 'text-amber-300 font-medium',
-                  isPast && 'text-slate-600 line-through',
-                )}
+                key={p.id}
+                className="rounded-lg border border-slate-700 bg-slate-900 p-2.5"
               >
-                {i + 1}. {p?.name ?? '?'}
-                {isCurrent ? ' ← current' : ''}
+                <div className="font-medium">{playerDisplayName(state, p)}</div>
+                <div className="flex flex-wrap items-center gap-1.5 text-xs text-slate-400">
+                  <span>
+                    {p.mages.length} mage{p.mages.length === 1 ? '' : 's'}:
+                  </span>
+                  {p.mages.length === 0 ? (
+                    <span className="italic text-slate-500">(none)</span>
+                  ) : (
+                    p.mages.map((m, i) => (
+                      <MageToken key={i} color={m.color} size={26} />
+                    ))
+                  )}
+                </div>
               </li>
-            );
-          })}
-        </ol>
-      </section>
-
-      <section>
-        <h2 className="text-lg font-medium mb-2">Players</h2>
-        <ul className="grid grid-cols-1 md:grid-cols-2 gap-2 text-sm">
-          {state.players.map((p) => (
-            <li
-              key={p.id}
-              className="rounded border border-slate-700 bg-slate-900 p-2"
-            >
-              <div className="font-medium">{playerDisplayName(state, p)}</div>
-              <div className="text-xs text-slate-400 flex items-center gap-1.5 flex-wrap">
-                <span>
-                  {p.mages.length} mage{p.mages.length === 1 ? '' : 's'}:
-                </span>
-                {p.mages.length === 0 ? (
-                  <span className="italic text-slate-500">(none)</span>
-                ) : (
-                  p.mages.map((m, i) => (
-                    <MageIcon key={i} color={m.color} size={24} />
-                  ))
-                )}
-              </div>
-            </li>
-          ))}
-        </ul>
-      </section>
-    </div>
+            ))}
+          </ul>
+        </DraftCard>
+      </div>
+    </DraftShell>
   );
 }
 
@@ -3876,37 +3963,27 @@ function InitialMarkPlacementScreen({
   };
 
   return (
-    <div className="min-h-full p-6 max-w-5xl mx-auto space-y-5">
-      <header className="flex items-center justify-between flex-wrap gap-3">
-        <div>
-          <h1 className="text-2xl font-semibold">Argent — initial mark placement</h1>
-          <p className="text-slate-400 text-sm">
-            Each player places their starting Mark on a Voter before round 1.
-            Currently choosing:{' '}
-            <strong>
-              {activePlayer ? playerDisplayName(state, activePlayer) : '?'}
-            </strong>
-          </p>
-        </div>
-        <button
-          type="button"
-          onClick={reset}
-          className="px-3 py-1.5 rounded bg-slate-800 hover:bg-slate-700 text-sm"
-        >
-          Back to setup
-        </button>
-      </header>
-
-      <section>
-        <h2 className="text-lg font-medium mb-2">Players</h2>
-        <ul className="grid grid-cols-1 md:grid-cols-2 gap-2 text-sm">
+    <DraftShell
+      title="Initial Mark Placement"
+      subtitle={
+        <>
+          Each player marks a Voter before round 1. Currently choosing:{' '}
+          <strong className="text-slate-300">
+            {activePlayer ? playerDisplayName(state, activePlayer) : '?'}
+          </strong>
+        </>
+      }
+      actions={<BackToSetupButton onClick={reset} />}
+    >
+      <DraftCard title="Players">
+        <ul className="grid grid-cols-1 gap-2 text-sm sm:grid-cols-2 lg:grid-cols-3">
           {state.players.map((p, i) => {
             const hasPlaced = p.resources.marks > 0;
             return (
               <li
                 key={p.id}
                 className={clsx(
-                  'p-2 rounded border flex items-center justify-between gap-2',
+                  'flex items-center justify-between gap-2 rounded-lg border p-2.5',
                   i === phase.activePlayerIndex
                     ? 'border-amber-400/60 bg-amber-400/5'
                     : 'border-slate-700 bg-slate-900',
@@ -3930,17 +4007,14 @@ function InitialMarkPlacementScreen({
             );
           })}
         </ul>
-      </section>
+      </DraftCard>
 
-      <section>
-        <h2 className="text-lg font-medium mb-2">
-          Pick a Consortium Voter to mark
-        </h2>
-        <p className="text-xs text-slate-500 mb-2">
-          Marks on face-down voters let you peek at them during play and
-          break voter-level ties at endgame scoring.
+      <DraftCard title="Pick a Consortium Voter to mark">
+        <p className="-mt-1 mb-3 text-xs text-slate-500">
+          Marks on face-down voters let you peek at them during play and break
+          voter-level ties at endgame scoring.
         </p>
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+        <div className="grid grid-cols-1 gap-2 md:grid-cols-2 xl:grid-cols-3">
           {state.voters.map((v) => {
             const eligible = eligibleSet.has(v.id);
             return (
@@ -3950,10 +4024,10 @@ function InitialMarkPlacementScreen({
                 disabled={!eligible}
                 onClick={() => resolveWithVoter(v.id)}
                 className={clsx(
-                  'rounded border p-3 text-left text-xs space-y-0.5',
+                  'space-y-0.5 rounded-lg border p-3 text-left text-xs transition-colors',
                   eligible
-                    ? 'border-slate-700 bg-slate-900 hover:border-amber-400/60 hover:bg-slate-800 cursor-pointer'
-                    : 'border-slate-800 bg-slate-900/40 opacity-50 cursor-not-allowed',
+                    ? 'cursor-pointer border-slate-700 bg-slate-900 hover:border-amber-400/60 hover:bg-slate-800'
+                    : 'cursor-not-allowed border-slate-800 bg-slate-900/40 opacity-50',
                 )}
               >
                 <div className="flex items-baseline gap-1.5 flex-wrap">
@@ -3985,29 +4059,28 @@ function InitialMarkPlacementScreen({
             );
           })}
         </div>
-      </section>
-    </div>
+      </DraftCard>
+    </DraftShell>
   );
 }
 
 function MageDraftPoolPanel({ state }: { state: GameState }) {
   return (
-    <section className="rounded border border-slate-700 bg-slate-900 p-3">
-      <h2 className="text-sm font-medium mb-2">Pool (after leader picks)</h2>
-      <ul className="grid grid-cols-2 sm:grid-cols-3 gap-1 text-xs text-slate-300">
+    <DraftCard title="Pool (after leader picks)">
+      <ul className="grid grid-cols-2 gap-1 text-xs text-slate-300 sm:grid-cols-3">
         {(
           ['red', 'grey', 'green', 'blue', 'purple', 'off-white'] as MageColor[]
         ).map((color) => (
           <li
             key={color}
-            className="capitalize inline-flex items-center gap-1.5"
+            className="inline-flex items-center gap-1.5 capitalize"
           >
-            <MageIcon color={color} size={14} />
+            <MageToken color={color} size={18} />
             {color}: {state.mageDraftPool[color] ?? 0}
           </li>
         ))}
       </ul>
-    </section>
+    </DraftCard>
   );
 }
 
