@@ -3349,6 +3349,37 @@ function placeMageOnSpace(
   };
 }
 
+/** Seats `mageId` into the SHADOW position of `spaceId` (test-only). */
+function placeMageAsShadow(
+  state: GameState,
+  playerId: string,
+  mageId: string,
+  spaceId: string,
+): GameState {
+  const updated = mapPlayer(state, playerId, (p) => ({
+    ...p,
+    mages: p.mages.map((m) =>
+      m.id !== mageId
+        ? m
+        : { ...m, location: { kind: 'action-space', spaceId }, isShadowing: true },
+    ),
+  }));
+  return {
+    ...updated,
+    rooms: updated.rooms.map((r) => ({
+      ...r,
+      actionSpaces: r.actionSpaces.map((s) =>
+        s.id !== spaceId
+          ? s
+          : {
+              ...s,
+              shadowOccupant: { mageId, ownerId: playerId, isShadowing: true },
+            },
+      ),
+    })),
+  };
+}
+
 function addOwnedSpell(
   state: GameState,
   playerId: string,
@@ -5313,6 +5344,43 @@ describe('Leader spells (unique single-level)', () => {
     expect(s.pendingResolutionStack).toHaveLength(0);
   });
 
+  it('Paralocation does not offer a target whose shadow slot is already occupied', () => {
+    // Regression: a "shadow an opponent's Mage" effect must exclude targets
+    // whose slot's shadow position is already filled (there is nowhere to
+    // place the shadow, so it would only fizzle).
+    let s = setupLeaderTest();
+    s = addMage(s, 'p1', {
+      id: 'alice-cast',
+      cardId: 'base.mage.planar-studies',
+      color: 'purple',
+    });
+    s = addMage(s, 'p1', {
+      id: 'alice-shadow',
+      cardId: 'base.mage.planar-studies',
+      color: 'purple',
+    });
+    // bob-open's slot shadow is free (valid target); bob-blocked's is filled.
+    s = addMage(s, 'p2', { id: 'bob-open', cardId: 'base.mage.sorcery', color: 'red' });
+    s = addMage(s, 'p2', { id: 'bob-blocked', cardId: 'base.mage.sorcery', color: 'red' });
+    s = addMage(s, 'p2', { id: 'bob-occupier', cardId: 'base.mage.sorcery', color: 'red' });
+    s = placeMageOnSpace(s, 'p2', 'bob-open', 'base.room.library.a.slot-1');
+    s = placeMageOnSpace(s, 'p2', 'bob-blocked', 'base.room.library.a.slot-2');
+    s = placeMageAsShadow(s, 'p2', 'bob-occupier', 'base.room.library.a.slot-2');
+    s = setMana(s, 'p1', 1);
+    s = addOwnedSpell(s, 'p1', 'base.spell.paralocation');
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.paralocation',
+      level: 1,
+    });
+    const pick = topPending(s);
+    expect(pick.prompt.kind).toBe('choose-target-mage');
+    if (pick.prompt.kind !== 'choose-target-mage') return;
+    expect(pick.prompt.eligibleMageIds).toContain('bob-open');
+    expect(pick.prompt.eligibleMageIds).not.toContain('bob-blocked');
+  });
+
   it('Paralocation: shadow placement credits roundPlacements and respects the per-room cap', () => {
     let s = setupLeaderTest();
     s = forceRoomSide(s, 'Council Chamber', 'A');
@@ -6921,6 +6989,32 @@ describe('PLAY_SUPPORTER', () => {
     });
     // Opens the Swap/Stop loop instead of fizzling.
     expect(topPending(s).prompt.kind).toBe('choose-from-options');
+  });
+
+  it('Rennel Pedrigor does not offer a target whose shadow slot is already occupied', () => {
+    // Regression: "Shadow an opponent's Mage" must exclude targets whose slot
+    // already has a shadow occupant — there is nowhere to place the shadow.
+    let s = setupSupporterTest('base.supporter.rennel-pedrigor');
+    s = forceLibrarySideA(s);
+    // Alice needs an office Mage to shadow with (so the effect doesn't bail
+    // for an unrelated reason).
+    s = addMage(s, 'p1', { id: 'alice-shadow', cardId: 'base.mage.sorcery', color: 'red' });
+    s = addMage(s, 'p2', { id: 'bob-open', cardId: 'base.mage.sorcery', color: 'red' });
+    s = addMage(s, 'p2', { id: 'bob-blocked', cardId: 'base.mage.sorcery', color: 'red' });
+    s = addMage(s, 'p2', { id: 'bob-occupier', cardId: 'base.mage.sorcery', color: 'red' });
+    s = placeMageOnSpace(s, 'p2', 'bob-open', 'base.room.library.a.slot-1');
+    s = placeMageOnSpace(s, 'p2', 'bob-blocked', 'base.room.library.a.slot-2');
+    s = placeMageAsShadow(s, 'p2', 'bob-occupier', 'base.room.library.a.slot-2');
+    s = applyAction(s, {
+      type: 'PLAY_SUPPORTER',
+      playerId: 'p1',
+      supporterCardId: 'base.supporter.rennel-pedrigor',
+    });
+    const pick = topPending(s);
+    expect(pick.prompt.kind).toBe('choose-target-mage');
+    if (pick.prompt.kind !== 'choose-target-mage') return;
+    expect(pick.prompt.eligibleMageIds).toContain('bob-open');
+    expect(pick.prompt.eligibleMageIds).not.toContain('bob-blocked');
   });
 
   it('blocks a higher-cost gold-trade supporter below its swap cost', () => {

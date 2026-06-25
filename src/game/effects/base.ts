@@ -57,6 +57,7 @@ import {
   buildSpellShadowTargets,
   canArsMagnaTakeSpace,
   findMageSlotPosition,
+  shadowSlotOpenForMage,
   isLegendarySpell,
   isRoomAtPlayerCap,
   isRoomLocked,
@@ -6988,6 +6989,9 @@ registerEffect('base.supporter.rennel-pedrigor', (ctx): EffectResult => {
         ) {
           continue;
         }
+        // Skip targets whose slot's shadow position is already filled — there
+        // is nowhere to place the shadow, so the effect would only fizzle.
+        if (!shadowSlotOpenForMage(ctx.state, m.id)) continue;
         targets.push(m.id);
       }
     }
@@ -8549,6 +8553,9 @@ function shadowOpponentMageEffect(selfEffectId: string) {
         ) {
           return false;
         }
+        // Exclude targets whose shadow slot is already filled — nowhere to
+        // place the caster's mage, so the spell would only fizzle.
+        if (!shadowSlotOpenForMage(ctx.state, mageId)) return false;
         return true;
       });
       if (targets.length === 0) {
@@ -15470,7 +15477,10 @@ registerEffect('base.spell.shadow-bolt.l1', (ctx): EffectResult => {
       const owner = ctx.state.players.find((p) =>
         p.mages.some((m) => m.id === mageId),
       );
-      return owner?.id !== ctx.triggeringPlayerId;
+      if (owner?.id === ctx.triggeringPlayerId) return false;
+      // The mage moves into its OWN slot's shadow position — skip it if that
+      // shadow position is already occupied (the spell would only fizzle).
+      return shadowSlotOpenForMage(ctx.state, mageId);
     });
     if (targets.length === 0) return { kind: 'done', patch: {} };
     return {

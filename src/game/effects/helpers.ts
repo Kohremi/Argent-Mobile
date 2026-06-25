@@ -496,6 +496,25 @@ export function buildSpellShadowTargets(
 }
 
 /**
+ * True when `mageId` sits on a base slot whose SHADOW position is still open,
+ * so a "shadow this Mage" effect can actually place there. Shadow-targeting
+ * effects must exclude Mages whose shadow slot is already taken — otherwise the
+ * effect offers a target it can only fizzle on (Rennel Pedrigor, Shadow Bolt,
+ * Paralocation / Parallel Synchronicity). Event Horizon inlines the same check.
+ */
+export function shadowSlotOpenForMage(
+  state: GameState,
+  mageId: OwnedMageId,
+): boolean {
+  const pos = findMageSlotPosition(state, mageId);
+  if (!pos || pos.position !== 'base') return false;
+  const space = state.rooms
+    .flatMap((r) => r.actionSpaces)
+    .find((s) => s.id === pos.spaceId);
+  return space != null && space.shadowOccupant == null;
+}
+
+/**
  * Looks up a mage's slot position (base vs shadow) given its current
  * spaceId. Returns null if the mage isn't on a slot. Used by wound /
  * banish / move helpers so they clear the right occupant slot.
