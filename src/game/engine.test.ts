@@ -8112,6 +8112,93 @@ describe('Ars Magna (Sorcery Mage power)', () => {
     expect(s.pendingResolutionStack).toHaveLength(0);
   });
 
+  it('Regrowth reacting to Ars Magna is NOT offered the attacker’s reserved slot', () => {
+    // Regression for a reported desync: Alice Ars Magnas onto Bob's slot,
+    // wounding Bob and taking the slot. The wound opens a reaction window; Bob
+    // reacts with Regrowth ("place your wounded mage into an empty slot"). The
+    // attacker now occupies the vacated slot (it is seated before the window),
+    // so Regrowth must NOT offer that slot — Bob relocates to a genuinely empty
+    // slot instead, and Alice keeps the slot she took.
+    let s = setupArsMagnaTest({ bobColor: 'grey', aliceMana: 3 });
+    s = addOwnedSpell(s, 'p2', 'base.spell.songs-of-springtime', {
+      intPlaced: true,
+      wisPlacedLevel2: true,
+    });
+    s = setMana(s, 'p2', 1);
+    const targetSlot = 'base.room.vault.b.slot-3';
+
+    s = applyAction(s, {
+      type: 'USE_ABILITY',
+      playerId: 'p1',
+      abilityId: 'base.mage.sorcery.ars-magna',
+      sourceCardId: 'alice-red',
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'mage-chosen', mageId: 'bob-mage' },
+    });
+
+    const reactionPrompt = topPending(s);
+    expect(reactionPrompt.prompt.kind).toBe('reaction-window');
+    if (reactionPrompt.prompt.kind !== 'reaction-window') return;
+    const regrowth = reactionPrompt.prompt.reactionOptions.find(
+      (o) => o.effectId === 'base.spell.songs-of-springtime.l2.react',
+    );
+    expect(regrowth).toBeDefined();
+
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: reactionPrompt.id,
+      answer: {
+        kind: 'reaction-played',
+        effectId: 'base.spell.songs-of-springtime.l2.react',
+        reactionContext: {},
+      },
+    });
+
+    // Alice's red Mage is seated onto the target slot up front (before the
+    // reaction window), so the slot reads as occupied.
+    const targetAfterSeat = s.rooms
+      .flatMap((r) => r.actionSpaces)
+      .find((sp) => sp.id === targetSlot)!;
+    expect(targetAfterSeat.occupant?.mageId).toBe('alice-red');
+
+    // The infirmary-bonus prompt (Bob wounded by an opponent) surfaces ON TOP
+    // of Regrowth's still-pending slot picker; resolve it first.
+    const bonusPrompt = topPending(s);
+    expect(bonusPrompt.prompt.kind).toBe('choose-from-options');
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: bonusPrompt.id,
+      answer: { kind: 'option-chosen', optionId: 'gold', payload: {} },
+    });
+
+    // Bob's Regrowth slot picker must NOT offer the reserved target slot.
+    const slotPrompt = topPending(s);
+    expect(slotPrompt.prompt.kind).toBe('choose-target-action-space');
+    if (slotPrompt.prompt.kind !== 'choose-target-action-space') return;
+    expect(slotPrompt.prompt.eligibleSpaceIds).not.toContain(targetSlot);
+
+    // Bob relocates to a genuinely empty slot — healed, out of the Infirmary.
+    const altSlot = slotPrompt.prompt.eligibleSpaceIds[0]!;
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: slotPrompt.id,
+      answer: { kind: 'space-chosen', spaceId: altSlot },
+    });
+
+    expect(findBoardInconsistency(s)).toBeNull();
+    const bobAfter = findMageById(s, 'bob-mage');
+    expect(bobAfter.isWounded).toBe(false);
+    expect(bobAfter.location).toEqual({ kind: 'action-space', spaceId: altSlot });
+    // Alice's red Mage kept the slot she took.
+    expect(findMageById(s, 'alice-red').location).toEqual({
+      kind: 'action-space',
+      spaceId: targetSlot,
+    });
+  });
+
   it('Ars Magna can target a merit slot and ignores the merit cost', () => {
     let s = initGame(TWO_PLAYER_CONFIG);
     s = forceVaultPlayableSide(s);

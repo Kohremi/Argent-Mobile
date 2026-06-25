@@ -1481,6 +1481,17 @@ function handlePlaceWorker(state: GameState, action: PlaceWorkerAction): GameSta
       targetMageId,
       action.playerId,
     );
+    // Seat the red Mage onto the vacated slot BEFORE the reaction window so the
+    // slot reads as occupied to any reaction the wounded player makes (mirrors
+    // the ability-driven Ars Magna paths). `ars-magna.complete` then runs only
+    // the post-reaction follow-ups (Infirmary bonus + instant-room reward).
+    const afterWound: GameState = { ...stateAfterCosts, ...wounded.patch };
+    const seatPatch = placeMageOnSlot(afterWound, {
+      mageId: action.mageId,
+      ownerId: action.playerId,
+      spaceId: space.id,
+      asShadow: false,
+    });
     const source: ResolutionSource = {
       kind: 'mage-power',
       id: action.mageId,
@@ -1495,7 +1506,7 @@ function handlePlaceWorker(state: GameState, action: PlaceWorkerAction): GameSta
     };
     const result: EffectResult = {
       kind: 'open-reaction',
-      patch: wounded.patch,
+      patch: { ...wounded.patch, ...seatPatch },
       window: {
         triggerEvents: [wounded.triggerEvent],
         pendingResponderIds: buildReactionQueue(

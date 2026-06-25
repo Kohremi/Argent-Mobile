@@ -1566,6 +1566,18 @@ registerEffect('mancers.room.golem-lab-b.slot-1', (ctx): EffectResult => {
       };
       const wounded = woundMage(working, targetMageId, ctx.triggeringPlayerId);
       working = { ...working, ...wounded.patch };
+      // Seat the golem onto the vacated slot before the reaction window so it
+      // reads as occupied to the wounded player's reactions; ars-magna.complete
+      // runs only the post-reaction follow-ups.
+      working = {
+        ...working,
+        ...placeMageOnSlot(working, {
+          mageId: golemId,
+          ownerId: ctx.triggeringPlayerId,
+          spaceId,
+          asShadow: false,
+        }),
+      };
       const source: ResolutionSource = {
         kind: 'mage-power',
         id: golemId,
@@ -2759,6 +2771,18 @@ function woundAndPlaceEffect(
     };
     const wound = woundMage(working, targetMageId, ctx.triggeringPlayerId);
     working = { ...working, ...wound.patch };
+    // Seat the placer onto the vacated slot before the reaction window so it
+    // reads as occupied to the wounded player's reactions; ars-magna.complete
+    // runs only the post-reaction follow-ups.
+    working = {
+      ...working,
+      ...placeMageOnSlot(working, {
+        mageId: placerMageId,
+        ownerId: ctx.triggeringPlayerId,
+        spaceId: targetSpaceId,
+        asShadow: false,
+      }),
+    };
     return {
       kind: 'open-reaction',
       patch: {
@@ -3418,6 +3442,18 @@ registerEffect('mancers.vault.hourglass-of-fate.react', (ctx): EffectResult => {
       };
       const wound = woundMage(working, targetMageId, playerId);
       working = { ...working, ...wound.patch };
+      // Seat the placer onto the vacated slot before the reaction window so it
+      // reads as occupied to the wounded player's reactions; ars-magna.complete
+      // runs only the post-reaction follow-ups.
+      working = {
+        ...working,
+        ...placeMageOnSlot(working, {
+          mageId,
+          ownerId: playerId,
+          spaceId,
+          asShadow: false,
+        }),
+      };
       return {
         kind: 'open-reaction',
         patch: {

@@ -6053,9 +6053,25 @@ registerEffect('base.mage.sorcery.ars-magna', (ctx: EffectContext): EffectResult
     return { kind: 'done', patch: wounded.patch };
   }
 
+  // Seat the caster's red Mage onto the (now-vacated) target slot BEFORE
+  // opening the reaction window. Ars Magna takes the slot as part of the
+  // action, so the slot must read as occupied to any reaction the wounded
+  // player makes — otherwise a "place into an empty slot" reaction (Regrowth /
+  // Renewal) would be offered the reserved slot and silently fizzle on it. The
+  // slot's instant-room reward and the Infirmary bonus still run in `.complete`
+  // (after reactions). Phase Steppers only re-shadows, so it never contends for
+  // this base position.
+  const afterWound: GameState = { ...ctx.state, ...wounded.patch };
+  const seatPatch = moveRedMagePatch(
+    afterWound,
+    sourceMageIdRaw as OwnedMageId,
+    targetSpaceId as ActionSpaceId,
+    ctx.triggeringPlayerId,
+  );
+
   return {
     kind: 'open-reaction',
-    patch: wounded.patch,
+    patch: { ...wounded.patch, ...seatPatch },
     window: {
       triggerEvents: [triggerEvent],
       pendingResponderIds: buildReactionQueue(ctx.state, ctx.triggeringPlayerId),
@@ -6074,18 +6090,14 @@ registerEffect('base.mage.sorcery.ars-magna', (ctx: EffectContext): EffectResult
 });
 
 /**
- * After-reaction continuation for Ars Magna.
+ * After-reaction continuation for Ars Magna. The caster's red Mage was already
+ * seated onto the target slot in the `wound` step (before the reaction window),
+ * so this step only resolves the follow-ups that must run AFTER reactions:
  *
- * Steps:
- *   1. If the wound stuck and was inflicted by an opponent, prompt the
- *      wounded player for the Infirmary bonus. The custom resume chains
- *      back to this effect with `step: 'after-bonus'`, where the bonus
- *      patch is applied inline and the red Mage move runs against the
- *      post-bonus state.
- *   2. Otherwise (or after the bonus), if the targeted slot is now empty,
- *      the caster's red Mage takes it. If a reaction (Phase Steppers)
- *      re-occupied the slot, the red Mage stays in office and the Mana
- *      paid up front is forfeit.
+ *   1. If the wound stuck and was inflicted by an opponent, prompt the wounded
+ *      player for the Infirmary bonus (chaining back here with `after-bonus`).
+ *   2. Fire the target slot's instant-room reward (Guilds A etc.) for the
+ *      already-seated red Mage.
  */
 registerEffect('base.mage.sorcery.ars-magna.complete', (ctx: EffectContext): EffectResult => {
   const sourceMageIdRaw = ctx.resumeContext?.['sourceMageId'];
@@ -6093,10 +6105,10 @@ registerEffect('base.mage.sorcery.ars-magna.complete', (ctx: EffectContext): Eff
   if (typeof sourceMageIdRaw !== 'string' || typeof targetSpaceIdRaw !== 'string') {
     throw new Error('Ars Magna complete: missing context fields');
   }
-  const sourceMageId = sourceMageIdRaw as OwnedMageId;
   const targetSpaceId = targetSpaceIdRaw as ActionSpaceId;
 
-  // Resume from bonus prompt — apply the chosen bonus, then move the Mage.
+  // Resume from bonus prompt — apply the chosen bonus, then fire the slot's
+  // instant-room reward (the red Mage is already seated).
   if (ctx.resumeContext?.['step'] === 'after-bonus') {
     if (ctx.resumeAnswer?.kind !== 'option-chosen') {
       throw new Error('ars-magna.complete after-bonus expected option-chosen');
@@ -6112,16 +6124,9 @@ registerEffect('base.mage.sorcery.ars-magna.complete', (ctx: EffectContext): Eff
       ctx.resumeAnswer,
       ctx.resumeContext,
     );
-    const afterBonus: GameState = { ...ctx.state, ...bonusPatch };
-    const placePatch = moveRedMagePatch(
-      afterBonus,
-      sourceMageId,
-      targetSpaceId,
-      casterId,
-    );
     return patchWithMaybeInstantReward(
-      afterBonus,
-      { ...bonusPatch, ...placePatch },
+      ctx.state,
+      bonusPatch,
       targetSpaceId,
       casterId,
       'base',
@@ -6139,23 +6144,18 @@ registerEffect('base.mage.sorcery.ars-magna.complete', (ctx: EffectContext): Eff
           step: 'after-bonus',
           recipientPlayerId: event.ownerId,
           casterPlayerId: ctx.triggeringPlayerId,
-          sourceMageId,
+          sourceMageId: sourceMageIdRaw,
           targetSpaceId,
         },
       }),
     };
   }
 
-  // No infirmary bonus needed — apply the placement and route through
-  // the instant-room check (Guilds A etc.).
+  // No Infirmary bonus — just fire the instant-room reward for the
+  // already-seated red Mage (Guilds A etc.).
   return patchWithMaybeInstantReward(
     ctx.state,
-    moveRedMagePatch(
-      ctx.state,
-      sourceMageId,
-      targetSpaceId,
-      ctx.triggeringPlayerId,
-    ),
+    {},
     targetSpaceId,
     ctx.triggeringPlayerId,
     'base',
@@ -6403,9 +6403,19 @@ registerEffect(
       if (wounded.triggerEvent.kind !== 'mage-wounded') {
         throw new Error('apprentice Ars Magna: unexpected wound event');
       }
+      // Seat the Apprentice onto the vacated slot before the reaction window
+      // (see the main Ars Magna power for why); `.complete` only runs the
+      // post-reaction follow-ups (Infirmary bonus + instant-room reward).
+      const afterWound: GameState = { ...afterMana, ...wounded.patch };
+      const seatPatch = moveRedMagePatch(
+        afterWound,
+        sourceMageId as OwnedMageId,
+        takenSpaceId as ActionSpaceId,
+        playerId,
+      );
       return {
         kind: 'open-reaction',
-        patch: wounded.patch,
+        patch: { ...wounded.patch, ...seatPatch },
         window: {
           triggerEvents: [wounded.triggerEvent],
           pendingResponderIds: buildReactionQueue(afterMana, playerId),
@@ -7746,6 +7756,16 @@ registerEffect(
           targetMageId,
           ctx.triggeringPlayerId,
         );
+        // Seat the placed Mage onto the vacated slot before the reaction
+        // window (see the main Ars Magna power); `.complete` only runs the
+        // post-reaction follow-ups.
+        const afterWound: GameState = { ...afterMana, ...wounded.patch };
+        const seatPatch = moveRedMagePatch(
+          afterWound,
+          placerMageId as OwnedMageId,
+          spaceId as ActionSpaceId,
+          ctx.triggeringPlayerId,
+        );
         const source: ResolutionSource = {
           kind: 'mage-power',
           id: placerMageId,
@@ -7754,7 +7774,7 @@ registerEffect(
         };
         return {
           kind: 'open-reaction',
-          patch: { players: afterMana.players, ...wounded.patch },
+          patch: { ...wounded.patch, ...seatPatch },
           window: {
             triggerEvents: [wounded.triggerEvent],
             pendingResponderIds: buildReactionQueue(
