@@ -539,7 +539,8 @@ export function findMageSlotPosition(
  * a mage entering a slot from off the board — and it fires for BOTH base and
  * shadow placements: a shadowing mage keeps its colour power (only green's
  * wound-immunity and blue's spell-immunity drop in a shadow slot). It is skipped
- * when `suppressMagePowers` is set (Stop / Slow Time, Great Hall). Other
+ * when `suppressMagePowers` is set — only Stop Time (L2), whose card text says
+ * "without using Mage Powers". Slow Time (L1) and Great Hall do NOT suppress. Other
  * side-effects (instant-room reward, Adventuring-B draft prompt, per-room caps,
  * card disposal) still live in the wrappers — the engine orders the Adventuring-B
  * prompt relative to the instant-room prompt, so it can't move in here.
@@ -554,7 +555,7 @@ export function placeMageOnSlot(
     /** Fire the Technomancy on-place trigger (genuine PLACE, base or shadow). */
     firesTechnomancy?: boolean;
     /** A "place without Mage powers" placement — skips Technomancy even when
-     *  `firesTechnomancy` is set (Stop / Slow Time, Great Hall). */
+     *  `firesTechnomancy` is set. Only Stop Time (L2) sets this. */
     suppressMagePowers?: boolean;
   },
 ): GameStatePatch {

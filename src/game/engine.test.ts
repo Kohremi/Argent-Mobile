@@ -15684,6 +15684,43 @@ describe('Modular mage powers — Side A gated by mageAbilitySides', () => {
     expect(technomancyOnPlacePatch(b.s, 'p1', 'o', b.slot)).toEqual({});
   });
 
+  it('Slow Time (powered) queues the Technomancy trigger; Stop Time (suppressed) does not', async () => {
+    const { placeMageOnSlot } = await import('./effects/helpers');
+    const slot = 'base.room.library.a.slot-1';
+    let s = initGame({
+      activePackIds: ['base', 'mancers'],
+      playerNames: ['Alice', 'Bob'],
+      rngSeed: 7777,
+    });
+    s = forceLibrarySideA(s);
+    s = addMage(s, 'p1', {
+      id: 'o',
+      cardId: 'mancers.mage.technomancy',
+      color: 'orange',
+    });
+    // Slow Time (L1): a genuine, powered placement → Technomancy queues. Its
+    // card text has no "without using Mage Powers" clause.
+    const powered = placeMageOnSlot(s, {
+      mageId: 'o',
+      ownerId: 'p1',
+      spaceId: slot,
+      asShadow: false,
+      firesTechnomancy: true,
+      suppressMagePowers: false,
+    });
+    expect(powered.pendingTechnomancyTrigger).toHaveLength(1);
+    // Stop Time (L2): "without using Mage Powers" → trigger suppressed.
+    const suppressed = placeMageOnSlot(s, {
+      mageId: 'o',
+      ownerId: 'p1',
+      spaceId: slot,
+      asShadow: false,
+      firesTechnomancy: true,
+      suppressMagePowers: true,
+    });
+    expect(suppressed.pendingTechnomancyTrigger ?? []).toHaveLength(0);
+  });
+
   it('Technomancy fires on a SHADOW placement, not just a base one', async () => {
     const { placeOfficeMageAsShadow } = await import('./effects/helpers');
     const slot = 'base.room.library.a.slot-1';
@@ -30128,6 +30165,79 @@ describe('Slow Time (Temporal Calculus L1)', () => {
     expect(s.pendingPlaceChain).toBeNull();
     const top = topPending(s);
     expect(top.source.id).toBe('base.mage.mysticism.place-after-cast');
+  });
+
+  it('a Technomancy (orange) Mage placed via Slow Time fires its on-place Research trigger', () => {
+    // Regression: Slow Time (L1) previously set `suppressMagePowers`, swallowing
+    // the Technomancy "pay 3 Gold → Research" power. Unlike Stop Time (L2), Slow
+    // Time's card text has no "without using Mage Powers" clause, so the trigger
+    // must fire. The trigger surfaces only after the place-chain clears (engine
+    // gates it on `pendingPlaceChain === null`), so a single orange Mage gives a
+    // deterministic top-of-stack.
+    let s = initGame({
+      ...TWO_PLAYER_CONFIG,
+      activePackIds: ['base', 'mancers'],
+    });
+    s = forceLibrarySideA(s);
+    s = zeroPlayerResources(s, 'p1');
+    s = setGold(s, 'p1', 3);
+    s = setMana(s, 'p1', 2);
+    s = addOwnedSpell(s, 'p1', 'base.spell.temporal-calculus-6th-ed', {
+      intPlaced: true,
+    });
+    s = addMage(s, 'p1', {
+      id: 'alice-orange',
+      cardId: 'mancers.mage.technomancy',
+      color: 'orange',
+    });
+    s = {
+      ...s,
+      firstPlayerIndex: 0,
+      phase: {
+        kind: 'errands',
+        round: 1,
+        activePlayerIndex: 0,
+        actionUsed: false,
+        fastActionUsed: false,
+      },
+      bellTower: { ...s.bellTower, available: [] },
+    };
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.temporal-calculus-6th-ed',
+      level: 1,
+    });
+    // Choose Library A.
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: {
+        kind: 'option-chosen',
+        optionId: 'base.room.library.a',
+        payload: {},
+      },
+    });
+    // Place the orange Mage (the only office Mage, so the chain then clears).
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'option-chosen', optionId: 'alice-orange', payload: {} },
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'space-chosen', spaceId: 'base.room.library.a.slot-3' },
+    });
+    // The Technomancy "pay 3 Gold → Research" prompt surfaces.
+    expect(s.pendingPlaceChain).toBeNull();
+    const prompt = topPending(s);
+    expect(prompt.resume.effectId).toBe('mancers.mage.technomancy.place-after');
+    if (prompt.prompt.kind !== 'choose-from-options') throw new Error('unreachable');
+    expect(prompt.prompt.options.map((o) => o.id).sort()).toEqual([
+      'pay',
+      'skip',
+    ]);
   });
 });
 

@@ -9564,8 +9564,9 @@ function placeOfficeMageOnSpace(
   playerId: PlayerId,
   mageId: string,
   spaceId: string,
-  // When true, this is a genuine "place without powers" placement (Slow / Stop
-  // Time, Great Hall) — the Technomancy "upon placement" Mage power is skipped.
+  // When true, this is a genuine "place without powers" placement (only Stop
+  // Time / L2) — the Technomancy "upon placement" power is skipped. Slow Time
+  // (L1) and Great Hall placements DO use powers.
   suppressMagePowers = false,
 ): GameStatePatch {
   const player = state.players.find((p) => p.id === playerId);
@@ -16037,8 +16038,9 @@ registerEffect(
           remaining: 1,
           restrictRoomId: roomId,
           allowStop: true,
-          // Slow Time places Mages without using powers.
-          suppressMagePowers: true,
+          // Slow Time (L1) uses Mage powers — unlike Stop Time (L2), its card
+          // text has no "without using Mage Powers" clause, so the Technomancy
+          // "upon placement" trigger must still fire. (No suppressMagePowers.)
         },
       };
       const delegate = getEffect('base.system.place-mage-without-powers')({
