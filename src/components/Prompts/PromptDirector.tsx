@@ -15,7 +15,13 @@ import {
 } from '../../game/effects/helpers';
 import { useGameStore } from '../../store/gameStore';
 import { useUiStore } from '../../store/uiStore';
-import { DEPT_HUE, PLAYER_AURA, researchTotals } from '../../utils/uiSelectors';
+import {
+  botOwnsCurrentDecision,
+  DEPT_HUE,
+  PLAYER_AURA,
+  researchTotals,
+} from '../../utils/uiSelectors';
+import { useIsMobile } from '../../hooks/useMediaQuery';
 import { TIMING_HUE, TIMING_LABEL } from '../Cards/HandFans';
 import { MageToken } from '../Board/MageToken';
 import { PortraitBust } from '../Player/PortraitBust';
@@ -1034,9 +1040,14 @@ export function PromptDirector() {
   const privacyRevealedForId = useUiStore((s) => s.privacyRevealedForId);
   const setPrivacyRevealed = useUiStore((s) => s.setPrivacyRevealed);
   const setPeek = useUiStore((s) => s.setPeek);
+  const isMobile = useIsMobile();
   if (!state) return null;
   const pending = topPending(state);
   if (!pending) return null;
+  // On mobile, a bot's prompt would only flash a popover over the board for the
+  // ~600ms before the bot driver answers it. The MobileActionRow narrates what
+  // the bot is doing instead, so suppress the floating banner/modal here.
+  if (isMobile && botOwnsCurrentDecision(state)) return null;
   const prompt = pending.prompt;
 
   const answer = (a: ResolutionAnswer) =>
