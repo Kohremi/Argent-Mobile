@@ -99,16 +99,25 @@ export function SummerBreakChip({ state }: { state: GameState }) {
       ? pack.roundEndScenarios?.find((s) => s.round === round)
       : undefined;
   return (
+    // Lower shrink priority than the ScenarioChip: this chip gives up its
+    // space first (shrink-[4]) and collapses to just the ☀ sun — the pinned
+    // icon survives while the label clips away with no ellipsis — so the
+    // scenario chip keeps room to show its name.
     <span
-      className="min-w-0 shrink truncate rounded-full bg-player-gold/15 px-2 py-0.5 font-display text-xs text-player-gold ring-1 ring-player-gold/40 lg:px-3 lg:py-1 lg:text-sm"
+      className="flex min-w-0 shrink-[4] items-center gap-1 rounded-full bg-player-gold/15 px-2 py-0.5 font-display text-xs text-player-gold ring-1 ring-player-gold/40 lg:px-3 lg:py-1 lg:text-sm"
       title={
         reward
           ? `${reward.name} — ${SUMMER_BREAK_BLURBS[reward.name] ?? ''}`.trim()
           : pack.description
       }
     >
-      ☀ Summer Break
-      {reward && <span className="text-white/80"> · {reward.name}</span>}
+      <span aria-hidden className="shrink-0 leading-none">
+        ☀
+      </span>
+      <span className="min-w-0 overflow-hidden whitespace-nowrap">
+        Summer Break
+        {reward && <span className="text-white/80"> · {reward.name}</span>}
+      </span>
     </span>
   );
 }
