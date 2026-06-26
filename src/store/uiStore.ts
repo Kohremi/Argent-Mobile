@@ -41,6 +41,10 @@ interface UiStore {
   dockExpanded: boolean;
   setDockExpanded: (expanded: boolean) => void;
 
+  /** Mobile: whether the Bell Tower offerings menu (top-bar bell) is open. */
+  bellMenuOpen: boolean;
+  setBellMenuOpen: (open: boolean) => void;
+
   /** Mobile: the hand card whose full-detail bottom sheet is open, if any. */
   cardDetail: { kind: 'spell' | 'vault' | 'supporter'; id: string } | null;
   setCardDetail: (
@@ -141,6 +145,9 @@ export const useUiStore = create<UiStore>((set) => ({
 
   cardDetail: null,
   setCardDetail: (card) => set({ cardDetail: card }),
+
+  bellMenuOpen: false,
+  setBellMenuOpen: (open) => set({ bellMenuOpen: open }),
 
   mobilePromptHint: null,
   setMobilePromptHint: (hint) => set({ mobilePromptHint: hint }),

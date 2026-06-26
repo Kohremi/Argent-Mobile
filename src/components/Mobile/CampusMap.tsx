@@ -11,7 +11,6 @@ import {
 } from '../../utils/uiSelectors';
 import { usePromptTargets } from '../Prompts/usePromptTargets';
 import { LockIcon } from '../icons';
-import { BellTower } from '../Board/BellTower';
 
 /**
  * The university as a spatial icon map (the mobile "zoomed-out" view): rooms in
@@ -263,9 +262,6 @@ export function CampusMap() {
 
   return (
     <div className="h-full overflow-auto p-3">
-      <div className="mx-auto mb-2 max-w-[640px]">
-        <BellTower state={state} />
-      </div>
       <div
         className="mx-auto grid max-w-[640px] items-stretch gap-2"
         style={{ gridTemplateColumns: `repeat(${cols}, minmax(72px, 1fr))` }}

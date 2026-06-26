@@ -55,11 +55,11 @@ export function ScenarioChip({ state }: { state: GameState }) {
     round === null ? null : scenario.rounds.find((r) => r.round === round);
   return (
     <span
-      className="rounded-full bg-leyline/15 px-3 py-1 font-display text-sm text-leyline ring-1 ring-leyline/40"
+      className="min-w-0 shrink truncate rounded-full bg-leyline/15 px-2 py-0.5 font-display text-xs text-leyline ring-1 ring-leyline/40 lg:px-3 lg:py-1 lg:text-sm"
       title={rule ? `${rule.name} — ${rule.description}` : scenario.description}
     >
       {scenario.name}
-      {rule && <span className="ml-2 text-white/80">· {rule.name}</span>}
+      {rule && <span className="text-white/80"> · {rule.name}</span>}
     </span>
   );
 }
@@ -100,7 +100,7 @@ export function SummerBreakChip({ state }: { state: GameState }) {
       : undefined;
   return (
     <span
-      className="rounded-full bg-player-gold/15 px-3 py-1 font-display text-sm text-player-gold ring-1 ring-player-gold/40"
+      className="min-w-0 shrink truncate rounded-full bg-player-gold/15 px-2 py-0.5 font-display text-xs text-player-gold ring-1 ring-player-gold/40 lg:px-3 lg:py-1 lg:text-sm"
       title={
         reward
           ? `${reward.name} — ${SUMMER_BREAK_BLURBS[reward.name] ?? ''}`.trim()
@@ -108,7 +108,7 @@ export function SummerBreakChip({ state }: { state: GameState }) {
       }
     >
       ☀ Summer Break
-      {reward && <span className="ml-2 text-white/80">· {reward.name}</span>}
+      {reward && <span className="text-white/80"> · {reward.name}</span>}
     </span>
   );
 }
@@ -116,7 +116,16 @@ export function SummerBreakChip({ state }: { state: GameState }) {
 /** Bell count chip — the round's clock. The claimable offerings live on the
  *  campus (see Board/BellTower); this is just the remaining-bells indicator,
  *  glowing when the active player has a bell they can claim. */
-export function BellTowerMeter({ state }: { state: GameState }) {
+export function BellTowerMeter({
+  state,
+  onClick,
+  active,
+}: {
+  state: GameState;
+  /** When set, the meter becomes a button (mobile: toggles the offerings menu). */
+  onClick?: () => void;
+  active?: boolean;
+}) {
   const player = activePlayer(state);
   const claimable =
     player && !player.controlledByBot
@@ -124,20 +133,37 @@ export function BellTowerMeter({ state }: { state: GameState }) {
       : new Set<string>();
   const bells = state.bellTower.available.length;
 
-  return (
-    <span
-      className={clsx(
-        'flex items-center gap-1.5 rounded-full bg-night-700 px-3 py-1 text-sm ring-1',
-        claimable.size > 0 ? 'ring-starlight/60' : 'ring-white/15',
-      )}
-      title={
-        claimable.size > 0
-          ? 'Bell Tower — claim an offering on the campus (ends your turn)'
-          : 'Bell Tower offerings remaining this round'
-      }
-    >
+  const cls = clsx(
+    'flex shrink-0 items-center gap-1.5 rounded-full px-3 py-1 text-sm ring-1',
+    active ? 'bg-night-600 ring-2 ring-starlight' : 'bg-night-700',
+    !active && (claimable.size > 0 ? 'ring-starlight/60' : 'ring-white/15'),
+    claimable.size > 0 && !active && 'animate-breathe shadow-glow-sm',
+    onClick && 'cursor-pointer transition active:scale-95',
+  );
+  const title =
+    claimable.size > 0
+      ? 'Bell Tower — tap to claim an offering (ends your turn)'
+      : 'Bell Tower offerings remaining this round';
+  const inner = (
+    <>
       🔔
       <span className="font-bold text-starlight">{bells}</span>
+    </>
+  );
+
+  return onClick ? (
+    <button
+      type="button"
+      onClick={onClick}
+      className={cls}
+      title={title}
+      style={claimable.size > 0 && !active ? ({ '--glow': '#ffe9a855' } as React.CSSProperties) : undefined}
+    >
+      {inner}
+    </button>
+  ) : (
+    <span className={cls} title={title}>
+      {inner}
     </span>
   );
 }

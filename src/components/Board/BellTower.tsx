@@ -10,7 +10,7 @@ import { activePlayer, claimableBellCards } from '../../utils/uiSelectors';
  * there's room for the full card text. Claimable offerings glow on the active
  * player's turn (claiming ends the turn); a bot's turn shows them static.
  */
-export function BellTower({ state }: { state: GameState }) {
+export function BellTower({ state, onClaim }: { state: GameState; onClaim?: () => void }) {
   const tryDispatch = useUiStore((s) => s.tryDispatch);
   const player = activePlayer(state);
   // Only the active HUMAN may claim; on a bot's turn the offerings are read-only.
@@ -43,14 +43,18 @@ export function BellTower({ state }: { state: GameState }) {
                 type="button"
                 data-bell
                 disabled={!ok}
-                onClick={() =>
-                  player &&
-                  tryDispatch({
-                    type: 'CLAIM_BELL_TOWER',
-                    playerId: player.id,
-                    bellTowerCardId: card.id,
-                  })
-                }
+                onClick={() => {
+                  if (
+                    player &&
+                    tryDispatch({
+                      type: 'CLAIM_BELL_TOWER',
+                      playerId: player.id,
+                      bellTowerCardId: card.id,
+                    })
+                  ) {
+                    onClaim?.();
+                  }
+                }}
                 title={ok ? `Claim ${card.name} — ends your turn` : card.name}
                 className={clsx(
                   'flex w-44 shrink-0 flex-col gap-0.5 rounded-lg px-2 py-1.5 text-left ring-1 transition',

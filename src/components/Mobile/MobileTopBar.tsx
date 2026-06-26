@@ -18,6 +18,8 @@ export function MobileTopBar() {
   const state = useGameStore((s) => s.state);
   const debugOpen = useUiStore((s) => s.debugOpen);
   const setDebugOpen = useUiStore((s) => s.setDebugOpen);
+  const bellMenuOpen = useUiStore((s) => s.bellMenuOpen);
+  const setBellMenuOpen = useUiStore((s) => s.setBellMenuOpen);
   if (!state) return null;
 
   const active = activePlayer(state);
@@ -28,11 +30,15 @@ export function MobileTopBar() {
         Argent
       </h1>
 
-      <div className="flex min-w-0 flex-1 items-center gap-2 overflow-x-auto">
+      <div className="flex min-w-0 flex-1 items-center gap-2">
         <span className="shrink-0 rounded-full bg-night-700 px-2.5 py-1 font-display text-xs text-white/90 ring-1 ring-white/15">
           {phaseLabel(state.phase)}
         </span>
-        <BellTowerMeter state={state} />
+        <BellTowerMeter
+          state={state}
+          active={bellMenuOpen}
+          onClick={() => setBellMenuOpen(!bellMenuOpen)}
+        />
         <ScenarioChip state={state} />
         <SummerBreakChip state={state} />
       </div>

@@ -16,6 +16,7 @@ import { MobileActionRow } from './MobileActionRow';
 import { MobileDock } from './MobileDock';
 import { TabBar } from './TabBar';
 import { CampusMap } from './CampusMap';
+import { BellTowerSheet } from './BellTowerSheet';
 import { RoomDetailSheet } from './RoomDetailSheet';
 import { CardDetailSheet } from './CardDetailSheet';
 import { TableauView } from './TableauView';
@@ -54,6 +55,9 @@ export function MobileShell() {
 
           {/* drilled-in enlarged room view (over the Campus map) */}
           {mobileTab === 'campus' && <RoomDetailSheet />}
+
+          {/* Bell Tower offerings — drops out of the top-bar bell over the board */}
+          <BellTowerSheet />
         </main>
 
         <MobileDock />

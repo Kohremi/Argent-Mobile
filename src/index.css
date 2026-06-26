@@ -111,6 +111,22 @@ textarea,
   animation: zoomIn 0.22s cubic-bezier(0.22, 1, 0.36, 1);
 }
 
+/* Bell Tower offerings dropping out of the top-bar bell icon. */
+@keyframes bellDrop {
+  from {
+    transform: translateY(-10px) scale(0.95);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0) scale(1);
+    opacity: 1;
+  }
+}
+.bell-drop {
+  animation: bellDrop 0.2s cubic-bezier(0.22, 1, 0.36, 1);
+  transform-origin: top left;
+}
+
 /* Thin, unobtrusive scrollbars for board panning / drawers. */
 *::-webkit-scrollbar {
   width: 8px;
