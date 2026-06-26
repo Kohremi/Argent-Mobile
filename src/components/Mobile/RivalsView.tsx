@@ -11,14 +11,8 @@ import { ResourceIcon } from '../icons';
 import { MageToken } from '../Board/MageToken';
 import { PortraitBust } from '../Player/PortraitBust';
 import { MeritBadge, RESOURCE_ORDER_COMPACT } from '../Player/PlayerDock';
-import {
-  CardZoom,
-  GameCard,
-  spellFace,
-  supporterFace,
-  vaultFace,
-  type CardFace,
-} from '../Cards/GameCard';
+import { CardZoom, spellFace, supporterFace, vaultFace, type CardFace } from '../Cards/GameCard';
+import { CardFan, type FanItem } from '../Cards/CardFan';
 
 /**
  * The Rivals tab: each opponent shown in full rather than as a one-line summary
@@ -29,7 +23,7 @@ import {
  * now lives inline.
  */
 
-const RIVAL_CARD_W = 58; // px — small tappable thumbnails.
+const RIVAL_CARD_W = 50; // px — small thumbnails; tap (or fan-out) to enlarge.
 
 type CardRef = { kind: 'spell' | 'vault' | 'supporter'; id: string };
 
@@ -46,37 +40,16 @@ function faceFor(state: GameState, ref: CardRef): CardFace | null {
   return d ? supporterFace(d) : null;
 }
 
-function CardRow({
-  label,
-  cards,
-  state,
-  onOpen,
-}: {
-  label: string;
-  cards: CardRef[];
-  state: GameState;
-  onOpen: (ref: CardRef) => void;
-}) {
-  if (cards.length === 0) return null;
-  return (
-    <div className="flex flex-col gap-1">
-      <span className="text-[9px] font-bold uppercase tracking-widest text-white/35">{label}</span>
-      <div className="flex flex-wrap gap-1.5">
-        {cards.map((c, i) => {
-          const face = faceFor(state, c);
-          if (!face) return null;
-          return (
-            <GameCard
-              key={`${c.id}-${i}`}
-              face={face}
-              style={{ width: RIVAL_CARD_W }}
-              onClick={() => onOpen(c)}
-            />
-          );
-        })}
-      </div>
-    </div>
-  );
+/** Build fan items for a rival's cards — tapping any opens the read-only zoom. */
+function fanItems(
+  state: GameState,
+  refs: CardRef[],
+  onOpen: (ref: CardRef) => void,
+): FanItem[] {
+  return refs.flatMap((c, i) => {
+    const face = faceFor(state, c);
+    return face ? [{ key: `${c.id}-${i}`, face, onOpen: () => onOpen(c) }] : [];
+  });
 }
 
 export function RivalsView({
@@ -161,30 +134,40 @@ export function RivalsView({
               })}
             </div>
 
-            {/* tableau cards — tap any for full info */}
-            <div className="mt-2 flex flex-col gap-2">
-              <CardRow
-                label="spells"
-                state={state}
-                cards={p.ownedSpells.map((s) => ({ kind: 'spell', id: s.cardId }))}
-                onOpen={setZoom}
-              />
-              <CardRow
-                label="vault"
-                state={state}
-                cards={p.vaultCards.map((v) => ({ kind: 'vault', id: v.cardId }))}
-                onOpen={setZoom}
-              />
-              <CardRow
-                label="allies"
-                state={state}
-                cards={p.supporters.map((id) => ({ kind: 'supporter', id }))}
-                onOpen={setZoom}
-              />
-              {p.ownedSpells.length + p.vaultCards.length + p.supporters.length === 0 && (
-                <p className="text-[11px] italic text-white/35">No cards in play yet.</p>
-              )}
-            </div>
+            {/* tableau cards — three overlapping hands; drag to fan, tap to enlarge */}
+            {p.ownedSpells.length + p.vaultCards.length + p.supporters.length === 0 ? (
+              <p className="mt-2 text-[11px] italic text-white/35">No cards in play yet.</p>
+            ) : (
+              <div className="mt-2 flex items-end gap-3 pt-4">
+                <CardFan
+                  label="spells"
+                  cardWidth={RIVAL_CARD_W}
+                  items={fanItems(
+                    state,
+                    p.ownedSpells.map((s) => ({ kind: 'spell', id: s.cardId })),
+                    setZoom,
+                  )}
+                />
+                <CardFan
+                  label="vault"
+                  cardWidth={RIVAL_CARD_W}
+                  items={fanItems(
+                    state,
+                    p.vaultCards.map((v) => ({ kind: 'vault', id: v.cardId })),
+                    setZoom,
+                  )}
+                />
+                <CardFan
+                  label="allies"
+                  cardWidth={RIVAL_CARD_W}
+                  items={fanItems(
+                    state,
+                    p.supporters.map((id) => ({ kind: 'supporter', id })),
+                    setZoom,
+                  )}
+                />
+              </div>
+            )}
           </section>
         );
       })}
