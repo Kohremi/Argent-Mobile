@@ -25,9 +25,17 @@ const HAND_CARD_W = 54; // px — a touch larger than the rivals thumbnails.
 
 export function MobileHand({ state, player }: { state: GameState; player: Player }) {
   const setCardDetail = useUiStore((s) => s.setCardDetail);
+  const setDockExpanded = useUiStore((s) => s.setDockExpanded);
   const castable = castableSpellLevels(state, player.id);
   const vaultInfo = vaultCardPlayability(state, player.id);
   const suppInfo = supporterPlayability(state, player.id);
+
+  // Opening a card to use it collapses the dock so the board is visible behind
+  // the detail sheet (and once you cast/play and it closes).
+  const open = (detail: { kind: 'spell' | 'vault' | 'supporter'; id: string }) => {
+    setCardDetail(detail);
+    setDockExpanded(false);
+  };
 
   const hasAny =
     player.ownedSpells.length + player.vaultCards.length + player.supporters.length > 0;
@@ -45,7 +53,7 @@ export function MobileHand({ state, player }: { state: GameState; player: Player
         key: s.cardId,
         face: spellFace(def),
         status,
-        onOpen: () => setCardDetail({ kind: 'spell', id: s.cardId }),
+        onOpen: () => open({ kind: 'spell', id: s.cardId }),
       },
     ];
   });
@@ -60,7 +68,7 @@ export function MobileHand({ state, player }: { state: GameState; player: Player
         key: `${v.cardId}-${i}`,
         face: vaultFace(def),
         status,
-        onOpen: () => setCardDetail({ kind: 'vault', id: v.cardId }),
+        onOpen: () => open({ kind: 'vault', id: v.cardId }),
       },
     ];
   });
@@ -74,7 +82,7 @@ export function MobileHand({ state, player }: { state: GameState; player: Player
         key: `${id}-${i}`,
         face: supporterFace(def),
         status: reason === null ? 'playable' : null,
-        onOpen: () => setCardDetail({ kind: 'supporter', id }),
+        onOpen: () => open({ kind: 'supporter', id }),
       },
     ];
   });

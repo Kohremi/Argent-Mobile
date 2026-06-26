@@ -79,19 +79,26 @@ export function MobileDock() {
   const research = researchTotals(self);
   const bench = self.mages.filter((m) => m.location.kind === 'office');
   const turn = myTurn ? computeTurnActions(state, self) : null;
+  // Bench is hidden when collapsed — but stay visible if a prompt is targeting a
+  // bench mage (so the player can't get stuck unable to reach it).
+  const showBench = expanded || mageTargets.size > 0;
 
   return (
     <footer
       className="z-30 flex shrink-0 flex-col gap-1.5 bg-night-800/95 px-3 pb-1.5 pt-1 ring-1 ring-white/10 backdrop-blur"
       style={{ boxShadow: `inset 0 3px 0 ${aura}` }}
     >
-      {/* drag handle / expand toggle */}
+      {/* expand toggle — a wide, easy-to-hit button (the hand & bench live inside) */}
       <button
         type="button"
         onClick={() => setExpanded(!expanded)}
-        aria-label={expanded ? 'Collapse dock' : 'Expand dock'}
-        className="mx-auto -mb-0.5 mt-0.5 h-1 w-10 shrink-0 rounded-full bg-white/25"
-      />
+        aria-label={expanded ? 'Hide hand and bench' : 'Show hand and bench'}
+        className="-mt-0.5 flex w-full items-center justify-center gap-2 py-1.5 text-[10px] font-bold uppercase tracking-widest text-white/45 transition active:text-white/80"
+      >
+        <span className="h-1 w-8 rounded-full bg-white/25" />
+        <span>{expanded ? 'Hide hand ▾' : 'Hand & bench ▴'}</span>
+        <span className="h-1 w-8 rounded-full bg-white/25" />
+      </button>
 
       {/* identity + budget + turn control (or an "opponents playing" pill) */}
       <div className="flex items-center gap-2">
@@ -168,43 +175,53 @@ export function MobileDock() {
         })}
       </div>
 
-      {/* bench — pick a student up to place on the Campus map (only on my turn) */}
-      <div className="flex items-center gap-1 overflow-x-auto">
-        <span className="mr-1 shrink-0 text-[9px] uppercase tracking-widest text-white/40">
-          bench
-        </span>
-        {bench.length === 0 && (
-          <span className="text-[11px] italic text-white/35">no students in the office</span>
-        )}
-        {bench.map((m) => {
-          const targeted = mageTargets.has(m.id);
-          const picked = selectedMageId === m.id;
-          const interactive = myTurn || targeted;
-          return (
-            <button
-              key={m.id}
-              type="button"
-              disabled={!interactive}
-              onClick={() =>
-                targeted ? pickMage(m.id) : selectMage(picked ? null : m.id)
-              }
-              className={clsx(
-                'shrink-0 rounded-xl px-1 py-0.5 transition',
-                targeted && 'animate-breathe',
-                picked
-                  ? 'scale-110 bg-night-600 ring-2 ring-starlight shadow-glow-sm'
-                  : interactive
-                    ? 'hover:bg-night-700'
-                    : 'opacity-60',
-              )}
-              style={targeted ? { filter: 'drop-shadow(0 0 7px #ff5d7d)' } : undefined}
-              title={`${m.color} student${m.isWounded ? ' (wounded)' : ''}`}
-            >
-              <MageToken color={m.color} aura={aura} isWounded={m.isWounded} size={40} glideId={m.id} />
-            </button>
-          );
-        })}
-      </div>
+      {/* bench — pick a student up to place on the Campus map; picking one
+          auto-collapses the dock so the board is visible to place it. */}
+      {showBench && (
+        <div className="flex items-center gap-1 overflow-x-auto">
+          <span className="mr-1 shrink-0 text-[9px] uppercase tracking-widest text-white/40">
+            bench
+          </span>
+          {bench.length === 0 && (
+            <span className="text-[11px] italic text-white/35">no students in the office</span>
+          )}
+          {bench.map((m) => {
+            const targeted = mageTargets.has(m.id);
+            const picked = selectedMageId === m.id;
+            const interactive = myTurn || targeted;
+            return (
+              <button
+                key={m.id}
+                type="button"
+                disabled={!interactive}
+                onClick={() => {
+                  if (targeted) {
+                    pickMage(m.id);
+                    setExpanded(false);
+                  } else {
+                    const next = picked ? null : m.id;
+                    selectMage(next);
+                    if (next) setExpanded(false);
+                  }
+                }}
+                className={clsx(
+                  'shrink-0 rounded-xl px-1 py-0.5 transition',
+                  targeted && 'animate-breathe',
+                  picked
+                    ? 'scale-110 bg-night-600 ring-2 ring-starlight shadow-glow-sm'
+                    : interactive
+                      ? 'hover:bg-night-700'
+                      : 'opacity-60',
+                )}
+                style={targeted ? { filter: 'drop-shadow(0 0 7px #ff5d7d)' } : undefined}
+                title={`${m.color} student${m.isWounded ? ' (wounded)' : ''}`}
+              >
+                <MageToken color={m.color} aura={aura} isWounded={m.isWounded} size={40} glideId={m.id} />
+              </button>
+            );
+          })}
+        </div>
+      )}
 
       {/* expanded: hands + buffs + scenario actions */}
       {expanded && (

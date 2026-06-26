@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { createPortal } from 'react-dom';
 import { GameCard, type CardFace, type CardStatus } from './GameCard';
 
 /**
@@ -47,11 +48,25 @@ export function CardFan({
     setHover(null);
   };
 
+  const previewItem = hover != null ? items[hover] : undefined;
+  // Legibility peek: the hovered/dragged card, blown up in the upper half of the
+  // screen (these thumbnails are too small to read). Portalled to the body so it
+  // escapes the dock and isn't clipped; pointer-events-none so taps pass through.
+  const previewW = previewItem?.face.kind === 'spell' ? 'min(48vw, 190px)' : 'min(58vw, 230px)';
+
   return (
     <div className="flex flex-col items-center gap-1">
       <div
         className="relative"
-        style={{ width: footprint, height: fanH, zIndex: spread ? 30 : 1 }}
+        style={{
+          width: footprint,
+          height: fanH,
+          zIndex: spread ? 30 : 1,
+          // Enlarge the whole fan ~20% while it's being browsed.
+          transform: spread ? 'scale(1.2)' : 'scale(1)',
+          transformOrigin: 'bottom center',
+          transition: 'transform 150ms ease',
+        }}
         onPointerEnter={() => setSpread(true)}
         onPointerDown={() => setSpread(true)}
         onPointerLeave={collapse}
@@ -84,6 +99,18 @@ export function CardFan({
         {label}
         <span className="ml-1 text-white/25">{n}</span>
       </span>
+
+      {previewItem &&
+        createPortal(
+          <div className="pointer-events-none fixed inset-x-0 top-0 z-[70] flex justify-center px-4 pt-4 drop-shadow-2xl">
+            <GameCard
+              face={previewItem.face}
+              status={previewItem.status ?? null}
+              style={{ width: previewW }}
+            />
+          </div>,
+          document.body,
+        )}
     </div>
   );
 }
