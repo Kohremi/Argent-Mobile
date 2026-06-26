@@ -10,7 +10,7 @@ import { PortraitBust } from './PortraitBust';
 import { PlayerBuffBadges } from './PlayerBuffBadges';
 import { StaffBadge } from './StaffBadge';
 import { getBotPersonality } from '../../game/ai';
-import { getScenario } from '../../content/scenarios';
+import { computeTurnActions } from './turnActions';
 
 /**
  * Bottom command center for the active player (docs/UI_DESIGN.md §8):
@@ -30,6 +30,26 @@ export const RESOURCE_ORDER: { kind: ResourceKind; key: string }[] = [
   { kind: 'marks', key: 'marks' },
   { kind: 'merit-badge', key: 'meritBadges' },
 ];
+
+// Mobile status strips drop Marks (now viewed in the Marks/Council tab) and
+// Merit Badges (surfaced as a prominent pip beside the portrait — see
+// `MeritBadge`), keeping the inline strip to the spendable resources + research.
+export const RESOURCE_ORDER_COMPACT = RESOURCE_ORDER.filter(
+  (r) => r.key !== 'marks' && r.key !== 'meritBadges',
+);
+
+/** Prominent Merit Badge pip shown beside a player's portrait/identity. */
+export function MeritBadge({ count, className }: { count: number; className?: string }) {
+  return (
+    <span
+      className={clsx('flex shrink-0 items-center gap-1', className)}
+      title={`${count} Merit Badge${count === 1 ? '' : 's'}`}
+    >
+      <ResourceIcon kind="merit-badge" className="h-6 w-6" />
+      <span className="text-sm font-bold text-white/90">{count}</span>
+    </span>
+  );
+}
 
 export function PlayerDock() {
   const state = useGameStore((s) => s.state);
@@ -90,51 +110,18 @@ export function PlayerDock() {
   const research0 = researchTotals(player);
   const bench = player.mages.filter((m) => m.location.kind === 'office');
 
-  // Action budget for this turn. `activePlayer()` is non-null only during
-  // errands, so the phase is always 'errands' here — the guard just narrows
-  // the type. The counts are derived (not hard-coded to 1) so the readout
-  // already reflects a future module that grants more than one per turn:
-  //   regular = base Action (1 until used) + bonus grants (Flare / Dazzle /
-  //             Bend Time, tracked in extraActions)
-  //   fast    = the optional Fast Action, usable only BEFORE the regular one
-  const errands = state.phase.kind === 'errands' ? state.phase : null;
-  const regularActions = errands
-    ? (errands.actionUsed ? 0 : 1) + (errands.extraActions ?? 0)
-    : 0;
-  // The scenario rule for the round in play (Dimensional Rift round twists).
-  const scenarioRule =
-    errands && state.scenarioId
-      ? getScenario(state.scenarioId)?.rounds.find((r) => r.round === errands.round)
-      : undefined;
-  // Fast Actions left this turn: the per-turn limit (raised to 2 by Time Stands
-  // Still) minus those already taken. Fast Actions are only usable before the
-  // Regular Action.
-  const fastActionLimit = scenarioRule?.maxFastActionsPerTurn ?? 1;
-  const fastActions =
-    errands && !errands.actionUsed
-      ? Math.max(0, fastActionLimit - (errands.fastActionsUsed ?? 0))
-      : 0;
-  // Dimensional Rift R5 (Time Flux): the round runs on voluntary passes — the
-  // turn control becomes "Pass for this round" instead of "End turn".
-  const voluntaryPass = !!(errands && scenarioRule?.voluntaryPassRound);
-  // When a Fast Action costs extra Mana this round, offer a way to skip it so a
-  // forced-Fast placement (e.g. a Planar mage) is taken as the Regular Action.
-  const fastSurcharge = scenarioRule?.fastActionManaSurcharge ?? 0;
-  const canSkipFast = !!(
-    errands &&
-    !errands.actionUsed &&
-    fastActions > 0 &&
-    fastSurcharge > 0
-  );
-  // Assassins R3 (Carrying out the Deed): an extra Action that sends an office
-  // Mage to the Infirmary to place up to two Hits. Offered only with the Action
-  // in hand and a Mage available to send.
-  const canInfirmaryStrike = !!(
-    errands &&
-    scenarioRule?.infirmaryStrikeAction &&
-    regularActions > 0 &&
-    player.mages.some((m) => m.location.kind === 'office')
-  );
+  // Action budget + scenario-action flags for this turn (shared with the mobile
+  // dock via computeTurnActions). `activePlayer()` is non-null only during
+  // errands, so the phase is always 'errands' here.
+  const {
+    errands,
+    regularActions,
+    fastActions,
+    voluntaryPass,
+    canSkipFast,
+    fastSurcharge,
+    canInfirmaryStrike,
+  } = computeTurnActions(state, player);
   // Wounded mages aren't shown here — they rest in the Infirmary ward on the
   // board (RoomScene bed grid), which renders + targets them and owns their
   // glide animation. Duplicating them here collided the framer-motion
@@ -312,7 +299,7 @@ export function PlayerDock() {
  * player has left this turn. Count-first (not a checkmark) so it reads
  * correctly if a future module grants more than one of either per turn.
  */
-function ActionBudget({ fast, regular }: { fast: number; regular: number }) {
+export function ActionBudget({ fast, regular }: { fast: number; regular: number }) {
   return (
     <div className="flex items-center gap-1.5">
       <BudgetChip label="Fast" count={fast} tone="#7dd3fc" />

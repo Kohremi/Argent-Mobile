@@ -3,10 +3,8 @@ import { useGameStore } from '../../store/gameStore';
 import { useUiStore } from '../../store/uiStore';
 import { useStateDiffFx } from '../FX/useStateDiffFx';
 import { localPlayer, PLAYER_AURA } from '../../utils/uiSelectors';
-import { getBotPersonality } from '../../game/ai';
 import type { GameState, Player } from '../../game/types';
 import { PromptDirector } from '../Prompts/PromptDirector';
-import { OpponentInspector } from '../Player/OpponentInspector';
 import { ScoringCeremony } from '../Modals/ScoringCeremony';
 import { TurnBanner } from '../HUD/TurnBanner';
 import { PortraitBust } from '../Player/PortraitBust';
@@ -21,6 +19,7 @@ import { CampusMap } from './CampusMap';
 import { RoomDetailSheet } from './RoomDetailSheet';
 import { CardDetailSheet } from './CardDetailSheet';
 import { TableauView } from './TableauView';
+import { RivalsView } from './RivalsView';
 import { CouncilView } from './CouncilView';
 
 /**
@@ -63,7 +62,6 @@ export function MobileShell() {
         {/* global overlays (shared with the desktop shell) */}
         <CardDetailSheet />
         <PromptDirector />
-        <OpponentInspector />
         <PeekModal />
         <TurnBanner />
         <ScoringCeremony />
@@ -110,45 +108,6 @@ function MyBoardView({ state, localPlayerId }: { state: GameState; localPlayerId
         </div>
       </div>
       <PlayerTableau state={state} player={player} />
-    </div>
-  );
-}
-
-function RivalsView({ state, localPlayerId }: { state: GameState; localPlayerId: string | null }) {
-  const setInspect = useUiStore((s) => s.setInspectPlayerId);
-  const self = selfPlayer(state, localPlayerId);
-  const rivals = state.players.filter((p) => p.id !== self.id);
-  return (
-    <div className="flex h-full flex-col gap-2 overflow-y-auto px-3 py-3">
-      {rivals.map((p) => {
-        const aura = PLAYER_AURA[p.color];
-        const office = p.mages.filter((m) => m.location.kind === 'office').length;
-        return (
-          <button
-            key={p.id}
-            type="button"
-            onClick={() => setInspect(p.id)}
-            className="flex items-center gap-3 rounded-card bg-night-700/80 p-2.5 text-left ring-1 ring-white/10"
-            style={{ boxShadow: `inset 0 2px 0 ${aura}` }}
-          >
-            <PortraitBust player={p} state={state} expression="neutral" size={34} />
-            <div className="min-w-0 flex-1">
-              <p className="truncate font-display text-sm font-bold" style={{ color: aura }}>
-                {p.name}
-                {p.controlledByBot && (
-                  <span className="ml-1.5 rounded-full bg-night-900/70 px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wide text-starlight ring-1 ring-starlight/40">
-                    🤖 {getBotPersonality(p.botPersonalityId).name}
-                  </span>
-                )}
-              </p>
-              <p className="text-[11px] text-white/55">
-                {p.ownedSpells.length} spells · {p.supporters.length} allies · {office} in office
-              </p>
-            </div>
-            <span className="text-white/30">›</span>
-          </button>
-        );
-      })}
     </div>
   );
 }
