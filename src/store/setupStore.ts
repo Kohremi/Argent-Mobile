@@ -119,10 +119,12 @@ export function defaultRoomCountForPlayerCount(playerCount: number): number {
 export const useSetupStore = create<SetupState>((set) => ({
   // Base is always required. Other packs are off by default.
   selectedPackIds: ['base'],
-  playerNames: defaultPlayerNames(2),
-  playerControlledByBot: Array.from({ length: 2 }, () => false),
-  playerBotPersonality: Array.from({ length: 2 }, () => 'klank'),
-  numberOfRooms: defaultRoomCountForPlayerCount(2),
+  // Single-player by default: seat 0 is you, the rest are bots. Every seat stays
+  // fully customisable — toggle any to human for hot-seat, or all to bots.
+  playerNames: defaultPlayerNames(3),
+  playerControlledByBot: [false, true, true],
+  playerBotPersonality: ['klank', 'klank', 'malfoy'],
+  numberOfRooms: defaultRoomCountForPlayerCount(3),
   // Default to the recommended beginner layout for new games.
   layoutMode: 'first-time',
   // Custom layout pre-seats the always-included University Central rooms
@@ -213,9 +215,10 @@ export const useSetupStore = create<SetupState>((set) => ({
       while (next.length < clamped) {
         next.push(`Player ${next.length + 1}`);
       }
-      // Keep the per-player arrays the same length as the player list.
+      // Keep the per-player arrays the same length as the player list. New
+      // seats default to bots (single-player friendly); the user can flip any.
       const bots = s.playerControlledByBot.slice(0, clamped);
-      while (bots.length < clamped) bots.push(false);
+      while (bots.length < clamped) bots.push(true);
       const personalities = s.playerBotPersonality.slice(0, clamped);
       while (personalities.length < clamped) personalities.push('klank');
       // Auto-correct room count to the default for the new player count.

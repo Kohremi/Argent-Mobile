@@ -41,6 +41,24 @@ export function allPlayersAreBots(state: GameState): boolean {
 }
 
 /**
+ * The seat this client controls — `localPlayerId` when set (single-player),
+ * else a sensible fallback (the active Errands seat, then the first seat) so
+ * legacy hot-seat play keeps working. This is "me" for the mobile shell.
+ */
+export function localPlayer(state: GameState, localPlayerId: string | null): Player | null {
+  if (localPlayerId) {
+    return state.players.find((p) => p.id === localPlayerId) ?? null;
+  }
+  return activePlayer(state) ?? state.players[0] ?? null;
+}
+
+/** True when it's the local (human) seat's Errands turn — i.e. they may act. */
+export function isLocalPlayersTurn(state: GameState, localPlayerId: string | null): boolean {
+  if (!localPlayerId) return activePlayer(state) !== null; // hot-seat: any active turn
+  return activePlayer(state)?.id === localPlayerId;
+}
+
+/**
  * What, if anything, the AI driver (`useKlankDriver`) should do right now:
  *  - `'prompt'`  — the top pending resolution is owed by a bot seat → answer it.
  *  - `'errands'` — it's a bot seat's Errands turn with no pending prompt → act.
@@ -149,6 +167,27 @@ export function eligibleShadowPlacementSlots(
     }
   }
   return out;
+}
+
+/**
+ * Room ids that contain at least one slot where `mageId` may legally be placed
+ * right now (regular OR shadow). Used by the mobile Campus map to glow the
+ * rooms a picked-up Mage can be dropped into, and to gate which tiles open.
+ */
+export function roomPlacementEligibility(
+  state: GameState,
+  playerId: string,
+  mageId: string,
+): Set<string> {
+  const eligible = eligiblePlacementSlots(state, playerId, mageId);
+  const shadow = eligibleShadowPlacementSlots(state, playerId, mageId);
+  const rooms = new Set<string>();
+  for (const room of state.rooms) {
+    if (room.actionSpaces.some((s) => eligible.has(s.id) || shadow.has(s.id))) {
+      rooms.add(room.id);
+    }
+  }
+  return rooms;
 }
 
 /**

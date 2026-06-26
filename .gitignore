@@ -3,6 +3,7 @@ dist
 dist-ssr
 *.local
 .vite
+.scratch
 
 # Editor
 .vscode/*

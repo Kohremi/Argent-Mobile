@@ -1,4 +1,3 @@
-import { useState } from 'react';
 import clsx from 'clsx';
 import { getScenario } from '../../content/scenarios';
 import type { ConsortiumVoter, GameState } from '../../game/types';
@@ -23,16 +22,17 @@ import { usePromptTargets } from '../Prompts/usePromptTargets';
 
 function VoterTile({ state, voter }: { state: GameState; voter: ConsortiumVoter }) {
   const marks = state.voterMarks.filter((m) => m.voterId === voter.id);
-  const active = activePlayer(state);
+  const localPlayerId = useGameStore((s) => s.localPlayerId);
+  // The viewer is the local (human) seat in single-player, else the active seat.
+  const viewer = localPlayerId
+    ? state.players.find((p) => p.id === localPlayerId) ?? null
+    : activePlayer(state);
   const { voterTargets, pickVoter } = usePromptTargets();
   const targeted = voterTargets.has(voter.id);
-  const canPeek =
-    !voter.revealed &&
-    !voter.isAlwaysFaceUp &&
-    active !== null &&
-    marks.some((m) => m.playerId === active.id);
-  const [peeking, setPeeking] = useState(false);
-  const faceUp = voter.revealed || voter.isAlwaysFaceUp || (canPeek && peeking);
+  // A voter you've marked, you've seen — so it's shown face-up to you and given
+  // a starlight outline. Voters you haven't marked stay sealed.
+  const markedByMe = viewer !== null && marks.some((m) => m.playerId === viewer.id);
+  const faceUp = voter.revealed || voter.isAlwaysFaceUp || markedByMe;
 
   return (
     <div
@@ -44,7 +44,7 @@ function VoterTile({ state, voter }: { state: GameState; voter: ConsortiumVoter 
         faceUp
           ? 'bg-parchment-50 text-ink-900 ring-black/10'
           : 'bg-night-600/90 ring-white/15',
-        canPeek && peeking && 'ring-2 ring-starlight',
+        markedByMe && !targeted && 'ring-2 ring-starlight',
         targeted &&
           'animate-breathe cursor-pointer ring-2 ring-leyline shadow-glow-sm hover:scale-[1.03]',
       )}
@@ -73,30 +73,6 @@ function VoterTile({ state, voter }: { state: GameState; voter: ConsortiumVoter 
             sealed voter
           </span>
         </div>
-      )}
-
-      {/* hold-to-peek for voters the active player has marked */}
-      {canPeek && (
-        <button
-          type="button"
-          title="You marked this voter — hold to peek"
-          onPointerDown={(e) => {
-            e.stopPropagation();
-            setPeeking(true);
-          }}
-          onPointerUp={() => setPeeking(false)}
-          onPointerLeave={() => setPeeking(false)}
-          onClick={(e) => e.stopPropagation()}
-          onContextMenu={(e) => e.preventDefault()}
-          className={clsx(
-            'absolute -top-1.5 left-2 select-none rounded-full px-1.5 py-0.5 text-[10px] font-bold ring-1 transition',
-            peeking
-              ? 'bg-starlight text-ink-900 ring-starlight'
-              : 'bg-night-800 text-starlight ring-starlight/50 hover:ring-starlight',
-          )}
-        >
-          👁 {peeking ? 'peeking' : 'hold'}
-        </button>
       )}
 
       {/* wax-seal marks */}
@@ -128,7 +104,7 @@ function VoterTile({ state, voter }: { state: GameState; voter: ConsortiumVoter 
  * voters, a running Support Marker tally, and (while a gain-mark prompt is live)
  * a button to place a Support Marker into this faction instead of a voter mark.
  */
-function FactionSection({
+export function FactionSection({
   state,
   group,
 }: {
@@ -136,9 +112,14 @@ function FactionSection({
   group: { id: string; name: string; color: string };
 }) {
   const { supportOptions, pickVoter } = usePromptTargets();
-  const voters = state.voters.filter(
-    (v) => state.voterGroups?.[v.id] === group.id,
-  );
+  // Face-up voters (the leaders) first, so each faction column is headed by a
+  // known voter — same flow as the two-column base-game layout.
+  const voters = state.voters
+    .filter((v) => state.voterGroups?.[v.id] === group.id)
+    .sort(
+      (a, b) =>
+        Number(b.isAlwaysFaceUp || b.revealed) - Number(a.isAlwaysFaceUp || a.revealed),
+    );
   const support = state.supportMarkers?.[group.id] ?? 0;
   const option = supportOptions.find((o) => o.groupId === group.id);
 
@@ -212,7 +193,7 @@ function HitBox({ state, voter }: { state: GameState; voter: ConsortiumVoter }) 
 }
 
 /** Voter row with an optional left-hand Hit box (Assassins). */
-function VoterRow({ state, voter }: { state: GameState; voter: ConsortiumVoter }) {
+export function VoterRow({ state, voter }: { state: GameState; voter: ConsortiumVoter }) {
   if (!state.voterHits) return <VoterTile state={state} voter={voter} />;
   return (
     <div className="flex items-stretch gap-1">

@@ -176,7 +176,7 @@ describe('PromptDirector (step-2 smoke)', () => {
 });
 
 describe('Bell Tower + turn hand-off (step-3 smoke)', () => {
-  it('claims a bell from the TopBar popover; the turn passes and the banner shows', () => {
+  it('claims a bell from the campus bell tower; the turn passes and the banner shows', () => {
     useGameStore.setState({ state: errandsState() });
     useUiStore.setState({ selectedMageId: null, debugOpen: false, lastError: null, reactionSlotPick: null });
     render(<GameScreen />);
@@ -184,11 +184,8 @@ describe('Bell Tower + turn hand-off (step-3 smoke)', () => {
     const before = useGameStore.getState().state!;
     const bellsBefore = before.bellTower.available.length;
 
-    // Open the bell popover and claim the first claimable offering.
-    fireEvent.click(screen.getByTitle('Bell Tower offerings remaining this round'));
-    const claim = document.querySelector(
-      '.absolute.left-0.top-10 button:not([disabled])',
-    );
+    // Claim the first claimable offering from the campus bell tower.
+    const claim = document.querySelector('button[data-bell]:not([disabled])');
     expect(claim).toBeTruthy();
     fireEvent.click(claim!);
 
@@ -865,7 +862,7 @@ describe('Opponent inspector (quick-reference smoke)', () => {
 });
 
 describe('Privacy flows (peek smoke)', () => {
-  it('active player can hold-to-peek a voter they marked; others stay sealed', () => {
+  it('shows voters you marked face-up; voters a rival marked stay sealed', () => {
     let s = errandsState();
     const hidden = s.voters.filter((v) => !v.revealed && !v.isAlwaysFaceUp);
     expect(hidden.length).toBeGreaterThan(1);
@@ -882,17 +879,11 @@ describe('Privacy flows (peek smoke)', () => {
     useUiStore.setState({ selectedMageId: null, debugOpen: false, lastError: null });
     render(<GameScreen />);
 
-    // Only the voter p1 marked offers the peek (it's p1's turn).
-    const peekButtons = screen.getAllByTitle('You marked this voter — hold to peek');
-    expect(peekButtons.length).toBe(1);
-    expect(screen.queryByText(mine.name)).toBeNull();
-
-    fireEvent.pointerDown(peekButtons[0]!);
+    // It's p1's turn: the voter p1 marked is face-up (no peek button needed);
+    // the one p2 marked stays sealed to p1.
+    expect(screen.queryByTitle(/hold to peek/)).toBeNull();
     expect(screen.getByText(mine.name)).toBeTruthy();
-    expect(screen.queryByText(theirs.name)).toBeNull(); // rival's stays sealed
-
-    fireEvent.pointerUp(peekButtons[0]!);
-    expect(screen.queryByText(mine.name)).toBeNull();
+    expect(screen.queryByText(theirs.name)).toBeNull();
   });
 
   it('peeked-supporter prompts hide the cards behind the privacy curtain', () => {

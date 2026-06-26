@@ -1,18 +1,11 @@
-import { useMemo } from 'react';
 import { useGameStore } from '../../store/gameStore';
-import { useUiStore } from '../../store/uiStore';
-import {
-  activePlayer,
-  buildMageIndex,
-  eligiblePlacementSlots,
-  eligibleShadowPlacementSlots,
-  selectedMageOccupiedSlotPower,
-  visibleRoomSpaces,
-} from '../../utils/uiSelectors';
+import { visibleRoomSpaces } from '../../utils/uiSelectors';
 import { usePromptTargets } from '../Prompts/usePromptTargets';
 
 import { RoomScene } from './RoomScene';
 import { TableauShelf } from './TableauShelf';
+import { usePlacement } from './usePlacement';
+import { BellTower } from './BellTower';
 
 /**
  * The university laid out as a readable, screen-fitting grid that mirrors the
@@ -25,40 +18,15 @@ import { TableauShelf } from './TableauShelf';
 
 export function CampusBoard() {
   const state = useGameStore((s) => s.state);
-  const selectedMageId = useUiStore((s) => s.selectedMageId);
-  const tryDispatch = useUiStore((s) => s.tryDispatch);
-
-  const mageIndex = useMemo(
-    () => (state ? buildMageIndex(state) : new Map()),
-    [state],
-  );
-
-  const eligible = useMemo(() => {
-    if (!state || !selectedMageId) return new Set<string>();
-    const player = activePlayer(state);
-    if (!player) return new Set<string>();
-    return eligiblePlacementSlots(state, player.id, selectedMageId);
-  }, [state, selectedMageId]);
-
-  // Slots whose SHADOW position the selected Mage may drop into — Planar
-  // Studies Side B (pay 1 Mana) or an active shadow-on-place buff.
-  const shadowEligible = useMemo(() => {
-    if (!state || !selectedMageId) return new Set<string>();
-    const player = activePlayer(state);
-    if (!player) return new Set<string>();
-    return eligibleShadowPlacementSlots(state, player.id, selectedMageId);
-  }, [state, selectedMageId]);
-
-  // The selected Mage's occupied-slot power (Ars Magna / Natural Magick B), if
-  // any — used to give occupied targets a distinct border + Mana cost label.
-  const occupiedSlotPower = useMemo(() => {
-    if (!state || !selectedMageId) return null;
-    const mage = state.players
-      .flatMap((p) => p.mages)
-      .find((m) => m.id === selectedMageId);
-    if (!mage) return null;
-    return selectedMageOccupiedSlotPower(state, mage);
-  }, [state, selectedMageId]);
+  const {
+    mageIndex,
+    eligible,
+    shadowEligible,
+    occupiedSlotPower,
+    shadowManaCost,
+    onPlace,
+    onPlaceShadow,
+  } = usePlacement();
 
   // Prompt-targeted slots must stay visible even in collapsed pool rooms.
   const { spaceTargets } = usePromptTargets();
@@ -67,42 +35,11 @@ export function CampusBoard() {
   const { grid, cols } = state.roomLayout;
   const roomById = new Map(state.rooms.map((r) => [r.id, r] as const));
 
-  // Shadowing costs 1 Mana via Planar Studies Side B, or is free under a
-  // shadow-on-place buff (Zero Hour / Inversion).
-  const activeId = activePlayer(state)?.id;
-  const shadowIsFree =
-    activeId !== undefined &&
-    state.activeBuffs.some(
-      (b) => b.kind === 'shadow-on-place' && b.casterPlayerId === activeId,
-    );
-  const shadowManaCost = shadowIsFree ? 0 : 1;
-
-  const onPlace = (spaceId: string) => {
-    const player = activePlayer(state);
-    if (!player || !selectedMageId) return;
-    tryDispatch({
-      type: 'PLACE_WORKER',
-      playerId: player.id,
-      mageId: selectedMageId,
-      actionSpaceId: spaceId,
-    });
-  };
-
-  const onPlaceShadow = (spaceId: string) => {
-    const player = activePlayer(state);
-    if (!player || !selectedMageId) return;
-    tryDispatch({
-      type: 'PLACE_WORKER',
-      playerId: player.id,
-      mageId: selectedMageId,
-      actionSpaceId: spaceId,
-      isShadowing: true,
-    });
-  };
-
   return (
     <div className="h-full w-full overflow-auto">
       <div className="mx-auto max-w-[1200px] space-y-4 px-4 py-5">
+        {/* the bell tower — the round's clock, over the campus */}
+        <BellTower state={state} />
         {/* the university rooms, in their real grid positions */}
         <div
           className="grid items-start gap-3"

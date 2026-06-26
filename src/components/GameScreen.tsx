@@ -4,7 +4,6 @@ import { MotionConfig } from 'framer-motion';
 import { useGameStore } from '../store/gameStore';
 import { useUiStore } from '../store/uiStore';
 import { useStateDiffFx } from './FX/useStateDiffFx';
-import { useKlankDriver } from '../hooks/useKlankDriver';
 import { botOwnsCurrentDecision, activePlayer } from '../utils/uiSelectors';
 import { getBotPersonality } from '../game/ai';
 import { TopBar } from './HUD/TopBar';
@@ -44,7 +43,7 @@ const SKY: Record<ReturnType<typeof skyPhase>, string> = {
 };
 
 /** Private peek results (deck tops): curtain → reveal → Done. */
-function PeekModal() {
+export function PeekModal() {
   const state = useGameStore((s) => s.state);
   const peek = useUiStore((s) => s.peek);
   const peekRevealed = useUiStore((s) => s.peekRevealed);
@@ -97,7 +96,7 @@ function PeekModal() {
   );
 }
 
-function ErrorToast() {
+export function ErrorToast() {
   const lastError = useUiStore((s) => s.lastError);
   const clearError = useUiStore((s) => s.clearError);
   useEffect(() => {
@@ -120,7 +119,6 @@ export function GameScreen() {
   const debugOpen = useUiStore((s) => s.debugOpen);
   const setDebugOpen = useUiStore((s) => s.setDebugOpen);
   useStateDiffFx();
-  useKlankDriver();
   if (!state) return null;
 
   // While a bot owns the current decision, show a non-blocking "thinking"

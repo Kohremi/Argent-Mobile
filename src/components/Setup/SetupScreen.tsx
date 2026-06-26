@@ -150,7 +150,7 @@ function SetupCard({
   );
 }
 
-export function SetupScreen() {
+export function SetupScreen({ onQuickStart }: { onQuickStart?: () => void } = {}) {
   const packs = useMemo(() => listPacks(), []);
   const scenarios = useMemo(() => listScenarios(), []);
   const selectedPackIds = useSetupStore((s) => s.selectedPackIds);
@@ -312,13 +312,24 @@ export function SetupScreen() {
       {/* Sticky command bar: identity · decoupled Rounds control · Start. */}
       <header className="sticky top-0 z-10 border-b border-slate-700/60 bg-slate-950/80 backdrop-blur">
         <div className="mx-auto flex max-w-6xl flex-wrap items-center gap-x-6 gap-y-3 px-6 py-3">
-          <div className="mr-auto">
-            <h1 className="text-xl font-semibold leading-tight">
-              Argent: The Consortium
-            </h1>
-            <p className="text-xs text-slate-400">
-              Local hot-seat scaffold — configure your table and begin.
-            </p>
+          <div className="mr-auto flex items-center gap-3">
+            <div>
+              <h1 className="text-xl font-semibold leading-tight">
+                Argent: The Consortium
+              </h1>
+              <p className="text-xs text-slate-400">
+                Configure your table — single-player by default, fully customisable.
+              </p>
+            </div>
+            {onQuickStart && (
+              <button
+                type="button"
+                onClick={onQuickStart}
+                className="rounded-full bg-slate-800 px-3 py-1.5 text-sm text-slate-200 ring-1 ring-slate-700 hover:bg-slate-700"
+              >
+                ⚡ Quick solo
+              </button>
+            )}
           </div>
 
           {/* Rounds — its own small control, independent of the scenario. */}

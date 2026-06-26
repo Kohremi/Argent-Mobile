@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <radialGradient id="bg" cx="50%" cy="42%" r="70%">
+      <stop offset="0%" stop-color="#2a2554" />
+      <stop offset="100%" stop-color="#171430" />
+    </radialGradient>
+    <linearGradient id="gem" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#f3f7ff" />
+      <stop offset="45%" stop-color="#c8d2e8" />
+      <stop offset="100%" stop-color="#8c99bb" />
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="96" fill="url(#bg)" />
+  <!-- starlight glow -->
+  <circle cx="256" cy="248" r="150" fill="#ffe9a8" opacity="0.14" />
+  <!-- silver gem (diamond) -->
+  <g>
+    <polygon points="256,96 392,232 256,420 120,232" fill="url(#gem)" stroke="#ffe9a8" stroke-width="6" stroke-linejoin="round" />
+    <!-- facets -->
+    <polygon points="256,96 392,232 256,232" fill="#ffffff" opacity="0.35" />
+    <polygon points="256,232 392,232 256,420" fill="#7e89ad" opacity="0.45" />
+    <line x1="120" y1="232" x2="392" y2="232" stroke="#171430" stroke-width="4" opacity="0.5" />
+    <line x1="256" y1="96" x2="256" y2="420" stroke="#171430" stroke-width="3" opacity="0.4" />
+  </g>
+</svg>
