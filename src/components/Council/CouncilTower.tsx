@@ -40,7 +40,10 @@ function VoterTile({ state, voter }: { state: GameState; voter: ConsortiumVoter 
       onClick={targeted ? () => pickVoter(voter.id) : undefined}
       title={targeted ? `Mark ${voter.name}` : undefined}
       className={clsx(
-        'relative rounded-card p-2 ring-1 transition',
+        // Fixed height so every tile is identical — sealed vs revealed, short
+        // criterion vs long, base game vs scenario voters — keeping the two
+        // columns symmetric. Text is truncated/clamped to fit this box.
+        'relative flex h-[76px] flex-col rounded-card p-2 ring-1 transition',
         faceUp
           ? 'bg-parchment-50 text-ink-900 ring-black/10'
           : 'bg-night-600/90 ring-white/15',
@@ -52,21 +55,25 @@ function VoterTile({ state, voter }: { state: GameState; voter: ConsortiumVoter 
     >
       {faceUp ? (
         <>
-          <p className="font-display text-[13px] font-bold leading-tight">
-            {voter.name}
-            <span className="ml-1 rounded-full bg-ink-900/10 px-1.5 font-body text-[10px] font-extrabold">
+          <p className="flex items-baseline gap-1 font-display text-[12px] font-bold leading-tight">
+            <span className="min-w-0 flex-1 truncate">{voter.name}</span>
+            <span className="shrink-0 rounded-full bg-ink-900/10 px-1.5 font-body text-[10px] font-extrabold">
               {voter.votes}🗳
             </span>
           </p>
           {voter.title && (
-            <p className="text-[9px] uppercase tracking-widest text-black/45">{voter.title}</p>
+            <p className="truncate text-[9px] uppercase tracking-widest text-black/45">
+              {voter.title}
+            </p>
           )}
           {voter.description && (
-            <p className="mt-0.5 text-[11px] leading-snug text-black/70">{voter.description}</p>
+            <p className="mt-0.5 line-clamp-2 text-[10px] leading-snug text-black/70">
+              {voter.description}
+            </p>
           )}
         </>
       ) : (
-        <div className="flex h-12 items-center justify-center">
+        <div className="flex h-full items-center justify-center">
           {/* rune back */}
           <span className="font-arcane text-2xl text-leyline/50">✦</span>
           <span className="ml-2 text-[10px] uppercase tracking-widest text-white/40">

@@ -45,13 +45,9 @@ export function CouncilView() {
   const factioned = !!(state.voterGroups && groups);
 
   return (
-    <div className="h-full overflow-y-auto p-3">
-      <p className="mb-2 px-1 font-display text-sm font-bold text-starlight">
-        The Consortium
-        <span className="ml-2 text-[10px] font-normal uppercase tracking-widest text-white/40">
-          {state.voters.length} voters
-        </span>
-      </p>
+    // No header row here — the bottom tab already reads "Council", and dropping
+    // it lets all twelve voter tiles fit on screen without a scrollbar.
+    <div className="h-full overflow-y-auto p-2">
       {factioned ? (
         <div className="grid grid-cols-2 items-start gap-2">
           {groups!.map((g) => (
