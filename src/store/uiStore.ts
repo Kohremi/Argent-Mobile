@@ -27,6 +27,39 @@ interface UiStore {
   setDebugOpen: (open: boolean) => void;
 
   /**
+   * Mobile shell (< lg) navigation — the focal "stage" shown by the bottom tab
+   * bar. Ignored by the desktop GameScreen. See components/Mobile/.
+   */
+  mobileTab: 'campus' | 'tableau' | 'board' | 'rivals' | 'council';
+  setMobileTab: (tab: 'campus' | 'tableau' | 'board' | 'rivals' | 'council') => void;
+
+  /** Mobile: the room drilled into from the Campus map (enlarged room view). */
+  openRoomId: string | null;
+  setOpenRoomId: (roomId: string | null) => void;
+
+  /** Mobile: whether the active-player dock bottom sheet is expanded (hands). */
+  dockExpanded: boolean;
+  setDockExpanded: (expanded: boolean) => void;
+
+  /** Mobile: the hand card whose full-detail bottom sheet is open, if any. */
+  cardDetail: { kind: 'spell' | 'vault' | 'supporter'; id: string } | null;
+  setCardDetail: (
+    card: { kind: 'spell' | 'vault' | 'supporter'; id: string } | null,
+  ) => void;
+
+  /**
+   * Mobile: the active board/shelf-targeting prompt's guidance, published by
+   * PromptDirector's TargetBanner so the MobileActionRow can show it in-flow
+   * (the floating banner is suppressed on mobile — see TargetBanner). The board
+   * stays clear; the lit cards/slots/voters remain the tap target. `pass` is the
+   * optional Skip/Pass affordance carried inline in the row.
+   */
+  mobilePromptHint: { text: string; pass: { label: string; onPass: () => void } | null } | null;
+  setMobilePromptHint: (
+    hint: { text: string; pass: { label: string; onPass: () => void } | null } | null,
+  ) => void;
+
+  /**
    * Opponent quick-reference: the rival whose full tableau (resources, spells,
    * supporters, vault items, discards) is being reviewed. While set, the
    * OpponentInspector overlays the board and blocks other actions until closed.
@@ -96,6 +129,21 @@ export const useUiStore = create<UiStore>((set) => ({
 
   debugOpen: false,
   setDebugOpen: (open) => set({ debugOpen: open }),
+
+  mobileTab: 'campus',
+  setMobileTab: (tab) => set({ mobileTab: tab }),
+
+  openRoomId: null,
+  setOpenRoomId: (roomId) => set({ openRoomId: roomId }),
+
+  dockExpanded: false,
+  setDockExpanded: (expanded) => set({ dockExpanded: expanded }),
+
+  cardDetail: null,
+  setCardDetail: (card) => set({ cardDetail: card }),
+
+  mobilePromptHint: null,
+  setMobilePromptHint: (hint) => set({ mobilePromptHint: hint }),
 
   inspectPlayerId: null,
   setInspectPlayerId: (playerId) => set({ inspectPlayerId: playerId }),

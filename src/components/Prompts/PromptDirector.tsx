@@ -1,3 +1,4 @@
+import { useEffect } from 'react';
 import clsx from 'clsx';
 import { motion } from 'framer-motion';
 import type {
@@ -203,7 +204,36 @@ function TargetBanner({
   passLabel?: string;
 }) {
   const tryDispatch = useUiStore((s) => s.tryDispatch);
+  const setMobilePromptHint = useUiStore((s) => s.setMobilePromptHint);
+  const isMobile = useIsMobile();
   const showPass = canPass || onPass;
+  const fullText = `${pending.source.description ? `${pending.source.description} ▸ ` : ''}${text}`;
+
+  // On mobile this guidance lives in the in-flow MobileActionRow instead of a
+  // popover over the board; publish it there and render nothing here. The board
+  // stays clear and the lit cards/slots/voters remain the tap target.
+  useEffect(() => {
+    if (!isMobile) return undefined;
+    const pass = showPass
+      ? {
+          label: passLabel,
+          onPass: () =>
+            onPass
+              ? onPass()
+              : tryDispatch({
+                  type: 'RESOLVE_PENDING',
+                  resolutionId: pending.id,
+                  answer: { kind: 'pass' },
+                }),
+        }
+      : null;
+    setMobilePromptHint({ text: fullText, pass });
+    return () => setMobilePromptHint(null);
+    // onPass/tryDispatch are stable for a given pending; re-publish on text/pass change.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isMobile, fullText, showPass, passLabel, pending.id]);
+
+  if (isMobile) return null;
   return (
     <div className="pointer-events-none absolute inset-x-0 top-16 z-40 flex justify-center">
       <div className="pointer-events-auto flex animate-pop items-center gap-3 rounded-full bg-night-800/95 px-4 py-2 ring-1 ring-starlight/50 shadow-glow-sm"

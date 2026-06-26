@@ -1,5 +1,6 @@
 import clsx from 'clsx';
 import { useGameStore } from '../../store/gameStore';
+import { useUiStore } from '../../store/uiStore';
 import { getBotPersonality } from '../../game/ai';
 import type { GameState } from '../../game/types';
 import { activePlayer, botOwnsCurrentDecision, PLAYER_AURA } from '../../utils/uiSelectors';
@@ -62,6 +63,7 @@ function liveAction(state: GameState): Live {
 
 export function MobileActionRow() {
   const state = useGameStore((s) => s.state);
+  const hint = useUiStore((s) => s.mobilePromptHint);
   if (!state) return null;
 
   const round = 'round' in state.phase ? (state.phase.round as number) : null;
@@ -73,23 +75,38 @@ export function MobileActionRow() {
         {round != null ? `Round ${round}` : phaseLabel(state.phase)}
       </span>
       <span className="h-3 w-px shrink-0 bg-white/15" />
-      <span className="flex min-w-0 flex-1 items-center gap-1.5">
-        {live.bot && <span className="shrink-0 animate-breathe">🤖</span>}
-        {live.busy && !live.bot && (
-          <span
-            className="h-1.5 w-1.5 shrink-0 animate-breathe rounded-full"
-            style={{ background: live.aura ?? '#ffe9a8' }}
-          />
-        )}
-        <span
-          className={clsx(
-            'truncate font-semibold',
-            live.busy ? 'text-white/90' : 'text-white/50',
+      {hint ? (
+        // An active board/shelf-targeting prompt of the local player's — its
+        // guidance + Skip live here; the lit board/cards are the tap target.
+        <span className="flex min-w-0 flex-1 items-center gap-1.5">
+          <span className="shrink-0 animate-breathe text-starlight">✦</span>
+          <span className="truncate font-semibold text-starlight">{hint.text}</span>
+          {hint.pass && (
+            <button
+              type="button"
+              onClick={hint.pass.onPass}
+              className="ml-auto shrink-0 rounded-full bg-night-700 px-2.5 py-0.5 text-[10px] font-bold text-white/75 ring-1 ring-white/15 active:scale-95"
+            >
+              {hint.pass.label}
+            </button>
           )}
-        >
-          {live.text}
         </span>
-      </span>
+      ) : (
+        <span className="flex min-w-0 flex-1 items-center gap-1.5">
+          {live.bot && <span className="shrink-0 animate-breathe">🤖</span>}
+          {live.busy && !live.bot && (
+            <span
+              className="h-1.5 w-1.5 shrink-0 animate-breathe rounded-full"
+              style={{ background: live.aura ?? '#ffe9a8' }}
+            />
+          )}
+          <span
+            className={clsx('truncate font-semibold', live.busy ? 'text-white/90' : 'text-white/50')}
+          >
+            {live.text}
+          </span>
+        </span>
+      )}
     </div>
   );
 }
