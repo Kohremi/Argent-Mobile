@@ -8,12 +8,11 @@ import { useUiStore } from '../../store/uiStore';
  * touch target. Selecting a tab also closes any drilled-in room.
  */
 
-type Tab = 'campus' | 'tableau' | 'board' | 'rivals' | 'council';
+type Tab = 'campus' | 'tableau' | 'rivals' | 'council';
 
 const TABS: { id: Tab; label: string; glyph: string }[] = [
   { id: 'campus', label: 'Campus', glyph: '🏰' },
   { id: 'tableau', label: 'Offer', glyph: '🃏' },
-  { id: 'board', label: 'My Board', glyph: '📜' },
   { id: 'rivals', label: 'Rivals', glyph: '🎓' },
   { id: 'council', label: 'Council', glyph: '⚖️' },
 ];

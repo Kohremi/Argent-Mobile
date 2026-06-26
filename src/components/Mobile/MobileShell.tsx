@@ -2,13 +2,9 @@ import { MotionConfig } from 'framer-motion';
 import { useGameStore } from '../../store/gameStore';
 import { useUiStore } from '../../store/uiStore';
 import { useStateDiffFx } from '../FX/useStateDiffFx';
-import { localPlayer, PLAYER_AURA } from '../../utils/uiSelectors';
-import type { GameState, Player } from '../../game/types';
 import { PromptDirector } from '../Prompts/PromptDirector';
 import { ScoringCeremony } from '../Modals/ScoringCeremony';
 import { TurnBanner } from '../HUD/TurnBanner';
-import { PortraitBust } from '../Player/PortraitBust';
-import { PlayerTableau } from '../Player/PlayerTableau';
 import { DebugControls } from '../DebugControls';
 import { PeekModal, ErrorToast } from '../GameScreen';
 import { MobileTopBar } from './MobileTopBar';
@@ -49,7 +45,6 @@ export function MobileShell() {
         <main className="relative min-h-0 flex-1 overflow-hidden">
           {mobileTab === 'campus' && <CampusMap />}
           {mobileTab === 'tableau' && <TableauView state={state} />}
-          {mobileTab === 'board' && <MyBoardView state={state} localPlayerId={localPlayerId} />}
           {mobileTab === 'rivals' && <RivalsView state={state} localPlayerId={localPlayerId} />}
           {mobileTab === 'council' && <CouncilView />}
 
@@ -88,30 +83,5 @@ export function MobileShell() {
         )}
       </div>
     </MotionConfig>
-  );
-}
-
-/** The seat shown as "mine" — the bound local seat in single-player, else the
- *  active seat (legacy hot-seat). */
-function selfPlayer(state: GameState, localPlayerId: string | null): Player {
-  return localPlayer(state, localPlayerId) ?? state.players[0]!;
-}
-
-function MyBoardView({ state, localPlayerId }: { state: GameState; localPlayerId: string | null }) {
-  const player = selfPlayer(state, localPlayerId);
-  const aura = PLAYER_AURA[player.color];
-  return (
-    <div className="h-full overflow-y-auto px-3 py-3">
-      <div className="flex items-center gap-3">
-        <PortraitBust player={player} state={state} expression="neutral" size={40} />
-        <div className="min-w-0">
-          <p className="font-display text-lg font-bold leading-tight" style={{ color: aura }}>
-            {player.name}
-          </p>
-          <p className="text-[10px] uppercase tracking-widest text-white/40">your tableau</p>
-        </div>
-      </div>
-      <PlayerTableau state={state} player={player} />
-    </div>
   );
 }

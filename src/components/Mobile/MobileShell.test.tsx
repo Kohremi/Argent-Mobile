@@ -78,7 +78,7 @@ describe('MobileShell (smoke)', () => {
 
     // Bottom tab bar is present.
     expect(screen.getByText('Campus')).toBeTruthy();
-    expect(screen.getByText('My Board')).toBeTruthy();
+    expect(screen.getByText('Rivals')).toBeTruthy();
     expect(screen.getByText('Council')).toBeTruthy();
 
     // Pick the bench student in the dock — this also auto-collapses the dock.

@@ -30,8 +30,8 @@ interface UiStore {
    * Mobile shell (< lg) navigation — the focal "stage" shown by the bottom tab
    * bar. Ignored by the desktop GameScreen. See components/Mobile/.
    */
-  mobileTab: 'campus' | 'tableau' | 'board' | 'rivals' | 'council';
-  setMobileTab: (tab: 'campus' | 'tableau' | 'board' | 'rivals' | 'council') => void;
+  mobileTab: 'campus' | 'tableau' | 'rivals' | 'council';
+  setMobileTab: (tab: 'campus' | 'tableau' | 'rivals' | 'council') => void;
 
   /** Mobile: the room drilled into from the Campus map (enlarged room view). */
   openRoomId: string | null;
