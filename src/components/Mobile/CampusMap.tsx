@@ -12,7 +12,7 @@ import {
 } from '../../utils/uiSelectors';
 import { usePromptTargets } from '../Prompts/usePromptTargets';
 import { MageToken } from '../Board/MageToken';
-import { LockIcon } from '../icons';
+import { LockIcon, RoomIcon } from '../icons';
 
 /**
  * The university as a spatial icon map (the mobile "zoomed-out" view): rooms in
@@ -25,31 +25,6 @@ import { LockIcon } from '../icons';
  * enlarged room view (RoomDetailSheet). Adjacency-accurate, so the spatial shape
  * that some spells care about is legible.
  */
-
-/** Pick an emoji glyph for a room from keywords in its name (data has none). */
-const GLYPH_RULES: [RegExp, string][] = [
-  [/infirmary|ward/i, '🚑'],
-  [/library|archive/i, '📚'],
-  [/astronomy|tower|observ/i, '🔭'],
-  [/chapel|cathedral|shrine/i, '⛪'],
-  [/council|chamber|senate/i, '⚖️'],
-  [/great hall|hall|dining/i, '🏛️'],
-  [/golem/i, '🤖'],
-  [/labor|laboratory|lab\b/i, '🧪'],
-  [/tavern|inn|pub/i, '🍺'],
-  [/atelier|workshop|synthesis|forge/i, '🛠️'],
-  [/archmage|study|sanctum/i, '📖'],
-  [/training|field|yard|arena/i, '🛡️'],
-  [/dorm|dormitory|residence/i, '🛏️'],
-  [/guild|market|bazaar/i, '🏷️'],
-  [/staff|wand|relic/i, '🪄'],
-  [/garden|grove|nature/i, '🌿'],
-];
-
-export function roomGlyph(name: string): string {
-  for (const [re, g] of GLYPH_RULES) if (re.test(name)) return g;
-  return '🏰';
-}
 
 /**
  * One drawable spot on a room tile. Occupied spots carry the seated student so
@@ -227,7 +202,7 @@ function RoomMapTile({
       )}
 
       <div className="flex w-full items-start justify-between gap-1">
-        <span className="text-lg leading-none">{roomGlyph(room.name)}</span>
+        <RoomIcon name={room.name} size={22} className="text-slate-100" />
         <span className="flex items-center gap-0.5">
           {cost && (
             <span className="rounded bg-amber-400/15 px-1 text-[7px] font-bold leading-tight text-amber-200/90 ring-1 ring-amber-300/30">

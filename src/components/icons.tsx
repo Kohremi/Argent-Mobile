@@ -671,3 +671,300 @@ export function BellIcon({
     </svg>
   );
 }
+
+// ============================================================================
+// Room icons — a flat SVG glyph per university chamber, replacing the emoji
+// glyphs the Campus map / room sheet used to draw (which clashed with the
+// night/starlight theme). Each paints in `currentColor` (so the host sets the
+// hue) with dark "cutout" + white accent details, matching the resource icons.
+// ============================================================================
+
+export type RoomIconKind =
+  | 'infirmary'
+  | 'catacombs'
+  | 'vault'
+  | 'archive'
+  | 'library'
+  | 'astronomy'
+  | 'adventuring'
+  | 'chapel'
+  | 'council'
+  | 'great-hall'
+  | 'golem'
+  | 'lab'
+  | 'tavern'
+  | 'workshop'
+  | 'training'
+  | 'dormitory'
+  | 'guild'
+  | 'stores'
+  | 'staff'
+  | 'courtyard'
+  | 'castle';
+
+/** Classify a room by keywords in its name (room data carries no glyph). Order
+ *  matters — earlier, more-specific rules win. */
+const ROOM_ICON_RULES: [RegExp, RoomIconKind][] = [
+  [/infirmary|ward/i, 'infirmary'],
+  [/catacomb|crypt|tomb|ossuary/i, 'catacombs'],
+  [/vault/i, 'vault'],
+  [/research|archive/i, 'archive'],
+  [/library/i, 'library'],
+  [/astronomy|observ/i, 'astronomy'],
+  [/adventur/i, 'adventuring'],
+  [/chapel|cathedral|shrine|temple/i, 'chapel'],
+  [/council|chamber|senate/i, 'council'],
+  [/great hall|dining/i, 'great-hall'],
+  [/golem/i, 'golem'],
+  [/labor|laboratory|lab\b/i, 'lab'],
+  [/tavern|inn|pub/i, 'tavern'],
+  [/atelier|workshop|synthesis|forge|smith/i, 'workshop'],
+  [/archmage|staff|sanctum|study/i, 'staff'],
+  // Courtyard before training so "court-YARD" doesn't match the yard rule.
+  [/courtyard|garden|grove|nature|park/i, 'courtyard'],
+  [/training|field|yard|arena/i, 'training'],
+  [/dorm|dormitory|residence|barrack/i, 'dormitory'],
+  [/guild|bazaar/i, 'guild'],
+  [/store|market|shop|stall/i, 'stores'],
+  [/tower/i, 'astronomy'],
+  [/hall/i, 'great-hall'],
+];
+
+export function roomIconKind(name: string): RoomIconKind {
+  for (const [re, kind] of ROOM_ICON_RULES) if (re.test(name)) return kind;
+  return 'castle';
+}
+
+const HOLE = { fill: '#0b1020', fillOpacity: 0.5 } as const;
+const ACCENT = { fill: '#ffffff', fillOpacity: 0.6 } as const;
+
+function roomIconBody(kind: RoomIconKind) {
+  switch (kind) {
+    case 'infirmary':
+      // Ward: a card with a medical cross.
+      return (
+        <>
+          <rect x="3" y="4" width="18" height="16" rx="2.5" />
+          <path d="M10.7 7 h2.6 v3.4 h3.4 v2.6 h-3.4 v3.4 h-2.6 v-3.4 H7.3 v-2.6 H10.7 Z" {...ACCENT} />
+        </>
+      );
+    case 'catacombs':
+      // Skull over crossed bones — the crypt.
+      return (
+        <>
+          <circle cx="12" cy="10" r="7" />
+          <rect x="8" y="15" width="8" height="4.5" rx="1.5" />
+          <circle cx="9.4" cy="10" r="1.8" {...HOLE} />
+          <circle cx="14.6" cy="10" r="1.8" {...HOLE} />
+          <path d="M11.2 13 h1.6 v2.6 h-1.6 Z" {...HOLE} />
+        </>
+      );
+    case 'vault':
+      // A strongbox / safe with a combination dial.
+      return (
+        <>
+          <rect x="3" y="5" width="18" height="14" rx="2" />
+          <rect x="6" y="8" width="12" height="8" rx="1" {...HOLE} />
+          <circle cx="12" cy="12" r="2.6" fill="none" stroke="#fff" strokeOpacity="0.75" strokeWidth="1.3" />
+          <path d="M12 9.8 V12" stroke="#fff" strokeOpacity="0.75" strokeWidth="1.3" />
+        </>
+      );
+    case 'archive':
+      // Rolled scroll with ruled lines.
+      return (
+        <>
+          <path d="M8 4 h8 a2 2 0 0 1 2 2 v12 a2 2 0 0 1 -2 2 h-8 Z" />
+          <rect x="4" y="4" width="4.5" height="16" rx="2.25" {...HOLE} />
+          <path d="M10 9 H16 M10 12 H16 M10 15 H14" stroke="#fff" strokeOpacity="0.6" strokeWidth="1" fill="none" />
+        </>
+      );
+    case 'library':
+      // Three book spines with band lines.
+      return (
+        <>
+          <rect x="4" y="5" width="4" height="14" rx="0.8" />
+          <rect x="9.5" y="5" width="4" height="14" rx="0.8" />
+          <rect x="15" y="6.5" width="4" height="12.5" rx="0.8" transform="rotate(9 17 13)" />
+          <path d="M4.6 8 H7.4 M10.1 8 H12.9 M15.6 9.3 H18" stroke="#fff" strokeOpacity="0.55" strokeWidth="0.9" fill="none" />
+        </>
+      );
+    case 'astronomy':
+      // Telescope on a tripod.
+      return (
+        <>
+          <g transform="rotate(-35 12 12)">
+            <rect x="3.5" y="9.6" width="13" height="4.6" rx="1.4" />
+            <rect x="15.5" y="8.8" width="3" height="6.2" rx="1.2" {...ACCENT} />
+          </g>
+          <path d="M9 17 L6.5 22 M12.5 15.5 L16 22" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" fill="none" />
+        </>
+      );
+    case 'adventuring':
+      // Compass.
+      return (
+        <>
+          <circle cx="12" cy="12" r="9" />
+          <path d="M12 5.5 L14 12 L12 18.5 L10 12 Z" {...ACCENT} />
+          <circle cx="12" cy="12" r="1.3" {...HOLE} />
+        </>
+      );
+    case 'chapel':
+      // Peaked-roof chapel with a cross.
+      return (
+        <>
+          <path d="M6 21 V10 L12 4.5 L18 10 V21 Z" />
+          <rect x="10.4" y="14" width="3.2" height="7" rx="1.4" {...HOLE} />
+          <path d="M12 5.4 V8.4 M10.5 6.9 H13.5" stroke="#fff" strokeOpacity="0.85" strokeWidth="1.2" />
+        </>
+      );
+    case 'council':
+      // Balance scales.
+      return (
+        <>
+          <rect x="11" y="5" width="2" height="14" rx="0.6" />
+          <rect x="6" y="18.5" width="12" height="2.2" rx="1" />
+          <path d="M4.5 7 H19.5" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+          <circle cx="12" cy="6" r="1.4" />
+          <path d="M4.5 7 L2.5 12 H6.5 Z" />
+          <path d="M19.5 7 L17.5 12 H21.5 Z" />
+        </>
+      );
+    case 'great-hall':
+      // Classical facade: pediment over columns.
+      return (
+        <>
+          <path d="M3 9.5 L12 4 L21 9.5 Z" />
+          <rect x="4" y="9.5" width="16" height="2" />
+          <rect x="5" y="12" width="2.2" height="7" />
+          <rect x="9" y="12" width="2.2" height="7" />
+          <rect x="12.8" y="12" width="2.2" height="7" />
+          <rect x="16.8" y="12" width="2.2" height="7" />
+          <rect x="3" y="19" width="18" height="2" />
+        </>
+      );
+    case 'golem':
+      // Blocky stone construct with glowing eyes.
+      return (
+        <>
+          <rect x="6" y="4.5" width="12" height="11" rx="2" />
+          <rect x="8" y="15.5" width="8" height="4.5" rx="1.2" />
+          <circle cx="9.6" cy="10" r="1.6" fill="#fde68a" />
+          <circle cx="14.4" cy="10" r="1.6" fill="#fde68a" />
+        </>
+      );
+    case 'lab':
+      // Bubbling flask.
+      return (
+        <>
+          <path d="M9 3 H15 V8 L19 18 Q20 21 17 21 H7 Q4 21 5 18 L9 8 Z" />
+          <path d="M8 3 H16" stroke="#fff" strokeOpacity="0.55" strokeWidth="1" fill="none" />
+          <circle cx="11" cy="16" r="1" {...ACCENT} />
+          <circle cx="14" cy="18" r="0.8" {...ACCENT} />
+        </>
+      );
+    case 'tavern':
+      // Foaming mug.
+      return (
+        <>
+          <path d="M5 7 H16 V18 a2 2 0 0 1 -2 2 H7 a2 2 0 0 1 -2 -2 Z" />
+          <path d="M16 9 H19 a2 2 0 0 1 2 2 v2 a2 2 0 0 1 -2 2 H16" fill="none" stroke="currentColor" strokeWidth="1.7" />
+          <rect x="5" y="7" width="11" height="3" {...ACCENT} />
+        </>
+      );
+    case 'workshop':
+      // Cog (overlapping squares → 8 teeth) with a bored centre.
+      return (
+        <>
+          <rect x="5" y="5" width="14" height="14" rx="2.5" />
+          <rect x="5" y="5" width="14" height="14" rx="2.5" transform="rotate(45 12 12)" />
+          <circle cx="12" cy="12" r="3.4" {...HOLE} />
+        </>
+      );
+    case 'training':
+      // Crossed swords.
+      return (
+        <g fill="none" stroke="currentColor" strokeLinecap="round">
+          <path d="M5 19 L16 8" strokeWidth="2.2" />
+          <path d="M19 19 L8 8" strokeWidth="2.2" />
+          <path d="M14.5 5.5 L18.5 9.5" strokeWidth="1.4" />
+          <path d="M5.5 9.5 L9.5 5.5" strokeWidth="1.4" />
+          <path d="M5 19 L7 17 M19 19 L17 17" strokeWidth="2.2" />
+        </g>
+      );
+    case 'dormitory':
+      // Bed with a pillow.
+      return (
+        <>
+          <rect x="2" y="13.5" width="20" height="4.5" rx="1" />
+          <rect x="2" y="10.5" width="3.2" height="7.5" rx="1" />
+          <rect x="6.5" y="11.5" width="6" height="3" rx="1.5" {...ACCENT} />
+        </>
+      );
+    case 'guild':
+      // Pennant banner on a pole.
+      return (
+        <>
+          <rect x="5" y="3" width="1.8" height="18" rx="0.6" />
+          <path d="M6.8 4 H19 L16 8 L19 12 H6.8 Z" />
+        </>
+      );
+    case 'stores':
+      // Shopfront with a striped awning.
+      return (
+        <>
+          <path d="M3.5 8 L4.6 4 H19.4 L20.5 8 Z" />
+          <rect x="4.5" y="8" width="15" height="12" rx="1" />
+          <rect x="9" y="12" width="6" height="8" rx="0.8" {...HOLE} />
+          <path d="M8.2 4 L7.6 8 M12 4 L12 8 M15.8 4 L16.4 8" stroke="#0b1020" strokeOpacity="0.45" strokeWidth="1.1" />
+        </>
+      );
+    case 'staff':
+      // Wand with a spark.
+      return (
+        <>
+          <path d="M5 20 L15.5 9.5" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" fill="none" />
+          <path d="M18 4 l1 2.6 2.6 1 -2.6 1 -1 2.6 -1 -2.6 -2.6 -1 2.6 -1 Z" {...ACCENT} />
+        </>
+      );
+    case 'courtyard':
+      // A single tree — the open green.
+      return (
+        <>
+          <circle cx="12" cy="9" r="6" />
+          <rect x="11" y="13.5" width="2" height="6.5" rx="0.8" />
+          <path d="M9.5 8 a2.5 2.5 0 0 1 5 0" fill="none" stroke="#fff" strokeOpacity="0.4" strokeWidth="0.9" />
+        </>
+      );
+    case 'castle':
+    default:
+      // Crenellated keep — the generic fallback.
+      return (
+        <>
+          <path d="M4 21 V8 H6 V5 H8.5 V8 H11 V5 H13 V8 H15.5 V5 H18 V8 H20 V21 Z" />
+          <rect x="10" y="14" width="4" height="7" rx="0.4" {...HOLE} />
+        </>
+      );
+  }
+}
+
+export function RoomIcon({
+  name,
+  className,
+  size = 18,
+}: IconProps & { name: string }) {
+  const kind = roomIconKind(name);
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      role="img"
+      aria-label={name}
+      className={clsx('inline-block flex-shrink-0', className)}
+      fill="currentColor"
+    >
+      <title>{name}</title>
+      {roomIconBody(kind)}
+    </svg>
+  );
+}

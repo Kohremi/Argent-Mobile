@@ -5,8 +5,7 @@ import { visibleRoomSpaces } from '../../utils/uiSelectors';
 import { usePromptTargets } from '../Prompts/usePromptTargets';
 import { RoomScene } from '../Board/RoomScene';
 import { usePlacement } from '../Board/usePlacement';
-import { LockIcon } from '../icons';
-import { roomGlyph } from './CampusMap';
+import { LockIcon, RoomIcon } from '../icons';
 
 /**
  * Enlarged single-room view for the mobile shell — a bottom sheet (matching the
@@ -93,12 +92,15 @@ export function RoomDetailSheet() {
           {/* faint glyph watermark */}
           <span
             aria-hidden
-            className="pointer-events-none absolute -right-2 -top-3 select-none text-7xl opacity-10"
+            className="pointer-events-none absolute -right-3 -top-4 select-none opacity-10"
+            style={{ color: hue }}
           >
-            {roomGlyph(room.name)}
+            <RoomIcon name={room.name} size={92} />
           </span>
 
-          <span className="mt-0.5 text-2xl leading-none">{roomGlyph(room.name)}</span>
+          <span className="mt-0.5 shrink-0" style={{ color: hue }}>
+            <RoomIcon name={room.name} size={28} />
+          </span>
 
           <div className="min-w-0 flex-1">
             <p className="truncate font-display text-lg font-bold leading-tight" style={{ color: hue }}>
