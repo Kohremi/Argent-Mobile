@@ -46,7 +46,7 @@ const GLYPH_RULES: [RegExp, string][] = [
   [/garden|grove|nature/i, '🌿'],
 ];
 
-function roomGlyph(name: string): string {
+export function roomGlyph(name: string): string {
   for (const [re, g] of GLYPH_RULES) if (re.test(name)) return g;
   return '🏰';
 }

@@ -52,6 +52,13 @@ export interface RoomSceneProps {
   width?: number | string;
   /** The slots to render (pool rooms collapse to occupied + one open). */
   spaces: ActionSpace[];
+  /**
+   * Render flush inside a host chrome (the mobile RoomDetailSheet): drop the
+   * card's own border/background/padding and its name·side·tags header, since
+   * the sheet's header band already provides them. Defaults to false so the
+   * desktop board card is unchanged.
+   */
+  embedded?: boolean;
 }
 
 type Occupant = { ownerId: string; mageId: string; isShadowing?: boolean };
@@ -72,6 +79,7 @@ export function RoomScene({
   onPlaceShadow,
   mageIndex,
   spaces,
+  embedded = false,
 }: RoomSceneProps) {
   const locked = state.roomLocks.some((l) => l.roomId === room.id);
   const hasEligible = spaces.some((s) => eligible.has(s.id));
@@ -79,15 +87,22 @@ export function RoomScene({
   return (
     <div
       className={clsx(
-        'relative rounded border p-3 text-xs space-y-1 transition-colors',
-        locked
-          ? 'border-rose-500 bg-rose-900/20'
-          : hasEligible
-            ? 'border-amber-400 bg-amber-400/10'
-            : 'border-slate-700 bg-slate-900',
+        'relative text-xs space-y-1',
+        embedded
+          ? ''
+          : clsx(
+              'rounded border p-3 transition-colors',
+              locked
+                ? 'border-rose-500 bg-rose-900/20'
+                : hasEligible
+                  ? 'border-amber-400 bg-amber-400/10'
+                  : 'border-slate-700 bg-slate-900',
+            ),
       )}
     >
-      {/* header line: lock · name · side · tags */}
+      {/* header line: lock · name · side · tags — the sheet supplies its own
+          header band in embedded mode, so skip this one there. */}
+      {!embedded && (
       <div className="flex items-baseline gap-2 flex-wrap">
         {locked && <LockIcon size={14} />}
         <span className="text-sm font-medium text-slate-100">{room.name}</span>
@@ -113,6 +128,7 @@ export function RoomScene({
           </span>
         )}
       </div>
+      )}
 
       {room.description && (
         <p className="text-[11px] text-slate-300 italic">{room.description}</p>
