@@ -10,9 +10,10 @@ import {
 } from '../HUD/TopBar';
 
 /**
- * Compact status bar for the mobile shell: title + phase, the bell-tower clock,
- * scenario chips, and a dot for whose turn it is. Reuses the desktop TopBar's
- * bell/scenario pieces verbatim. Horizontally scrollable so chips never wrap.
+ * Compact status bar for the mobile shell: phase, the bell-tower clock,
+ * scenario chips, and a dot for whose turn it is. (No app title — dropped to
+ * give the status chips more room.) Reuses the desktop TopBar's bell/scenario
+ * pieces verbatim. Horizontally scrollable so chips never wrap.
  */
 export function MobileTopBar() {
   const state = useGameStore((s) => s.state);
@@ -26,10 +27,6 @@ export function MobileTopBar() {
 
   return (
     <header className="z-30 flex h-12 shrink-0 items-center gap-2 bg-night-800/90 px-3 ring-1 ring-white/10 backdrop-blur">
-      <h1 className="font-display text-base font-extrabold tracking-wide text-starlight">
-        Argent
-      </h1>
-
       <div className="flex min-w-0 flex-1 items-center gap-2">
         <span className="shrink-0 rounded-full bg-night-700 px-2.5 py-1 font-display text-xs text-white/90 ring-1 ring-white/15">
           {phaseLabel(state.phase)}
