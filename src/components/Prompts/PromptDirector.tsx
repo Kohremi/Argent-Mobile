@@ -209,7 +209,7 @@ function TargetBanner({
   const showPass = canPass || onPass;
   const fullText = `${pending.source.description ? `${pending.source.description} ▸ ` : ''}${text}`;
 
-  // On mobile this guidance lives in the top bar's LiveActionNote instead of a
+  // On mobile this guidance lives in the in-flow MobileActionRow instead of a
   // popover over the board; publish it there and render nothing here. The board
   // stays clear and the lit cards/slots/voters remain the tap target.
   useEffect(() => {
@@ -1075,8 +1075,8 @@ export function PromptDirector() {
   const pending = topPending(state);
   if (!pending) return null;
   // On mobile, a bot's prompt would only flash a popover over the board for the
-  // ~600ms before the bot driver answers it. The top bar's LiveActionNote
-  // narrates what the bot is doing instead, so suppress the floating banner here.
+  // ~600ms before the bot driver answers it. The MobileActionRow narrates what
+  // the bot is doing instead, so suppress the floating banner/modal here.
   if (isMobile && botOwnsCurrentDecision(state)) return null;
   const prompt = pending.prompt;
 
