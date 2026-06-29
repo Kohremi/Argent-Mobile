@@ -16,8 +16,14 @@ function TwoColumns({ state }: { state: GameState }) {
   const cols: ConsortiumVoter[][] = [[], []];
   // A face-up leader heads each column…
   headers.forEach((v, i) => cols[i % 2]!.push(v));
-  // …then the sealed voters are dealt across the two columns.
-  others.forEach((v, i) => cols[i % 2]!.push(v));
+  // …then the sealed voters fill the shorter column each time, so the two
+  // columns stay balanced even when a scenario leaves an odd number of leaders.
+  // (Key to the University removes the Most-Influence leader, so a single leader
+  // would otherwise skew the columns to 7/5 instead of an even 6/6.)
+  others.forEach((v) => {
+    const target = cols[0]!.length <= cols[1]!.length ? 0 : 1;
+    cols[target]!.push(v);
+  });
 
   return (
     <div className="grid grid-cols-2 items-start gap-2">
