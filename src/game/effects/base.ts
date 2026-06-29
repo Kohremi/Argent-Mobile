@@ -7277,17 +7277,23 @@ function askForNextSwap(
   cfg: { label: string; goldCost: number; total: number },
   remaining: number,
 ): EffectResult {
-  if (remaining <= 0) return { kind: 'done', patch: { players: ctx.state.players } };
+  // Carry both `players` (resource spends/gains) and `researchQueue` (queued
+  // Research opportunities from immediateGain) so neither is dropped at a pause.
+  const carry = {
+    players: ctx.state.players,
+    researchQueue: ctx.state.researchQueue,
+  };
+  if (remaining <= 0) return { kind: 'done', patch: carry };
   const player = ctx.state.players.find(
     (p) => p.id === ctx.triggeringPlayerId,
   );
   if (!player || player.resources.gold < cfg.goldCost) {
-    return { kind: 'done', patch: { players: ctx.state.players } };
+    return { kind: 'done', patch: carry };
   }
   const indexLabel = `${cfg.total - remaining + 1} of ${cfg.total}`;
   return {
     kind: 'pause',
-    patch: { players: ctx.state.players },
+    patch: carry,
     pending: {
       responderId: ctx.triggeringPlayerId,
       prompt: {
@@ -7340,11 +7346,12 @@ registerEffect('base.supporter.raffique-van-anzel', (ctx): EffectResult =>
     label: 'Swap 2 Gold for 1 Research',
     goldCost: 2,
     total: 4,
-    // Research is a transient resource (the spend/discard step lives on its
-    // own prompt). For now we treat the gain as no-op since the research
-    // system is still a TODO; the gold cost is real, the research tick is
-    // pending future research-system work.
-    immediateGain: () => ({}),
+    // Each swap queues one Research opportunity; the engine's research-drain
+    // pump surfaces a spend prompt per entry once the swap loop finishes
+    // (matching how "Gain N Research" supporters resolve). swapLoop threads
+    // `researchQueue` through each pause so the entries survive the loop.
+    immediateGain: (state) =>
+      appendResearchQueue(state, ctx.triggeringPlayerId, ctx.source, 1),
   }),
 );
 

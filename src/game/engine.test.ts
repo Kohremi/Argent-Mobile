@@ -6991,6 +6991,43 @@ describe('PLAY_SUPPORTER', () => {
     expect(topPending(s).prompt.kind).toBe('choose-from-options');
   });
 
+  it('Raffique Van Anzel grants 1 Research per swap and charges the Gold', () => {
+    // Regression: the swap used to deduct 2 Gold but grant nothing (immediateGain
+    // was a no-op stub), and swapLoop's pause patch dropped researchQueue so any
+    // queued Research was lost across the loop's pauses.
+    let s = setupSupporterTest('base.supporter.raffique-van-anzel');
+    s = setGold(s, 'p1', 8); // enough for all 4 swaps (2 Gold each)
+    s = applyAction(s, {
+      type: 'PLAY_SUPPORTER',
+      playerId: 'p1',
+      supporterCardId: 'base.supporter.raffique-van-anzel',
+    });
+    // Two swaps mid-loop: each deducts 2 Gold and queues 1 Research that must
+    // survive the loop's pause (researchQueue was previously dropped here).
+    for (let i = 0; i < 2; i++) {
+      expect(topPending(s).prompt.kind).toBe('choose-from-options');
+      s = applyAction(s, {
+        type: 'RESOLVE_PENDING',
+        resolutionId: topPending(s).id,
+        answer: { kind: 'option-chosen', optionId: 'swap', payload: {} },
+      });
+    }
+    expect(s.players.find((p) => p.id === 'p1')!.resources.gold).toBe(4); // 8 - 2*2
+    expect(s.researchQueue.length).toBe(2);
+
+    // Stop swapping → loop ends → the engine drains the queue into Research
+    // spend prompts (it never did before, since nothing was ever queued).
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'option-chosen', optionId: 'stop', payload: {} },
+    });
+    expect(
+      s.researchQueue.length >= 1 ||
+        topPending(s).resume.effectId === 'base.system.spend-research',
+    ).toBe(true);
+  });
+
   it('Rennel Pedrigor does not offer a target whose shadow slot is already occupied', () => {
     // Regression: "Shadow an opponent's Mage" must exclude targets whose slot
     // already has a shadow occupant — there is nowhere to place the shadow.
