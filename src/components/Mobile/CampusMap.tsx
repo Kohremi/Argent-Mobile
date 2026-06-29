@@ -1,23 +1,29 @@
 import clsx from 'clsx';
 import { useMemo } from 'react';
-import type { ActionSpaceSlotType, GameState, Room } from '../../game/types';
+import type { ActionSpaceSlotType, GameState, MageColor, OwnedMage, Room } from '../../game/types';
 import { useGameStore } from '../../store/gameStore';
 import { useUiStore } from '../../store/uiStore';
 import {
   activePlayer,
   buildMageIndex,
+  localPlayer,
   PLAYER_AURA,
   roomPlacementEligibility,
 } from '../../utils/uiSelectors';
 import { usePromptTargets } from '../Prompts/usePromptTargets';
+import { MageToken } from '../Board/MageToken';
 import { LockIcon } from '../icons';
 
 /**
  * The university as a spatial icon map (the mobile "zoomed-out" view): rooms in
- * their real `roomLayout.grid` positions, each a compact tile with a glyph,
- * abbreviation, and occupancy pips. A picked-up Mage glows the rooms it can be
- * placed in; tapping a tile drills into the enlarged room view (RoomDetailSheet).
- * Adjacency-accurate, so the spatial shape that some spells care about is legible.
+ * their real `roomLayout.grid` positions, each a compact tile with a glyph, the
+ * room's name, and its live occupancy — seated students shown as their actual
+ * coloured tokens (occupancy is the thing players scan for), open slots as small
+ * type-ringed dots. A picked-up Mage glows the rooms it can be placed in and
+ * dims the rest, turning the board into a decision surface; a dot in your aura
+ * marks rooms where you already have a student. Tapping a tile drills into the
+ * enlarged room view (RoomDetailSheet). Adjacency-accurate, so the spatial shape
+ * that some spells care about is legible.
  */
 
 /** Pick an emoji glyph for a room from keywords in its name (data has none). */
@@ -45,50 +51,52 @@ function roomGlyph(name: string): string {
   return '🏰';
 }
 
-/** Short uppercase abbreviation from the room name (initials, max 4 chars). */
-function roomAbbr(name: string): string {
-  const words = name.replace(/[^a-z0-9 ]/gi, '').split(/\s+/).filter(Boolean);
-  if (words.length === 0) return '??';
-  if (words.length === 1) return words[0]!.slice(0, 4).toUpperCase();
-  return words
-    .map((w) => w[0])
-    .join('')
-    .slice(0, 4)
-    .toUpperCase();
-}
-
 /**
- * One drawable spot on a room tile. Unlike the old occupancy pips (which only
- * drew *occupied* slots), every action space contributes a slot — so an open
- * 3-slot room reads differently from a full one, and the slot's `kind` shows
- * what sort of spot it is. `color` null = open; set = the seated mage's aura.
+ * One drawable spot on a room tile. Occupied spots carry the seated student so
+ * the tile can paint the real token (colour + owner aura + wound); open spots
+ * carry only their slot `kind`, drawn as a type-ringed dot — so an open 3-slot
+ * room reads differently from a full one.
  */
-type Slot = { kind: ActionSpaceSlotType; color: string | null; shadow: boolean };
+type TileSpot =
+  | { kind: 'mage'; mage: OwnedMage; aura: string; shadow: boolean }
+  | { kind: 'open'; slotType: ActionSpaceSlotType };
 
-function roomSlots(room: Room, state: GameState, mageOwnerColor: (mageId: string) => string): Slot[] {
+function roomSpots(
+  room: Room,
+  state: GameState,
+  mageOf: (mageId: string) => { mage: OwnedMage; auraColor: string } | undefined,
+): TileSpot[] {
   // Infirmary holds resting wounded mages in beds, not action-space occupants —
-  // draw each as a filled "wound" bed so the ward's load is visible.
+  // draw each as its wounded token so the ward's load is visible.
   if (room.cannotBePlacedInDirectly) {
-    const slots: Slot[] = [];
+    const spots: TileSpot[] = [];
     for (const p of state.players) {
       for (const m of p.mages) {
         if (m.location.kind === 'infirmary')
-          slots.push({ kind: 'wound', color: PLAYER_AURA[p.color], shadow: false });
+          spots.push({ kind: 'mage', mage: m, aura: PLAYER_AURA[p.color], shadow: false });
       }
     }
-    return slots;
+    return spots;
   }
-  const slots: Slot[] = [];
+  const spots: TileSpot[] = [];
   for (const s of room.actionSpaces) {
     const occ = s.occupant as { mageId: string } | null;
     const shadow = s.shadowOccupant as { mageId: string } | null;
-    slots.push({ kind: s.slotType, color: occ ? mageOwnerColor(occ.mageId) : null, shadow: false });
-    if (shadow) slots.push({ kind: 'shadow', color: mageOwnerColor(shadow.mageId), shadow: true });
+    if (occ) {
+      const e = mageOf(occ.mageId);
+      if (e) spots.push({ kind: 'mage', mage: e.mage, aura: e.auraColor, shadow: false });
+    } else {
+      spots.push({ kind: 'open', slotType: s.slotType });
+    }
+    if (shadow) {
+      const e = mageOf(shadow.mageId);
+      if (e) spots.push({ kind: 'mage', mage: e.mage, aura: e.auraColor, shadow: true });
+    }
   }
-  return slots;
+  return spots;
 }
 
-/** Ring colour per slot kind — visible whether the slot is open or filled. */
+/** Ring colour per open-slot kind — keeps the slot-type read at a glance. */
 const SLOT_RING: Record<ActionSpaceSlotType, string> = {
   regular: 'ring-white/35',
   merit: 'ring-amber-300/90',
@@ -105,18 +113,26 @@ const SLOT_LABEL: Record<ActionSpaceSlotType, string> = {
   wound: 'Infirmary bed',
 };
 
-function SlotPip({ slot }: { slot: Slot }) {
-  const filled = slot.color != null;
+function SpotPip({ spot }: { spot: TileSpot }) {
+  if (spot.kind === 'mage') {
+    return (
+      <MageToken
+        color={spot.mage.color as MageColor}
+        aura={spot.aura}
+        isWounded={spot.mage.isWounded}
+        isShadowing={spot.shadow || spot.mage.isShadowing}
+        golem={spot.mage.isTemporary === true}
+        size={24}
+      />
+    );
+  }
   return (
     <span
-      title={SLOT_LABEL[slot.kind]}
+      title={SLOT_LABEL[spot.slotType]}
       className={clsx(
-        'h-2.5 w-2.5 rounded-full ring-1 ring-inset transition-colors',
-        SLOT_RING[slot.kind],
-        slot.shadow && 'opacity-55',
-        !filled && 'bg-black/40',
+        'h-2.5 w-2.5 rounded-full bg-black/40 ring-1 ring-inset',
+        SLOT_RING[spot.slotType],
       )}
-      style={filled ? { background: slot.color! } : undefined}
     />
   );
 }
@@ -152,18 +168,25 @@ function RoomMapTile({
   room,
   placeable,
   locked,
-  slots,
+  dimmed,
+  myAura,
+  spots,
   onOpen,
 }: {
   room: Room;
   placeable: boolean;
   locked: boolean;
-  slots: Slot[];
+  /** Picking a Mage / answering a prompt and this room isn't a target — recede. */
+  dimmed: boolean;
+  /** The local player's aura when they already have a student here, else null. */
+  myAura: string | null;
+  spots: TileSpot[];
   onOpen: () => void;
 }) {
-  const shown = slots.slice(0, 8);
-  const overflow = slots.length - shown.length;
+  const shown = spots.slice(0, 8);
+  const overflow = spots.length - shown.length;
   const cost = roomCostBadge(room);
+  const cap = room.maxMagesPerPlayerPerRound;
   return (
     <button
       type="button"
@@ -171,12 +194,13 @@ function RoomMapTile({
       data-room={room.id}
       data-available={placeable ? true : undefined}
       className={clsx(
-        'relative flex min-h-[84px] flex-col items-center justify-between gap-1 overflow-hidden rounded-lg border p-1.5 text-center transition-colors',
+        'relative flex min-h-[96px] flex-col items-stretch justify-between gap-1 overflow-hidden rounded-lg border p-1.5 text-center transition-all',
         locked
           ? 'border-rose-500 bg-rose-900/20'
           : placeable
             ? 'border-amber-400 bg-amber-400/15 shadow-glow-sm'
             : tileIdentityClass(room),
+        dimmed && 'opacity-35 saturate-50',
       )}
       style={placeable ? ({ '--glow': '#ffe9a877' } as React.CSSProperties) : undefined}
       title={`${room.name} (side ${room.side})`}
@@ -192,8 +216,17 @@ function RoomMapTile({
           className="pointer-events-none absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-amber-300/0 via-amber-300/80 to-amber-300/0"
         />
       )}
+      {/* "Your student is here" — a dot in the local player's aura. */}
+      {myAura && (
+        <span
+          aria-hidden
+          title="You have a student here"
+          className="pointer-events-none absolute left-1 top-1 h-2 w-2 rounded-full ring-1 ring-black/40"
+          style={{ background: myAura }}
+        />
+      )}
 
-      <div className="flex w-full items-start justify-between">
+      <div className="flex w-full items-start justify-between gap-1">
         <span className="text-lg leading-none">{roomGlyph(room.name)}</span>
         <span className="flex items-center gap-0.5">
           {cost && (
@@ -210,13 +243,18 @@ function RoomMapTile({
           )}
         </span>
       </div>
-      <span className="text-[9px] font-bold leading-tight text-slate-200">
-        {roomAbbr(room.name)}
-        <span className="ml-1 font-normal text-slate-500">{room.side}</span>
+
+      <span className="px-0.5 text-[10px] font-bold leading-tight text-slate-100">
+        <span className="line-clamp-2">{room.name}</span>
+        <span className="mt-0.5 block text-[8px] font-normal uppercase tracking-wide text-slate-500">
+          side {room.side}
+          {cap != null && <span className="ml-1 text-slate-600">· max {cap}/rd</span>}
+        </span>
       </span>
-      <div className="flex min-h-[10px] flex-wrap items-center justify-center gap-1">
+
+      <div className="flex min-h-[24px] flex-wrap items-center justify-center gap-1">
         {shown.map((s, i) => (
-          <SlotPip key={i} slot={s} />
+          <SpotPip key={i} spot={s} />
         ))}
         {overflow > 0 && <span className="text-[8px] text-slate-400">+{overflow}</span>}
       </div>
@@ -226,6 +264,7 @@ function RoomMapTile({
 
 export function CampusMap() {
   const state = useGameStore((s) => s.state);
+  const localPlayerId = useGameStore((s) => s.localPlayerId);
   const selectedMageId = useUiStore((s) => s.selectedMageId);
   const setOpenRoomId = useUiStore((s) => s.setOpenRoomId);
   const { spaceTargets } = usePromptTargets();
@@ -255,10 +294,22 @@ export function CampusMap() {
   if (!state) return null;
   const { grid, cols } = state.roomLayout;
   const roomById = new Map(state.rooms.map((r) => [r.id, r] as const));
-  const ownerColor = (mageId: string) => {
+  const myId = localPlayer(state, localPlayerId)?.id ?? null;
+  const mageOf = (mageId: string) => {
     const entry = mageIndex.get(mageId);
-    return entry ? PLAYER_AURA[entry.owner.color] : '#94a3b8';
+    return entry ? { mage: entry.mage, auraColor: PLAYER_AURA[entry.owner.color] } : undefined;
   };
+  // While picking a Mage to place (or answering a space prompt), the board is a
+  // decision surface: only target rooms stay lit; the rest recede.
+  const picking = selectedMageId != null || promptRooms.size > 0;
+  // A room holds one of my students if I own any base/shadow occupant in it.
+  const iAmIn = (room: Room) =>
+    myId != null &&
+    room.actionSpaces.some(
+      (s) =>
+        (s.occupant as { ownerId: string } | null)?.ownerId === myId ||
+        (s.shadowOccupant as { ownerId: string } | null)?.ownerId === myId,
+    );
 
   return (
     <div className="h-full overflow-auto p-3">
@@ -273,20 +324,23 @@ export function CampusMap() {
                 <div
                   key={`empty-${r}-${c}`}
                   aria-hidden="true"
-                  className="min-h-[84px] rounded-lg border border-dashed border-slate-800 bg-slate-900/30"
+                  className="min-h-[96px] rounded-lg border border-dashed border-slate-800 bg-slate-900/30"
                 />
               );
             }
             const room = roomById.get(roomId);
             if (!room) return null;
             const locked = state.roomLocks.some((l) => l.roomId === room.id);
+            const placeable = placeableRooms.has(room.id) || promptRooms.has(room.id);
             return (
               <RoomMapTile
                 key={room.id}
                 room={room}
-                placeable={placeableRooms.has(room.id) || promptRooms.has(room.id)}
+                placeable={placeable}
                 locked={locked}
-                slots={roomSlots(room, state, ownerColor)}
+                dimmed={picking && !placeable && !locked}
+                myAura={iAmIn(room) ? PLAYER_AURA[localPlayer(state, localPlayerId)!.color] : null}
+                spots={roomSpots(room, state, mageOf)}
                 onOpen={() => setOpenRoomId(room.id)}
               />
             );
