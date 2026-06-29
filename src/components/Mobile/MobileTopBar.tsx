@@ -8,11 +8,16 @@ import {
   SummerBreakChip,
   phaseLabel,
 } from '../HUD/TopBar';
+import { LiveActionNote } from './LiveActionNote';
 
 /**
- * Compact status bar for the mobile shell: title + phase, the bell-tower clock,
- * scenario chips, and a dot for whose turn it is. Reuses the desktop TopBar's
- * bell/scenario pieces verbatim. Horizontally scrollable so chips never wrap.
+ * The mobile shell's single status header — a consolidation of what used to be
+ * two stacked strips (a title/chips top bar + a separate live-action row). One
+ * 48px bar now carries: a compact round/phase pill, the live-action narration
+ * in the flexible middle (folded in from the old second row — see
+ * LiveActionNote), then the bell-tower clock, scenario chips, a whose-turn dot,
+ * and the engine-console toggle. Merging the strips reclaims the second row's
+ * height for the board. Horizontally tight items shrink-0; the note truncates.
  */
 export function MobileTopBar() {
   const state = useGameStore((s) => s.state);
@@ -23,37 +28,33 @@ export function MobileTopBar() {
   if (!state) return null;
 
   const active = activePlayer(state);
+  const round = 'round' in state.phase ? (state.phase.round as number) : null;
 
   return (
     <header className="z-30 flex h-12 shrink-0 items-center gap-2 bg-night-800/90 px-3 ring-1 ring-white/10 backdrop-blur">
-      <h1 className="font-display text-base font-extrabold tracking-wide text-starlight">
-        Argent
-      </h1>
+      {/* round / phase context (absorbs the old phase chip + the row's "Round N") */}
+      <span className="shrink-0 rounded-full bg-night-700 px-2.5 py-1 font-display text-[11px] font-bold text-white/90 ring-1 ring-white/15">
+        {round != null ? `Round ${round}` : phaseLabel(state.phase)}
+      </span>
 
-      <div className="flex min-w-0 flex-1 items-center gap-2">
-        <span className="shrink-0 rounded-full bg-night-700 px-2.5 py-1 font-display text-xs text-white/90 ring-1 ring-white/15">
-          {phaseLabel(state.phase)}
-        </span>
-        <BellTowerMeter
-          state={state}
-          active={bellMenuOpen}
-          onClick={() => setBellMenuOpen(!bellMenuOpen)}
-        />
-        <ScenarioChip state={state} />
-        <SummerBreakChip state={state} />
-      </div>
+      {/* live action narration — the flexible middle, truncates under pressure */}
+      <LiveActionNote />
+
+      {/* persistent status cluster */}
+      <BellTowerMeter
+        state={state}
+        active={bellMenuOpen}
+        onClick={() => setBellMenuOpen(!bellMenuOpen)}
+      />
+      <ScenarioChip state={state} />
+      <SummerBreakChip state={state} />
 
       {active && (
         <span
-          className="flex shrink-0 items-center gap-1 rounded-full bg-night-700/70 px-2 py-1 text-[11px] font-semibold text-white/85 ring-1 ring-white/10"
+          className="h-2.5 w-2.5 shrink-0 rounded-full ring-1 ring-black/30"
+          style={{ background: PLAYER_AURA[active.color] }}
           title={`${active.name}'s turn`}
-        >
-          <span
-            className="h-2.5 w-2.5 rounded-full"
-            style={{ background: PLAYER_AURA[active.color] }}
-          />
-          <span className="max-w-[5rem] truncate">{active.name}</span>
-        </span>
+        />
       )}
 
       <button

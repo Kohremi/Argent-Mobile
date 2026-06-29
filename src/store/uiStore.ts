@@ -53,10 +53,10 @@ interface UiStore {
 
   /**
    * Mobile: the active board/shelf-targeting prompt's guidance, published by
-   * PromptDirector's TargetBanner so the MobileActionRow can show it in-flow
-   * (the floating banner is suppressed on mobile — see TargetBanner). The board
-   * stays clear; the lit cards/slots/voters remain the tap target. `pass` is the
-   * optional Skip/Pass affordance carried inline in the row.
+   * PromptDirector's TargetBanner so the top bar's LiveActionNote can show it
+   * in-flow (the floating banner is suppressed on mobile — see TargetBanner). The
+   * board stays clear; the lit cards/slots/voters remain the tap target. `pass`
+   * is the optional Skip/Pass affordance carried inline in the bar.
    */
   mobilePromptHint: { text: string; pass: { label: string; onPass: () => void } | null } | null;
   setMobilePromptHint: (

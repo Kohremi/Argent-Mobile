@@ -8,7 +8,6 @@ import { TurnBanner } from '../HUD/TurnBanner';
 import { DebugControls } from '../DebugControls';
 import { PeekModal, ErrorToast } from '../GameScreen';
 import { MobileTopBar } from './MobileTopBar';
-import { MobileActionRow } from './MobileActionRow';
 import { MobileDock } from './MobileDock';
 import { TabBar } from './TabBar';
 import { CampusMap } from './CampusMap';
@@ -40,7 +39,6 @@ export function MobileShell() {
     <MotionConfig reducedMotion="user">
       <div className="relative flex h-full flex-col overflow-hidden bg-night-900">
         <MobileTopBar />
-        <MobileActionRow />
 
         <main className="relative min-h-0 flex-1 overflow-hidden">
           {mobileTab === 'campus' && <CampusMap />}
