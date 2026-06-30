@@ -3,7 +3,11 @@
 import { describe, expect, it } from 'vitest';
 import { baseGamePack } from '../content/packs/base';
 import type { GameState, PendingPrompt, Room } from '../game/types';
-import { smartCameraFocusTab, visibleRoomSpaces } from './uiSelectors';
+import {
+  localOwnsCurrentDecision,
+  smartCameraFocusTab,
+  visibleRoomSpaces,
+} from './uiSelectors';
 
 const greatHall = (): Room =>
   JSON.parse(
@@ -125,5 +129,67 @@ describe('smartCameraFocusTab', () => {
       pendingResolutionStack: [],
     } as unknown as GameState;
     expect(smartCameraFocusTab(s)).toBeNull();
+  });
+});
+
+// localOwnsCurrentDecision: whether the LOCAL seat is the one who must act now.
+// The Smart Camera force-closes a drilled-in room only when this is FALSE, so
+// the board (and the bot's move) is visible during someone else's turn.
+describe('localOwnsCurrentDecision', () => {
+  const players = [
+    { id: 'p1', controlledByBot: false },
+    { id: 'p2', controlledByBot: true },
+  ];
+  const errands = (activePlayerIndex: number): GameState =>
+    ({
+      phase: { kind: 'errands', round: 1, activePlayerIndex },
+      players,
+      pendingResolutionStack: [],
+    }) as unknown as GameState;
+
+  // Build a prompt-bearing state where the top prompt is owed by `responderId`.
+  const owedTo = (responderId: string): GameState =>
+    ({
+      phase: { kind: 'errands', round: 1, activePlayerIndex: 1 },
+      players,
+      pendingResolutionStack: [
+        { id: 'r1', responderId, prompt: { kind: 'confirm', message: 'x' } },
+      ],
+    }) as unknown as GameState;
+
+  it("is true on the local seat's own Errands turn", () => {
+    expect(localOwnsCurrentDecision(errands(0), 'p1')).toBe(true);
+  });
+
+  it("is false during a bot's Errands turn", () => {
+    expect(localOwnsCurrentDecision(errands(1), 'p1')).toBe(false);
+  });
+
+  it('follows the top prompt: true when owed to the local seat', () => {
+    expect(localOwnsCurrentDecision(owedTo('p1'), 'p1')).toBe(true);
+  });
+
+  it('follows the top prompt: false when owed to a bot, even on no errands turn', () => {
+    expect(localOwnsCurrentDecision(owedTo('p2'), 'p1')).toBe(false);
+  });
+
+  it('is false in a between-turns phase (nothing for the human to decide)', () => {
+    const s = {
+      phase: { kind: 'resolution', round: 1 },
+      players,
+      pendingResolutionStack: [],
+    } as unknown as GameState;
+    expect(localOwnsCurrentDecision(s, 'p1')).toBe(false);
+  });
+
+  it('hot-seat (no bound seat) never force-closes: any active turn is "ours"', () => {
+    expect(localOwnsCurrentDecision(errands(0), null)).toBe(true);
+    expect(localOwnsCurrentDecision(errands(1), null)).toBe(true);
+    const between = {
+      phase: { kind: 'resolution', round: 1 },
+      players,
+      pendingResolutionStack: [],
+    } as unknown as GameState;
+    expect(localOwnsCurrentDecision(between, null)).toBe(false);
   });
 });

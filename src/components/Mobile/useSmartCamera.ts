@@ -2,7 +2,11 @@ import { useEffect, useRef, useState } from 'react';
 import type { GameState } from '../../game/types';
 import { useGameStore } from '../../store/gameStore';
 import { useUiStore } from '../../store/uiStore';
-import { botOwnsCurrentDecision, smartCameraFocusTab } from '../../utils/uiSelectors';
+import {
+  botOwnsCurrentDecision,
+  localOwnsCurrentDecision,
+  smartCameraFocusTab,
+} from '../../utils/uiSelectors';
 import { describeBoardAction } from './boardAction';
 
 /** How long an opponent's board-action spotlight lingers before auto-clearing. */
@@ -43,6 +47,19 @@ export function useSmartCamera(): { cueKey: number; bot: boolean } {
     const prev = prevState.current;
     prevState.current = state ?? null;
     if (!smartCamera || !state) return;
+
+    // While anyone but the local seat is acting — a bot's Errands turn, a bot
+    // prompt, or a between-turns phase auto-resolving (Nightfall/setup/scoring)
+    // — a drilled-in room sheet hides the board (and the follow animation)
+    // behind its scrim. Drop it so the Campus map is visible; the player
+    // re-opens a room when it's their own turn again. The `openRoomId` guard
+    // keeps this idempotent so it fires once per turn, not every bot sub-action.
+    if (
+      !localOwnsCurrentDecision(state, localPlayerId) &&
+      useUiStore.getState().openRoomId
+    ) {
+      useUiStore.getState().setOpenRoomId(null);
+    }
 
     // Follow an opponent's board placement (incl. Ars Magna). Gate on the actor
     // NOT being the local seat — you already know what you just did.

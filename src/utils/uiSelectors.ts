@@ -112,6 +112,26 @@ export function botOwnsCurrentDecision(state: GameState): boolean {
 }
 
 /**
+ * True when the LOCAL seat is the one who must act right now: it's owed the top
+ * pending prompt, or (no prompt) it's their Errands turn. False while a bot is
+ * acting, a bot is owed a prompt, or a between-turns phase (Nightfall, setup,
+ * scoring) is auto-resolving with nothing for anyone to decide. The Smart
+ * Camera uses this to know when it's safe to drop a drilled-in room sheet so the
+ * board — and the follow animation — is visible during someone else's turn.
+ */
+export function localOwnsCurrentDecision(
+  state: GameState,
+  localPlayerId: string | null,
+): boolean {
+  const top = state.pendingResolutionStack[state.pendingResolutionStack.length - 1];
+  // Hot-seat (no bound seat): every human turn is "ours", so the camera never
+  // force-closes a room the local players opened.
+  if (!localPlayerId) return top ? true : activePlayer(state) !== null;
+  if (top) return top.responderId === localPlayerId;
+  return activePlayer(state)?.id === localPlayerId;
+}
+
+/**
  * "Smart Camera" target: the mobile tab where the CURRENT decision is taken,
  * so the shell can auto-jump there — for the local player's prompts (place a
  * Mark → Council, draft a Supporter → the Offer shelf) and to follow a bot's
