@@ -132,17 +132,17 @@ export function localOwnsCurrentDecision(
 }
 
 /**
- * "Smart Camera" target: the mobile tab where the CURRENT decision is taken,
- * so the shell can auto-jump there — for the local player's prompts (place a
- * Mark → Council, draft a Supporter → the Offer shelf) and to follow a bot's
- * move as it happens. Mirrors the targeting read-model (`usePromptTargets`):
- * voters live on the Council tab, draftable cards on the Offer/Tableau shelf,
- * and mages / action-spaces on the Campus board.
+ * "Smart Camera" target: the mobile tab the shell should rest on right now.
+ * Mirrors the targeting read-model (`usePromptTargets`): a voter prompt lives on
+ * the Council tab, a draftable-card prompt on the Offer/Tableau shelf, and
+ * everything else on the Campus board.
  *
- * Returns `null` when the active prompt is a self-contained modal (a plain
- * option/confirm/reaction sheet that floats over any tab) or when nothing is
- * being decided — in both cases the camera should stay put rather than yank
- * the player around.
+ * Campus is HOME: it's the default whenever no decision specifically needs
+ * another tab — between turns, during a bot's Errands turn, and under any
+ * self-contained overlay prompt (option / confirm / spell-level / reaction
+ * sheet, which floats above whatever tab is showing). This is what resets the
+ * player to the board to "follow the action" after a side-trip to mark a voter
+ * or draft a card, instead of stranding them on Council / Tableau.
  *
  * `localPlayerId` makes the draft destination ownership-aware: a Supporter /
  * Vault draft owed to the LOCAL seat points at their own Tableau (where they
@@ -153,7 +153,7 @@ export function localOwnsCurrentDecision(
 export function smartCameraFocusTab(
   state: GameState,
   localPlayerId?: string | null,
-): MobileTab | null {
+): MobileTab {
   const top = state.pendingResolutionStack[state.pendingResolutionStack.length - 1];
   if (top) {
     // A draft owed to someone other than the local seat → watch them on Rivals.
@@ -165,19 +165,14 @@ export function smartCameraFocusTab(
       case 'choose-peeked-supporter':
       case 'choose-vault-card':
         return ownedByRival ? 'rivals' : 'tableau';
-      case 'choose-target-mage':
-      case 'choose-target-action-space':
-        return 'campus';
       default:
-        // option / confirm / spell-level / deck / reaction sheets render as
-        // overlays above whichever tab is showing — don't move for them.
-        return null;
+        // Targeting prompts and self-contained overlays both resolve on / above
+        // the board → Campus.
+        return 'campus';
     }
   }
-  // No pending prompt: an Errands turn means someone is placing a Mage / acting
-  // on the board, so the board is where to look.
-  if (state.phase.kind === 'errands') return 'campus';
-  return null;
+  // No pending decision (an Errands turn or a between-turns phase) → Campus.
+  return 'campus';
 }
 
 /** Action-space ids where `mageId` may legally be placed right now. */

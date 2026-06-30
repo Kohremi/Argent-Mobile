@@ -110,9 +110,11 @@ export function useSmartCamera(): { cueKey: number; bot: boolean } {
       }
     }
 
-    // Jump the stage to the tab where the current decision lives, on a change.
+    // Rest the stage on the tab the current decision lives on — Campus by
+    // default — jumping only when that target CHANGES, so a resolved Mark / draft
+    // snaps back to the board instead of stranding the player on a side tab.
     const focus = smartCameraFocusTab(state, localPlayerId);
-    if (!focus || focus === lastFocus.current) return;
+    if (focus === lastFocus.current) return;
     lastFocus.current = focus;
     if (focus !== useUiStore.getState().mobileTab) {
       // Drilled-in room / card sheets would otherwise hide the tab we're moving

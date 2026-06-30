@@ -119,9 +119,13 @@ describe('smartCameraFocusTab', () => {
     expect(smartCameraFocusTab(draft, 'p2')).toBe('rivals'); // owed to a rival
   });
 
-  it('stays put (null) for self-contained option/confirm sheets', () => {
-    expect(smartCameraFocusTab(withPrompt({ kind: 'choose-from-options', options: [] }))).toBeNull();
-    expect(smartCameraFocusTab(withPrompt({ kind: 'confirm', message: 'x' }))).toBeNull();
+  it('falls back to Campus (home) for self-contained option/confirm sheets', () => {
+    // These float as overlays above the board, so resting on Campus underneath
+    // resets the player to the action instead of stranding them on a side tab.
+    expect(smartCameraFocusTab(withPrompt({ kind: 'choose-from-options', options: [] }))).toBe(
+      'campus',
+    );
+    expect(smartCameraFocusTab(withPrompt({ kind: 'confirm', message: 'x' }))).toBe('campus');
   });
 
   it('with no prompt, an Errands turn points at the Campus board', () => {
@@ -132,12 +136,12 @@ describe('smartCameraFocusTab', () => {
     expect(smartCameraFocusTab(s)).toBe('campus');
   });
 
-  it('with no prompt outside Errands, does not move (null)', () => {
+  it('falls back to Campus (home) when nothing is being decided', () => {
     const s = {
       phase: { kind: 'round-setup', round: 1 },
       pendingResolutionStack: [],
     } as unknown as GameState;
-    expect(smartCameraFocusTab(s)).toBeNull();
+    expect(smartCameraFocusTab(s)).toBe('campus');
   });
 });
 
