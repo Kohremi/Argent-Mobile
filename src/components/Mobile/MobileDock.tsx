@@ -14,6 +14,7 @@ import { PortraitBust } from '../Player/PortraitBust';
 import { PlayerBuffBadges } from '../Player/PlayerBuffBadges';
 import { ActionBudget, MeritBadge, RESOURCE_ORDER_COMPACT } from '../Player/PlayerDock';
 import { computeTurnActions } from '../Player/turnActions';
+import { phaseLabel } from '../HUD/TopBar';
 import { MobileHand } from './MobileHand';
 
 /**
@@ -39,42 +40,16 @@ export function MobileDock() {
   const active = activePlayer(state);
   const pendings = state.pendingResolutionStack.length;
 
-  // Between turns (round-setup / resolution / scoring): no active Errands player.
-  if (!active) {
-    const electionRunning =
-      state.phase.kind === 'final-scoring' || state.phase.kind === 'complete';
-    const betweenLabel =
-      state.phase.kind === 'round-setup'
-        ? `Round ${state.phase.round} — setup`
-        : state.phase.kind === 'resolution'
-          ? 'Resolution phase'
-          : state.phase.kind === 'mid-game-scoring'
-            ? 'Mid-game scoring'
-            : 'Between turns';
-    return (
-      <footer className="z-30 flex shrink-0 items-center justify-center gap-3 bg-night-800/95 px-4 py-2 ring-1 ring-white/10">
-        {electionRunning ? (
-          <p className="text-sm text-white/60">The election is underway…</p>
-        ) : (
-          <>
-            <p className="text-sm text-white/60">{betweenLabel}</p>
-            <button
-              type="button"
-              disabled={pendings > 0}
-              onClick={() => tryDispatch({ type: 'ADVANCE_PHASE' })}
-              className="rounded-full bg-gradient-to-b from-starlight to-amber-300 px-5 py-2 font-display text-sm font-bold text-ink-900 shadow-card transition active:translate-y-0 disabled:opacity-40"
-            >
-              Advance ▸
-            </button>
-          </>
-        )}
-      </footer>
-    );
-  }
-
-  // Errands: show the local (human) seat; gate interactivity on it being my turn.
+  // Always show the LOCAL seat's board — including through the night (resolution)
+  // / setup / scoring phases, when there's no active Errands player, so you can
+  // still read your stats to make decisions. Only the turn controls swap out for
+  // an "opponents playing" pill or the between-phase Advance button.
   const self = localPlayer(state, localPlayerId) ?? state.players[0]!;
-  const myTurn = active.id === self.id;
+  const myTurn = active?.id === self.id;
+  // No active Errands player → a between-turns phase (Nightfall, setup, scoring).
+  const betweenTurns = !active;
+  const electionRunning =
+    state.phase.kind === 'final-scoring' || state.phase.kind === 'complete';
   const aura = PLAYER_AURA[self.color];
   const research = researchTotals(self);
   const bench = self.mages.filter((m) => m.location.kind === 'office');
@@ -111,7 +86,7 @@ export function MobileDock() {
             {self.name}
           </p>
           <p className="text-[9px] uppercase tracking-widest text-white/40">
-            {myTurn ? 'your move' : 'waiting…'}
+            {myTurn ? 'your move' : betweenTurns ? phaseLabel(state.phase) : 'waiting…'}
           </p>
         </div>
         <MeritBadge count={self.resources.meritBadges} className="mr-1" />
@@ -138,10 +113,27 @@ export function MobileDock() {
               </button>
             )}
           </>
+        ) : betweenTurns ? (
+          // Night (resolution) / setup / scoring: stats stay; controls become the
+          // phase + the Advance step (or an election-underway note).
+          electionRunning ? (
+            <span className="shrink-0 text-[11px] font-semibold text-white/55">
+              The election is underway…
+            </span>
+          ) : (
+            <button
+              type="button"
+              disabled={pendings > 0}
+              onClick={() => tryDispatch({ type: 'ADVANCE_PHASE' })}
+              className="shrink-0 rounded-full bg-gradient-to-b from-starlight to-amber-300 px-5 py-2 font-display text-xs font-bold text-ink-900 shadow-card transition active:translate-y-0 disabled:opacity-40"
+            >
+              Advance ▸
+            </button>
+          )
         ) : (
           <span className="flex shrink-0 items-center gap-1.5 rounded-full bg-night-700 px-3 py-1.5 text-[11px] font-bold text-starlight ring-1 ring-starlight/30">
             <span className="animate-breathe">🤖</span>
-            <span className="max-w-[7rem] truncate">{active.name} is playing…</span>
+            <span className="max-w-[7rem] truncate">{active?.name} is playing…</span>
           </span>
         )}
       </div>
