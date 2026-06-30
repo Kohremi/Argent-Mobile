@@ -11,7 +11,7 @@ import {
 import { describeOpponentAction } from './boardAction';
 
 /** How long an opponent's board-action spotlight lingers before auto-clearing. */
-const SPOTLIGHT_MS = 2200;
+export const SPOTLIGHT_MS = 2200;
 
 /**
  * Smart Camera (toggled on the start menu): keeps the mobile shell pointed at
@@ -61,6 +61,20 @@ export function useSmartCamera(): { cueKey: number; bot: boolean } {
       useUiStore.getState().openRoomId
     ) {
       useUiStore.getState().setOpenRoomId(null);
+    }
+
+    // An opponent's combat/action caption must not bleed into the HUMAN's own
+    // turn. The moment the local seat owns the decision again, clear the
+    // spotlight (and cancel its lingering auto-clear timer) so the caption fades
+    // out instead of staying up while they plan. Gated on a bound seat so an
+    // all-bot spectator game (no human turn) still shows its captions.
+    if (
+      localPlayerId != null &&
+      localOwnsCurrentDecision(state, localPlayerId) &&
+      useUiStore.getState().boardSpotlight
+    ) {
+      if (clearTimer.current) clearTimeout(clearTimer.current);
+      setBoardSpotlight(null);
     }
 
     // Completing a Fast Action also closes a drilled-in room, so the player sees
