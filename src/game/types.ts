@@ -1003,6 +1003,16 @@ export interface ChoiceOption {
   payload: SerializableValue;
   available?: boolean;
   unavailableReason?: string;
+  /**
+   * When set, the option represents a specific card that lives OFF the board
+   * (a discard pile, the player's own office, an opponent's vault), so it
+   * can't be clicked on the board itself. The UI renders it as the actual
+   * card face (with art) instead of a text button. Purely presentational —
+   * the engine still keys off `id`.
+   */
+  cardId?: string;
+  /** Short qualifier shown beneath the card face (e.g. "used", an owner name). */
+  cardNote?: string;
 }
 
 export interface ReactionOption {

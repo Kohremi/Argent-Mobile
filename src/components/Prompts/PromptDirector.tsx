@@ -24,6 +24,13 @@ import {
 } from '../../utils/uiSelectors';
 import { useIsMobile } from '../../hooks/useMediaQuery';
 import { TIMING_HUE, TIMING_LABEL } from '../Cards/HandFans';
+import {
+  GameCard,
+  spellFace,
+  supporterFace,
+  vaultFace,
+  type CardFace,
+} from '../Cards/GameCard';
 import { MageToken } from '../Board/MageToken';
 import { PortraitBust } from '../Player/PortraitBust';
 import { describeTrigger, playerName, promptDraftsFromShelf, topPending } from './promptHelpers';
@@ -140,6 +147,100 @@ function ChoiceSheet({
             </button>
           )}
         </div>
+      </div>
+    </div>
+  );
+}
+
+/** Builds a renderable card face for any card id (vault / supporter / spell). */
+function faceForCardId(state: GameState, cardId: string): CardFace | null {
+  const v = lookupVaultCardDef(state, cardId);
+  if (v) return vaultFace(v);
+  const s = lookupSupporterCardDef(state, cardId);
+  if (s) return supporterFace(s);
+  const sp = lookupSpellCardDef(state, cardId);
+  if (sp) return spellFace(sp);
+  return null;
+}
+
+/**
+ * Card-art picker for `choose-from-options` prompts whose options carry a
+ * `cardId` (docs/UI_DESIGN.md §8). The cards live off the board — a discard
+ * pile, the player's own office, an opponent's vault — so they can't be
+ * clicked on the board itself; we render the real card faces here instead of
+ * a list of text buttons. Options without a `cardId` (Skip / Pass) fall to a
+ * footer button row.
+ */
+function CardPickerSheet({
+  state,
+  pending,
+  onPick,
+}: {
+  state: GameState;
+  pending: PendingResolution;
+  onPick: (id: string) => void;
+}) {
+  if (pending.prompt.kind !== 'choose-from-options') return null;
+  const cardOpts = pending.prompt.options.filter((o) => o.cardId);
+  const plainOpts = pending.prompt.options.filter((o) => !o.cardId);
+  return (
+    <div className="absolute inset-0 z-40 flex items-center justify-center bg-night-900/70 px-4 backdrop-blur-sm">
+      <div className="pointer-events-auto max-h-[88vh] w-full max-w-3xl animate-pop overflow-y-auto rounded-card bg-night-700/95 p-4 ring-1 ring-white/15 shadow-card-lift">
+        <div className="mb-3 flex items-center justify-between gap-2">
+          <p className="font-display text-base font-bold text-starlight">
+            {pending.source.description ?? 'Choose'} <span className="text-white/50">▸</span>{' '}
+            <span className="text-white/90">pick a card</span>
+          </p>
+          <ResponderChip state={state} pending={pending} />
+        </div>
+        <div className="flex flex-wrap justify-center gap-3">
+          {cardOpts.map((o) => {
+            const face = faceForCardId(state, o.cardId!);
+            const disabled = o.available === false;
+            return (
+              <div key={o.id} className="flex w-[132px] flex-col items-center gap-1">
+                {face ? (
+                  <GameCard
+                    face={face}
+                    status={disabled ? 'exhausted' : 'draftable'}
+                    title={(disabled ? o.unavailableReason : o.label) ?? o.label}
+                    style={{ width: 132 }}
+                    {...(disabled ? {} : { onClick: () => onPick(o.id) })}
+                  />
+                ) : (
+                  <button
+                    type="button"
+                    disabled={disabled}
+                    onClick={() => onPick(o.id)}
+                    className="w-full rounded-xl bg-night-600 px-3 py-2 text-sm font-semibold text-white/95 ring-1 ring-white/15 hover:ring-starlight/60"
+                  >
+                    {o.label}
+                  </button>
+                )}
+                {o.cardNote && (
+                  <span className="rounded-full bg-night-800 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-amber-200/90 ring-1 ring-white/10">
+                    {o.cardNote}
+                  </span>
+                )}
+              </div>
+            );
+          })}
+        </div>
+        {plainOpts.length > 0 && (
+          <div className="mt-4 flex flex-wrap justify-center gap-2">
+            {plainOpts.map((o) => (
+              <button
+                key={o.id}
+                type="button"
+                disabled={o.available === false}
+                onClick={() => onPick(o.id)}
+                className="rounded-full bg-night-800 px-4 py-1.5 text-xs font-bold text-white/70 ring-1 ring-white/15 transition hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
+              >
+                {o.label}
+              </button>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );
@@ -470,12 +571,26 @@ function ReactionCutIn({ state, pending }: { state: GameState; pending: PendingR
                   });
                 }}
                 className={clsx(
-                  'rounded-xl px-3 py-1.5 text-sm font-bold shadow-card transition',
+                  'inline-flex items-center gap-1.5 rounded-xl px-3 py-1.5 text-sm font-bold shadow-card transition',
                   o.disabled
                     ? 'cursor-not-allowed bg-night-800 text-white/35 ring-1 ring-white/10'
                     : 'bg-gradient-to-b from-starlight to-amber-300 text-ink-900 hover:-translate-y-0.5',
                 )}
               >
+                {o.forMageId &&
+                  (() => {
+                    // Show WHICH of your Mages this reaction protects as a real
+                    // token (its room is named in the label) — never a raw id.
+                    const found = findMageWithOwner(state, o.forMageId);
+                    return found ? (
+                      <MageToken
+                        color={found.mage.color}
+                        aura={PLAYER_AURA[found.owner.color]}
+                        golem={found.mage.isTemporary === true}
+                        size={18}
+                      />
+                    ) : null;
+                  })()}
                 {o.label}
                 {!o.disabled && o.requiresSlotPick && (
                   <span className="ml-1 text-[10px] uppercase tracking-wide opacity-60">
@@ -1149,6 +1264,11 @@ export function PromptDirector() {
             onPick={pickOption}
           />
         );
+      }
+      // Options that name a specific off-board card (discard recovery, swaps,
+      // opponent-card steal) render as real card faces, not a text list.
+      if (prompt.options.some((o) => o.cardId)) {
+        return <CardPickerSheet state={state} pending={pending} onPick={pickOption} />;
       }
       return (
         <ChoiceSheet

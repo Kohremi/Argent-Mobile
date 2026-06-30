@@ -1722,9 +1722,30 @@ export function buildReactionOptionsFor(
     has('mancers.vault.diviners-mitre', true) && triggerSource?.kind === 'spell';
 
   // When this is a single-mage window we omit `forMageId` so the existing
-  // single-event prompt continues to render with unadorned labels.
+  // single-event prompt continues to render with unadorned labels. In a
+  // multi-mage window each option also carries `forMageId` (so the UI can show
+  // the affected Mage's token); the label gains a room locator — never a raw
+  // Mage id — so two reactions on same-colour Mages stay tellable apart.
   const multi = ownMageEvents.length > 1;
-  const labelSuffix = (mageId: string) => (multi ? ` on ${mageId}` : '');
+  const roomNameOf = (spaceId: string | null): string | null =>
+    spaceId == null
+      ? null
+      : (state.rooms.find((r) => r.actionSpaces.some((s) => s.id === spaceId))
+          ?.name ?? null);
+  const mageLocator = (
+    originalSpaceId: string | null,
+    mageId: OwnedMageId,
+  ): string => {
+    const fromOriginal = roomNameOf(originalSpaceId);
+    if (fromOriginal) return fromOriginal;
+    const loc = state.players
+      .flatMap((p) => p.mages)
+      .find((m) => m.id === mageId)?.location;
+    if (loc?.kind === 'action-space') return roomNameOf(loc.spaceId) ?? mageId;
+    if (loc?.kind === 'infirmary') return 'Infirmary';
+    if (loc?.kind === 'office') return 'Office';
+    return mageId;
+  };
 
   // Regrowth / Renewal place the Mage into an empty regular/merit slot (the
   // exact same set as the place-without-powers chain). They pay + exhaust
@@ -1765,6 +1786,7 @@ export function buildReactionOptionsFor(
         r.actionSpaces.some((s) => s.id === originalSpaceId),
       )?.noShadowSlots ??
         false);
+    const suffix = multi ? ` · ${mageLocator(originalSpaceId, mageId)}` : '';
 
     // Landing-availability gates — don't offer a reposition reaction that has
     // nowhere to land (it would fizzle, and the spell-based ones would still
@@ -1806,7 +1828,7 @@ export function buildReactionOptionsFor(
         sourceKind: 'vault-card',
         sourceId: 'base.vault.phase-steppers',
         effectId: 'base.vault.phase-steppers.react',
-        label: `Play Phase Steppers${labelSuffix(mageId)}`,
+        label: `Play Phase Steppers${suffix}`,
         ...(multi ? { forMageId: mageId } : {}),
       });
     }
@@ -1824,7 +1846,7 @@ export function buildReactionOptionsFor(
         sourceKind: 'vault-card',
         sourceId: 'mancers.vault.sacred-shield',
         effectId: 'mancers.vault.sacred-shield.react',
-        label: `Play Sacred Shield${labelSuffix(mageId)} (1 Mana)`,
+        label: `Play Sacred Shield${suffix} (1 Mana)`,
         requiresSlotPick: true,
         repeatable: true,
         ...(multi ? { forMageId: mageId } : {}),
@@ -1835,7 +1857,7 @@ export function buildReactionOptionsFor(
         sourceKind: 'vault-card',
         sourceId: 'base.vault.invisibility-cloak',
         effectId: 'base.vault.invisibility-cloak.react',
-        label: `Use Invisibility Cloak${labelSuffix(mageId)}`,
+        label: `Use Invisibility Cloak${suffix}`,
         ...(multi ? { forMageId: mageId } : {}),
       });
     }
@@ -1844,7 +1866,7 @@ export function buildReactionOptionsFor(
         sourceKind: 'vault-card',
         sourceId: 'base.vault.shield-potion',
         effectId: 'base.vault.shield-potion.react',
-        label: `Play Shield Potion${labelSuffix(mageId)}`,
+        label: `Play Shield Potion${suffix}`,
         requiresSlotPick: true,
         ...(multi ? { forMageId: mageId } : {}),
       });
@@ -1859,7 +1881,7 @@ export function buildReactionOptionsFor(
         sourceKind: 'vault-card',
         sourceId: 'base.vault.ancient-armor',
         effectId: 'base.vault.ancient-armor.react',
-        label: `Use Ancient Armor${labelSuffix(mageId)}`,
+        label: `Use Ancient Armor${suffix}`,
         requiresSlotPick: true,
         ...(multi ? { forMageId: mageId } : {}),
       });
@@ -1871,7 +1893,7 @@ export function buildReactionOptionsFor(
         sourceKind: 'vault-card',
         sourceId: 'mancers.vault.diviners-mitre',
         effectId: 'mancers.vault.diviners-mitre.react',
-        label: `Play Diviner's Mitre${labelSuffix(mageId)}`,
+        label: `Play Diviner's Mitre${suffix}`,
         requiresSlotPick: true,
         ...(multi ? { forMageId: mageId } : {}),
       });
@@ -1886,7 +1908,7 @@ export function buildReactionOptionsFor(
         sourceKind: 'vault-card',
         sourceId: 'base.vault.mystic-amulet',
         effectId: 'base.vault.mystic-amulet.react',
-        label: `Use Mystic Amulet${labelSuffix(mageId)}`,
+        label: `Use Mystic Amulet${suffix}`,
         requiresSlotPick: true,
         ...(multi ? { forMageId: mageId } : {}),
       });
@@ -1914,8 +1936,8 @@ export function buildReactionOptionsFor(
         effectId: 'base.spell.wrath-of-heaven.l1.react',
         label:
           n === 0
-            ? `Cast Justice (0 targets available)${labelSuffix(mageId)}`
-            : `Cast Justice (wound a mage of the attacker)${labelSuffix(mageId)}`,
+            ? `Cast Justice (0 targets available)${suffix}`
+            : `Cast Justice (wound a mage of the attacker)${suffix}`,
         ...(n === 0 ? { disabled: true } : {}),
         ...(multi ? { forMageId: mageId } : {}),
       });
@@ -1936,8 +1958,8 @@ export function buildReactionOptionsFor(
         effectId: 'base.spell.wrath-of-heaven.l2.react',
         label:
           n === 0
-            ? `Cast Recompense (0 targets available)${labelSuffix(mageId)}`
-            : `Cast Recompense (banish a mage of the attacker)${labelSuffix(mageId)}`,
+            ? `Cast Recompense (0 targets available)${suffix}`
+            : `Cast Recompense (banish a mage of the attacker)${suffix}`,
         ...(n === 0 ? { disabled: true } : {}),
         ...(multi ? { forMageId: mageId } : {}),
       });
@@ -1966,7 +1988,7 @@ export function buildReactionOptionsFor(
         sourceKind: 'spell',
         sourceId: 'base.spell.wrath-of-heaven',
         effectId: 'base.spell.wrath-of-heaven.l3.react',
-        label: `${label}${labelSuffix(mageId)}`,
+        label: `${label}${suffix}`,
         ...(n === 0 ? { disabled: true } : {}),
         ...(multi ? { forMageId: mageId } : {}),
       });
@@ -1992,7 +2014,7 @@ export function buildReactionOptionsFor(
           sourceKind: 'spell',
           sourceId: 'base.spell.songs-of-springtime',
           effectId: 'base.spell.songs-of-springtime.l1.react',
-          label: `Cast Regeneration (refresh a Spell or Treasure)${labelSuffix(mageId)}`,
+          label: `Cast Regeneration (refresh a Spell or Treasure)${suffix}`,
           ...(multi ? { forMageId: mageId } : {}),
         });
       }
@@ -2010,7 +2032,7 @@ export function buildReactionOptionsFor(
         sourceKind: 'spell',
         sourceId: 'base.spell.songs-of-springtime',
         effectId: 'base.spell.songs-of-springtime.l2.react',
-        label: `Cast Regrowth (place into an empty slot)${labelSuffix(mageId)}`,
+        label: `Cast Regrowth (place into an empty slot)${suffix}`,
         ...(multi ? { forMageId: mageId } : {}),
       });
     }
@@ -2028,7 +2050,7 @@ export function buildReactionOptionsFor(
         sourceKind: 'spell',
         sourceId: 'base.spell.songs-of-springtime',
         effectId: 'base.spell.songs-of-springtime.l3.react',
-        label: `Cast Renewal (place + refresh a Spell or Treasure)${labelSuffix(mageId)}`,
+        label: `Cast Renewal (place + refresh a Spell or Treasure)${suffix}`,
         ...(multi ? { forMageId: mageId } : {}),
       });
     }
@@ -2053,7 +2075,7 @@ export function buildReactionOptionsFor(
         sourceKind: 'spell',
         sourceId: 'base.spell.tome-of-protection',
         effectId: 'base.spell.tome-of-protection.l3.react',
-        label: `Cast Absorb Mana (gain Mana = spell's cost)${labelSuffix(mageId)}`,
+        label: `Cast Absorb Mana (gain Mana = spell's cost)${suffix}`,
         ...(multi ? { forMageId: mageId } : {}),
       });
     }
@@ -2077,7 +2099,7 @@ export function buildReactionOptionsFor(
         sourceKind: 'spell',
         sourceId: 'base.spell.the-darkness-within',
         effectId: 'base.spell.the-darkness-within.l2.react',
-        label: `Cast Haunt (shadow original slot)${labelSuffix(mageId)}`,
+        label: `Cast Haunt (shadow original slot)${suffix}`,
         ...(multi ? { forMageId: mageId } : {}),
       });
     }

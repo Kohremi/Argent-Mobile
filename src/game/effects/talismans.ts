@@ -137,6 +137,7 @@ registerEffect('talismans.scenario.testing-incentives', (ctx): EffectResult => {
                 id: `idx-${i}`,
                 label: lookupVaultCardDef(ctx.state, cardId)?.name ?? cardId,
                 payload: {},
+                cardId,
               };
             }),
             { id: 'skip', label: 'Skip', payload: {} },

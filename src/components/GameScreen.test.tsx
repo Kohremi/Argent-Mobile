@@ -569,6 +569,63 @@ describe('Mark a voter (Consortium targeting smoke)', () => {
   });
 });
 
+describe('Card picker (off-board card-art smoke)', () => {
+  it('renders cardId options as real card faces and resolves on click', () => {
+    let s = errandsState();
+    const vaultId = 'base.vault.shield-potion';
+    const supId = 'base.supporter.adelaide-chivers';
+    const vaultName = lookupVaultCardDef(s, vaultId)!.name;
+    const supName = lookupSupporterCardDef(s, supId)!.name;
+    // A generic choose-from-options prompt whose options name specific
+    // off-board cards (e.g. a discard-recovery): the Director renders the
+    // card faces, not a text list.
+    s = {
+      ...s,
+      pendingResolutionStack: [
+        {
+          id: 'pr-card-picker',
+          responderId: 'p1',
+          prompt: {
+            kind: 'choose-from-options',
+            options: [
+              { id: 'idx-0', label: vaultName, payload: {}, cardId: vaultId, cardNote: 'used' },
+              { id: supId, label: supName, payload: {}, cardId: supId },
+              { id: 'skip', label: 'Skip', payload: {} },
+            ],
+          },
+          resume: { effectId: 'base.system.noop', context: {} },
+          source: {
+            kind: 'system',
+            id: 'talismans.scenario.testing-incentives',
+            triggeringPlayerId: 'p1',
+            description: 'Student Testing Incentives',
+          },
+        },
+      ],
+    };
+    useGameStore.setState({ state: s });
+    useUiStore.setState({ selectedMageId: null, debugOpen: false, lastError: null });
+    render(<GameScreen />);
+
+    // The picker sheet shows ("pick a card"), not the generic text sheet.
+    const sheet = screen.getByText(/pick a card/).closest('.pointer-events-auto') as HTMLElement;
+    expect(sheet).toBeTruthy();
+    const inSheet = within(sheet);
+    // Both cards render as faces (clickable buttons titled by name), the
+    // "used" qualifier shows, and Skip is a footer button.
+    const vaultCard = inSheet.getByTitle(vaultName);
+    expect(vaultCard.tagName).toBe('BUTTON');
+    expect(inSheet.getByTitle(supName)).toBeTruthy();
+    expect(inSheet.getByText('used')).toBeTruthy();
+    expect(inSheet.getByText('Skip')).toBeTruthy();
+
+    // Clicking a card resolves the pending (noop resume just pops the stack).
+    fireEvent.click(vaultCard);
+    expect(useGameStore.getState().state!.pendingResolutionStack.length).toBe(0);
+    expect(useUiStore.getState().lastError).toBeNull();
+  });
+});
+
 describe('Advance button (between-turns smoke)', () => {
   it('offers an Advance button between turns and advances the phase on click', () => {
     // A fresh game sits in round-setup — no active player, so the dock shows

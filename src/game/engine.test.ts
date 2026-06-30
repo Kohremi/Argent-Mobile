@@ -12181,7 +12181,22 @@ describe('Synthesis Workshop A (Mancers)', () => {
       resolutionId: topPending(s).id,
       answer: { kind: 'mage-chosen', mageId: 'b2' },
     });
-    // Multi-wound reaction window for p2 — react with Sacred Shield on b1...
+    // Multi-wound reaction window for p2 — each affected Mage gets its own
+    // option, tagged with forMageId and labelled with a room locator (never a
+    // raw Mage id like "on b1") so same-colour Mages stay tellable apart.
+    const window1 = topPending(s);
+    expect(window1.prompt.kind).toBe('reaction-window');
+    if (window1.prompt.kind === 'reaction-window') {
+      const shields = window1.prompt.reactionOptions.filter(
+        (o) => o.effectId === 'mancers.vault.sacred-shield.react',
+      );
+      expect(shields.map((o) => o.forMageId).sort()).toEqual(['b1', 'b2']);
+      for (const o of shields) {
+        expect(o.label).toContain(' · ');
+        expect(o.label).not.toMatch(/ on b\d/);
+      }
+    }
+    // ...react with Sacred Shield on b1...
     s = applyAction(s, {
       type: 'RESOLVE_PENDING',
       resolutionId: topPending(s).id,

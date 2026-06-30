@@ -2255,6 +2255,8 @@ function atelierBSwapSlot(
       id: cardId,
       label: `${lookupVaultCardDef(ctx.state, cardId)?.name ?? cardId}${used ? ' (used)' : ''}`,
       payload: {},
+      cardId,
+      ...(used ? { cardNote: 'used' } : {}),
     }));
     options.push({ id: 'skip', label: 'Skip', payload: {} });
     return {
@@ -4001,6 +4003,7 @@ registerEffect('mancers.vault.potion-of-vigor', (ctx): EffectResult => {
             id,
             label: lookupSupporterCardDef(ctx.state, id)?.name ?? id,
             payload: {},
+            cardId: id,
           })),
         },
         resume: { effectId: 'mancers.vault.potion-of-vigor', context: {} },
