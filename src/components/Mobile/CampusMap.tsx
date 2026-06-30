@@ -1,5 +1,5 @@
 import clsx from 'clsx';
-import { useMemo } from 'react';
+import { useEffect, useMemo } from 'react';
 import type { ActionSpaceSlotType, GameState, MageColor, OwnedMage, Room } from '../../game/types';
 import { useGameStore } from '../../store/gameStore';
 import { useUiStore } from '../../store/uiStore';
@@ -98,6 +98,11 @@ function SpotPip({ spot }: { spot: TileSpot }) {
         isShadowing={spot.shadow || spot.mage.isShadowing}
         golem={spot.mage.isTemporary === true}
         size={24}
+        // Shared-layout glide: a wounded Mage visibly travels from its slot tile
+        // to its Infirmary bed (and a placed Mage settles in), so an opponent's
+        // Ars Magna reads as a real move rather than a blink. Shadow occupants
+        // reuse the base id, so they keep a distinct glide track.
+        glideId={`map-mage-${spot.mage.id}${spot.shadow ? '-shadow' : ''}`}
       />
     );
   }
@@ -146,6 +151,7 @@ function RoomMapTile({
   dimmed,
   myAura,
   spots,
+  spotlightKey,
   onOpen,
 }: {
   room: Room;
@@ -156,6 +162,8 @@ function RoomMapTile({
   /** The local player's aura when they already have a student here, else null. */
   myAura: string | null;
   spots: TileSpot[];
+  /** Smart Camera follow: when set, pulse this tile (re-keyed to replay). */
+  spotlightKey: number | null;
   onOpen: () => void;
 }) {
   const shown = spots.slice(0, 8);
@@ -191,6 +199,16 @@ function RoomMapTile({
           className="pointer-events-none absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-amber-300/0 via-amber-300/80 to-amber-300/0"
         />
       )}
+      {/* Smart Camera follow-pulse: a one-shot ring when an opponent just acted
+          here (or was wounded into the Infirmary). Re-keyed so it replays. */}
+      {spotlightKey != null && (
+        <span
+          key={spotlightKey}
+          aria-hidden
+          className="smart-cue smart-cue-bot pointer-events-none absolute inset-0 rounded-lg"
+        />
+      )}
+
       {/* "Your student is here" — a dot in the local player's aura. */}
       {myAura && (
         <span
@@ -242,7 +260,16 @@ export function CampusMap() {
   const localPlayerId = useGameStore((s) => s.localPlayerId);
   const selectedMageId = useUiStore((s) => s.selectedMageId);
   const setOpenRoomId = useUiStore((s) => s.setOpenRoomId);
+  const boardSpotlight = useUiStore((s) => s.boardSpotlight);
   const { spaceTargets } = usePromptTargets();
+
+  // Smart Camera follow: pan the spotlit room into view when a new follow-cue
+  // fires (nonce changes). Instant scroll so it doesn't fight the Mage glide.
+  useEffect(() => {
+    if (!boardSpotlight) return;
+    const el = document.querySelector(`[data-room="${boardSpotlight.roomId}"]`);
+    el?.scrollIntoView({ block: 'center', inline: 'center' });
+  }, [boardSpotlight?.nonce, boardSpotlight?.roomId]);
 
   const mageIndex = useMemo(
     () => (state ? buildMageIndex(state) : (new Map() as ReturnType<typeof buildMageIndex>)),
@@ -307,6 +334,12 @@ export function CampusMap() {
             if (!room) return null;
             const locked = state.roomLocks.some((l) => l.roomId === room.id);
             const placeable = placeableRooms.has(room.id) || promptRooms.has(room.id);
+            // Follow-pulse the room an opponent just acted in, plus the Infirmary
+            // when that move wounded someone (Ars Magna).
+            const spotlit =
+              boardSpotlight != null &&
+              (room.id === boardSpotlight.roomId ||
+                (boardSpotlight.wounded && room.cannotBePlacedInDirectly));
             return (
               <RoomMapTile
                 key={room.id}
@@ -316,6 +349,7 @@ export function CampusMap() {
                 dimmed={picking && !placeable && !locked}
                 myAura={iAmIn(room) ? PLAYER_AURA[localPlayer(state, localPlayerId)!.color] : null}
                 spots={roomSpots(room, state, mageOf)}
+                spotlightKey={spotlit ? boardSpotlight!.nonce : null}
                 onOpen={() => setOpenRoomId(room.id)}
               />
             );

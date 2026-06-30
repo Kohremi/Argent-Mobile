@@ -46,6 +46,21 @@ interface UiStore {
   smartCamera: boolean;
   setSmartCamera: (on: boolean) => void;
 
+  /**
+   * Smart Camera follow-cue: the opponent placement the campus map should pan
+   * to and pulse right now (set by useSmartCamera from the state diff, then
+   * auto-cleared). `wounded` also pulses the Infirmary; `caption` names the
+   * Ars-Magna victim; `nonce` re-keys the one-shot animations. Null when idle.
+   */
+  boardSpotlight:
+    | { roomId: string; wounded: boolean; caption: string | null; nonce: number }
+    | null;
+  setBoardSpotlight: (
+    spot:
+      | { roomId: string; wounded: boolean; caption: string | null; nonce: number }
+      | null,
+  ) => void;
+
   /** Mobile: the room drilled into from the Campus map (enlarged room view). */
   openRoomId: string | null;
   setOpenRoomId: (roomId: string | null) => void;
@@ -152,6 +167,9 @@ export const useUiStore = create<UiStore>((set) => ({
 
   smartCamera: true,
   setSmartCamera: (on) => set({ smartCamera: on }),
+
+  boardSpotlight: null,
+  setBoardSpotlight: (spot) => set({ boardSpotlight: spot }),
 
   openRoomId: null,
   setOpenRoomId: (roomId) => set({ openRoomId: roomId }),

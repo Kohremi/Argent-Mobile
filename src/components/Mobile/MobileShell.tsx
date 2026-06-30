@@ -35,6 +35,7 @@ export function MobileShell() {
   const mobileTab = useUiStore((s) => s.mobileTab);
   const debugOpen = useUiStore((s) => s.debugOpen);
   const setDebugOpen = useUiStore((s) => s.setDebugOpen);
+  const boardSpotlight = useUiStore((s) => s.boardSpotlight);
   useStateDiffFx();
   // Smart Camera: auto-jump the stage to wherever the current decision lives.
   const { cueKey, bot: cueBot } = useSmartCamera();
@@ -57,6 +58,18 @@ export function MobileShell() {
 
           {/* Bell Tower offerings — drops out of the top-bar bell over the board */}
           <BellTowerSheet />
+
+          {/* Smart Camera wound caption: names who an opponent's Ars Magna just
+              wounded, pinned over the stage while the follow-cue lingers. */}
+          {boardSpotlight?.caption && (
+            <div
+              key={boardSpotlight.nonce}
+              aria-live="polite"
+              className="zoom-in pointer-events-none absolute inset-x-3 bottom-3 z-20 mx-auto max-w-[22rem] rounded-full border border-rose-400/40 bg-night-900/90 px-3 py-1.5 text-center text-[11px] font-semibold text-rose-100 shadow-card-lift ring-1 ring-rose-500/20 backdrop-blur"
+            >
+              {boardSpotlight.caption}
+            </div>
+          )}
 
           {/* Smart Camera spotlight: a one-shot ring pulse when the camera jumps
               tabs, so the eye follows the action. Re-keyed each jump to replay. */}
