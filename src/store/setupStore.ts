@@ -117,16 +117,17 @@ export function defaultRoomCountForPlayerCount(playerCount: number): number {
 }
 
 export const useSetupStore = create<SetupState>((set) => ({
-  // Base is always required. Other packs are off by default.
-  selectedPackIds: ['base'],
+  // Base is always required; the Mancers expansion is on by default. Other packs
+  // are off by default.
+  selectedPackIds: ['base', 'mancers'],
   // Single-player by default: seat 0 is you, the rest are bots. Every seat stays
   // fully customisable — toggle any to human for hot-seat, or all to bots.
   playerNames: defaultPlayerNames(3),
   playerControlledByBot: [false, true, true],
   playerBotPersonality: ['klank', 'klank', 'malfoy'],
   numberOfRooms: defaultRoomCountForPlayerCount(3),
-  // Default to the recommended beginner layout for new games.
-  layoutMode: 'first-time',
+  // Default to a randomised board layout for replayability.
+  layoutMode: 'random',
   // Custom layout pre-seats the always-included University Central rooms
   // (Council / Library / Infirmary) on side A. The picker UI lets the
   // user flip them to side B but doesn't allow fully removing them.
