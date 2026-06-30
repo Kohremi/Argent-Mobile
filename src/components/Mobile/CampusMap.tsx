@@ -266,7 +266,7 @@ export function CampusMap() {
   // Smart Camera follow: pan the spotlit room into view when a new follow-cue
   // fires (nonce changes). Instant scroll so it doesn't fight the Mage glide.
   useEffect(() => {
-    if (!boardSpotlight) return;
+    if (!boardSpotlight?.roomId) return; // off-board action (Mark / recruit) → no pan
     const el = document.querySelector(`[data-room="${boardSpotlight.roomId}"]`);
     el?.scrollIntoView({ block: 'center', inline: 'center' });
   }, [boardSpotlight?.nonce, boardSpotlight?.roomId]);

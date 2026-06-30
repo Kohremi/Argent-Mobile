@@ -1,7 +1,30 @@
 import { getScenario } from '../../content/scenarios';
 import type { ConsortiumVoter, GameState } from '../../game/types';
 import { useGameStore } from '../../store/gameStore';
+import { useUiStore } from '../../store/uiStore';
 import { FactionSection, VoterRow } from '../Council/CouncilTower';
+
+/**
+ * A voter tile that the Smart Camera can pulse: when an opponent places a Mark
+ * on this voter, `boardSpotlight.voterId` points here and a one-shot ring flashes
+ * (re-keyed by nonce so it replays), so the eye follows the rival's Mark.
+ */
+function SpotlitVoterRow({ state, voter }: { state: GameState; voter: ConsortiumVoter }) {
+  const spotlight = useUiStore((s) => s.boardSpotlight);
+  const lit = spotlight?.voterId === voter.id;
+  return (
+    <div className="relative" data-voter={voter.id}>
+      <VoterRow state={state} voter={voter} />
+      {lit && (
+        <span
+          key={spotlight!.nonce}
+          aria-hidden
+          className="smart-cue smart-cue-bot pointer-events-none absolute inset-0 rounded-lg"
+        />
+      )}
+    </div>
+  );
+}
 
 /**
  * The Consortium for the mobile shell, laid out in two columns. Each column is
@@ -30,7 +53,7 @@ function TwoColumns({ state }: { state: GameState }) {
       {cols.map((col, i) => (
         <div key={i} className="flex flex-col gap-1.5">
           {col.map((v) => (
-            <VoterRow key={v.id} state={state} voter={v} />
+            <SpotlitVoterRow key={v.id} state={state} voter={v} />
           ))}
         </div>
       ))}

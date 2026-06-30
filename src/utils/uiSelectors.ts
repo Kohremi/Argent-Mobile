@@ -143,17 +143,28 @@ export function localOwnsCurrentDecision(
  * option/confirm/reaction sheet that floats over any tab) or when nothing is
  * being decided — in both cases the camera should stay put rather than yank
  * the player around.
+ *
+ * `localPlayerId` makes the draft destination ownership-aware: a Supporter /
+ * Vault draft owed to the LOCAL seat points at their own Tableau (where they
+ * pick), but one owed to a BOT points at the Rivals tab (where that opponent's
+ * growing tableau is visible) — otherwise the camera would jump to the human's
+ * own, unchanging tableau while a rival drafts. Omit it to keep the local view.
  */
-export function smartCameraFocusTab(state: GameState): MobileTab | null {
+export function smartCameraFocusTab(
+  state: GameState,
+  localPlayerId?: string | null,
+): MobileTab | null {
   const top = state.pendingResolutionStack[state.pendingResolutionStack.length - 1];
   if (top) {
+    // A draft owed to someone other than the local seat → watch them on Rivals.
+    const ownedByRival = localPlayerId != null && top.responderId !== localPlayerId;
     switch (top.prompt.kind) {
       case 'choose-voter':
         return 'council';
       case 'choose-supporter-card':
       case 'choose-peeked-supporter':
       case 'choose-vault-card':
-        return 'tableau';
+        return ownedByRival ? 'rivals' : 'tableau';
       case 'choose-target-mage':
       case 'choose-target-action-space':
         return 'campus';

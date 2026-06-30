@@ -110,6 +110,15 @@ describe('smartCameraFocusTab', () => {
     ).toBe('campus');
   });
 
+  it('routes a BOT-owned Supporter draft to the Rivals tab (watch the opponent)', () => {
+    // Same prompt, owed to p1. With no localPlayerId it defaults to the local
+    // Tableau; told the local seat is p2, p1 is a rival → watch them on Rivals.
+    const draft = withPrompt({ kind: 'choose-supporter-card', eligibleCardIds: [] });
+    expect(smartCameraFocusTab(draft)).toBe('tableau');
+    expect(smartCameraFocusTab(draft, 'p1')).toBe('tableau'); // owed to the local seat
+    expect(smartCameraFocusTab(draft, 'p2')).toBe('rivals'); // owed to a rival
+  });
+
   it('stays put (null) for self-contained option/confirm sheets', () => {
     expect(smartCameraFocusTab(withPrompt({ kind: 'choose-from-options', options: [] }))).toBeNull();
     expect(smartCameraFocusTab(withPrompt({ kind: 'confirm', message: 'x' }))).toBeNull();

@@ -7,6 +7,22 @@ import { useGameStore } from './gameStore';
 /** The mobile shell's focal "stage" tabs (bottom tab bar). */
 export type MobileTab = 'campus' | 'tableau' | 'rivals' | 'council';
 
+/** Smart Camera follow-cue: one surfaced opponent action (see `boardSpotlight`). */
+export interface BoardSpotlight {
+  /** Campus room to pan to + pulse (Mage placement); null for off-board moves. */
+  roomId: string | null;
+  /** The placement also wounded an occupant → pulse the Infirmary. */
+  wounded: boolean;
+  /** Council voter to pulse (an opponent placed a Mark on it), else null. */
+  voterId: string | null;
+  /** Tab to follow the move to, so off-board actions are visible; null = stay. */
+  tab: MobileTab | null;
+  /** Player-facing narration of what just happened, or null for a silent pan. */
+  caption: string | null;
+  /** Re-keys the one-shot animations + caption toast. */
+  nonce: number;
+}
+
 /**
  * Presentation-layer state (docs/UI_DESIGN.md §8). Selection, drawers, and
  * transient feedback live here — never game truth, which stays in gameStore.
@@ -47,19 +63,19 @@ interface UiStore {
   setSmartCamera: (on: boolean) => void;
 
   /**
-   * Smart Camera follow-cue: the opponent placement the campus map should pan
-   * to and pulse right now (set by useSmartCamera from the state diff, then
-   * auto-cleared). `wounded` also pulses the Infirmary; `caption` names the
-   * Ars-Magna victim; `nonce` re-keys the one-shot animations. Null when idle.
+   * Smart Camera follow-cue: the opponent action to surface right now (set by
+   * useSmartCamera from the state diff, then auto-cleared). It covers any kind
+   * of opponent move, not just board placements:
+   *  - `roomId`  — a campus room to pan to + pulse (a Mage placement); null for
+   *                off-board actions (a Mark, a recruit).
+   *  - `wounded` — the placement also wounded an occupant → pulse the Infirmary.
+   *  - `voterId` — a Council voter to pulse (an opponent placed a Mark on it).
+   *  - `tab`     — where to look, so the camera can follow off-board moves.
+   *  - `caption` — the player-facing narration of what just happened.
+   *  - `nonce`   — re-keys the one-shot animations / toast.
    */
-  boardSpotlight:
-    | { roomId: string; wounded: boolean; caption: string | null; nonce: number }
-    | null;
-  setBoardSpotlight: (
-    spot:
-      | { roomId: string; wounded: boolean; caption: string | null; nonce: number }
-      | null,
-  ) => void;
+  boardSpotlight: BoardSpotlight | null;
+  setBoardSpotlight: (spot: BoardSpotlight | null) => void;
 
   /** Mobile: the room drilled into from the Campus map (enlarged room view). */
   openRoomId: string | null;

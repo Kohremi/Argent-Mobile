@@ -1,4 +1,5 @@
-import type { GameState, MageColor } from '../../game/types';
+import type { GameState, MageColor, VoterMark } from '../../game/types';
+import type { MobileTab } from '../../store/uiStore';
 
 /**
  * What an opponent just did on the board, derived purely from the state diff
@@ -97,4 +98,122 @@ export function describeBoardAction(
     : null;
 
   return { roomId: actor.roomId, wounded: !!victim, actorOwnerId: actor.ownerId, caption };
+}
+
+/**
+ * A surfaced opponent action — a superset of {@link BoardActionInfo} that also
+ * covers off-board moves (placing a Mark, recruiting a Supporter). The Smart
+ * Camera publishes it so the shell can follow the action to the right tab and
+ * narrate it, not just pan the campus map.
+ */
+export interface OpponentActionInfo {
+  /** Campus room to pan to + pulse (a placement), else null. */
+  roomId: string | null;
+  /** The placement also wounded an occupant (Ars Magna). */
+  wounded: boolean;
+  /** Council voter that just gained a Mark, else null. */
+  voterId: string | null;
+  /** Tab to follow the move to, so off-board actions are visible. */
+  tab: MobileTab | null;
+  /** Seat id of the acting player, so the camera can ignore the local seat. */
+  actorOwnerId: string;
+  /** Player-facing narration of what just happened. */
+  caption: string | null;
+}
+
+/** The single Mark added between two states (multiset diff), or null. */
+function newMark(prev: GameState, next: GameState): VoterMark | null {
+  const remaining = new Map<string, number>();
+  for (const m of prev.voterMarks ?? []) {
+    const k = `${m.voterId}|${m.playerId}`;
+    remaining.set(k, (remaining.get(k) ?? 0) + 1);
+  }
+  for (const m of next.voterMarks ?? []) {
+    const k = `${m.voterId}|${m.playerId}`;
+    const left = remaining.get(k) ?? 0;
+    if (left > 0) remaining.set(k, left - 1);
+    else return m; // a mark in `next` not accounted for in `prev` → freshly placed
+  }
+  return null;
+}
+
+/** The first player whose count of `pick(player)` grew between states, or null. */
+function whoGained(
+  prev: GameState,
+  next: GameState,
+  pick: (p: GameState['players'][number]) => number,
+): string | null {
+  const before = new Map(prev.players.map((p) => [p.id, pick(p)] as const));
+  for (const p of next.players) {
+    if (pick(p) > (before.get(p.id) ?? 0)) return p.id;
+  }
+  return null;
+}
+
+/**
+ * What an opponent just did, derived purely from the state diff — the Smart
+ * Camera's "follow the flow" signal. Returns the single highest-priority change
+ * (bot moves are atomic dispatches, so usually exactly one thing changed):
+ *  1. a Mage placement (incl. an Ars Magna wound) — the richest, with a glide;
+ *  2. a Mark placed on a Council voter;
+ *  3. a Supporter recruited or a Consumable taken into the tableau.
+ * Returns null for resource-only churn so the camera doesn't twitch.
+ */
+export function describeOpponentAction(
+  prev: GameState,
+  next: GameState,
+): OpponentActionInfo | null {
+  // 1. Board placement — reuse the placement detector (carries the glide + pan).
+  const placed = describeBoardAction(prev, next);
+  if (placed) {
+    return {
+      roomId: placed.roomId,
+      wounded: placed.wounded,
+      voterId: null,
+      tab: 'campus',
+      actorOwnerId: placed.actorOwnerId,
+      caption: placed.caption,
+    };
+  }
+
+  // 2. A Mark on a voter. Don't name a still-sealed voter (it would leak it).
+  const mark = newMark(prev, next);
+  if (mark) {
+    const voter = next.voters.find((v) => v.id === mark.voterId);
+    const named = voter && (voter.revealed || voter.isAlwaysFaceUp) ? voter.name : 'a sealed voter';
+    return {
+      roomId: null,
+      wounded: false,
+      voterId: mark.voterId,
+      tab: 'council',
+      actorOwnerId: mark.playerId,
+      caption: `◆ ${readablePlayerName(next, mark.playerId)} marked ${named}`,
+    };
+  }
+
+  // 3. A Supporter recruited (office grew), then a Consumable taken (vault grew).
+  const recruiter = whoGained(prev, next, (p) => p.supporters.length);
+  if (recruiter) {
+    return {
+      roomId: null,
+      wounded: false,
+      voterId: null,
+      tab: 'rivals',
+      actorOwnerId: recruiter,
+      caption: `✦ ${readablePlayerName(next, recruiter)} recruited a Supporter`,
+    };
+  }
+  const buyer = whoGained(prev, next, (p) => p.vaultCards.length);
+  if (buyer) {
+    return {
+      roomId: null,
+      wounded: false,
+      voterId: null,
+      tab: 'rivals',
+      actorOwnerId: buyer,
+      caption: `✦ ${readablePlayerName(next, buyer)} took a Consumable`,
+    };
+  }
+
+  return null;
 }

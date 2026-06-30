@@ -7,7 +7,7 @@ import {
   localOwnsCurrentDecision,
   smartCameraFocusTab,
 } from '../../utils/uiSelectors';
-import { describeBoardAction } from './boardAction';
+import { describeOpponentAction } from './boardAction';
 
 /** How long an opponent's board-action spotlight lingers before auto-clearing. */
 const SPOTLIGHT_MS = 2200;
@@ -21,11 +21,12 @@ const SPOTLIGHT_MS = 2200;
  * player can still wander to another tab without being yanked back; the next
  * decision re-centres them.
  *
- * It also FOLLOWS opponents on the board: when a rival places a Mage (including
- * an Ars Magna takeover that wounds an occupant), it publishes a `boardSpotlight`
- * so the Campus map can pan to that room, pulse it + the Infirmary, glide the
- * wounded Mage to its bed, and caption who got hit. The bot-move slowdown lives
- * in `useBotDriver`.
+ * It also FOLLOWS each opponent move, derived from the state diff: a Mage
+ * placement (incl. an Ars Magna takeover that wounds an occupant) pans + pulses
+ * the Campus map and glides the wounded Mage to its bed; a Mark jumps to the
+ * Council and pulses the voter; a Supporter / Consumable draft jumps to Rivals.
+ * Each publishes a `boardSpotlight` that captions what happened. The bot-move
+ * slowdown lives in `useBotDriver`.
  *
  * Returns `{ cueKey, bot }` for the shell: `cueKey` bumps on every tab jump
  * (remount the spotlight to replay its animation), and `bot` flags whether the
@@ -61,19 +62,39 @@ export function useSmartCamera(): { cueKey: number; bot: boolean } {
       useUiStore.getState().setOpenRoomId(null);
     }
 
-    // Follow an opponent's board placement (incl. Ars Magna). Gate on the actor
+    // Follow an opponent's move (placement / Mark / recruit). Gate on the actor
     // NOT being the local seat — you already know what you just did.
     if (prev && prev !== state) {
-      const action = describeBoardAction(prev, state);
+      const action = describeOpponentAction(prev, state);
       if (action && action.actorOwnerId !== localPlayerId) {
-        setBoardSpotlight({ ...action, nonce: ++nonce.current });
+        setBoardSpotlight({
+          roomId: action.roomId,
+          wounded: action.wounded,
+          voterId: action.voterId,
+          tab: action.tab,
+          caption: action.caption,
+          nonce: ++nonce.current,
+        });
         if (clearTimer.current) clearTimeout(clearTimer.current);
         clearTimer.current = setTimeout(() => setBoardSpotlight(null), SPOTLIGHT_MS);
+
+        // Follow the move to its tab and replay the cue there. Claim `lastFocus`
+        // and bail so the generic focus pass below can't immediately yank us
+        // back to the board while the off-board action is still being shown.
+        if (action.tab) {
+          if (action.tab !== useUiStore.getState().mobileTab) {
+            useUiStore.getState().setOpenRoomId(null);
+            setMobileTab(action.tab);
+          }
+          lastFocus.current = action.tab;
+          setCue((c) => ({ key: c.key + 1, bot: true }));
+          return;
+        }
       }
     }
 
     // Jump the stage to the tab where the current decision lives, on a change.
-    const focus = smartCameraFocusTab(state);
+    const focus = smartCameraFocusTab(state, localPlayerId);
     if (!focus || focus === lastFocus.current) return;
     lastFocus.current = focus;
     if (focus !== useUiStore.getState().mobileTab) {
