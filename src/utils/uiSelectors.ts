@@ -87,15 +87,18 @@ export function botDecisionContext(state: GameState): BotDecision | null {
     const active = state.players[state.phase.activePlayerIndex];
     return active?.controlledByBot ? { kind: 'errands', playerId: active.id } : null;
   }
-  // No pending prompt and not Errands. In an all-bot game, keep the
-  // non-interactive phases moving (mixed games rely on the human's dock button).
+  // No pending prompt and not Errands → a non-interactive between-turns phase
+  // (Nightfall/resolution, round setup, scoring). Auto-advance it in EVERY mode,
+  // not just all-bot games, so a solo player never has to hand-crank the Night
+  // phase. Any step that needs a human is a pending resolution, which is handled
+  // by the `top` branch above (returns null there and leaves it to them), so
+  // this only fires when there is genuinely nothing for anyone to decide.
   if (
-    allPlayersAreBots(state) &&
-    (state.phase.kind === 'round-setup' ||
-      state.phase.kind === 'resolution' ||
-      state.phase.kind === 'mid-game-scoring' ||
-      state.phase.kind === 'round-end-scenario' ||
-      state.phase.kind === 'final-scoring')
+    state.phase.kind === 'round-setup' ||
+    state.phase.kind === 'resolution' ||
+    state.phase.kind === 'mid-game-scoring' ||
+    state.phase.kind === 'round-end-scenario' ||
+    state.phase.kind === 'final-scoring'
   ) {
     return { kind: 'advance' };
   }

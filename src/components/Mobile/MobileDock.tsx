@@ -14,7 +14,6 @@ import { PortraitBust } from '../Player/PortraitBust';
 import { PlayerBuffBadges } from '../Player/PlayerBuffBadges';
 import { ActionBudget, MeritBadge, RESOURCE_ORDER_COMPACT } from '../Player/PlayerDock';
 import { computeTurnActions } from '../Player/turnActions';
-import { phaseLabel } from '../HUD/TopBar';
 import { MobileHand } from './MobileHand';
 
 /**
@@ -46,10 +45,20 @@ export function MobileDock() {
   // an "opponents playing" pill or the between-phase Advance button.
   const self = localPlayer(state, localPlayerId) ?? state.players[0]!;
   const myTurn = active?.id === self.id;
-  // No active Errands player → a between-turns phase (Nightfall, setup, scoring).
+  // No active Errands player → a between-turns phase (Nightfall, setup, scoring),
+  // which now auto-advances in every mode, so the dock shows a quiet "working"
+  // state rather than a manual Advance button or a phase label that just repeats
+  // the top bar. A short activity verb conveys what's auto-resolving.
   const betweenTurns = !active;
   const electionRunning =
     state.phase.kind === 'final-scoring' || state.phase.kind === 'complete';
+  const betweenActivity = electionRunning
+    ? 'the election'
+    : state.phase.kind === 'round-setup'
+      ? 'new round'
+      : state.phase.kind === 'mid-game-scoring'
+        ? 'scoring'
+        : 'resolving';
   const aura = PLAYER_AURA[self.color];
   const research = researchTotals(self);
   const bench = self.mages.filter((m) => m.location.kind === 'office');
@@ -86,7 +95,7 @@ export function MobileDock() {
             {self.name}
           </p>
           <p className="text-[9px] uppercase tracking-widest text-white/40">
-            {myTurn ? 'your move' : betweenTurns ? phaseLabel(state.phase) : 'waiting…'}
+            {myTurn ? 'your move' : betweenTurns ? betweenActivity : 'waiting…'}
           </p>
         </div>
         <MeritBadge count={self.resources.meritBadges} className="mr-1" />
@@ -114,22 +123,13 @@ export function MobileDock() {
             )}
           </>
         ) : betweenTurns ? (
-          // Night (resolution) / setup / scoring: stats stay; controls become the
-          // phase + the Advance step (or an election-underway note).
-          electionRunning ? (
-            <span className="shrink-0 text-[11px] font-semibold text-white/55">
-              The election is underway…
-            </span>
-          ) : (
-            <button
-              type="button"
-              disabled={pendings > 0}
-              onClick={() => tryDispatch({ type: 'ADVANCE_PHASE' })}
-              className="shrink-0 rounded-full bg-gradient-to-b from-starlight to-amber-300 px-5 py-2 font-display text-xs font-bold text-ink-900 shadow-card transition active:translate-y-0 disabled:opacity-40"
-            >
-              Advance ▸
-            </button>
-          )
+          // Night (resolution) / setup / scoring auto-advance — no manual button.
+          // Just a quiet pulse so it's clear the game is progressing on its own.
+          <span
+            className="h-2.5 w-2.5 shrink-0 animate-breathe rounded-full"
+            style={{ background: aura }}
+            title="The game is advancing automatically"
+          />
         ) : (
           <span className="flex shrink-0 items-center gap-1.5 rounded-full bg-night-700 px-3 py-1.5 text-[11px] font-bold text-starlight ring-1 ring-starlight/30">
             <span className="animate-breathe">🤖</span>
