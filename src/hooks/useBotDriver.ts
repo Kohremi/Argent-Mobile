@@ -4,7 +4,7 @@ import { botDraftAction } from '../game/ai/draft';
 import type { GameAction, GameState } from '../game/types';
 import { useGameStore } from '../store/gameStore';
 import { useUiStore } from '../store/uiStore';
-import { botDecisionContext } from '../utils/uiSelectors';
+import { activePlayer, botDecisionContext } from '../utils/uiSelectors';
 
 /**
  * The single bot driver for the whole game. Mounted once (at the App root) so it
@@ -25,6 +25,13 @@ export const BOT_MOVE_DELAY_MS = 600;
  * each one as the camera follows it to the relevant tab.
  */
 export const BOT_MOVE_DELAY_SMART_MS = 1100;
+/**
+ * How long the turn hand-off splash (`TurnBanner`) stays up. The incoming bot's
+ * FIRST move is held until just after this clears (see the hand-off delay below)
+ * so its action isn't hidden behind the banner. Shared with `TurnBanner` so the
+ * two never drift.
+ */
+export const TURN_BANNER_MS = 900;
 
 function personalityFor(state: GameState, playerId: string) {
   const player = state.players.find((p) => p.id === playerId);
@@ -56,18 +63,35 @@ function nextBotAction(state: GameState): GameAction | null {
 export function useBotDriver(): void {
   const state = useGameStore((s) => s.state);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const prevActiveIdRef = useRef<string | null>(null);
 
   useEffect(() => {
     if (!state) return;
+
+    // Track the active Errands seat on every change (incl. human turns) so we
+    // can tell when the turn has just handed off — the moment the TurnBanner
+    // splash sweeps in. Update the ref BEFORE the gate below so a human→bot
+    // hand-off is still seen on the next bot turn.
+    const activeId =
+      state.phase.kind === 'errands' ? activePlayer(state)?.id ?? null : null;
+    const handedOff =
+      activeId !== null &&
+      prevActiveIdRef.current !== null &&
+      prevActiveIdRef.current !== activeId;
+    prevActiveIdRef.current = activeId;
+
     // Cheap gate: only schedule when a bot actually owns the next decision.
     const ctx = botDecisionContext(state);
     if (!ctx && !botDraftAction(state)) return;
 
     // Smart Camera slows the cadence so each bot move is watchable as the shell
     // pans to it; otherwise keep the snappy default.
-    const delay = useUiStore.getState().smartCamera
+    const base = useUiStore.getState().smartCamera
       ? BOT_MOVE_DELAY_SMART_MS
       : BOT_MOVE_DELAY_MS;
+    // Right after a hand-off, hold the incoming bot's first move until the
+    // splash has cleared, so its action begins on a visible board.
+    const delay = handedOff ? Math.max(base, TURN_BANNER_MS + 200) : base;
 
     timerRef.current = setTimeout(() => {
       const fresh = useGameStore.getState().state;

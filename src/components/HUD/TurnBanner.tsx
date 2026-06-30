@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useGameStore } from '../../store/gameStore';
 import { activePlayer, PLAYER_AURA } from '../../utils/uiSelectors';
+import { TURN_BANNER_MS } from '../../hooks/useBotDriver';
 import { PortraitBust } from '../Player/PortraitBust';
 
 /**
@@ -20,7 +21,7 @@ export function TurnBanner() {
   useEffect(() => {
     if (activeId && prevIdRef.current !== null && prevIdRef.current !== activeId) {
       setShownFor(activeId);
-      const t = setTimeout(() => setShownFor(null), 1400);
+      const t = setTimeout(() => setShownFor(null), TURN_BANNER_MS);
       return () => clearTimeout(t);
     }
     prevIdRef.current = activeId;
