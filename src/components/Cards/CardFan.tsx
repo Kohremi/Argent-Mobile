@@ -75,8 +75,11 @@ export function CardFan({
         {items.map((it, i) => {
           const lifted = hover === i;
           const baseX = i * step;
+          // A gentle lift only — the hovered card is already shown blown-up at
+          // the top of the screen, so a big in-fan jump just disrupts the flow
+          // of swiping through the hand. Keep it a subtle "this one" nudge.
           const transform = lifted
-            ? `translateX(${baseX}px) translateY(-10px) scale(1.16)`
+            ? `translateX(${baseX}px) translateY(-3px) scale(1.04)`
             : spread
               ? `translateX(${baseX}px) rotate(${(i - mid) * 4}deg)`
               : `translateX(${baseX}px)`;
