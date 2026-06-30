@@ -17,6 +17,7 @@ import type {
   Room,
   SpellLevel,
 } from '../game/types';
+import type { MobileTab } from '../store/uiStore';
 
 /**
  * Read-model helpers for the presentation layer. Eligibility is derived by
@@ -105,6 +106,44 @@ export function botDecisionContext(state: GameState): BotDecision | null {
 export function botOwnsCurrentDecision(state: GameState): boolean {
   const ctx = botDecisionContext(state);
   return ctx?.kind === 'prompt' || ctx?.kind === 'errands';
+}
+
+/**
+ * "Smart Camera" target: the mobile tab where the CURRENT decision is taken,
+ * so the shell can auto-jump there — for the local player's prompts (place a
+ * Mark → Council, draft a Supporter → the Offer shelf) and to follow a bot's
+ * move as it happens. Mirrors the targeting read-model (`usePromptTargets`):
+ * voters live on the Council tab, draftable cards on the Offer/Tableau shelf,
+ * and mages / action-spaces on the Campus board.
+ *
+ * Returns `null` when the active prompt is a self-contained modal (a plain
+ * option/confirm/reaction sheet that floats over any tab) or when nothing is
+ * being decided — in both cases the camera should stay put rather than yank
+ * the player around.
+ */
+export function smartCameraFocusTab(state: GameState): MobileTab | null {
+  const top = state.pendingResolutionStack[state.pendingResolutionStack.length - 1];
+  if (top) {
+    switch (top.prompt.kind) {
+      case 'choose-voter':
+        return 'council';
+      case 'choose-supporter-card':
+      case 'choose-peeked-supporter':
+      case 'choose-vault-card':
+        return 'tableau';
+      case 'choose-target-mage':
+      case 'choose-target-action-space':
+        return 'campus';
+      default:
+        // option / confirm / spell-level / deck / reaction sheets render as
+        // overlays above whichever tab is showing — don't move for them.
+        return null;
+    }
+  }
+  // No pending prompt: an Errands turn means someone is placing a Mage / acting
+  // on the board, so the board is where to look.
+  if (state.phase.kind === 'errands') return 'campus';
+  return null;
 }
 
 /** Action-space ids where `mageId` may legally be placed right now. */

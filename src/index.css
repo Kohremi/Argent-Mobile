@@ -127,6 +127,37 @@ textarea,
   transform-origin: top left;
 }
 
+/* Smart Camera spotlight: a one-shot inset ring that flashes when the shell
+   pans to a new tab, then fades. Amber when it's your move, cyan when watching
+   a bot. Honors reduced-motion by collapsing to a brief static tint. */
+@keyframes smartCue {
+  0% {
+    opacity: 0;
+    box-shadow: inset 0 0 0 2px var(--cue), inset 0 0 22px 4px var(--cue);
+  }
+  18% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+    box-shadow: inset 0 0 0 2px transparent, inset 0 0 0 0 transparent;
+  }
+}
+.smart-cue {
+  animation: smartCue 1.05s ease-out forwards;
+}
+.smart-cue-you {
+  --cue: rgba(255, 213, 79, 0.55);
+}
+.smart-cue-bot {
+  --cue: rgba(94, 214, 255, 0.5);
+}
+@media (prefers-reduced-motion: reduce) {
+  .smart-cue {
+    animation: smartCue 0.5s linear forwards;
+  }
+}
+
 /* Thin, unobtrusive scrollbars for board panning / drawers. */
 *::-webkit-scrollbar {
   width: 8px;

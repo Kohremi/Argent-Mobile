@@ -1,7 +1,9 @@
+import clsx from 'clsx';
 import { MotionConfig } from 'framer-motion';
 import { useGameStore } from '../../store/gameStore';
 import { useUiStore } from '../../store/uiStore';
 import { useStateDiffFx } from '../FX/useStateDiffFx';
+import { useSmartCamera } from './useSmartCamera';
 import { PromptDirector } from '../Prompts/PromptDirector';
 import { ScoringCeremony } from '../Modals/ScoringCeremony';
 import { TurnBanner } from '../HUD/TurnBanner';
@@ -34,6 +36,8 @@ export function MobileShell() {
   const debugOpen = useUiStore((s) => s.debugOpen);
   const setDebugOpen = useUiStore((s) => s.setDebugOpen);
   useStateDiffFx();
+  // Smart Camera: auto-jump the stage to wherever the current decision lives.
+  const { cueKey, bot: cueBot } = useSmartCamera();
   if (!state) return null;
 
   return (
@@ -53,6 +57,19 @@ export function MobileShell() {
 
           {/* Bell Tower offerings — drops out of the top-bar bell over the board */}
           <BellTowerSheet />
+
+          {/* Smart Camera spotlight: a one-shot ring pulse when the camera jumps
+              tabs, so the eye follows the action. Re-keyed each jump to replay. */}
+          {cueKey > 0 && (
+            <div
+              key={cueKey}
+              aria-hidden
+              className={clsx(
+                'smart-cue pointer-events-none absolute inset-0 z-10',
+                cueBot ? 'smart-cue-bot' : 'smart-cue-you',
+              )}
+            />
+          )}
         </main>
 
         <MobileDock />

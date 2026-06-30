@@ -4,6 +4,9 @@ import type { RoomFx } from '../components/FX/useStateDiffFx';
 import { botOwnsCurrentDecision } from '../utils/uiSelectors';
 import { useGameStore } from './gameStore';
 
+/** The mobile shell's focal "stage" tabs (bottom tab bar). */
+export type MobileTab = 'campus' | 'tableau' | 'rivals' | 'council';
+
 /**
  * Presentation-layer state (docs/UI_DESIGN.md §8). Selection, drawers, and
  * transient feedback live here — never game truth, which stays in gameStore.
@@ -30,8 +33,18 @@ interface UiStore {
    * Mobile shell (< lg) navigation — the focal "stage" shown by the bottom tab
    * bar. Ignored by the desktop GameScreen. See components/Mobile/.
    */
-  mobileTab: 'campus' | 'tableau' | 'rivals' | 'council';
-  setMobileTab: (tab: 'campus' | 'tableau' | 'rivals' | 'council') => void;
+  mobileTab: MobileTab;
+  setMobileTab: (tab: MobileTab) => void;
+
+  /**
+   * "Smart Camera" (set on the start menu): when on, the mobile shell auto-jumps
+   * to the tab where the current decision lives — the local player's prompts and
+   * the bots' moves alike — and the bot driver paces its moves slower so they're
+   * watchable. Purely presentational; the engine never reads it. See
+   * components/Mobile/useSmartCamera.ts and hooks/useBotDriver.ts.
+   */
+  smartCamera: boolean;
+  setSmartCamera: (on: boolean) => void;
 
   /** Mobile: the room drilled into from the Campus map (enlarged room view). */
   openRoomId: string | null;
@@ -136,6 +149,9 @@ export const useUiStore = create<UiStore>((set) => ({
 
   mobileTab: 'campus',
   setMobileTab: (tab) => set({ mobileTab: tab }),
+
+  smartCamera: true,
+  setSmartCamera: (on) => set({ smartCamera: on }),
 
   openRoomId: null,
   setOpenRoomId: (roomId) => set({ openRoomId: roomId }),

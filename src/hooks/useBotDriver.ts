@@ -3,6 +3,7 @@ import { getBotPersonality } from '../game/ai';
 import { botDraftAction } from '../game/ai/draft';
 import type { GameAction, GameState } from '../game/types';
 import { useGameStore } from '../store/gameStore';
+import { useUiStore } from '../store/uiStore';
 import { botDecisionContext } from '../utils/uiSelectors';
 
 /**
@@ -19,6 +20,11 @@ import { botDecisionContext } from '../utils/uiSelectors';
  * rapid changes (or StrictMode double-invokes) can't double-move.
  */
 export const BOT_MOVE_DELAY_MS = 600;
+/**
+ * Pacing when Smart Camera is on: bots move slower so you can actually watch
+ * each one as the camera follows it to the relevant tab.
+ */
+export const BOT_MOVE_DELAY_SMART_MS = 1100;
 
 function personalityFor(state: GameState, playerId: string) {
   const player = state.players.find((p) => p.id === playerId);
@@ -57,6 +63,12 @@ export function useBotDriver(): void {
     const ctx = botDecisionContext(state);
     if (!ctx && !botDraftAction(state)) return;
 
+    // Smart Camera slows the cadence so each bot move is watchable as the shell
+    // pans to it; otherwise keep the snappy default.
+    const delay = useUiStore.getState().smartCamera
+      ? BOT_MOVE_DELAY_SMART_MS
+      : BOT_MOVE_DELAY_MS;
+
     timerRef.current = setTimeout(() => {
       const fresh = useGameStore.getState().state;
       if (!fresh) return;
@@ -76,7 +88,7 @@ export function useBotDriver(): void {
           }
         }
       }
-    }, BOT_MOVE_DELAY_MS);
+    }, delay);
 
     return () => {
       if (timerRef.current) clearTimeout(timerRef.current);

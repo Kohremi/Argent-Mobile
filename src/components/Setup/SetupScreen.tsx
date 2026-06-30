@@ -11,6 +11,7 @@ import {
   type LayoutModeId,
 } from '../../store/setupStore';
 import { useGameStore } from '../../store/gameStore';
+import { useUiStore } from '../../store/uiStore';
 import { BOT_PERSONALITY_OPTIONS } from '../../game/ai';
 import { randomSeed } from '../../utils/rng';
 import type { Department, GameConfig, Mage, RoomId } from '../../game/types';
@@ -175,6 +176,9 @@ export function SetupScreen({ onQuickStart }: { onQuickStart?: () => void } = {}
   const scenarioId = useSetupStore((s) => s.scenarioId);
   const setScenario = useSetupStore((s) => s.setScenario);
   const startGame = useGameStore((s) => s.start);
+  // Presentation preference (mobile shell), not game config — lives in uiStore.
+  const smartCamera = useUiStore((s) => s.smartCamera);
+  const setSmartCamera = useUiStore((s) => s.setSmartCamera);
 
   // Index every wired room across the selected packs, grouped by name so
   // we can show one row per "physical" room with A/B side buttons. A room
@@ -331,6 +335,36 @@ export function SetupScreen({ onQuickStart }: { onQuickStart?: () => void } = {}
               </button>
             )}
           </div>
+
+          {/* Smart Camera — follow the action on mobile (presentation only). */}
+          <label
+            className="flex cursor-pointer select-none items-center gap-2"
+            title="On phones, auto-jump to the tab where each decision happens — yours and the bots' — and slow bot moves so you can watch."
+          >
+            <span className="text-[11px] font-medium uppercase tracking-wide text-slate-400">
+              Smart Camera
+            </span>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={smartCamera}
+              aria-label="Smart Camera"
+              onClick={() => setSmartCamera(!smartCamera)}
+              className={clsx(
+                'relative h-5 w-9 rounded-full border transition-colors',
+                smartCamera
+                  ? 'border-amber-300 bg-amber-400'
+                  : 'border-slate-600 bg-slate-800',
+              )}
+            >
+              <span
+                className={clsx(
+                  'absolute top-0.5 h-3.5 w-3.5 rounded-full bg-slate-950 transition-all',
+                  smartCamera ? 'left-[1.125rem]' : 'left-0.5',
+                )}
+              />
+            </button>
+          </label>
 
           {/* Rounds — its own small control, independent of the scenario. */}
           <div className="flex items-center gap-2">
