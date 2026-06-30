@@ -91,7 +91,10 @@ export function CardFan({
               onPointerEnter={() => setHover(i)}
               onClick={it.onOpen}
               className="absolute left-0 top-0 origin-bottom appearance-none border-0 bg-transparent p-0 transition-transform duration-150"
-              style={{ transform, zIndex: lifted ? 50 : i }}
+              // Keep the natural stacking order even when hovered — pulling the
+              // hovered card to the front re-layers the fan and makes it jumpy to
+              // scroll through. The top-of-screen preview is the readable view.
+              style={{ transform, zIndex: i }}
             >
               <GameCard face={it.face} status={it.status ?? null} style={{ width: cardWidth }} />
             </button>
