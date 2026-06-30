@@ -3,6 +3,7 @@ import type { GameState } from '../../game/types';
 import { useGameStore } from '../../store/gameStore';
 import { useUiStore } from '../../store/uiStore';
 import {
+  activePlayer,
   botOwnsCurrentDecision,
   localOwnsCurrentDecision,
   smartCameraFocusTab,
@@ -57,6 +58,22 @@ export function useSmartCamera(): { cueKey: number; bot: boolean } {
     // keeps this idempotent so it fires once per turn, not every bot sub-action.
     if (
       !localOwnsCurrentDecision(state, localPlayerId) &&
+      useUiStore.getState().openRoomId
+    ) {
+      useUiStore.getState().setOpenRoomId(null);
+    }
+
+    // Completing a Fast Action also closes a drilled-in room, so the player sees
+    // the board result before choosing their Regular Action. Detect the local
+    // seat's `fastActionsUsed` ticking up within the same Errands turn (same
+    // active index, so a turn handover that resets the count never counts).
+    if (
+      prev &&
+      prev.phase.kind === 'errands' &&
+      state.phase.kind === 'errands' &&
+      prev.phase.activePlayerIndex === state.phase.activePlayerIndex &&
+      activePlayer(state)?.id === localPlayerId &&
+      (state.phase.fastActionsUsed ?? 0) > (prev.phase.fastActionsUsed ?? 0) &&
       useUiStore.getState().openRoomId
     ) {
       useUiStore.getState().setOpenRoomId(null);
