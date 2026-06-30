@@ -13762,7 +13762,13 @@ registerEffect('mancers.spell.metamorphic-remediaries.l2', (ctx): EffectResult =
     for (const v of p.vaultCards) {
       const def = lookupVaultCardDef(ctx.state, v.cardId);
       if (!def || def.timing === 'reaction' || !hasEffect(def.effectId)) continue;
-      options.push({ id: `${p.id}::${v.cardId}`, label: `${def.name} (${p.id})`, payload: {} });
+      options.push({
+        id: `${p.id}::${v.cardId}`,
+        label: `${def.name} (${p.name})`,
+        payload: {},
+        cardId: v.cardId,
+        cardNote: p.name,
+      });
     }
   }
   if (options.length === 0) return { kind: 'done', patch: {} };
@@ -13834,7 +13840,13 @@ function treasureOptions(
       if (!def || def.type !== 'treasure') continue;
       if (opts.unexhaustedOnly && v.exhausted) continue;
       if (opts.wiredOnly && (def.timing === 'reaction' || !hasEffect(def.effectId))) continue;
-      out.push({ id: `${p.id}::${v.cardId}`, label: `${def.name} (${p.id})`, payload: {} });
+      out.push({
+        id: `${p.id}::${v.cardId}`,
+        label: `${def.name} (${p.name})`,
+        payload: {},
+        cardId: v.cardId,
+        cardNote: p.name,
+      });
     }
   }
   return out;
@@ -14256,8 +14268,10 @@ function spellTreasureOptions(
       if (s.exhausted !== wantExhausted) continue;
       out.push({
         id: `spell::${p.id}::${s.cardId}`,
-        label: `${lookupSpellCardDef(state, s.cardId)?.name ?? s.cardId} (Spell, ${p.id})`,
+        label: `${lookupSpellCardDef(state, s.cardId)?.name ?? s.cardId} (Spell, ${p.name})`,
         payload: {},
+        cardId: s.cardId,
+        cardNote: p.name,
       });
     }
     for (const v of p.vaultCards) {
@@ -14265,8 +14279,10 @@ function spellTreasureOptions(
       if (!def || def.type !== 'treasure' || v.exhausted !== wantExhausted) continue;
       out.push({
         id: `treasure::${p.id}::${v.cardId}`,
-        label: `${def.name} (Treasure, ${p.id})`,
+        label: `${def.name} (Treasure, ${p.name})`,
         payload: {},
+        cardId: v.cardId,
+        cardNote: p.name,
       });
     }
   }

@@ -163,13 +163,121 @@ function faceForCardId(state: GameState, cardId: string): CardFace | null {
   return null;
 }
 
+/** Shared modal chrome for the card-art picker sheets: scrim, panel, and the
+ *  "<source> ▸ <heading>" title with the responder chip. */
+function SheetShell({
+  state,
+  pending,
+  heading,
+  children,
+}: {
+  state: GameState;
+  pending: PendingResolution;
+  heading: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="absolute inset-0 z-40 flex items-center justify-center bg-night-900/70 px-4 backdrop-blur-sm">
+      <div className="pointer-events-auto max-h-[88vh] w-full max-w-3xl animate-pop overflow-y-auto rounded-card bg-night-700/95 p-4 ring-1 ring-white/15 shadow-card-lift">
+        <div className="mb-3 flex items-center justify-between gap-2">
+          <p className="font-display text-base font-bold text-starlight">
+            {pending.source.description ?? 'Choose'} <span className="text-white/50">▸</span>{' '}
+            <span className="text-white/90">{heading}</span>
+          </p>
+          <ResponderChip state={state} pending={pending} />
+        </div>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+interface CardSheetItem {
+  key: string;
+  cardId: string;
+  label: string;
+  note?: string | undefined;
+  disabled?: boolean | undefined;
+  onPick: () => void;
+}
+
 /**
- * Card-art picker for `choose-from-options` prompts whose options carry a
- * `cardId` (docs/UI_DESIGN.md §8). The cards live off the board — a discard
- * pile, the player's own office, an opponent's vault — so they can't be
- * clicked on the board itself; we render the real card faces here instead of
- * a list of text buttons. Options without a `cardId` (Skip / Pass) fall to a
- * footer button row.
+ * Pick one of a set of off-board cards by clicking its real face
+ * (docs/UI_DESIGN.md §8). These cards live in a discard pile, the player's own
+ * office, an opponent's vault, or a secret peek — never on the board shelf, so
+ * they can't be clicked there. Optional `footer` buttons cover non-card
+ * choices (Skip / Pass).
+ */
+function CardSheet({
+  state,
+  pending,
+  heading,
+  items,
+  footer,
+}: {
+  state: GameState;
+  pending: PendingResolution;
+  heading: string;
+  items: CardSheetItem[];
+  footer?: { key: string; label: string; disabled?: boolean | undefined; onPick: () => void }[];
+}) {
+  return (
+    <SheetShell state={state} pending={pending} heading={heading}>
+      <div className="flex flex-wrap justify-center gap-3">
+        {items.map((it) => {
+          const face = faceForCardId(state, it.cardId);
+          return (
+            <div key={it.key} className="flex w-[132px] flex-col items-center gap-1">
+              {face ? (
+                <GameCard
+                  face={face}
+                  status={it.disabled ? 'exhausted' : 'draftable'}
+                  title={it.label}
+                  style={{ width: 132 }}
+                  {...(it.disabled ? {} : { onClick: it.onPick })}
+                />
+              ) : (
+                <button
+                  type="button"
+                  disabled={it.disabled}
+                  onClick={it.onPick}
+                  className="w-full rounded-xl bg-night-600 px-3 py-2 text-sm font-semibold text-white/95 ring-1 ring-white/15 hover:ring-starlight/60 disabled:opacity-40"
+                >
+                  {it.label}
+                </button>
+              )}
+              {it.note && (
+                <span className="rounded-full bg-night-800 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-amber-200/90 ring-1 ring-white/10">
+                  {it.note}
+                </span>
+              )}
+            </div>
+          );
+        })}
+      </div>
+      {footer && footer.length > 0 && (
+        <div className="mt-4 flex flex-wrap justify-center gap-2">
+          {footer.map((f) => (
+            <button
+              key={f.key}
+              type="button"
+              disabled={f.disabled}
+              onClick={f.onPick}
+              className="rounded-full bg-night-800 px-4 py-1.5 text-xs font-bold text-white/70 ring-1 ring-white/15 transition hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
+            >
+              {f.label}
+            </button>
+          ))}
+        </div>
+      )}
+    </SheetShell>
+  );
+}
+
+/**
+ * `choose-from-options` whose options name specific off-board cards (discard
+ * recovery, swaps, opponent-card steal). Card-bearing options render as faces;
+ * the rest (Skip / Pass) become footer buttons.
  */
 function CardPickerSheet({
   state,
@@ -181,68 +289,84 @@ function CardPickerSheet({
   onPick: (id: string) => void;
 }) {
   if (pending.prompt.kind !== 'choose-from-options') return null;
-  const cardOpts = pending.prompt.options.filter((o) => o.cardId);
-  const plainOpts = pending.prompt.options.filter((o) => !o.cardId);
+  const items: CardSheetItem[] = pending.prompt.options
+    .filter((o) => o.cardId)
+    .map((o) => ({
+      key: o.id,
+      cardId: o.cardId!,
+      label: (o.available === false ? o.unavailableReason : o.label) ?? o.label,
+      note: o.cardNote,
+      disabled: o.available === false,
+      onPick: () => onPick(o.id),
+    }));
+  const footer = pending.prompt.options
+    .filter((o) => !o.cardId)
+    .map((o) => ({
+      key: o.id,
+      label: o.label,
+      disabled: o.available === false,
+      onPick: () => onPick(o.id),
+    }));
   return (
-    <div className="absolute inset-0 z-40 flex items-center justify-center bg-night-900/70 px-4 backdrop-blur-sm">
-      <div className="pointer-events-auto max-h-[88vh] w-full max-w-3xl animate-pop overflow-y-auto rounded-card bg-night-700/95 p-4 ring-1 ring-white/15 shadow-card-lift">
-        <div className="mb-3 flex items-center justify-between gap-2">
-          <p className="font-display text-base font-bold text-starlight">
-            {pending.source.description ?? 'Choose'} <span className="text-white/50">▸</span>{' '}
-            <span className="text-white/90">pick a card</span>
-          </p>
-          <ResponderChip state={state} pending={pending} />
-        </div>
-        <div className="flex flex-wrap justify-center gap-3">
-          {cardOpts.map((o) => {
-            const face = faceForCardId(state, o.cardId!);
-            const disabled = o.available === false;
+    <CardSheet state={state} pending={pending} heading="pick a card" items={items} footer={footer} />
+  );
+}
+
+/**
+ * `choose-spell-level`: show the spell's real card face (which lists every
+ * level's title / cost / timing / rules) alongside a button per castable
+ * level, instead of a bare text menu.
+ */
+function SpellLevelSheet({
+  state,
+  pending,
+  onPickLevel,
+}: {
+  state: GameState;
+  pending: PendingResolution;
+  onPickLevel: (level: 1 | 2 | 3) => void;
+}) {
+  if (pending.prompt.kind !== 'choose-spell-level') return null;
+  const prompt = pending.prompt;
+  const def = lookupSpellCardDef(state, prompt.spellId);
+  const face = def ? spellFace(def) : null;
+  return (
+    <SheetShell state={state} pending={pending} heading={`cast ${def?.name ?? prompt.spellId} at…`}>
+      <div className="flex flex-col items-center gap-3 sm:flex-row sm:items-start sm:justify-center">
+        {face && <GameCard face={face} style={{ width: 150 }} />}
+        <div className="flex w-full max-w-sm flex-col gap-2">
+          {prompt.availableLevels.map((lvl) => {
+            const level = def?.levels.find((l) => l.level === lvl);
             return (
-              <div key={o.id} className="flex w-[132px] flex-col items-center gap-1">
-                {face ? (
-                  <GameCard
-                    face={face}
-                    status={disabled ? 'exhausted' : 'draftable'}
-                    title={(disabled ? o.unavailableReason : o.label) ?? o.label}
-                    style={{ width: 132 }}
-                    {...(disabled ? {} : { onClick: () => onPick(o.id) })}
-                  />
-                ) : (
-                  <button
-                    type="button"
-                    disabled={disabled}
-                    onClick={() => onPick(o.id)}
-                    className="w-full rounded-xl bg-night-600 px-3 py-2 text-sm font-semibold text-white/95 ring-1 ring-white/15 hover:ring-starlight/60"
+              <button
+                key={lvl}
+                type="button"
+                onClick={() => onPickLevel(lvl)}
+                className="rounded-xl bg-night-600 px-3 py-2 text-left ring-1 ring-white/15 transition hover:-translate-y-0.5 hover:ring-starlight/60"
+              >
+                <span className="flex items-center gap-2 text-sm font-bold text-white/95">
+                  <span
+                    className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full font-arcane text-[11px] text-ink-900"
+                    style={{ background: def ? DEPT_HUE[def.department] ?? '#ffe9a8' : '#ffe9a8' }}
                   >
-                    {o.label}
-                  </button>
-                )}
-                {o.cardNote && (
-                  <span className="rounded-full bg-night-800 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-amber-200/90 ring-1 ring-white/10">
-                    {o.cardNote}
+                    {lvl}
+                  </span>
+                  {level?.title ?? `Level ${lvl}`}
+                  <span className="ml-auto text-[11px] font-bold text-amber-200/90">
+                    {level ? (level.manaCost > 0 ? `${level.manaCost}✦` : 'free') : ''}
+                  </span>
+                </span>
+                {level?.description && (
+                  <span className="mt-0.5 block text-[11px] leading-snug text-white/65">
+                    {level.description}
                   </span>
                 )}
-              </div>
+              </button>
             );
           })}
         </div>
-        {plainOpts.length > 0 && (
-          <div className="mt-4 flex flex-wrap justify-center gap-2">
-            {plainOpts.map((o) => (
-              <button
-                key={o.id}
-                type="button"
-                disabled={o.available === false}
-                onClick={() => onPick(o.id)}
-                className="rounded-full bg-night-800 px-4 py-1.5 text-xs font-bold text-white/70 ring-1 ring-white/15 transition hover:text-white disabled:cursor-not-allowed disabled:opacity-40"
-              >
-                {o.label}
-              </button>
-            ))}
-          </div>
-        )}
       </div>
-    </div>
+    </SheetShell>
   );
 }
 
@@ -1328,15 +1452,16 @@ export function PromptDirector() {
         );
       }
       return (
-        <ChoiceSheet
+        <CardSheet
           state={state}
           pending={pending}
-          title="choose a Vault card"
-          options={prompt.eligibleCardIds.map((id) => {
-            const def = lookupVaultCardDef(state, id);
-            return { id, label: def?.name ?? id, sub: def?.description };
-          })}
-          onPick={(id) => answer({ kind: 'card-chosen', cardId: id })}
+          heading="choose a Vault card"
+          items={prompt.eligibleCardIds.map((id, i) => ({
+            key: `${id}-${i}`,
+            cardId: id,
+            label: lookupVaultCardDef(state, id)?.name ?? id,
+            onPick: () => answer({ kind: 'card-chosen', cardId: id }),
+          }))}
         />
       );
     case 'choose-supporter-card':
@@ -1366,37 +1491,27 @@ export function PromptDirector() {
         );
       }
       return (
-        <ChoiceSheet
+        <CardSheet
           state={state}
           pending={pending}
-          title="choose a Supporter"
-          options={prompt.eligibleCardIds.map((id) => {
-            const def = lookupSupporterCardDef(state, id);
-            return { id, label: def?.name ?? id, sub: def?.description };
-          })}
-          onPick={(id) => answer({ kind: 'card-chosen', cardId: id })}
+          heading="choose a Supporter"
+          items={prompt.eligibleCardIds.map((id, i) => ({
+            key: `${id}-${i}`,
+            cardId: id,
+            label: lookupSupporterCardDef(state, id)?.name ?? id,
+            onPick: () => answer({ kind: 'card-chosen', cardId: id }),
+          }))}
         />
       );
     }
-    case 'choose-spell-level': {
-      const def = lookupSpellCardDef(state, prompt.spellId);
+    case 'choose-spell-level':
       return (
-        <ChoiceSheet
+        <SpellLevelSheet
           state={state}
           pending={pending}
-          title={`cast ${def?.name ?? prompt.spellId} at…`}
-          options={prompt.availableLevels.map((lvl) => {
-            const level = def?.levels.find((l) => l.level === lvl);
-            return {
-              id: String(lvl),
-              label: `Level ${lvl}${level?.title ? ` · ${level.title}` : ''}`,
-              sub: level?.description,
-            };
-          })}
-          onPick={(id) => answer({ kind: 'level-chosen', level: Number(id) as 1 | 2 | 3 })}
+          onPickLevel={(level) => answer({ kind: 'level-chosen', level })}
         />
       );
-    }
     case 'choose-deck':
       return (
         <ChoiceSheet

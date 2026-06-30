@@ -626,6 +626,45 @@ describe('Card picker (off-board card-art smoke)', () => {
   });
 });
 
+describe('Spell level picker (card-face smoke)', () => {
+  it('shows the spell card and a button per castable level, resolving on click', () => {
+    let s = errandsState();
+    s = {
+      ...s,
+      pendingResolutionStack: [
+        {
+          id: 'pr-spell-level',
+          responderId: 'p1',
+          prompt: { kind: 'choose-spell-level', spellId: 'base.spell.burn', availableLevels: [1, 2] },
+          resume: { effectId: 'base.system.noop', context: {} },
+          source: {
+            kind: 'spell',
+            id: 'base.spell.burn',
+            triggeringPlayerId: 'p1',
+            description: 'Burn',
+          },
+        },
+      ],
+    };
+    useGameStore.setState({ state: s });
+    useUiStore.setState({ selectedMageId: null, debugOpen: false, lastError: null });
+    render(<GameScreen />);
+
+    // The sheet shows the spell card face (not a bare text menu) plus one
+    // button per available level.
+    const sheet = screen.getByText(/cast Burn at/).closest('.pointer-events-auto') as HTMLElement;
+    expect(sheet).toBeTruthy();
+    const inSheet = within(sheet);
+    expect(inSheet.getAllByText('Burn').length).toBeGreaterThan(0); // card banner
+    const levelButtons = inSheet.getAllByRole('button');
+    expect(levelButtons.length).toBe(2); // L1 + L2, no card button (display only)
+
+    fireEvent.click(levelButtons[0]!);
+    expect(useGameStore.getState().state!.pendingResolutionStack.length).toBe(0);
+    expect(useUiStore.getState().lastError).toBeNull();
+  });
+});
+
 describe('Advance button (between-turns smoke)', () => {
   it('offers an Advance button between turns and advances the phase on click', () => {
     // A fresh game sits in round-setup — no active player, so the dock shows
