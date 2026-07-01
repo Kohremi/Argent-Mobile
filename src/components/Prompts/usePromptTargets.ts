@@ -1,6 +1,7 @@
 import type { MarkSupportOption } from '../../game/types';
 import { useGameStore } from '../../store/gameStore';
 import { useUiStore } from '../../store/uiStore';
+import { classifyOptionMenu } from '../../utils/uiSelectors';
 import { promptDraftsFromShelf, reactionDestinationSlots, topPending } from './promptHelpers';
 
 /**
@@ -26,10 +27,18 @@ export interface PromptTargets {
   /** Card ids draftable right now by clicking the board's tableau shelf
    *  (choose-vault-card / choose-supporter-card whose cards are shown). */
   cardTargets: Set<string>;
+  /** Room ids pickable right now by clicking the room on the board
+   *  (a choose-from-options menu whose options are all rooms). */
+  roomTargets: Set<string>;
+  /** Player ids pickable right now by clicking the rival's portrait/panel
+   *  (a choose-from-options menu whose options are all players). */
+  playerTargets: Set<string>;
   pickMage: (mageId: string) => void;
   pickSpace: (spaceId: string) => void;
   pickVoter: (voterId: string) => void;
   pickCard: (cardId: string) => void;
+  pickRoom: (roomId: string) => void;
+  pickPlayer: (playerId: string) => void;
 }
 
 const EMPTY = new Set<string>();
@@ -39,12 +48,16 @@ const NONE: PromptTargets = {
   spaceTargets: EMPTY,
   voterTargets: EMPTY,
   cardTargets: EMPTY,
+  roomTargets: EMPTY,
+  playerTargets: EMPTY,
   supportOptions: NO_SUPPORT,
   hitTargets: EMPTY,
   pickMage: () => {},
   pickSpace: () => {},
   pickVoter: () => {},
   pickCard: () => {},
+  pickRoom: () => {},
+  pickPlayer: () => {},
   pickHit: () => {},
 };
 
@@ -165,6 +178,33 @@ export function usePromptTargets(): PromptTargets {
         }
       },
     };
+  }
+
+  // A choose-from-options menu whose options are all rooms / all players →
+  // click the room on the board / the rival's portrait. The option id already
+  // is the room / player id, so it dispatches directly.
+  if (pending.prompt.kind === 'choose-from-options') {
+    const menuKind = classifyOptionMenu(state, pending.prompt.options);
+    if (menuKind === 'rooms' || menuKind === 'players') {
+      const ids = new Set(
+        pending.prompt.options
+          .filter((o) =>
+            menuKind === 'rooms'
+              ? state.rooms.some((r) => r.id === o.id)
+              : state.players.some((p) => p.id === o.id),
+          )
+          .map((o) => o.id),
+      );
+      const pick = (id: string) =>
+        tryDispatch({
+          type: 'RESOLVE_PENDING',
+          resolutionId: pending.id,
+          answer: { kind: 'option-chosen', optionId: id, payload: {} },
+        });
+      return menuKind === 'rooms'
+        ? { ...NONE, roomTargets: ids, pickRoom: pick }
+        : { ...NONE, playerTargets: ids, pickPlayer: pick };
+    }
   }
 
   if (pending.prompt.kind === 'choose-target-action-space') {

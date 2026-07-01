@@ -261,7 +261,7 @@ export function CampusMap() {
   const selectedMageId = useUiStore((s) => s.selectedMageId);
   const setOpenRoomId = useUiStore((s) => s.setOpenRoomId);
   const boardSpotlight = useUiStore((s) => s.boardSpotlight);
-  const { spaceTargets } = usePromptTargets();
+  const { spaceTargets, roomTargets, pickRoom } = usePromptTargets();
 
   // Smart Camera follow: pan the spotlit room into view when a new follow-cue
   // fires (nonce changes). Instant scroll so it doesn't fight the Mage glide.
@@ -301,9 +301,9 @@ export function CampusMap() {
     const entry = mageIndex.get(mageId);
     return entry ? { mage: entry.mage, auraColor: PLAYER_AURA[entry.owner.color] } : undefined;
   };
-  // While picking a Mage to place (or answering a space prompt), the board is a
-  // decision surface: only target rooms stay lit; the rest recede.
-  const picking = selectedMageId != null || promptRooms.size > 0;
+  // While picking a Mage to place (or answering a space / room prompt), the
+  // board is a decision surface: only target rooms stay lit; the rest recede.
+  const picking = selectedMageId != null || promptRooms.size > 0 || roomTargets.size > 0;
   // A room holds one of my students if I own any base/shadow occupant in it.
   const iAmIn = (room: Room) =>
     myId != null &&
@@ -333,7 +333,9 @@ export function CampusMap() {
             const room = roomById.get(roomId);
             if (!room) return null;
             const locked = state.roomLocks.some((l) => l.roomId === room.id);
-            const placeable = placeableRooms.has(room.id) || promptRooms.has(room.id);
+            const isRoomTarget = roomTargets.has(room.id);
+            const placeable =
+              placeableRooms.has(room.id) || promptRooms.has(room.id) || isRoomTarget;
             // Follow-pulse the room an opponent just acted in, plus the Infirmary
             // when that move wounded someone (Ars Magna).
             const spotlit =
@@ -350,7 +352,7 @@ export function CampusMap() {
                 myAura={iAmIn(room) ? PLAYER_AURA[localPlayer(state, localPlayerId)!.color] : null}
                 spots={roomSpots(room, state, mageOf)}
                 spotlightKey={spotlit ? boardSpotlight!.nonce : null}
-                onOpen={() => setOpenRoomId(room.id)}
+                onOpen={isRoomTarget ? () => pickRoom(room.id) : () => setOpenRoomId(room.id)}
               />
             );
           }),

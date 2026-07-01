@@ -18,7 +18,9 @@ import { useGameStore } from '../../store/gameStore';
 import { useUiStore } from '../../store/uiStore';
 import {
   botOwnsCurrentDecision,
+  classifyOptionMenu,
   DEPT_HUE,
+  findPassOption,
   PLAYER_AURA,
   researchTotals,
 } from '../../utils/uiSelectors';
@@ -1393,6 +1395,25 @@ export function PromptDirector() {
       // opponent-card steal) render as real card faces, not a text list.
       if (prompt.options.some((o) => o.cardId)) {
         return <CardPickerSheet state={state} pending={pending} onPick={pickOption} />;
+      }
+      // Menus whose options are all rooms / all players are answered by
+      // clicking the room on the board / the rival's portrait (usePromptTargets
+      // lights them). A "pass" option, if present, stays as a Skip button.
+      {
+        const menuKind = classifyOptionMenu(state, prompt.options);
+        if (menuKind === 'rooms' || menuKind === 'players') {
+          const pass = findPassOption(prompt.options);
+          return (
+            <TargetBanner
+              state={state}
+              pending={pending}
+              text={menuKind === 'rooms' ? 'Choose a room on the board →' : 'Choose a rival →'}
+              {...(pass
+                ? { onPass: () => pickOption(pass.id), passLabel: pass.label }
+                : {})}
+            />
+          );
+        }
       }
       return (
         <ChoiceSheet

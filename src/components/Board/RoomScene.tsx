@@ -83,23 +83,36 @@ export function RoomScene({
 }: RoomSceneProps) {
   const locked = state.roomLocks.some((l) => l.roomId === room.id);
   const hasEligible = spaces.some((s) => eligible.has(s.id));
+  const { roomTargets, pickRoom } = usePromptTargets();
+  const isRoomTarget = roomTargets.has(room.id);
 
   return (
     <div
       className={clsx(
         'relative text-xs space-y-1',
+        isRoomTarget && 'rounded ring-2 ring-amber-400',
         embedded
           ? ''
           : clsx(
               'rounded border p-3 transition-colors',
               locked
                 ? 'border-rose-500 bg-rose-900/20'
-                : hasEligible
+                : hasEligible || isRoomTarget
                   ? 'border-amber-400 bg-amber-400/10'
                   : 'border-slate-700 bg-slate-900',
             ),
       )}
     >
+      {isRoomTarget && (
+        <button
+          type="button"
+          onClick={() => pickRoom(room.id)}
+          title={`Choose ${room.name}`}
+          className="animate-breathe mb-1 flex w-full items-center justify-center gap-1 rounded bg-amber-400/20 px-2 py-1 text-[11px] font-bold uppercase tracking-wide text-amber-100 ring-1 ring-amber-400/60 transition hover:bg-amber-400/30"
+        >
+          ▶ Choose this room
+        </button>
+      )}
       {/* header line: lock · name · side · tags — the sheet supplies its own
           header band in embedded mode, so skip this one there. */}
       {!embedded && (

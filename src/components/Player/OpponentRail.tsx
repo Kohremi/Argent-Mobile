@@ -51,6 +51,7 @@ function RailToken({ player, mage }: { player: Player; mage: OwnedMage }) {
 export function OpponentRail() {
   const state = useGameStore((s) => s.state);
   const setInspectPlayerId = useUiStore((s) => s.setInspectPlayerId);
+  const { playerTargets, pickPlayer } = usePromptTargets();
   if (!state) return null;
   const active = activePlayer(state);
   const rivals = state.players.filter((p) => p.id !== active?.id);
@@ -62,16 +63,24 @@ export function OpponentRail() {
         const aura = PLAYER_AURA[p.color];
         const office = p.mages.filter((m) => m.location.kind === 'office');
         const research = researchTotals(p);
+        const isTarget = playerTargets.has(p.id);
         return (
           <section
             key={p.id}
-            className="rounded-card bg-night-700/85 p-2 ring-1 ring-white/10 backdrop-blur"
+            className={clsx(
+              'rounded-card bg-night-700/85 p-2 ring-1 backdrop-blur',
+              isTarget ? 'animate-breathe ring-2 ring-amber-400' : 'ring-white/10',
+            )}
             style={{ boxShadow: `inset 3px 0 0 ${aura}` }}
           >
             <button
               type="button"
-              onClick={() => setInspectPlayerId(p.id)}
-              title="Review full tableau — resources, spells, supporters, vault items & discards"
+              onClick={isTarget ? () => pickPlayer(p.id) : () => setInspectPlayerId(p.id)}
+              title={
+                isTarget
+                  ? `Choose ${p.name}`
+                  : 'Review full tableau — resources, spells, supporters, vault items & discards'
+              }
               className="group flex w-full items-center gap-1.5 rounded-lg px-1 py-0.5 text-left transition hover:bg-white/5"
               style={{ color: aura }}
             >

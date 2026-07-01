@@ -626,6 +626,81 @@ describe('Card picker (off-board card-art smoke)', () => {
   });
 });
 
+describe('Room picker (board-targeting smoke)', () => {
+  it('lights the room on the board and resolves when its Choose button is clicked', () => {
+    let s = errandsState();
+    const target = s.rooms.find((r) => !r.cannotBePlacedInDirectly)!;
+    s = {
+      ...s,
+      pendingResolutionStack: [
+        {
+          id: 'pr-room',
+          responderId: 'p1',
+          prompt: {
+            kind: 'choose-from-options',
+            options: [{ id: target.id, label: target.name, payload: {} }],
+          },
+          resume: { effectId: 'base.system.noop', context: {} },
+          source: {
+            kind: 'system',
+            id: 'base.system.pick-room',
+            triggeringPlayerId: 'p1',
+            description: 'Pick a room',
+          },
+        },
+      ],
+    };
+    useGameStore.setState({ state: s });
+    useUiStore.setState({ selectedMageId: null, debugOpen: false, lastError: null });
+    render(<GameScreen />);
+
+    // Banner points at the board; the room offers an in-board Choose button.
+    expect(screen.getByText(/Choose a room on the board/)).toBeTruthy();
+    const choose = screen.getByText(/Choose this room/);
+    fireEvent.click(choose);
+    expect(useGameStore.getState().state!.pendingResolutionStack.length).toBe(0);
+    expect(useUiStore.getState().lastError).toBeNull();
+  });
+});
+
+describe('Rival picker (portrait-targeting smoke)', () => {
+  it('lights the rival panel and resolves when their portrait is clicked', () => {
+    let s = errandsState();
+    // Menu of players (Steal Mana style): the lone rival (Diana / p2).
+    s = {
+      ...s,
+      pendingResolutionStack: [
+        {
+          id: 'pr-player',
+          responderId: 'p1',
+          prompt: {
+            kind: 'choose-from-options',
+            options: [{ id: 'p2', label: 'Steal 1 Mana from Diana', payload: {} }],
+          },
+          resume: { effectId: 'base.system.noop', context: {} },
+          source: {
+            kind: 'spell',
+            id: 'base.spell.mana-drain',
+            triggeringPlayerId: 'p1',
+            description: 'Mana Drain',
+          },
+        },
+      ],
+    };
+    useGameStore.setState({ state: s });
+    useUiStore.setState({ selectedMageId: null, debugOpen: false, lastError: null, inspectPlayerId: null });
+    render(<GameScreen />);
+
+    // Banner points at the rival; the rail panel becomes the pick target
+    // (its header no longer opens the inspector).
+    expect(screen.getByText(/Choose a rival/)).toBeTruthy();
+    const pick = screen.getByTitle('Choose Diana');
+    fireEvent.click(pick);
+    expect(useGameStore.getState().state!.pendingResolutionStack.length).toBe(0);
+    expect(useUiStore.getState().lastError).toBeNull();
+  });
+});
+
 describe('Spell level picker (card-face smoke)', () => {
   it('shows the spell card and a button per castable level, resolving on click', () => {
     let s = errandsState();

@@ -10,6 +10,7 @@ import {
 } from '../game/effects/helpers';
 import type {
   ActionSpace,
+  ChoiceOption,
   GameState,
   OwnedMage,
   Player,
@@ -150,6 +151,38 @@ export function localOwnsCurrentDecision(
  * growing tableau is visible) — otherwise the camera would jump to the human's
  * own, unchanging tableau while a rival drafts. Omit it to keep the local view.
  */
+/** Option ids that mean "decline / take nothing" — never a board target. */
+const PASS_OPTION_IDS = new Set(['pass', 'skip', 'none', 'decline', 'no', 'done']);
+
+/** The first "pass / skip" option in a menu, if any (so a board-targeting
+ *  banner can still offer a way to decline). */
+export function findPassOption(options: ChoiceOption[]): ChoiceOption | undefined {
+  return options.find((o) => PASS_OPTION_IDS.has(o.id.toLowerCase()));
+}
+
+/**
+ * Classifies a `choose-from-options` menu whose every real (non-pass) option id
+ * is a Room id or a Player id — those can be answered by clicking the room on
+ * the board / the rival's portrait instead of reading a text list. Returns null
+ * for any other menu (mixed, resource choices, card drafts, etc.), which keeps
+ * the generic sheet. The option id already IS the room / player id, so a click
+ * dispatches `option-chosen` with it directly.
+ */
+export function classifyOptionMenu(
+  state: GameState,
+  options: ChoiceOption[],
+): 'rooms' | 'players' | null {
+  // Card-bearing options are handled by the card picker, never here.
+  if (options.some((o) => o.cardId)) return null;
+  const picky = options.filter((o) => !PASS_OPTION_IDS.has(o.id.toLowerCase()));
+  if (picky.length === 0) return null;
+  const roomIds = new Set(state.rooms.map((r) => r.id));
+  if (picky.every((o) => roomIds.has(o.id))) return 'rooms';
+  const playerIds = new Set(state.players.map((p) => p.id));
+  if (picky.every((o) => playerIds.has(o.id))) return 'players';
+  return null;
+}
+
 export function smartCameraFocusTab(
   state: GameState,
   localPlayerId?: string | null,
@@ -165,6 +198,12 @@ export function smartCameraFocusTab(
       case 'choose-peeked-supporter':
       case 'choose-vault-card':
         return ownedByRival ? 'rivals' : 'tableau';
+      case 'choose-from-options':
+        // Picking a rival (Steal Mana / Take from…) → watch the Rivals rail so
+        // their portraits are the tap target. Room menus stay on the board.
+        return classifyOptionMenu(state, top.prompt.options) === 'players'
+          ? 'rivals'
+          : 'campus';
       default:
         // Targeting prompts and self-contained overlays both resolve on / above
         // the board → Campus.

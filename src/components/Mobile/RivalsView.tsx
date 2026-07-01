@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import clsx from 'clsx';
 import type { GameState } from '../../game/types';
 import {
   lookupSpellCardDef,
@@ -13,6 +14,7 @@ import { PortraitBust } from '../Player/PortraitBust';
 import { MeritBadge, RESOURCE_ORDER_COMPACT } from '../Player/PlayerDock';
 import { CardZoom, spellFace, supporterFace, vaultFace, type CardFace } from '../Cards/GameCard';
 import { CardFan, type FanItem } from '../Cards/CardFan';
+import { usePromptTargets } from '../Prompts/usePromptTargets';
 
 /**
  * The Rivals tab: each opponent shown in full rather than as a one-line summary
@@ -60,6 +62,7 @@ export function RivalsView({
   localPlayerId: string | null;
 }) {
   const [zoom, setZoom] = useState<CardRef | null>(null);
+  const { playerTargets, pickPlayer } = usePromptTargets();
   const self = localPlayer(state, localPlayerId) ?? state.players[0]!;
   const rivals = state.players.filter((p) => p.id !== self.id);
   const zoomFace = zoom ? faceFor(state, zoom) : null;
@@ -69,12 +72,26 @@ export function RivalsView({
       {rivals.map((p) => {
         const aura = PLAYER_AURA[p.color];
         const research = researchTotals(p);
+        const isTarget = playerTargets.has(p.id);
         return (
           <section
             key={p.id}
-            className="rounded-card bg-night-700/80 p-2.5 ring-1 ring-white/10"
+            className={clsx(
+              'rounded-card bg-night-700/80 p-2.5 ring-1',
+              isTarget ? 'animate-breathe ring-2 ring-amber-400' : 'ring-white/10',
+            )}
             style={{ boxShadow: `inset 0 2px 0 ${aura}` }}
           >
+            {isTarget && (
+              <button
+                type="button"
+                onClick={() => pickPlayer(p.id)}
+                title={`Choose ${p.name}`}
+                className="mb-2 flex w-full items-center justify-center gap-1 rounded-lg bg-amber-400/20 px-2 py-1 text-[11px] font-bold uppercase tracking-wide text-amber-100 ring-1 ring-amber-400/60 transition hover:bg-amber-400/30"
+              >
+                ▶ Choose this rival
+              </button>
+            )}
             {/* identity + mages */}
             <div className="flex items-center gap-2">
               <PortraitBust player={p} state={state} expression="neutral" size={34} />
