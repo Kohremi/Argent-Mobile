@@ -3,7 +3,13 @@ import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import { VitePWA } from 'vite-plugin-pwa';
 
-export default defineConfig({
+// GitHub Pages serves this project repo under a sub-path
+// (https://<user>.github.io/Argent-Mobile/), so the production build must be
+// based there. Dev + preview + tests stay at '/' so nothing local changes.
+const GH_PAGES_BASE = '/Argent-Mobile/';
+
+export default defineConfig(({ command }) => ({
+  base: command === 'build' ? GH_PAGES_BASE : '/',
   plugins: [
     react(),
     VitePWA({
@@ -41,8 +47,10 @@ export default defineConfig({
         background_color: '#171430',
         display: 'standalone',
         orientation: 'any',
-        start_url: '/',
-        scope: '/',
+        // Must match the GitHub Pages sub-path (see GH_PAGES_BASE) so the
+        // installed PWA launches into / stays scoped to the app.
+        start_url: '/Argent-Mobile/',
+        scope: '/Argent-Mobile/',
         categories: ['games'],
         icons: [
           { src: 'pwa-192x192.png', sizes: '192x192', type: 'image/png' },
@@ -66,4 +74,4 @@ export default defineConfig({
     environment: 'node',
     include: ['src/**/*.test.ts', 'src/**/*.test.tsx'],
   },
-});
+}));
