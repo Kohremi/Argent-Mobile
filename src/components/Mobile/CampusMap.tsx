@@ -217,15 +217,23 @@ function RoomMapTile({
       >
         <Roofline name={room.name} className="block h-full w-full" />
       </span>
-      {/* Identity accents: Instant rooms get a left edge-stripe, University */}
-      {/* Central a top crown — only when not overridden by an interaction state. */}
+      {/* Identity accents, started below the roofline so the silhouette stays
+          clean: Instant rooms a violet edge-stripe, University Central a white
+          one (side by side in the rare room that is both) — only when not
+          overridden by an interaction state. */}
       {!locked && !placeable && room.isInstantRoom && (
-        <span aria-hidden className="pointer-events-none absolute inset-y-0 left-0 w-1 bg-violet-400/70" />
+        <span
+          aria-hidden
+          className="pointer-events-none absolute bottom-0 left-0 top-[13px] w-1 bg-violet-400/70"
+        />
       )}
       {!locked && !placeable && room.isUniversityCentral && (
         <span
           aria-hidden
-          className="pointer-events-none absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-amber-300/0 via-amber-300/80 to-amber-300/0"
+          className={clsx(
+            'pointer-events-none absolute bottom-0 top-[13px] w-1 bg-white/70',
+            room.isInstantRoom ? 'left-1' : 'left-0',
+          )}
         />
       )}
       {/* Smart Camera follow-pulse: a one-shot ring when an opponent just acted
