@@ -51,7 +51,8 @@ export function MobileHand({ state, player }: { state: GameState; player: Player
     return [
       {
         key: s.cardId,
-        face: spellFace(def),
+        // Pass the owned entry so unresearched levels draw locked on the face.
+        face: spellFace(def, s),
         status,
         onOpen: () => open({ kind: 'spell', id: s.cardId }),
       },

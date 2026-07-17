@@ -42,7 +42,7 @@ function SpellDetail({
   const researched = [owned.intPlaced, owned.wisPlacedLevel2, owned.wisPlacedLevel3];
 
   return (
-    <CardZoom face={spellFace(def)} onClose={onClose}>
+    <CardZoom face={spellFace(def, owned)} onClose={onClose}>
       <div className="flex flex-col gap-1.5 rounded-2xl bg-night-800/95 p-2 ring-1 ring-white/10">
         {def.levels.map((lvl, i) => {
           const ok = castable?.has(lvl.level as 1 | 2 | 3) ?? false;

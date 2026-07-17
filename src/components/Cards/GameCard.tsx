@@ -51,6 +51,10 @@ export type CardFace =
         cost: string;
         timing: string;
         description?: string | undefined;
+        /** True when this level hasn't been researched yet by the owner —
+         *  drawn with a lock in place of the level number. Absent/false on
+         *  offer-view faces, where every level shows for information. */
+        locked?: boolean;
       }[];
     }
   | {
@@ -65,7 +69,28 @@ export type CardFace =
       description?: string | undefined;
     };
 
-export function spellFace(def: SpellCard): CardFace {
+/** The owner's research progress on a spell — which levels are unlocked.
+ *  Structurally a subset of `OwnedSpell`, so an owned entry passes directly. */
+export interface SpellResearch {
+  intPlaced: boolean;
+  wisPlacedLevel2: boolean;
+  wisPlacedLevel3: boolean;
+}
+
+/**
+ * Build a spell face. Pass the owner's `research` (their OwnedSpell) when the
+ * card sits in a hand or a rival's tableau so unresearched levels draw locked;
+ * omit it on offer views, where every level shows unlocked for information.
+ */
+export function spellFace(def: SpellCard, research?: SpellResearch | undefined): CardFace {
+  const locked = (level: number): boolean => {
+    // Unique (leader) spells never consume research — mirror the engine's
+    // CAST_SPELL guard, which skips the research flags for them entirely.
+    if (!research || def.unique) return false;
+    if (level === 1) return !research.intPlaced;
+    if (level === 2) return !research.wisPlacedLevel2;
+    return !research.wisPlacedLevel3;
+  };
   return {
     kind: 'spell',
     name: def.name,
@@ -77,6 +102,7 @@ export function spellFace(def: SpellCard): CardFace {
       cost: l.manaCost > 0 ? `${l.manaCost}✦` : 'free',
       timing: l.timing,
       description: l.description,
+      locked: locked(l.level),
     })),
   };
 }
@@ -143,27 +169,51 @@ function TimingStamp({ timing }: { timing: string }) {
   );
 }
 
-function SpellBody({ face }: { face: Extract<CardFace, { kind: 'spell' }> }) {
+function SpellBody({
+  face,
+  expanded,
+}: {
+  face: Extract<CardFace, { kind: 'spell' }>;
+  expanded?: boolean | undefined;
+}) {
   return (
     <>
       <Banner hue={face.hue} name={face.name} sub={face.department.replace('-', ' ')} />
       <ArtWindow hue={face.hue} glyph={DEPT_GLYPH[face.department] ?? '✦'} className="h-[30%]" />
-      <div className="flex min-h-0 flex-1 flex-col gap-[0.18em]">
+      <div
+        className={clsx(
+          'flex min-h-0 flex-1 flex-col gap-[0.18em]',
+          expanded && 'overflow-y-auto overscroll-contain',
+        )}
+      >
         {face.levels.map((lvl) => (
-          <div key={lvl.level} className="rounded-[0.22em] bg-white/65 px-[0.3em] py-[0.2em]">
+          <div
+            key={lvl.level}
+            className={clsx(
+              'rounded-[0.22em] bg-white/65 px-[0.3em] py-[0.2em]',
+              expanded && 'shrink-0',
+              lvl.locked && 'opacity-55 saturate-[.55]',
+            )}
+          >
             <div className="flex items-center gap-[0.28em]">
               <span
+                title={lvl.locked ? 'Not yet researched' : undefined}
                 className="flex h-[1.15em] w-[1.15em] shrink-0 items-center justify-center rounded-full font-arcane text-[0.62em] font-bold text-ink-900"
-                style={{ background: face.hue }}
+                style={{ background: lvl.locked ? '#a8a29e' : face.hue }}
               >
-                {lvl.level}
+                {lvl.locked ? <span className="text-[0.78em] leading-none">🔒</span> : lvl.level}
               </span>
               <span className="truncate text-[0.56em] font-bold text-ink-900">{lvl.title}</span>
               <span className="ml-auto shrink-0 text-[0.55em] font-bold text-black/65">
                 {lvl.cost}
               </span>
             </div>
-            <p className="mt-[0.12em] line-clamp-2 text-[0.5em] leading-snug text-black/70">
+            <p
+              className={clsx(
+                'mt-[0.12em] text-[0.5em] leading-snug text-black/70',
+                !expanded && 'line-clamp-2',
+              )}
+            >
               <span className="mr-[0.4em] text-[0.92em]">
                 <TimingStamp timing={lvl.timing} />
               </span>
@@ -176,7 +226,13 @@ function SpellBody({ face }: { face: Extract<CardFace, { kind: 'spell' }> }) {
   );
 }
 
-function ItemBody({ face }: { face: Extract<CardFace, { kind: 'vault' | 'supporter' }> }) {
+function ItemBody({
+  face,
+  expanded,
+}: {
+  face: Extract<CardFace, { kind: 'vault' | 'supporter' }>;
+  expanded?: boolean | undefined;
+}) {
   return (
     <>
       <Banner hue={face.hue} name={face.name} sub={face.subtitle} cost={face.cost} />
@@ -189,7 +245,12 @@ function ItemBody({ face }: { face: Extract<CardFace, { kind: 'vault' | 'support
           </span>
         )}
       </p>
-      <p className="mt-[0.18em] line-clamp-5 flex-1 text-[0.54em] leading-snug text-black/75">
+      <p
+        className={clsx(
+          'mt-[0.18em] flex-1 text-[0.54em] leading-snug text-black/75',
+          expanded ? 'min-h-0 overflow-y-auto overscroll-contain' : 'line-clamp-5',
+        )}
+      >
         {face.description}
       </p>
     </>
@@ -244,6 +305,7 @@ export function GameCard({
   className,
   style,
   title,
+  expanded,
 }: {
   face: CardFace;
   status?: CardStatus;
@@ -251,6 +313,9 @@ export function GameCard({
   className?: string;
   style?: React.CSSProperties;
   title?: string;
+  /** Zoomed-in reading mode: descriptions unclamp and the text area scrolls
+   *  when it overflows the card shape (thumbnails clamp instead). */
+  expanded?: boolean;
 }) {
   const ratio = face.kind === 'spell' ? RATIO.spell : RATIO.item;
   const Wrapper = onClick ? 'button' : 'div';
@@ -276,7 +341,11 @@ export function GameCard({
           ...(status === 'draftable' ? ({ '--glow': '#7ee8fa88' } as React.CSSProperties) : {}),
         }}
       >
-        {face.kind === 'spell' ? <SpellBody face={face} /> : <ItemBody face={face} />}
+        {face.kind === 'spell' ? (
+          <SpellBody face={face} expanded={expanded} />
+        ) : (
+          <ItemBody face={face} expanded={expanded} />
+        )}
       </div>
     </Wrapper>
   );
@@ -306,7 +375,7 @@ export function CardZoom({
         className="absolute inset-0 cursor-zoom-out bg-black/70 backdrop-blur-sm"
       />
       <div className="zoom-in relative">
-        <GameCard face={face} style={{ width }} />
+        <GameCard face={face} expanded style={{ width }} />
       </div>
       {children && (
         <div className="relative w-full max-w-sm" onClick={(e) => e.stopPropagation()}>

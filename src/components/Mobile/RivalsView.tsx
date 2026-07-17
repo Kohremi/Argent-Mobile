@@ -12,7 +12,14 @@ import { ResourceIcon } from '../icons';
 import { MageToken } from '../Board/MageToken';
 import { PortraitBust } from '../Player/PortraitBust';
 import { MeritBadge, RESOURCE_ORDER_COMPACT } from '../Player/PlayerDock';
-import { CardZoom, spellFace, supporterFace, vaultFace, type CardFace } from '../Cards/GameCard';
+import {
+  CardZoom,
+  spellFace,
+  supporterFace,
+  vaultFace,
+  type CardFace,
+  type SpellResearch,
+} from '../Cards/GameCard';
 import { CardFan, type FanItem } from '../Cards/CardFan';
 import { usePromptTargets } from '../Prompts/usePromptTargets';
 
@@ -27,12 +34,17 @@ import { usePromptTargets } from '../Prompts/usePromptTargets';
 
 const RIVAL_CARD_W = 50; // px — small thumbnails; tap (or fan-out) to enlarge.
 
-type CardRef = { kind: 'spell' | 'vault' | 'supporter'; id: string };
+type CardRef = {
+  kind: 'spell' | 'vault' | 'supporter';
+  id: string;
+  /** Spell refs carry the rival's research so locked levels draw locked. */
+  research?: SpellResearch | undefined;
+};
 
 function faceFor(state: GameState, ref: CardRef): CardFace | null {
   if (ref.kind === 'spell') {
     const d = lookupSpellCardDef(state, ref.id);
-    return d ? spellFace(d) : null;
+    return d ? spellFace(d, ref.research) : null;
   }
   if (ref.kind === 'vault') {
     const d = lookupVaultCardDef(state, ref.id);
@@ -161,7 +173,7 @@ export function RivalsView({
                   cardWidth={RIVAL_CARD_W}
                   items={fanItems(
                     state,
-                    p.ownedSpells.map((s) => ({ kind: 'spell', id: s.cardId })),
+                    p.ownedSpells.map((s) => ({ kind: 'spell', id: s.cardId, research: s })),
                     setZoom,
                   )}
                 />
