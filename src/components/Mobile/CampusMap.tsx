@@ -12,6 +12,7 @@ import {
 } from '../../utils/uiSelectors';
 import { usePromptTargets } from '../Prompts/usePromptTargets';
 import { MageToken } from '../Board/MageToken';
+import { RewardBubble } from '../FX/RewardBubble';
 import { LockIcon, RoomIcon } from '../icons';
 
 /**
@@ -177,7 +178,7 @@ function RoomMapTile({
       data-room={room.id}
       data-available={placeable ? true : undefined}
       className={clsx(
-        'relative flex min-h-[96px] flex-col items-stretch justify-between gap-1 overflow-hidden rounded-lg border p-1.5 text-center transition-all',
+        'relative flex h-full w-full min-h-[96px] flex-col items-stretch justify-between gap-1 overflow-hidden rounded-lg border p-1.5 text-center transition-all',
         locked
           ? 'border-rose-500 bg-rose-900/20'
           : placeable
@@ -252,6 +253,25 @@ function RoomMapTile({
         {overflow > 0 && <span className="text-[8px] text-slate-400">+{overflow}</span>}
       </div>
     </button>
+  );
+}
+
+/**
+ * Round-end loot bubbles for one tile: as each mage steps off the board, what
+ * its owner collected pops up over the room it left (fed by useStateDiffFx's
+ * 'reward' diff). The bubble animates itself to transparent before the queue
+ * expires it, so no AnimatePresence is needed here.
+ */
+function TileRewardFx({ roomId }: { roomId: string }) {
+  const fx = useUiStore((s) => s.roomFx);
+  const mine = fx.filter((f) => f.roomId === roomId && f.kind === 'reward');
+  if (mine.length === 0) return null;
+  return (
+    <div className="pointer-events-none absolute inset-x-0 top-0 z-40 flex flex-col items-center gap-1">
+      {mine.map((f) => (
+        <RewardBubble key={f.id} gains={f.gains ?? []} aura={f.aura} />
+      ))}
+    </div>
   );
 }
 
@@ -343,17 +363,19 @@ export function CampusMap() {
               (room.id === boardSpotlight.roomId ||
                 (boardSpotlight.wounded && room.cannotBePlacedInDirectly));
             return (
-              <RoomMapTile
-                key={room.id}
-                room={room}
-                placeable={placeable}
-                locked={locked}
-                dimmed={picking && !placeable && !locked}
-                myAura={iAmIn(room) ? PLAYER_AURA[localPlayer(state, localPlayerId)!.color] : null}
-                spots={roomSpots(room, state, mageOf)}
-                spotlightKey={spotlit ? boardSpotlight!.nonce : null}
-                onOpen={isRoomTarget ? () => pickRoom(room.id) : () => setOpenRoomId(room.id)}
-              />
+              <div key={room.id} className="relative">
+                <RoomMapTile
+                  room={room}
+                  placeable={placeable}
+                  locked={locked}
+                  dimmed={picking && !placeable && !locked}
+                  myAura={iAmIn(room) ? PLAYER_AURA[localPlayer(state, localPlayerId)!.color] : null}
+                  spots={roomSpots(room, state, mageOf)}
+                  spotlightKey={spotlit ? boardSpotlight!.nonce : null}
+                  onOpen={isRoomTarget ? () => pickRoom(room.id) : () => setOpenRoomId(room.id)}
+                />
+                <TileRewardFx roomId={room.id} />
+              </div>
             );
           }),
         )}

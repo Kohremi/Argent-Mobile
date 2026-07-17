@@ -2,8 +2,17 @@
 // engine transitions and asserts the implied room effects.
 import { describe, expect, it } from 'vitest';
 import { applyAction, initGame } from '../../game/engine';
-import type { GameState, OwnedMage } from '../../game/types';
-import { computeRoomFx } from './useStateDiffFx';
+import { getBotPersonality } from '../../game/ai';
+import { getPack } from '../../content/registry';
+import { botDecisionContext } from '../../utils/uiSelectors';
+import { createRng } from '../../utils/rng';
+import type { GameAction, GameState, OwnedMage } from '../../game/types';
+import {
+  computeRewardFx,
+  computeRoomFx,
+  createRewardTracker,
+  type RoomFx,
+} from './useStateDiffFx';
 
 function base(): GameState {
   const s = initGame({ activePackIds: ['base'], playerNames: ['Akko', 'Diana'], rngSeed: 7 });
@@ -187,5 +196,173 @@ describe('computeRoomFx', () => {
       ),
     };
     expect(computeRoomFx(seated, bounced)).toContainEqual({ roomId, kind: 'banish' });
+  });
+});
+
+describe('computeRewardFx', () => {
+  /** Seated resolution-phase anchor + a "mage came home" successor to mutate. */
+  function resolutionPair(): { anchor: GameState; home: GameState; roomId: string } {
+    let s = base();
+    s = { ...s, players: s.players.map((p, i) => (i === 0 ? { ...p, mages: [mk('w', p.id)] } : p)) };
+    const [seated, roomId] = seat(s, 0, 'w');
+    const anchor: GameState = {
+      ...seated,
+      phase: { kind: 'resolution', round: 1, pendingRoomIndex: 0, pendingSpaceIndex: 0, slotInProgress: true },
+    };
+    const home: GameState = {
+      ...anchor,
+      players: anchor.players.map((p, i) =>
+        i === 0 ? { ...p, mages: p.mages.map((m) => ({ ...m, location: { kind: 'office', playerId: p.id } })) } : p,
+      ),
+    };
+    return { anchor, home, roomId };
+  }
+
+  it('bubbles the owner resource gains over the room the mage left', () => {
+    const { anchor, home, roomId } = resolutionPair();
+    const next: GameState = {
+      ...home,
+      players: home.players.map((p, i) =>
+        i === 0 ? { ...p, resources: { ...p.resources, gold: p.resources.gold + 2, mana: p.resources.mana + 1 } } : p,
+      ),
+    };
+    const fx = computeRewardFx(anchor, next);
+    expect(fx).toHaveLength(1);
+    expect(fx[0]).toMatchObject({
+      roomId,
+      kind: 'reward',
+      gains: [
+        { icon: 'gold', amount: 2 },
+        { icon: 'mana', amount: 1 },
+      ],
+    });
+    expect(fx[0]!.aura).toBeTruthy();
+  });
+
+  it('bubbles drafted cards as card icons', () => {
+    const { anchor, home, roomId } = resolutionPair();
+    const next: GameState = {
+      ...home,
+      players: home.players.map((p, i) =>
+        i === 0
+          ? {
+              ...p,
+              ownedSpells: [
+                ...p.ownedSpells,
+                { cardId: 'base.spell.burn', intPlaced: false, wisPlacedLevel2: false, wisPlacedLevel3: false, exhausted: false },
+              ],
+            }
+          : p,
+      ),
+    };
+    expect(computeRewardFx(anchor, next)).toContainEqual(
+      expect.objectContaining({ roomId, kind: 'reward', gains: [{ icon: 'spell', amount: 1 }] }),
+    );
+  });
+
+  it('stays silent when the mage comes home empty-handed', () => {
+    const { anchor, home } = resolutionPair();
+    expect(computeRewardFx(anchor, home)).toEqual([]);
+  });
+
+  it('stays silent outside the resolution phase (mid-round bounces)', () => {
+    const { anchor, home } = resolutionPair();
+    const errandsAnchor: GameState = {
+      ...anchor,
+      phase: { kind: 'errands', round: 1, activePlayerIndex: 0, actionUsed: false, fastActionUsed: false },
+    };
+    const next: GameState = {
+      ...home,
+      phase: errandsAnchor.phase,
+      players: home.players.map((p, i) =>
+        i === 0 ? { ...p, resources: { ...p.resources, gold: p.resources.gold + 2 } } : p,
+      ),
+    };
+    expect(computeRewardFx(errandsAnchor, next)).toEqual([]);
+  });
+
+  it('ignores gains by players whose mage did not leave', () => {
+    const { anchor, home } = resolutionPair();
+    const next: GameState = {
+      ...home,
+      players: home.players.map((p, i) =>
+        i === 1 ? { ...p, resources: { ...p.resources, gold: p.resources.gold + 3 } } : p,
+      ),
+    };
+    expect(computeRewardFx(anchor, next)).toEqual([]);
+  });
+});
+
+describe('createRewardTracker — full all-bot game', () => {
+  it('bubbles well-formed rewards over a real game, and plenty of them', () => {
+    const seed = 3;
+    const rng = createRng((seed * 2654435761) | 0);
+    const rnd = (n: number) => Math.floor(rng() * n);
+    const candidateIds = getPack('base')!
+      .candidates.filter((c) => c.startingMageColor !== 'neutral')
+      .map((c) => c.id);
+    let s = initGame({
+      activePackIds: ['base'],
+      playerNames: ['P0', 'P1'],
+      rngSeed: seed,
+      controlledByBot: [true, true],
+      botPersonalityIds: ['klank', 'malfoy'],
+      useCandidateDraft: true,
+    });
+
+    const track = createRewardTracker();
+    const seen: RoomFx[] = [];
+    let steps = 0;
+    while (s.phase.kind !== 'complete' && steps < 40000) {
+      const ctx = botDecisionContext(s);
+      let action: GameAction | null = null;
+      if (ctx?.kind === 'advance') action = { type: 'ADVANCE_PHASE' };
+      else if (ctx?.kind === 'prompt') {
+        const bot = getBotPersonality(s.players.find((p) => p.id === ctx.pending.responderId)?.botPersonalityId);
+        action = { type: 'RESOLVE_PENDING', resolutionId: ctx.pending.id, answer: bot.answerPendingResolution(s, ctx.pending) };
+      } else if (ctx?.kind === 'errands') {
+        const bot = getBotPersonality(s.players.find((p) => p.id === ctx.playerId)?.botPersonalityId);
+        action = bot.chooseErrandsAction(s, ctx.playerId);
+      } else if (s.phase.kind === 'candidate-draft') {
+        const pid = s.players[s.phase.activePlayerIndex]!.id;
+        const taken = new Set(s.players.map((p) => p.candidateId).filter(Boolean));
+        const avail = candidateIds.filter((id) => !taken.has(id));
+        action = { type: 'CHOOSE_CANDIDATE', playerId: pid, candidateId: avail[rnd(avail.length)]! };
+      } else if (s.phase.kind === 'mage-draft-first-choice') {
+        action = { type: 'CHOOSE_DRAFT_FIRST', playerId: s.players[s.phase.chooserIndex]!.id, draftFirst: rng() < 0.5 };
+      } else if (s.phase.kind === 'mage-draft') {
+        const player = s.players[s.phase.pickOrder[s.phase.nextPickIndex]!]!;
+        const legal = Object.keys(s.mageDraftPool).filter(
+          (c) =>
+            (s.mageDraftPool[c as keyof typeof s.mageDraftPool] ?? 0) > 0 &&
+            player.mages.filter((m) => m.color === c).length < 2,
+        );
+        action = { type: 'DRAFT_MAGE', playerId: player.id, color: legal[rnd(legal.length)] as never };
+      }
+      expect(action, `no action at phase ${s.phase.kind}`).toBeTruthy();
+      const next = applyAction(s, action!);
+      seen.push(...track(s, next));
+      s = next;
+      steps++;
+    }
+    expect(s.phase.kind).toBe('complete');
+
+    // A 5-round game resolves dozens of occupied slots — the bubbles must
+    // actually fire, and every one must be render-ready.
+    expect(seen.length).toBeGreaterThan(10);
+    const knownIcons = new Set([
+      'gold', 'mana', 'influence', 'intelligence', 'wisdom', 'marks', 'merit-badge',
+      'spell', 'vault', 'supporter', 'mage',
+    ]);
+    for (const f of seen) {
+      expect(f.kind).toBe('reward');
+      expect(f.roomId).toBeTruthy();
+      expect(f.aura).toBeTruthy();
+      expect(f.gains!.length).toBeGreaterThan(0);
+      for (const g of f.gains!) {
+        expect(knownIcons.has(g.icon)).toBe(true);
+        expect(g.amount).toBeGreaterThan(0);
+      }
+    }
   });
 });

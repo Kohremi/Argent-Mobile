@@ -19,6 +19,7 @@ import { LockIcon, MageIcon, ResourceIcon, type ResourceKind } from '../icons';
  */
 const POWER_RING = 'ring-2 ring-fuchsia-400 shadow-[0_0_6px_rgba(232,121,249,0.7)]';
 import { usePromptTargets } from '../Prompts/usePromptTargets';
+import { RewardBubble } from '../FX/RewardBubble';
 import { MageToken } from './MageToken';
 
 /**
@@ -845,6 +846,18 @@ function RoomFxOverlay({ roomId }: { roomId: string }) {
   return (
     <AnimatePresence>
       {mine.map((f) => {
+        if (f.kind === 'reward') {
+          // Round-end loot bubble — what the departing mage's owner collected.
+          // (Animates itself; the plain wrapper only places it.)
+          return (
+            <div
+              key={f.id}
+              className="pointer-events-none absolute inset-x-0 top-2 z-30 flex justify-center"
+            >
+              <RewardBubble gains={f.gains ?? []} aura={f.aura} />
+            </div>
+          );
+        }
         if (f.kind === 'wound') {
           // Red impact flash — bad things hit.
           return (
