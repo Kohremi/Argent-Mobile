@@ -158,6 +158,22 @@ textarea,
   }
 }
 
+/* The campus at night: a deep sky gradient with faint starlight / leyline
+   specks behind the zoomed-out map grid. Painted on the scroll container, so
+   the sky holds still while the campus scrolls under it. */
+.campus-night {
+  background:
+    radial-gradient(1.5px 1.5px at 12% 18%, rgba(255, 233, 168, 0.55) 50%, transparent 51%),
+    radial-gradient(1px 1px at 78% 10%, rgba(126, 232, 250, 0.5) 50%, transparent 51%),
+    radial-gradient(1.2px 1.2px at 55% 32%, rgba(253, 248, 236, 0.4) 50%, transparent 51%),
+    radial-gradient(1px 1px at 30% 62%, rgba(253, 248, 236, 0.32) 50%, transparent 51%),
+    radial-gradient(1.4px 1.4px at 90% 44%, rgba(255, 233, 168, 0.35) 50%, transparent 51%),
+    radial-gradient(1px 1px at 8% 86%, rgba(126, 232, 250, 0.35) 50%, transparent 51%),
+    radial-gradient(1.2px 1.2px at 66% 78%, rgba(253, 248, 236, 0.3) 50%, transparent 51%),
+    radial-gradient(1px 1px at 42% 92%, rgba(255, 233, 168, 0.3) 50%, transparent 51%),
+    radial-gradient(130% 110% at 50% -20%, #2c2660 0%, #1b1738 45%, #131029 100%);
+}
+
 /* Thin, unobtrusive scrollbars for board panning / drawers. */
 *::-webkit-scrollbar {
   width: 8px;

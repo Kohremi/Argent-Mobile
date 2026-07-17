@@ -735,6 +735,40 @@ export function roomIconKind(name: string): RoomIconKind {
   return 'castle';
 }
 
+/**
+ * Reward-keyed room hue: each chamber tinted by what it chiefly pays out, so
+ * the zoomed-out map reads as a resource map (gold rooms amber, mana rooms
+ * leyline-cyan, knowledge rooms indigo, marks & politics rose, arcana violet).
+ * Keyed on the icon kind so expansion rooms inherit a sensible hue for free.
+ */
+const ROOM_KIND_HUE: Record<RoomIconKind, string> = {
+  guild: '#ffd93d', // gold
+  vault: '#ffd93d',
+  stores: '#ffd93d',
+  courtyard: '#7ee8fa', // mana
+  'great-hall': '#7ee8fa',
+  library: '#818cf8', // knowledge (INT/WIS/research)
+  archive: '#818cf8',
+  training: '#818cf8',
+  chapel: '#fb7185', // marks & politics
+  council: '#fb7185',
+  infirmary: '#fb7185',
+  astronomy: '#b388eb', // arcana
+  staff: '#b388eb',
+  lab: '#e879f9', // research brews
+  workshop: '#ff9f43', // craft & trade
+  tavern: '#ff9f43',
+  dormitory: '#ff9f43',
+  adventuring: '#5fd068', // expeditions
+  catacombs: '#a3b18a', // bone-sage crypt
+  golem: '#a8a29e', // stone
+  castle: '#e0cda0', // parchment fallback
+};
+
+export function roomHue(name: string): string {
+  return ROOM_KIND_HUE[roomIconKind(name)];
+}
+
 const HOLE = { fill: '#0b1020', fillOpacity: 0.5 } as const;
 const ACCENT = { fill: '#ffffff', fillOpacity: 0.6 } as const;
 

@@ -13,7 +13,8 @@ import {
 import { usePromptTargets } from '../Prompts/usePromptTargets';
 import { MageToken } from '../Board/MageToken';
 import { RewardBubble } from '../FX/RewardBubble';
-import { LockIcon, RoomIcon } from '../icons';
+import { LockIcon, roomHue } from '../icons';
+import { Roofline } from './Roofline';
 
 /**
  * The university as a spatial icon map (the mobile "zoomed-out" view): rooms in
@@ -131,18 +132,27 @@ function roomCostBadge(room: Room): string | null {
 }
 
 /**
- * Default tile skin keyed on the room's identity (only used when the tile isn't
- * in a locked / placeable interaction state, which take priority): University
- * Central glows amber, Instant rooms violet, the Infirmary reads as dashed/inert.
+ * Default tile skin when the tile isn't in a locked / placeable interaction
+ * state (those take priority). The Infirmary reads as dashed/inert; every
+ * other room carries its reward hue inline (see `hueWashStyle`) — University
+ * Central and Instant identity live on as their crown / edge-stripe accents.
  */
 function tileIdentityClass(room: Room): string {
   if (room.cannotBePlacedInDirectly)
     return 'border-dashed border-slate-600 bg-slate-900/50 hover:bg-slate-900';
-  if (room.isUniversityCentral)
-    return 'border-amber-300/45 bg-gradient-to-b from-amber-400/10 to-slate-900/85 hover:from-amber-400/15';
-  if (room.isInstantRoom)
-    return 'border-violet-400/45 bg-gradient-to-b from-violet-500/10 to-slate-900/85 hover:from-violet-500/15';
-  return 'border-slate-700 bg-slate-900/80 hover:bg-slate-800';
+  return 'border-slate-700 bg-slate-900/80';
+}
+
+/**
+ * Reward-keyed hue wash: border at ~40% hue, background fading a 12% tint into
+ * the night ground. Deliberately quiet so the picking-mode dim (opacity +
+ * desaturate) and the amber placeable glow always dominate room identity.
+ */
+function hueWashStyle(hue: string): React.CSSProperties {
+  return {
+    borderColor: `${hue}66`,
+    background: `linear-gradient(180deg, ${hue}1f 0%, rgba(15,23,42,0.82) 60%)`,
+  };
 }
 
 function RoomMapTile({
@@ -171,6 +181,10 @@ function RoomMapTile({
   const overflow = spots.length - shown.length;
   const cost = roomCostBadge(room);
   const cap = room.maxMagesPerPlayerPerRound;
+  const hue = roomHue(room.name);
+  // Hue wash only in the tile's resting state — locked rose, placeable amber,
+  // and the Infirmary's inert dashed skin all take priority over identity.
+  const washed = !locked && !placeable && !room.cannotBePlacedInDirectly;
   return (
     <button
       type="button"
@@ -178,7 +192,7 @@ function RoomMapTile({
       data-room={room.id}
       data-available={placeable ? true : undefined}
       className={clsx(
-        'relative flex h-full w-full min-h-[96px] flex-col items-stretch justify-between gap-1 overflow-hidden rounded-lg border p-1.5 text-center transition-all',
+        'relative flex h-full w-full min-h-[100px] flex-col items-stretch justify-between gap-1 overflow-hidden rounded-lg border p-1.5 pt-[16px] text-center transition-all',
         locked
           ? 'border-rose-500 bg-rose-900/20'
           : placeable
@@ -186,9 +200,23 @@ function RoomMapTile({
             : tileIdentityClass(room),
         dimmed && 'opacity-35 saturate-50',
       )}
-      style={placeable ? ({ '--glow': '#ffe9a877' } as React.CSSProperties) : undefined}
+      style={{
+        ...(placeable ? ({ '--glow': '#ffe9a877' } as React.CSSProperties) : {}),
+        ...(washed ? hueWashStyle(hue) : {}),
+      }}
       title={`${room.name} (side ${room.side})`}
     >
+      {/* The skyline: this room's architectural silhouette crowns the tile in
+          its reward hue — the identity carrier now that the header icon is
+          gone. Muted (not hidden) by the locked skin; the tile-level dim
+          handles picking mode. */}
+      <span
+        aria-hidden
+        className="pointer-events-none absolute inset-x-0 top-0 h-[13px]"
+        style={{ color: hue, opacity: locked ? 0.3 : 0.5 }}
+      >
+        <Roofline name={room.name} className="block h-full w-full" />
+      </span>
       {/* Identity accents: Instant rooms get a left edge-stripe, University */}
       {/* Central a top crown — only when not overridden by an interaction state. */}
       {!locked && !placeable && room.isInstantRoom && (
@@ -220,22 +248,20 @@ function RoomMapTile({
         />
       )}
 
-      <div className="flex w-full items-start justify-between gap-1">
-        <RoomIcon name={room.name} size={22} className="text-slate-100" />
-        <span className="flex items-center gap-0.5">
-          {cost && (
-            <span className="rounded bg-amber-400/15 px-1 text-[7px] font-bold leading-tight text-amber-200/90 ring-1 ring-amber-300/30">
-              {cost}
-            </span>
-          )}
-          {locked && <LockIcon size={11} />}
-          {room.isUniversityCentral && (
-            <span className="text-[7px] font-bold uppercase text-amber-300/80">UC</span>
-          )}
-          {room.isInstantRoom && (
-            <span className="text-[7px] font-bold uppercase text-purple-300/80">⚡</span>
-          )}
-        </span>
+      {/* Badges only — the roofline carries room identity now, no header icon. */}
+      <div className="flex w-full items-start justify-end gap-0.5">
+        {cost && (
+          <span className="rounded bg-amber-400/15 px-1 text-[7px] font-bold leading-tight text-amber-200/90 ring-1 ring-amber-300/30">
+            {cost}
+          </span>
+        )}
+        {locked && <LockIcon size={11} />}
+        {room.isUniversityCentral && (
+          <span className="text-[7px] font-bold uppercase text-amber-300/80">UC</span>
+        )}
+        {room.isInstantRoom && (
+          <span className="text-[7px] font-bold uppercase text-purple-300/80">⚡</span>
+        )}
       </div>
 
       <span className="px-0.5 text-[10px] font-bold leading-tight text-slate-100">
@@ -334,7 +360,7 @@ export function CampusMap() {
     );
 
   return (
-    <div className="h-full overflow-auto p-3">
+    <div className="campus-night h-full overflow-auto p-3">
       <div
         className="mx-auto grid max-w-[640px] items-stretch gap-2"
         style={{ gridTemplateColumns: `repeat(${cols}, minmax(72px, 1fr))` }}
@@ -342,11 +368,13 @@ export function CampusMap() {
         {grid.flatMap((row, r) =>
           row.map((roomId, c) => {
             if (!roomId) {
+              // Empty cells are quiet courtyard ground, not dashed voids —
+              // the starlit backdrop shows through them.
               return (
                 <div
                   key={`empty-${r}-${c}`}
                   aria-hidden="true"
-                  className="min-h-[96px] rounded-lg border border-dashed border-slate-800 bg-slate-900/30"
+                  className="min-h-[100px] rounded-lg border border-white/5 bg-night-900/40"
                 />
               );
             }
