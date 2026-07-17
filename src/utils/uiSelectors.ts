@@ -199,6 +199,13 @@ export function smartCameraFocusTab(
       case 'choose-vault-card':
         return ownedByRival ? 'rivals' : 'tableau';
       case 'choose-from-options':
+        // Adventuring B's resolution draft picks from the pool laid out on the
+        // On-Offer shelf — jump there, exactly like the vault/supporter drafts
+        // above. (Its options are composite `kind::cardId`, so it would
+        // otherwise fall through to the generic menu → campus.)
+        if (top.resume?.effectId === 'base.room.adventuring-b.draft') {
+          return ownedByRival ? 'rivals' : 'tableau';
+        }
         // Picking a rival (Steal Mana / Take from…) → watch the Rivals rail so
         // their portraits are the tap target. Room menus stay on the board.
         return classifyOptionMenu(state, top.prompt.options) === 'players'

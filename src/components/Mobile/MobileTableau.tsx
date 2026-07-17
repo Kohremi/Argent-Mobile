@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import clsx from 'clsx';
 import type { GameState } from '../../game/types';
 import {
@@ -81,14 +81,16 @@ function Section({
         {cards.map((c) => {
           const face = faceFor(state, c);
           if (!face) return null;
+          const draftable = cardTargets.has(c.id);
           return (
-            <GameCard
-              key={c.key}
-              face={face}
-              status={cardTargets.has(c.id) ? 'draftable' : null}
-              className="w-full"
-              onClick={() => onTap(c)}
-            />
+            <div key={c.key} data-draft-target={draftable ? true : undefined}>
+              <GameCard
+                face={face}
+                status={draftable ? 'draftable' : null}
+                className="w-full"
+                onClick={() => onTap(c)}
+              />
+            </div>
           );
         })}
       </div>
@@ -99,15 +101,27 @@ function Section({
 export function MobileTableau({ state }: { state: GameState }) {
   const { cardTargets, pickCard } = usePromptTargets();
   const [detail, setDetail] = useState<CardRef | null>(null);
+  const rootRef = useRef<HTMLDivElement>(null);
 
   const adv = state.adventuringBPool;
+
+  // When a draft prompt lights cards, bring the first eligible one into view —
+  // an Adventuring-pool draft's targets live in a temporary section below the
+  // three standing tableaus, otherwise hidden under the fold.
+  const targetsKey = [...cardTargets].sort().join('|');
+  useEffect(() => {
+    if (!targetsKey) return;
+    rootRef.current
+      ?.querySelector('[data-draft-target]')
+      ?.scrollIntoView?.({ block: 'center', behavior: 'smooth' });
+  }, [targetsKey]);
 
   const close = () => setDetail(null);
   const draftable = detail ? cardTargets.has(detail.id) : false;
   const detailFace = detail ? faceFor(state, detail) : null;
 
   return (
-    <div className="h-full overflow-y-auto p-3">
+    <div ref={rootRef} className="h-full overflow-y-auto p-3">
       <p className="mb-2 px-1 font-display text-sm font-bold text-starlight">
         On Offer
         <span className="ml-2 text-[10px] font-normal uppercase tracking-widest text-white/40">

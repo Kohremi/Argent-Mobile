@@ -128,6 +128,29 @@ describe('smartCameraFocusTab', () => {
     expect(smartCameraFocusTab(withPrompt({ kind: 'confirm', message: 'x' }))).toBe('campus');
   });
 
+  it("routes Adventuring B's resolution draft to the Offer/Tableau tab", () => {
+    // The pool draft is a choose-from-options prompt, but its cards live on
+    // the On-Offer shelf — jump there like the vault/supporter drafts, and to
+    // Rivals when the draft is owed to an opponent.
+    const draft = {
+      phase: { kind: 'resolution', round: 1 },
+      pendingResolutionStack: [
+        {
+          id: 'r1',
+          responderId: 'p1',
+          prompt: {
+            kind: 'choose-from-options',
+            options: [{ id: 'vault::base.vault.shield-potion', label: 'Vault', payload: {} }],
+          },
+          resume: { effectId: 'base.room.adventuring-b.draft', context: {} },
+        },
+      ],
+    } as unknown as GameState;
+    expect(smartCameraFocusTab(draft)).toBe('tableau');
+    expect(smartCameraFocusTab(draft, 'p1')).toBe('tableau'); // owed to the local seat
+    expect(smartCameraFocusTab(draft, 'p2')).toBe('rivals'); // owed to a rival
+  });
+
   it('with no prompt, an Errands turn points at the Campus board', () => {
     const s = {
       phase: { kind: 'errands', round: 1, activePlayerIndex: 0 },
