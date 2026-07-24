@@ -13,6 +13,8 @@ import {
   buildReactionQueue,
   findPlayer,
   gainResourcePatch,
+  lookupSupporterCardDef,
+  lookupVaultCardDef,
   moveMageToSpace,
   placeMageOnSlot,
   removeMageFromSlot,
@@ -205,90 +207,77 @@ function returnFromDiscardOrGold(
       ? entry.kind === 'consumable'
       : entry.kind === 'supporter' || entry.kind === 'secret-supporter';
   const eligible = player?.personalDiscard.filter(matches) ?? [];
+  const nameOf = (cardId: string): string =>
+    (kind === 'consumable'
+      ? lookupVaultCardDef(ctx.state, cardId)?.name
+      : lookupSupporterCardDef(ctx.state, cardId)?.name) ?? cardId;
 
-  // First call: choose return (if any eligible) vs gold.
+  // One prompt: every eligible discard card is offered as a real card face
+  // (each option carries `cardId`, so the client renders the art + rules via
+  // its CardPickerSheet), with "Gain 1 Gold instead" as the footer fallback.
+  // When nothing is eligible, gold is the only outcome — apply it directly.
   if (!ctx.resumeAnswer) {
-    const options: ChoiceOption[] = [];
-    if (eligible.length > 0) {
-      options.push({
-        id: 'return',
-        label: kind === 'consumable' ? 'Return a Consumable' : 'Return a Supporter',
-        payload: {},
-      });
-    }
-    options.push({ id: 'gold', label: 'Gain 1 Gold', payload: {} });
-    if (options.length === 1) {
-      // Only gold is possible — apply directly.
+    if (eligible.length === 0) {
       return { kind: 'done', patch: gainResourcePatch(ctx.state, ctx.triggeringPlayerId, 'gold', 1) };
     }
+    const options: ChoiceOption[] = [
+      ...eligible.map((e, i) => ({
+        id: `card:${i}`,
+        label: nameOf(e.cardId),
+        cardId: e.cardId,
+        payload: {},
+      })),
+      { id: 'gold', label: 'Gain 1 Gold instead', payload: {} },
+    ];
     return {
       kind: 'pause',
       pending: {
         responderId: ctx.triggeringPlayerId,
         prompt: { kind: 'choose-from-options', options },
-        resume: { effectId: self, context: { step: 'choice' } },
+        resume: { effectId: self, context: {} },
         source: ctx.source,
       },
     };
   }
 
-  const step = ctx.resumeContext?.['step'];
-  if (step === 'choice') {
-    if (ctx.resumeAnswer.kind !== 'option-chosen') {
-      throw new Error(`${self} choice expected option-chosen`);
-    }
-    if (ctx.resumeAnswer.optionId === 'gold') {
-      return { kind: 'done', patch: gainResourcePatch(ctx.state, ctx.triggeringPlayerId, 'gold', 1) };
-    }
-    // 'return' — pick which card.
-    if (eligible.length === 0) return { kind: 'done', patch: {} };
-    return {
-      kind: 'pause',
-      pending: {
-        responderId: ctx.triggeringPlayerId,
-        prompt: {
-          kind: 'choose-from-options',
-          options: eligible.map((e) => ({ id: e.cardId, label: e.cardId, payload: {} })),
-        },
-        resume: { effectId: self, context: { step: 'apply' } },
-        source: ctx.source,
-      },
-    };
+  if (ctx.resumeAnswer.kind !== 'option-chosen') {
+    throw new Error(`${self} expected option-chosen`);
   }
-
-  if (step === 'apply') {
-    if (ctx.resumeAnswer.kind !== 'option-chosen') {
-      throw new Error(`${self} apply expected option-chosen`);
-    }
-    const cardId = ctx.resumeAnswer.optionId;
-    return {
-      kind: 'done',
-      patch: {
-        players: ctx.state.players.map((p) => {
-          if (p.id !== ctx.triggeringPlayerId) return p;
-          // Remove the FIRST matching discard entry for this card id.
-          let removed = false;
-          const personalDiscard = p.personalDiscard.filter((e) => {
-            if (!removed && e.cardId === cardId && matches(e)) {
-              removed = true;
-              return false;
+  const optionId = ctx.resumeAnswer.optionId;
+  if (optionId === 'gold') {
+    return { kind: 'done', patch: gainResourcePatch(ctx.state, ctx.triggeringPlayerId, 'gold', 1) };
+  }
+  // `card:<index>` addresses the recomputed eligible list — the player's
+  // discard is unchanged between the pause and this resume. Same-id copies are
+  // identical, so removing the first matching entry from the full discard pile
+  // returns the chosen card faithfully.
+  const chosen = eligible[Number(optionId.slice('card:'.length))];
+  if (!chosen) return { kind: 'done', patch: {} };
+  const cardId = chosen.cardId;
+  return {
+    kind: 'done',
+    patch: {
+      players: ctx.state.players.map((p) => {
+        if (p.id !== ctx.triggeringPlayerId) return p;
+        let removed = false;
+        const personalDiscard = p.personalDiscard.filter((e) => {
+          if (!removed && e.cardId === cardId && matches(e)) {
+            removed = true;
+            return false;
+          }
+          return true;
+        });
+        if (!removed) return p;
+        return kind === 'consumable'
+          ? {
+              ...p,
+              personalDiscard,
+              vaultCards: [...p.vaultCards, { cardId, exhausted: false }],
             }
-            return true;
-          });
-          if (!removed) return p;
-          return kind === 'consumable'
-            ? {
-                ...p,
-                personalDiscard,
-                vaultCards: [...p.vaultCards, { cardId, exhausted: false }],
-              }
-            : { ...p, personalDiscard, supporters: [...p.supporters, cardId] };
-        }),
-      },
-    };
-  }
-
-  throw new Error(`${self} unexpected step ${String(step)}`);
+          : { ...p, personalDiscard, supporters: [...p.supporters, cardId] };
+      }),
+    },
+  };
 }
 
 registerEffect('renovation.bell.gluttony', (ctx): EffectResult =>

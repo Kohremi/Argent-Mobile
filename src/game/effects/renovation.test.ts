@@ -120,6 +120,104 @@ describe('Bell Tower Renovation — card effects', () => {
   });
 });
 
+describe('Bell Tower Renovation — discard recovery (Connections / Gluttony)', () => {
+  it('Connections offers each discarded Supporter as a card face plus a Gold fallback', () => {
+    let s = errandsWith(TWO, [bellCard('renovation.bell.connections'), bellCard('renovation.bell.wisdom')]);
+    s = mapPlayer(s, 'p1', (p) => ({
+      ...p,
+      personalDiscard: [
+        { kind: 'supporter', cardId: 'base.supporter.adelaide-chivers' },
+        { kind: 'supporter', cardId: 'base.supporter.arec-russel-zane' },
+      ],
+    }));
+    s = applyAction(s, { type: 'CLAIM_BELL_TOWER', playerId: 'p1', bellTowerCardId: 'renovation.bell.connections' });
+    const prompt = topPending(s)!;
+    if (prompt.prompt.kind !== 'choose-from-options') throw new Error('expected choose-from-options');
+    const opts = prompt.prompt.options;
+    // Each eligible card renders as a face (carries `cardId`), and every one is
+    // named — not a raw id — so the visual selector can label it.
+    const cardOpts = opts.filter((o) => o.cardId);
+    expect(cardOpts).toHaveLength(2);
+    expect(cardOpts.map((o) => o.cardId)).toEqual([
+      'base.supporter.adelaide-chivers',
+      'base.supporter.arec-russel-zane',
+    ]);
+    expect(cardOpts.every((o) => o.label.length > 0 && o.label !== o.cardId)).toBe(true);
+    // The Gold alternative is a non-card (footer) option.
+    expect(opts.some((o) => o.id === 'gold' && !o.cardId)).toBe(true);
+  });
+
+  it('Connections returns the chosen Supporter (by index) to hand, leaving the rest', () => {
+    let s = errandsWith(TWO, [bellCard('renovation.bell.connections'), bellCard('renovation.bell.wisdom')]);
+    s = mapPlayer(s, 'p1', (p) => ({
+      ...p,
+      supporters: [],
+      personalDiscard: [
+        { kind: 'supporter', cardId: 'base.supporter.adelaide-chivers' },
+        { kind: 'supporter', cardId: 'base.supporter.arec-russel-zane' },
+      ],
+    }));
+    s = applyAction(s, { type: 'CLAIM_BELL_TOWER', playerId: 'p1', bellTowerCardId: 'renovation.bell.connections' });
+    const prompt = topPending(s)!;
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: prompt.id,
+      answer: { kind: 'option-chosen', optionId: 'card:1', payload: {} },
+    });
+    const p1 = s.players[0]!;
+    expect(p1.supporters).toEqual(['base.supporter.arec-russel-zane']);
+    expect(p1.personalDiscard).toEqual([
+      { kind: 'supporter', cardId: 'base.supporter.adelaide-chivers' },
+    ]);
+  });
+
+  it('Gluttony returns the chosen Consumable to the office as a readied Vault card', () => {
+    let s = errandsWith(TWO, [bellCard('renovation.bell.gluttony'), bellCard('renovation.bell.wisdom')]);
+    s = mapPlayer(s, 'p1', (p) => ({
+      ...p,
+      vaultCards: [],
+      personalDiscard: [{ kind: 'consumable', cardId: 'base.vault.bottled-memories' }],
+    }));
+    s = applyAction(s, { type: 'CLAIM_BELL_TOWER', playerId: 'p1', bellTowerCardId: 'renovation.bell.gluttony' });
+    const prompt = topPending(s)!;
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: prompt.id,
+      answer: { kind: 'option-chosen', optionId: 'card:0', payload: {} },
+    });
+    const p1 = s.players[0]!;
+    expect(p1.vaultCards).toEqual([{ cardId: 'base.vault.bottled-memories', exhausted: false }]);
+    expect(p1.personalDiscard).toEqual([]);
+  });
+
+  it('picking the Gold fallback grants 1 Gold and keeps the discard intact', () => {
+    let s = errandsWith(TWO, [bellCard('renovation.bell.connections'), bellCard('renovation.bell.wisdom')]);
+    s = mapPlayer(s, 'p1', (p) => ({
+      ...p,
+      personalDiscard: [{ kind: 'supporter', cardId: 'base.supporter.adelaide-chivers' }],
+    }));
+    const gold = s.players[0]!.resources.gold;
+    s = applyAction(s, { type: 'CLAIM_BELL_TOWER', playerId: 'p1', bellTowerCardId: 'renovation.bell.connections' });
+    const prompt = topPending(s)!;
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: prompt.id,
+      answer: { kind: 'option-chosen', optionId: 'gold', payload: {} },
+    });
+    expect(s.players[0]!.resources.gold).toBe(gold + 1);
+    expect(s.players[0]!.personalDiscard).toHaveLength(1);
+  });
+
+  it('with no eligible discard card, Connections grants Gold without prompting', () => {
+    let s = errandsWith(TWO, [bellCard('renovation.bell.connections'), bellCard('renovation.bell.wisdom')]);
+    s = mapPlayer(s, 'p1', (p) => ({ ...p, personalDiscard: [] }));
+    const gold = s.players[0]!.resources.gold;
+    s = applyAction(s, { type: 'CLAIM_BELL_TOWER', playerId: 'p1', bellTowerCardId: 'renovation.bell.connections' });
+    expect(topPending(s)).toBeUndefined();
+    expect(s.players[0]!.resources.gold).toBe(gold + 1);
+  });
+});
+
 describe('Bell Tower Renovation — Adaptability', () => {
   it('grants the holder a placement when they take the final card', () => {
     let s = errandsWith(TWO, [bellCard('renovation.bell.adaptability')]);
