@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { applyAction, initGame } from '../engine';
-import { colorAbilityActive } from './helpers';
+import { colorAbilityActive, placeMageOnSlot } from './helpers';
 import { computeVoterWinner, scorePlayerForCriterion } from '../scoring';
 import {
   STAFF_A_CARD_ID,
@@ -332,5 +332,90 @@ describe("Archmage's Staff — always in play when the pack is active", () => {
       },
     });
     expect(s.rooms.some((r) => r.name === STAFF_ROOM_NAME)).toBe(false);
+  });
+});
+
+describe("Archmage's Staff — no shadow can be placed there (bypass fixes)", () => {
+  it('placeMageOnSlot rejects a shadow placement on the Staff slot', () => {
+    let s = injectStaffRoom(initGame(CONFIG), STAFF_A_ROOM);
+    s = addMage(s, 'p1', {
+      id: 'g1',
+      cardId: 'base.mage.natural-magick',
+      color: 'green',
+    });
+    expect(() =>
+      placeMageOnSlot(s, {
+        mageId: 'g1',
+        ownerId: 'p1',
+        spaceId: STAFF_A_SLOT,
+        asShadow: true,
+      }),
+    ).toThrow(/no shadow position/);
+    // Base placement on the same slot is still legal.
+    expect(() =>
+      placeMageOnSlot(s, {
+        mageId: 'g1',
+        ownerId: 'p1',
+        spaceId: STAFF_A_SLOT,
+        asShadow: false,
+      }),
+    ).not.toThrow();
+  });
+
+  it('Invisibility (Indefinite Definitives L2) never offers the Staff slot', () => {
+    let s = injectStaffRoom(initGame(CONFIG), STAFF_A_ROOM);
+    // p1 owns Indefinite Definitives researched to L2, with Mana + an office Mage.
+    s = mapPlayer(s, 'p1', (p) => ({
+      ...p,
+      ownedSpells: [
+        ...p.ownedSpells,
+        {
+          cardId: 'base.spell.indefinite-definitives',
+          intPlaced: true,
+          wisPlacedLevel2: true,
+          wisPlacedLevel3: false,
+          exhausted: false,
+        },
+      ],
+      resources: { ...p.resources, mana: 3 },
+    }));
+    s = addMage(s, 'p1', {
+      id: 'hider',
+      cardId: 'base.mage.divinity',
+      color: 'blue',
+    });
+    s = {
+      ...s,
+      firstPlayerIndex: 0,
+      phase: {
+        kind: 'errands',
+        round: 1,
+        activePlayerIndex: 0,
+        actionUsed: false,
+        fastActionUsed: false,
+      },
+    };
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.indefinite-definitives',
+      level: 2,
+    });
+    // Step 1: pick the office Mage to hide.
+    let top = s.pendingResolutionStack[s.pendingResolutionStack.length - 1]!;
+    expect(top.prompt.kind).toBe('choose-target-mage');
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: top.id,
+      answer: { kind: 'mage-chosen', mageId: 'hider' },
+    });
+    // Step 2: the empty-slot prompt must exclude the Staff slot but still offer
+    // other rooms' empty slots.
+    top = s.pendingResolutionStack[s.pendingResolutionStack.length - 1]!;
+    expect(top.prompt.kind).toBe('choose-target-action-space');
+    if (top.prompt.kind === 'choose-target-action-space') {
+      expect(top.prompt.eligibleSpaceIds).not.toContain(STAFF_A_SLOT);
+      expect(top.prompt.eligibleSpaceIds.length).toBeGreaterThan(0);
+    }
   });
 });

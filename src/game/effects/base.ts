@@ -1268,10 +1268,19 @@ function applyReactionReposition(
   // repositioning there would orphan that occupant (e.g. Invisibility Cloak
   // re-shadowing onto a slot whose shadow another of your Mages already holds).
   // The Mage simply stays where it is and the card is NOT consumed.
+  // A no-shadow room (Great Hall, Golem Lab, Archmage's Staff) has no shadow
+  // position, so a card that would re-shadow the Mage there returns it to its
+  // (now-vacated) base slot instead — matching the base-returning reaction
+  // cards (Shield Potion, Ancient Armor, …). Only Phase Steppers / Invisibility
+  // Cloak pass asShadow: true, so only they are affected.
+  const destRoom = state.rooms.find((r) =>
+    r.actionSpaces.some((s) => s.id === destinationSpaceId),
+  );
+  const effectiveShadow = asShadow && destRoom?.noShadowSlots !== true;
   const blocker = slotPositionHeldBy(
     state,
     destinationSpaceId,
-    asShadow ? 'shadow' : 'base',
+    effectiveShadow ? 'shadow' : 'base',
   );
   if (blocker !== null && blocker !== mageId) {
     return { players: state.players, rooms: state.rooms };
@@ -1284,7 +1293,7 @@ function applyReactionReposition(
     mageId,
     ownerId,
     spaceId: destinationSpaceId,
-    asShadow,
+    asShadow: effectiveShadow,
   });
   const rooms = placePatch.rooms!;
   // Card disposal on the reactor (consumable → discard; exhaust → flag).
@@ -11907,6 +11916,9 @@ registerEffect('base.spell.indefinite-definitives.l2', (ctx): EffectResult => {
     const emptySlots: string[] = [];
     for (const r of ctx.state.rooms) {
       if (r.cannotBePlacedInDirectly) continue;
+      // No-shadow rooms (Great Hall, Golem Lab, Archmage's Staff) have no
+      // shadow position to place into — skip them (matches Doppelganger L3).
+      if (r.noShadowSlots) continue;
       if (isRoomAtPlayerCap(ctx.state, ctx.triggeringPlayerId, r.id)) continue;
       for (const s of r.actionSpaces) {
         if (!s.occupant && !s.shadowOccupant) emptySlots.push(s.id);
@@ -18722,9 +18734,20 @@ registerEffect(
     const mageId = event.mageId;
     const ownerId = event.ownerId;
     const working: GameState = { ...ctx.state, ...paid };
-    // Fizzle the re-shadow if the original slot's shadow is already held by
-    // another Mage (placing there would orphan it) — the spell is still spent.
-    const blocker = slotPositionHeldBy(working, originalSpaceId, 'shadow');
+    // A no-shadow room (Great Hall, Golem Lab, Archmage's Staff) has no shadow
+    // position — Haunt returns the Mage to its (vacated) base slot there instead
+    // of re-shadowing it.
+    const originalRoom = working.rooms.find((r) =>
+      r.actionSpaces.some((s) => s.id === originalSpaceId),
+    );
+    const reshadow = originalRoom?.noShadowSlots !== true;
+    // Fizzle the reposition if the target position is already held by another
+    // Mage (placing there would orphan it) — the spell is still spent.
+    const blocker = slotPositionHeldBy(
+      working,
+      originalSpaceId,
+      reshadow ? 'shadow' : 'base',
+    );
     if (blocker !== null && blocker !== mageId) {
       return { kind: 'done', patch: { players: paid.players } };
     }
@@ -18734,7 +18757,7 @@ registerEffect(
         mageId,
         ownerId,
         spaceId: originalSpaceId,
-        asShadow: true,
+        asShadow: reshadow,
       }),
     };
   },

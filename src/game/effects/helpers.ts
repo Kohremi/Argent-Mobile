@@ -583,6 +583,20 @@ export function placeMageOnSlot(
     .flatMap((r) => r.actionSpaces)
     .find((s) => s.id === spaceId);
   if (!target) throw new Error(`placeMageOnSlot: space ${spaceId} not found`);
+  // Invariant: rooms flagged `noShadowSlots` (Great Hall, Golem Lab, Archmage's
+  // Staff) have no shadow position, so a Mage can never be placed there as a
+  // shadow. Callers must pre-filter (or fall back to base); this throw is the
+  // safety net that keeps a shadow from ever landing in such a room.
+  if (asShadow) {
+    const room = state.rooms.find((r) =>
+      r.actionSpaces.some((s) => s.id === spaceId),
+    );
+    if (room?.noShadowSlots) {
+      throw new Error(
+        `placeMageOnSlot: ${room.name} has no shadow position — shadow placement rejected`,
+      );
+    }
+  }
   const existing = asShadow ? target.shadowOccupant : target.occupant;
   if (existing && existing.mageId !== mageId) {
     throw new Error(
