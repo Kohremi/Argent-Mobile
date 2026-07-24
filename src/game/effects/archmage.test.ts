@@ -15,6 +15,19 @@ const CONFIG: GameConfig = {
   activePackIds: ['base', 'archmage'],
   playerNames: ['Alice', 'Bob'],
   rngSeed: 4242,
+  // A fixed board that omits the Staff room, so the tests below that inject it
+  // via `injectStaffRoom` control exactly one Staff tile. (Random layout now
+  // always seats the Staff — covered by the "always in play" suite.)
+  roomLayoutMode: {
+    kind: 'custom',
+    roomIds: [
+      'base.room.council-chamber.a',
+      'base.room.library.a',
+      'base.room.infirmary.a',
+      'base.room.vault.a',
+      'base.room.training-fields.a',
+    ],
+  },
 };
 
 const STAFF_A_ROOM = archmagePack.rooms.find((r) => r.side === 'A')!;
@@ -268,5 +281,56 @@ describe("Archmage's Staff — voter only enters the pool with the Staff room", 
       if (s.voters.some((v) => v.id === ULEYLE)) appeared = true;
     }
     expect(appeared).toBe(true);
+  });
+});
+
+describe("Archmage's Staff — always in play when the pack is active", () => {
+  const STAFF_ROOM_NAME = "The Archmage's Staff";
+  const STAFF_A_ROOM_ID = 'archmage.room.archmages-staff.a';
+  const STAFF_B_ROOM_ID = 'archmage.room.archmages-staff.b';
+
+  it('the random layout always seats exactly one Staff room', () => {
+    for (let seed = 1; seed <= 30; seed++) {
+      const s = initGame({ ...CONFIG, rngSeed: seed, roomLayoutMode: { kind: 'random' } });
+      const staff = s.rooms.filter((r) => r.name === STAFF_ROOM_NAME);
+      expect(staff.length).toBe(1);
+      expect([STAFF_A_ROOM_ID, STAFF_B_ROOM_ID]).toContain(staff[0]!.id);
+    }
+  });
+
+  it('the random layout picks the Staff side by coin flip (both sides appear)', () => {
+    const sides = new Set<string>();
+    for (let seed = 1; seed <= 40; seed++) {
+      const s = initGame({ ...CONFIG, rngSeed: seed, roomLayoutMode: { kind: 'random' } });
+      sides.add(s.rooms.find((r) => r.name === STAFF_ROOM_NAME)!.side);
+    }
+    expect(sides).toEqual(new Set(['A', 'B']));
+  });
+
+  it('the first-time (starter) layout appends the Staff (side A) as an extra tile', () => {
+    const starter = initGame({ ...CONFIG, roomLayoutMode: { kind: 'first-time' } });
+    // The 8 rulebook rooms plus the appended Staff.
+    expect(starter.rooms.length).toBe(9);
+    const staff = starter.rooms.filter((r) => r.name === STAFF_ROOM_NAME);
+    expect(staff.length).toBe(1);
+    expect(staff[0]!.id).toBe(STAFF_A_ROOM_ID);
+  });
+
+  it('a hand-picked custom board that omits the Staff stays without it', () => {
+    // The custom pre-select is a removable UI default, not an engine guarantee —
+    // an explicit selection without the Staff is honoured as-is.
+    const s = initGame({
+      ...CONFIG,
+      roomLayoutMode: {
+        kind: 'custom',
+        roomIds: [
+          'base.room.council-chamber.a',
+          'base.room.library.a',
+          'base.room.infirmary.a',
+          'base.room.vault.a',
+        ],
+      },
+    });
+    expect(s.rooms.some((r) => r.name === STAFF_ROOM_NAME)).toBe(false);
   });
 });

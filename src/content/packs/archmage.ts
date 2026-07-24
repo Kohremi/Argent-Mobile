@@ -169,6 +169,10 @@ export const archmagePack: ContentPack = {
   mages: [],
   candidates: [],
   rooms: [archmagesStaffA, archmagesStaffB],
+  // The Staff room is the whole point of this pack (and its Uleyle Kimbhe voter
+  // requires it), so keep it in play across every layout mode — see
+  // ContentPack.alwaysInPlayRoomIds for how each mode honours this.
+  alwaysInPlayRoomIds: [STAFF_A_ROOM_ID],
   spells: [],
   legendarySpells: [],
   vaultCards: [staffA, staffB],

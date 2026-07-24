@@ -33,7 +33,9 @@ const MAX_GRID_COLS = 3;
 /**
  * Fixed beginner layout for `roomLayoutMode: { kind: 'first-time' }` —
  * all 8 base rooms, side A, listed in grid row-major order (2 cols × 4
- * rows). Matches the rulebook-recommended starter board.
+ * rows). Matches the rulebook-recommended starter board. An active pack's
+ * `alwaysInPlayRoomIds` (the Archmage's Staff) are appended as extra tiles,
+ * growing the grid to fit.
  */
 export const FIRST_TIME_LAYOUT_ROOM_IDS: RoomId[] = [
   'base.room.vault.a',
@@ -354,6 +356,16 @@ export function buildInitialState(config: GameConfig): GameState {
   // recommended default for new games.
   const layoutMode = config.roomLayoutMode ?? { kind: 'random' };
   const allRoomsById = new Map(allRooms.map((r) => [r.id, r] as const));
+  // Rooms an active pack guarantees in play across EVERY layout mode (the
+  // Archmage's Staff). Resolved to Room objects here; each mode below forces
+  // them in on the appropriate side. Scenario-banned rooms are never forced.
+  const alwaysInPlayRooms: Room[] = [];
+  for (const pack of packs) {
+    for (const rid of pack.alwaysInPlayRoomIds ?? []) {
+      const room = allRoomsById.get(rid);
+      if (room && !bannedRoomNames.has(room.name)) alwaysInPlayRooms.push(room);
+    }
+  }
   let selectedRooms: Room[];
   let cols: number;
   let rows: number;
@@ -387,6 +399,19 @@ export function buildInitialState(config: GameConfig): GameState {
       })
       // Scenario-banned rooms are stripped even from an explicit selection.
       .filter((r) => !bannedRoomNames.has(r.name));
+    // The first-time (starter) board appends any always-in-play pack room (the
+    // Archmage's Staff) as an extra tile, side A. The custom picker instead
+    // pre-selects it, so a 'custom' selection already carries the choice (and
+    // the player is free to remove it there) — don't force it back in.
+    if (layoutMode.kind === 'first-time') {
+      const selectedNames = new Set(selectedRooms.map((r) => r.name));
+      for (const room of alwaysInPlayRooms) {
+        if (!selectedNames.has(room.name)) {
+          selectedRooms.push(room);
+          selectedNames.add(room.name);
+        }
+      }
+    }
     const dims = pickGridForRoomCount(selectedRooms.length);
     cols = dims.cols;
     rows = dims.rows;
@@ -430,6 +455,9 @@ export function buildInitialState(config: GameConfig): GameState {
     }
     // Scenario-guaranteed rooms (e.g. Talismans forces Student Stores).
     for (const name of scenarioGuaranteedNames) guaranteedNames.add(name);
+    // Always-in-play pack rooms (the Archmage's Staff) are guaranteed here too,
+    // on whichever side the coin-flip above chose for that name.
+    for (const room of alwaysInPlayRooms) guaranteedNames.add(room.name);
     const roomSelection = selectInPlayRooms(
       sidePick.rooms,
       targetRoomCount,

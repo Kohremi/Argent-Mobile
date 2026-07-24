@@ -76,9 +76,23 @@ export interface ContentPack {
   /**
    * Room ids that must be included whenever the random layout is used (in
    * addition to the always-present University-Central rooms). Summer Break
-   * guarantees the Dormitory; a future "random + Archmage's Staff" mode could
-   * add the Staff room here. Ignored by the first-time / custom layouts (the
-   * player already picks rooms there).
+   * guarantees the Dormitory. Ignored by the first-time / custom layouts (the
+   * player already picks rooms there). For a room that must be present in EVERY
+   * layout mode, use `alwaysInPlayRoomIds` instead.
    */
   guaranteedRandomRoomIds?: RoomId[];
+
+  /**
+   * Room ids that must ALWAYS be in play whenever this pack is active — the
+   * stronger, all-layout-modes form of `guaranteedRandomRoomIds`. The
+   * Archmage's Staff pack guarantees its single Staff room this way (it is the
+   * pack's only room, and its Uleyle Kimbhe voter needs it in play):
+   *   - the random layout forces it in on a coin-flipped side (one of the N),
+   *   - the first-time (starter) layout appends it as an extra tile (side A),
+   *   - the custom picker pre-selects it (side A) — the player may still remove
+   *     or flip it, so this is only the starting default there.
+   * Matched by room name, so whichever side is chosen still satisfies it. List
+   * the side-A room id; the two sides share a name.
+   */
+  alwaysInPlayRoomIds?: RoomId[];
 }

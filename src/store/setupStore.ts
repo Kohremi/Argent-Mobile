@@ -7,6 +7,7 @@ import type {
   ScenarioId,
 } from '../game/types';
 import { getScenario } from '../content/scenarios';
+import { getPack } from '../content/registry';
 
 /** The six magic departments that have worker-Mage abilities, in display
  *  order. Technomancy is from the Mancers expansion. */
@@ -116,6 +117,43 @@ export function defaultRoomCountForPlayerCount(playerCount: number): number {
   return 12;
 }
 
+/** Strip the trailing `.a` / `.b` side suffix so both sides of a room share a
+ *  key — used to detect "this room is already chosen, on either side". */
+function roomBaseId(roomId: RoomId): string {
+  return roomId.replace(/\.[ab]$/, '');
+}
+
+/**
+ * Keep the custom-layout selection in step with a pack toggle. A pack that just
+ * became active pre-selects its `alwaysInPlayRoomIds` (side A) unless the player
+ * already chose that room; a pack that just became inactive has its rooms
+ * dropped so the custom layout never references a room from an inactive pack.
+ * Only rooms of the packs that actually changed are touched, so a room the
+ * player removed by hand stays removed across unrelated toggles (the Archmage's
+ * Staff is a removable default, not a locked room).
+ */
+function applyPackRoomDefaults(
+  customRoomIds: RoomId[],
+  prevPackIds: PackId[],
+  nextPackIds: PackId[],
+): RoomId[] {
+  let out = customRoomIds;
+  for (const id of nextPackIds.filter((p) => !prevPackIds.includes(p))) {
+    const present = new Set(out.map(roomBaseId));
+    for (const rid of getPack(id)?.alwaysInPlayRoomIds ?? []) {
+      if (!present.has(roomBaseId(rid))) {
+        out = [...out, rid];
+        present.add(roomBaseId(rid));
+      }
+    }
+  }
+  for (const id of prevPackIds.filter((p) => !nextPackIds.includes(p))) {
+    const drop = new Set((getPack(id)?.alwaysInPlayRoomIds ?? []).map(roomBaseId));
+    if (drop.size > 0) out = out.filter((rid) => !drop.has(roomBaseId(rid)));
+  }
+  return out;
+}
+
 export const useSetupStore = create<SetupState>((set) => ({
   // Base is always required; the Mancers expansion is on by default. Other packs
   // are off by default.
@@ -140,7 +178,11 @@ export const useSetupStore = create<SetupState>((set) => ({
   roundCount: 5,
   scenarioId: null,
 
-  setSelectedPacks: (ids) => set({ selectedPackIds: ids }),
+  setSelectedPacks: (ids) =>
+    set((s) => ({
+      selectedPackIds: ids,
+      customRoomIds: applyPackRoomDefaults(s.customRoomIds, s.selectedPackIds, ids),
+    })),
 
   togglePack: (id) =>
     set((s) => {
@@ -161,7 +203,11 @@ export const useSetupStore = create<SetupState>((set) => ({
       if (id === 'summerbreak' && s.scenarioId === null) {
         roundCount = next.includes('summerbreak') ? 6 : 5;
       }
-      return { selectedPackIds: next, roundCount };
+      return {
+        selectedPackIds: next,
+        roundCount,
+        customRoomIds: applyPackRoomDefaults(s.customRoomIds, s.selectedPackIds, next),
+      };
     }),
 
   setRoundCount: (n) =>
@@ -178,6 +224,11 @@ export const useSetupStore = create<SetupState>((set) => ({
       return {
         scenarioId: id,
         selectedPackIds,
+        customRoomIds: applyPackRoomDefaults(
+          s.customRoomIds,
+          s.selectedPackIds,
+          selectedPackIds,
+        ),
         // Scenarios are always 5-round games. Selecting one forces 5; clearing
         // it restores the Summer-Break-aware default.
         roundCount:
