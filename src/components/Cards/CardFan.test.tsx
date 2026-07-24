@@ -4,7 +4,7 @@
 // happy-dom has no layout, so elementFromPoint is stubbed to steer "which card
 // is under the finger" per step.
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, render, screen, fireEvent } from '@testing-library/react';
+import { cleanup, render, screen, fireEvent, act } from '@testing-library/react';
 import { CardFan, type FanItem } from './CardFan';
 import type { CardFace } from './GameCard';
 
@@ -64,6 +64,39 @@ describe('CardFan hold-and-swipe', () => {
     expect(opened).toEqual(['Gamma']);
     // The preview is dismissed with the gesture.
     expect(screen.getAllByTitle('Gamma').length).toBe(1);
+  });
+
+  it('a quick tap (press → release, no swipe) opens the tapped card', () => {
+    const opened: string[] = [];
+    render(<CardFan label="vault" items={makeItems((n) => opened.push(n))} />);
+    const fan = document.querySelector('[data-fan-card="0"]')!.parentElement!;
+
+    fingerOver(1);
+    fireEvent.pointerDown(fan, { clientX: 30, clientY: 10 });
+    fireEvent.pointerUp(fan, { clientX: 30, clientY: 10 });
+    expect(opened).toEqual(['Beta']);
+  });
+
+  it('a quick tap still opens when down+up fire before any re-render', () => {
+    // The real-device tap: pointerdown and pointerup land in the same task, so
+    // React has not re-rendered between them and the `hover` STATE is still
+    // stale in the release handler. The fix reads a synchronous ref instead, so
+    // the tapped card still opens. (Batched in one act() to defeat fireEvent's
+    // per-call flush, which would otherwise hide the bug.)
+    const opened: string[] = [];
+    render(<CardFan label="vault" items={makeItems((n) => opened.push(n))} />);
+    const fan = document.querySelector('[data-fan-card="0"]')!.parentElement!;
+
+    fingerOver(2);
+    act(() => {
+      fan.dispatchEvent(
+        new PointerEvent('pointerdown', { bubbles: true, clientX: 55, clientY: 10 }),
+      );
+      fan.dispatchEvent(
+        new PointerEvent('pointerup', { bubbles: true, clientX: 55, clientY: 10 }),
+      );
+    });
+    expect(opened).toEqual(['Gamma']);
   });
 
   it('dragging off the fan before releasing selects nothing', () => {

@@ -39,6 +39,11 @@ export function CardFan({
 }) {
   const [spread, setSpread] = useState(false);
   const [hover, setHover] = useState<number | null>(null);
+  // A synchronous shadow of `hover`. `onPointerUp` reads this instead of the
+  // `hover` state so a quick tap works: on a tap the pointerdown→pointerup pair
+  // fires before React re-renders, leaving the `hover` STATE stale (null) in the
+  // release handler — the ref is updated the instant the pointer resolves.
+  const hoverRef = useRef<number | null>(null);
   const rootRef = useRef<HTMLDivElement>(null);
   const pressed = useRef(false);
   const lastPoint = useRef<{ x: number; y: number } | null>(null);
@@ -54,10 +59,17 @@ export function CardFan({
   const ratioH = items[0]?.face.kind === 'spell' ? 19 / 11 : 7 / 5;
   const fanH = Math.round(cardWidth * ratioH);
 
+  // Keep the ref and the state in lock-step — every hover change goes through
+  // here so `hoverRef.current` always matches the last resolved card.
+  const setHoverIdx = (idx: number | null) => {
+    hoverRef.current = idx;
+    setHover(idx);
+  };
+
   const collapse = () => {
     pressed.current = false;
     setSpread(false);
-    setHover(null);
+    setHoverIdx(null);
   };
 
   // Which card is under the pointer right now? Hit-testing the rendered layout
@@ -75,7 +87,7 @@ export function CardFan({
 
   const trackPointer = (e: React.PointerEvent) => {
     lastPoint.current = { x: e.clientX, y: e.clientY };
-    setHover(indexAt(e.clientX, e.clientY));
+    setHoverIdx(indexAt(e.clientX, e.clientY));
   };
 
   const previewItem = hover != null ? items[hover] : undefined;
@@ -110,8 +122,10 @@ export function CardFan({
         onPointerMove={trackPointer}
         onPointerUp={() => {
           // Select what the preview is showing — not a fresh hit-test, which
-          // could land on a neighbor mid-spread-animation.
-          const idx = pressed.current ? hover : null;
+          // could land on a neighbor mid-spread-animation. Read the ref, not the
+          // `hover` state, so a quick tap (no re-render between down and up)
+          // still resolves to the tapped card.
+          const idx = pressed.current ? hoverRef.current : null;
           collapse();
           if (idx != null) items[idx]?.onOpen();
         }}
@@ -127,7 +141,7 @@ export function CardFan({
         // still finger — the cards moved out from under it while it held still.
         onTransitionEnd={() => {
           if (pressed.current && lastPoint.current) {
-            setHover(indexAt(lastPoint.current.x, lastPoint.current.y));
+            setHoverIdx(indexAt(lastPoint.current.x, lastPoint.current.y));
           }
         }}
         onContextMenu={(e) => e.preventDefault()}
