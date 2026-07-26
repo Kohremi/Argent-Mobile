@@ -197,6 +197,66 @@ describe('computeRoomFx', () => {
     };
     expect(computeRoomFx(seated, bounced)).toContainEqual({ roomId, kind: 'banish' });
   });
+
+  it('emits a move swoosh on the destination when a mage relocates slot→slot', () => {
+    let s = base();
+    s = { ...s, players: s.players.map((p, i) => (i === 0 ? { ...p, mages: [mk('m', p.id)] } : p)) };
+    const [seated] = seat(s, 0, 'm');
+    const dest = seated.rooms.find(
+      (r) =>
+        !r.cannotBePlacedInDirectly &&
+        !r.actionSpaces.some((sp) => sp.occupant?.mageId === 'm') &&
+        r.actionSpaces.some((sp) => !sp.occupant),
+    )!;
+    const destSlot = dest.actionSpaces.find((sp) => !sp.occupant)!;
+    const moved: GameState = {
+      ...seated,
+      players: seated.players.map((p, i) =>
+        i === 0
+          ? { ...p, mages: p.mages.map((m) => (m.id === 'm' ? { ...m, location: { kind: 'action-space', spaceId: destSlot.id } } : m)) }
+          : p,
+      ),
+    };
+    expect(computeRoomFx(seated, moved)).toContainEqual({ roomId: dest.id, kind: 'move' });
+  });
+
+  it('emits a move swoosh when a mage is pushed base→shadow on the same slot', () => {
+    let s = base();
+    s = { ...s, players: s.players.map((p, i) => (i === 0 ? { ...p, mages: [mk('m', p.id)] } : p)) };
+    const [seated, roomId] = seat(s, 0, 'm');
+    const shadowed: GameState = {
+      ...seated,
+      players: seated.players.map((p, i) =>
+        i === 0 ? { ...p, mages: p.mages.map((m) => (m.id === 'm' ? { ...m, isShadowing: true } : m)) } : p,
+      ),
+    };
+    expect(computeRoomFx(seated, shadowed)).toContainEqual({ roomId, kind: 'move' });
+  });
+
+  it('emits a lock clamp when a room is newly locked (once)', () => {
+    const s = base();
+    const room = s.rooms.find((r) => !r.cannotBePlacedInDirectly)!;
+    const locked: GameState = { ...s, roomLocks: [...s.roomLocks, { roomId: room.id }] };
+    expect(computeRoomFx(s, locked)).toContainEqual({ roomId: room.id, kind: 'lock' });
+    // Already locked in both states → no repeat clamp.
+    expect(computeRoomFx(locked, locked).some((f) => f.kind === 'lock')).toBe(false);
+  });
+
+  it('emits one wound flourish per mage in a batch (multiple at once)', () => {
+    let s = base();
+    s = { ...s, players: s.players.map((p, i) => (i === 1 ? { ...p, mages: [mk('a', p.id), mk('b', p.id)] } : p)) };
+    const [s1] = seat(s, 1, 'a');
+    const [s2] = seat(s1, 1, 'b');
+    const wounded: GameState = {
+      ...s2,
+      players: s2.players.map((p, i) =>
+        i === 1
+          ? { ...p, mages: p.mages.map((m) => ({ ...m, location: { kind: 'infirmary' as const, playerId: p.id }, isWounded: true })) }
+          : p,
+      ),
+    };
+    expect(computeRoomFx(s2, wounded).filter((f) => f.kind === 'wound')).toHaveLength(2);
+  });
 });
 
 describe('computeRewardFx', () => {

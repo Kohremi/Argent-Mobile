@@ -13,6 +13,8 @@ import type { ResourceKind } from '../icons';
 export type RoomFxKind =
   | 'wound'
   | 'banish'
+  | 'move'
+  | 'lock'
   | 'flip'
   | 'mana-gain'
   | 'buff-activate'
@@ -52,17 +54,27 @@ export interface RoomFx {
 export function computeRoomFx(prev: GameState, next: GameState): RoomFx[] {
   const fx: RoomFx[] = [];
 
-  // Index the previous state: where each mage stood, and its wound flag.
+  // Index the previous state: where each mage stood, its wound + shadow flags.
   const spaceToRoom = new Map<string, string>();
   for (const r of prev.rooms) {
     for (const s of r.actionSpaces) spaceToRoom.set(s.id, r.id);
   }
-  const prevMage = new Map<string, { spaceId: string | null; isWounded: boolean }>();
+  // next-state slot → room; used by the move flourish below AND the passive
+  // on-place powers further down (computed once here).
+  const spaceToRoomNext = new Map<string, string>();
+  for (const r of next.rooms) {
+    for (const s of r.actionSpaces) spaceToRoomNext.set(s.id, r.id);
+  }
+  const prevMage = new Map<
+    string,
+    { spaceId: string | null; isWounded: boolean; isShadowing: boolean }
+  >();
   for (const p of prev.players) {
     for (const m of p.mages) {
       prevMage.set(m.id, {
         spaceId: m.location.kind === 'action-space' ? m.location.spaceId : null,
         isWounded: m.isWounded,
+        isShadowing: m.isShadowing,
       });
     }
   }
@@ -77,6 +89,15 @@ export function computeRoomFx(prev: GameState, next: GameState): RoomFx[] {
         fx.push({ roomId, kind: 'wound' });
       } else if (m.location.kind === 'office' && !m.isWounded) {
         fx.push({ roomId, kind: 'banish' });
+      } else if (
+        m.location.kind === 'action-space' &&
+        (m.location.spaceId !== was.spaceId || m.isShadowing !== was.isShadowing)
+      ) {
+        // Still on the board but relocated: a slot→slot move, or a base↔shadow
+        // shift on the same slot (Cut Plane, Fade, …). The swoosh lands on the
+        // destination room.
+        const toRoom = spaceToRoomNext.get(m.location.spaceId) ?? roomId;
+        fx.push({ roomId: toRoom, kind: 'move' });
       }
     }
   }
@@ -87,10 +108,6 @@ export function computeRoomFx(prev: GameState, next: GameState): RoomFx[] {
   // same rules the engine used — keeping the FX honest. Shadow placements
   // (Planar B) don't qualify: neither power triggers from the shadow position.
   const roomByIdNext = new Map(next.rooms.map((r) => [r.id, r] as const));
-  const spaceToRoomNext = new Map<string, string>();
-  for (const r of next.rooms) {
-    for (const s of r.actionSpaces) spaceToRoomNext.set(s.id, r.id);
-  }
   const powersLost = magesLosePowers(next);
   for (const p of next.players) {
     for (const m of p.mages) {
@@ -130,6 +147,13 @@ export function computeRoomFx(prev: GameState, next: GameState): RoomFx[] {
     if (opp && next.rooms.some((n) => n.id === opp)) {
       fx.push({ roomId: opp, kind: 'flip' });
     }
+  }
+
+  // Room locks (Master Book "place & lock", Thaumaturgy, …): a room id newly
+  // present in the lock list clamps shut.
+  const prevLocked = new Set(prev.roomLocks.map((l) => l.roomId));
+  for (const l of next.roomLocks) {
+    if (!prevLocked.has(l.roomId)) fx.push({ roomId: l.roomId, kind: 'lock' });
   }
 
   return fx;

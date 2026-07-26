@@ -36,6 +36,7 @@ import {
 import { MageToken } from '../Board/MageToken';
 import { PortraitBust } from '../Player/PortraitBust';
 import { describeTrigger, playerName, promptDraftsFromShelf, topPending } from './promptHelpers';
+import { useReactionRevealDelay } from './useReactionReveal';
 
 /**
  * Research is a multi-step chain of generic `choose-from-options` prompts —
@@ -582,7 +583,13 @@ function ReactionCutIn({ state, pending }: { state: GameState; pending: PendingR
   const tryDispatch = useUiStore((s) => s.tryDispatch);
   const reactionSlotPick = useUiStore((s) => s.reactionSlotPick);
   const setReactionSlotPick = useUiStore((s) => s.setReactionSlotPick);
+  const revealed = useReactionRevealDelay(pending);
   if (pending.prompt.kind !== 'reaction-window') return null;
+  // Hold the cut-in for a beat so the board impact FX (wound flash, move
+  // swoosh, lock clamp) plays on an uncovered board before this full-screen
+  // overlay drops. Flips true after the beat — or immediately for non-board
+  // triggers (spell-cast / buy) and reduced-motion viewers.
+  if (!revealed) return null;
   const { triggerEvents, reactionOptions } = pending.prompt;
   // Some options can be shown for awareness but not played (e.g. Wrath of
   // Heaven's retaliation with no legal targets). The responder has a real

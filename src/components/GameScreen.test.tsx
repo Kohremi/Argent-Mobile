@@ -76,7 +76,7 @@ describe('GameScreen (step-1 smoke)', () => {
 });
 
 describe('PromptDirector (step-2 smoke)', () => {
-  it('drives target -> reaction cut-in -> choice sheet through a real Burn cast', () => {
+  it('drives target -> reaction cut-in -> choice sheet through a real Burn cast', async () => {
     // Build: p1 has Burn researched + mana; p2 has a placed mage to scorch.
     let s = errandsState();
     s = {
@@ -152,8 +152,10 @@ describe('PromptDirector (step-2 smoke)', () => {
     expect(targets.length).toBeGreaterThan(0);
     fireEvent.click(targets[0]!);
 
-    // Reaction window: the cut-in shows for Diana (pass-only window).
-    expect(screen.getByText('⚡ Reaction!')).toBeTruthy();
+    // Reaction window: the cut-in shows for Diana (pass-only window). It is now
+    // held for a beat so the wound FX is visible on the board first, then it
+    // reveals — wait for it rather than asserting synchronously.
+    expect(await screen.findByText('⚡ Reaction!')).toBeTruthy();
     fireEvent.click(screen.getByText('Continue'));
 
     // Infirmary bonus choice sheet for the victim's owner.

@@ -936,6 +936,61 @@ function RoomFxOverlay({ roomId }: { roomId: string }) {
             </motion.div>
           );
         }
+        if (f.kind === 'move') {
+          // Teal streak sweeps across — a Mage is relocated to another slot.
+          return (
+            <motion.div
+              key={f.id}
+              className="pointer-events-none absolute inset-0 z-30 flex items-center justify-center overflow-hidden"
+            >
+              <motion.span
+                className="absolute h-1.5 w-4/5 rounded-full"
+                style={{
+                  background:
+                    'linear-gradient(90deg, transparent, #5eead4cc 45%, #ccfbf1 50%, #5eead4cc 55%, transparent)',
+                }}
+                initial={{ x: '-55%', opacity: 0, scaleX: 0.6 }}
+                animate={{ x: '55%', opacity: [0, 1, 0], scaleX: [0.6, 1.1, 0.6] }}
+                transition={{ duration: 0.5, ease: 'easeInOut' }}
+              />
+              <motion.span
+                className="font-display text-xl font-black text-teal-200"
+                style={{ textShadow: '0 0 8px rgba(94,234,212,0.85)' }}
+                initial={{ x: -12, opacity: 0 }}
+                animate={{ x: [-12, 12], opacity: [0, 1, 0] }}
+                transition={{ duration: 0.5, ease: 'easeOut' }}
+              >
+                »
+              </motion.span>
+            </motion.div>
+          );
+        }
+        if (f.kind === 'lock') {
+          // Gold padlock slams shut — the chamber is sealed.
+          return (
+            <motion.div
+              key={f.id}
+              className="pointer-events-none absolute inset-0 z-30 flex items-center justify-center"
+            >
+              <motion.span
+                className="absolute rounded-full border-2 border-amber-300/80"
+                style={{ width: 58, height: 58 }}
+                initial={{ scale: 1.7, opacity: 0 }}
+                animate={{ scale: [1.7, 0.9, 1], opacity: [0, 0.9, 0] }}
+                transition={{ duration: 0.6, ease: 'easeOut' }}
+              />
+              <motion.span
+                className="text-amber-300"
+                style={{ filter: 'drop-shadow(0 0 8px rgba(252,211,77,0.85))' }}
+                initial={{ scale: 0.3, rotate: -18, opacity: 0 }}
+                animate={{ scale: [0.3, 1.25, 1], rotate: [-18, 4, 0], opacity: [0, 1, 1, 0] }}
+                transition={{ duration: 0.7, ease: 'easeOut', times: [0, 0.4, 0.75, 1] }}
+              >
+                <LockIcon size={30} />
+              </motion.span>
+            </motion.div>
+          );
+        }
         // flip — cyan sweep while the chamber swaps sides.
         return (
           <motion.div
