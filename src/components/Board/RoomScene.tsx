@@ -859,17 +859,53 @@ function RoomFxOverlay({ roomId }: { roomId: string }) {
           );
         }
         if (f.kind === 'wound') {
-          // Red impact flash — bad things hit.
+          // Explosion — a hard shake carrying a red wash, a white-hot center
+          // pop, and two expanding shockwave rings. Big and ~1s long so it is
+          // impossible to miss.
           return (
             <motion.div
               key={f.id}
-              className="pointer-events-none absolute inset-0 z-30"
-              style={{ background: 'radial-gradient(ellipse at 50% 70%, #ff5d7daa, transparent 65%)' }}
-              initial={{ opacity: 0 }}
-              animate={{ opacity: [0, 1, 0], x: [0, -3, 3, -2, 0] }}
-              exit={{ opacity: 0 }}
-              transition={{ duration: 0.5, ease: 'easeOut' }}
-            />
+              className="pointer-events-none absolute inset-0 z-30 flex items-center justify-center"
+              initial={{ x: 0, y: 0 }}
+              animate={{ x: [0, -6, 6, -4, 3, 0], y: [0, 4, -4, 2, 0] }}
+              transition={{ duration: 0.45, ease: 'easeOut' }}
+            >
+              {/* red wash + flash */}
+              <motion.span
+                className="absolute inset-0"
+                style={{
+                  background:
+                    'radial-gradient(ellipse at 50% 55%, #ff4166ee, #ff5d7d66 42%, transparent 72%)',
+                }}
+                initial={{ opacity: 0, scale: 0.6 }}
+                animate={{ opacity: [0, 1, 0.7, 0], scale: [0.6, 1.15, 1.25, 1.35] }}
+                transition={{ duration: 1, ease: 'easeOut', times: [0, 0.15, 0.5, 1] }}
+              />
+              {/* white-hot center pop */}
+              <motion.span
+                className="absolute h-10 w-10 rounded-full bg-white"
+                style={{ filter: 'blur(2px)' }}
+                initial={{ scale: 0.2, opacity: 0 }}
+                animate={{ scale: [0.2, 1.5, 0], opacity: [0, 1, 0] }}
+                transition={{ duration: 0.4, ease: 'easeOut' }}
+              />
+              {/* shockwave ring 1 */}
+              <motion.span
+                className="absolute rounded-full border-4 border-rose-400"
+                style={{ width: 72, height: 72 }}
+                initial={{ scale: 0.2, opacity: 0.95 }}
+                animate={{ scale: 3.3, opacity: 0 }}
+                transition={{ duration: 0.9, ease: 'easeOut' }}
+              />
+              {/* shockwave ring 2 — thinner, staggered */}
+              <motion.span
+                className="absolute rounded-full border-2 border-rose-200/80"
+                style={{ width: 72, height: 72 }}
+                initial={{ scale: 0.2, opacity: 0 }}
+                animate={{ scale: [0.2, 2.7], opacity: [0, 0.8, 0] }}
+                transition={{ duration: 1, ease: 'easeOut', delay: 0.12, times: [0, 0.25, 1] }}
+              />
+            </motion.div>
           );
         }
         if (f.kind === 'banish') {
@@ -937,28 +973,30 @@ function RoomFxOverlay({ roomId }: { roomId: string }) {
           );
         }
         if (f.kind === 'move') {
-          // Teal streak sweeps across — a Mage is relocated to another slot.
+          // Big teal swoosh — a wide motion band sweeps across trailed by a
+          // bold arrow. Large and ~0.9s so a relocation reads clearly.
           return (
             <motion.div
               key={f.id}
               className="pointer-events-none absolute inset-0 z-30 flex items-center justify-center overflow-hidden"
             >
               <motion.span
-                className="absolute h-1.5 w-4/5 rounded-full"
+                className="absolute h-2/5 w-[130%] rounded-full"
                 style={{
                   background:
-                    'linear-gradient(90deg, transparent, #5eead4cc 45%, #ccfbf1 50%, #5eead4cc 55%, transparent)',
+                    'linear-gradient(90deg, transparent, #2dd4bf99 40%, #ccfbf1 50%, #2dd4bf99 60%, transparent)',
+                  filter: 'blur(1px)',
                 }}
-                initial={{ x: '-55%', opacity: 0, scaleX: 0.6 }}
-                animate={{ x: '55%', opacity: [0, 1, 0], scaleX: [0.6, 1.1, 0.6] }}
-                transition={{ duration: 0.5, ease: 'easeInOut' }}
+                initial={{ x: '-60%', opacity: 0, scaleY: 0.5 }}
+                animate={{ x: '60%', opacity: [0, 1, 1, 0], scaleY: [0.5, 1, 0.5] }}
+                transition={{ duration: 0.9, ease: 'easeInOut', times: [0, 0.25, 0.6, 1] }}
               />
               <motion.span
-                className="font-display text-xl font-black text-teal-200"
-                style={{ textShadow: '0 0 8px rgba(94,234,212,0.85)' }}
-                initial={{ x: -12, opacity: 0 }}
-                animate={{ x: [-12, 12], opacity: [0, 1, 0] }}
-                transition={{ duration: 0.5, ease: 'easeOut' }}
+                className="absolute font-display text-4xl font-black text-teal-100"
+                style={{ textShadow: '0 0 14px rgba(45,212,191,0.95)' }}
+                initial={{ x: '-45%', opacity: 0, scale: 0.7 }}
+                animate={{ x: '45%', opacity: [0, 1, 1, 0], scale: [0.7, 1.25, 1] }}
+                transition={{ duration: 0.9, ease: 'easeOut', times: [0, 0.2, 0.7, 1] }}
               >
                 »
               </motion.span>

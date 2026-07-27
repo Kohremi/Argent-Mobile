@@ -49,9 +49,9 @@ describe('reactionRevealDelayMs', () => {
   });
 
   it('is a positive beat for one impact and scales (capped) for batches', () => {
-    expect(reactionRevealDelayMs([wound])).toBe(450);
-    expect(reactionRevealDelayMs([wound, wound, wound])).toBe(450 + 2 * 130);
-    expect(reactionRevealDelayMs(Array(20).fill(wound))).toBe(900);
+    expect(reactionRevealDelayMs([wound])).toBe(750);
+    expect(reactionRevealDelayMs([wound, wound, wound])).toBe(750 + 2 * 150);
+    expect(reactionRevealDelayMs(Array(20).fill(wound))).toBe(1250);
   });
 
   it('is 0 when the viewer prefers reduced motion', () => {
@@ -97,7 +97,7 @@ describe('useReactionRevealDelay', () => {
     rerender({ p: reactionPending(2, [wound]) }); // new id → hold again
     expect(result.current).toBe(false);
     act(() => {
-      vi.advanceTimersByTime(450);
+      vi.advanceTimersByTime(reactionRevealDelayMs([wound]));
     });
     expect(result.current).toBe(true);
   });

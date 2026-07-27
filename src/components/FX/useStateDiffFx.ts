@@ -280,15 +280,18 @@ export function useStateDiffFx() {
     pushRoomFx(fx);
     // Expire after the longest overlay finishes. Reward bubbles are the beat
     // the player most wants to catch (what did that slot pay out?), so they
-    // linger longest; the passive-power flourishes (mana-gain / buff-activate)
-    // hold ~1s; the impact flashes clear sooner. Deliberately NOT cleaned up
-    // on re-render: the store is global and rapid dispatches must not strand
-    // earlier effects in the queue.
+    // linger longest; the impact flourishes (wound explosion, move swoosh, lock
+    // clamp) run ~1s and must not be cut off; the passive-power flourishes
+    // (mana-gain / buff-activate) hold ~1s; the rest clear sooner. Deliberately
+    // NOT cleaned up on re-render: the store is global and rapid dispatches must
+    // not strand earlier effects in the queue.
     const ttl = fx.some((f) => f.kind === 'reward')
       ? 1700
-      : fx.some((f) => f.kind === 'mana-gain' || f.kind === 'buff-activate')
-        ? 1100
-        : 900;
+      : fx.some((f) => f.kind === 'wound' || f.kind === 'move' || f.kind === 'lock')
+        ? 1400
+        : fx.some((f) => f.kind === 'mana-gain' || f.kind === 'buff-activate')
+          ? 1100
+          : 900;
     const snapshot = useUiStore.getState().roomFx.slice(-fx.length).map((f) => f.id);
     setTimeout(() => expireRoomFx(snapshot), ttl);
   }, [state, pushRoomFx, expireRoomFx]);

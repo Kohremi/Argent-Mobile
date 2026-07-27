@@ -153,9 +153,9 @@ describe('PromptDirector (step-2 smoke)', () => {
     fireEvent.click(targets[0]!);
 
     // Reaction window: the cut-in shows for Diana (pass-only window). It is now
-    // held for a beat so the wound FX is visible on the board first, then it
-    // reveals — wait for it rather than asserting synchronously.
-    expect(await screen.findByText('⚡ Reaction!')).toBeTruthy();
+    // held for a beat (so the wound explosion is visible on the board first),
+    // then reveals — wait for it rather than asserting synchronously.
+    expect(await screen.findByText('⚡ Reaction!', undefined, { timeout: 2500 })).toBeTruthy();
     fireEvent.click(screen.getByText('Continue'));
 
     // Infirmary bonus choice sheet for the victim's owner.

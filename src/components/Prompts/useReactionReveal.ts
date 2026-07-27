@@ -34,7 +34,9 @@ function prefersReducedMotion(): boolean {
 export function reactionRevealDelayMs(events: readonly ReactionTriggerEvent[]): number {
   const impacts = events.filter((e) => IMPACT_KINDS.has(e.kind)).length;
   if (impacts === 0 || prefersReducedMotion()) return 0;
-  return Math.min(900, 450 + (impacts - 1) * 130);
+  // ~0.75s lets the bulk of the (now ~1s) wound/move animation play before the
+  // full-screen cut-in covers the board; a little more per simultaneous impact.
+  return Math.min(1250, 750 + (impacts - 1) * 150);
 }
 
 /**
