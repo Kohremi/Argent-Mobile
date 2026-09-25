@@ -10420,6 +10420,63 @@ describe('Laboratory B (Mancers)', () => {
     expect(s.researchQueue).toHaveLength(0);
     expect(s.pendingResolutionStack).toHaveLength(0);
   });
+
+  /** Takes the Technomancy "Gain a Buy" and picks `cardId` from the market. */
+  function buyAtLab(state: GameState, cardId: string): GameState {
+    let s = applyAction(state, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(state).id,
+      answer: { kind: 'option-chosen', optionId: 'buy', payload: {} },
+    });
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'card-chosen', cardId },
+    });
+    return s;
+  }
+
+  it('Technomancy (orange) with 0 Gold + an Auric Catalyst: the Buy offers the Catalyst and gains the card free', () => {
+    // Regression: the market counts a Catalyst holder as able to afford any
+    // card, but the Laboratory charged full price without ever offering the
+    // Catalyst — "insufficient gold", and the game stalled.
+    let s = setupLabB('orange', 'mancers.mage.technomancy', 'mancers.room.laboratory.b.slot-2');
+    s = addVaultCard(s, 'p1', 'base.vault.auric-catalyst');
+    s = setVaultTableau(s, ['base.vault.mana-elixir']); // 2 Gold
+    s = driveToResolution(s);
+    s = buyAtLab(s, 'base.vault.mana-elixir');
+    const reaction = topPending(s);
+    expect(reaction.prompt.kind).toBe('reaction-window');
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: reaction.id,
+      answer: {
+        kind: 'reaction-played',
+        effectId: 'base.vault.auric-catalyst.react',
+        reactionContext: {},
+      },
+    });
+    const alice = s.players.find((p) => p.id === 'p1')!;
+    expect(alice.resources.gold).toBe(0);
+    // The Mana Elixir is hers; the Catalyst was spent on it.
+    expect(alice.vaultCards.map((v) => v.cardId)).toEqual(['base.vault.mana-elixir']);
+    expect(alice.nextGoldCostWaived).toBe(false);
+  });
+
+  it('Technomancy (orange): a Buy refills the market from the Vault deck without duplicating the card', () => {
+    let s = setupLabB('orange', 'mancers.mage.technomancy', 'mancers.room.laboratory.b.slot-2');
+    s = setGold(s, 'p1', 10);
+    s = {
+      ...s,
+      vaultTableau: ['base.vault.mana-elixir'],
+      vaultDeck: ['base.vault.ancient-armor', 'base.vault.gilded-chalice'],
+    };
+    s = driveToResolution(s);
+    s = buyAtLab(s, 'base.vault.mana-elixir');
+    // The top of the deck moved into the market — and left the deck.
+    expect(s.vaultTableau).toEqual(['base.vault.ancient-armor']);
+    expect(s.vaultDeck).toEqual(['base.vault.gilded-chalice']);
+  });
 });
 
 // ============================================================================

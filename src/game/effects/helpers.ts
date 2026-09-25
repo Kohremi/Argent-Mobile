@@ -12,6 +12,7 @@ import type {
   ConsortiumVoter,
   ConsortiumVoterId,
   Department,
+  EffectResult,
   GameState,
   GameStatePatch,
   HarmfulEffectKind,
@@ -31,6 +32,7 @@ import type {
   ReactionTriggerEvent,
   ResolutionAnswer,
   ResolutionSource,
+  ResumeContinuation,
   Room,
   RoomId,
   SerializableContext,
@@ -2441,6 +2443,52 @@ export function playerHasAuricCatalyst(player: Player): boolean {
   return player.vaultCards.some(
     (v) => v.cardId === 'base.vault.auric-catalyst' && !v.exhausted,
   );
+}
+
+/**
+ * Opens a `gold-payment-pending` reaction window before a vault buy — the
+ * buyer's chance to play Auric Catalyst. EVERY buy must go through it:
+ * `affordableVaultCards` offers a Catalyst holder any card, so applying the
+ * purchase without this window charges full price and fails. Used by
+ * BUY_VAULT_CARD and the "Gain a Buy" sites (Library A, Endless Coin Purse,
+ * the Laboratory). The window's afterResume points back to the caller's
+ * "after-buy" continuation, which applies the buy via
+ * `applyVaultPurchaseMaybeWaived`.
+ *
+ * If the buyer has no Auric Catalyst available to react with, the window
+ * opens with an empty responder queue and the engine immediately fires
+ * afterResume — the buy proceeds as normal.
+ */
+export function spawnVaultBuyReactionWindow(
+  state: GameState,
+  buyerId: PlayerId,
+  vaultCardId: VaultCardId,
+  source: ResolutionSource,
+  afterResume: ResumeContinuation,
+): EffectResult {
+  const buyer = findPlayer(state, buyerId);
+  if (!buyer) return { kind: 'done', patch: {} };
+  const card = lookupVaultCardDef(state, vaultCardId);
+  if (!card) return { kind: 'done', patch: {} };
+  const canReact = playerHasAuricCatalyst(buyer);
+  return {
+    kind: 'open-reaction',
+    patch: {},
+    window: {
+      triggerEvents: [
+        {
+          kind: 'gold-payment-pending',
+          payingPlayerId: buyerId,
+          amount: card.goldCost,
+          purpose: 'vault-purchase',
+        },
+      ],
+      pendingResponderIds: canReact ? [buyerId] : [],
+      reactedPlayerIds: [],
+      afterResume,
+      source,
+    },
+  };
 }
 
 /**

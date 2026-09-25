@@ -29,6 +29,7 @@ import {
   moveMageToSpace,
   placeMageOnSlot,
   returnMageToOfficePatch,
+  spawnVaultBuyReactionWindow,
   vaultCardReturnsToRoom,
   woundMage,
 } from './helpers';
@@ -375,26 +376,46 @@ function laboratoryChain(
     if (ctx.resumeAnswer?.kind !== 'card-chosen') {
       throw new Error(`${selfEffectId} after-buy-card expected card-chosen`);
     }
+    // Pay through the gold-payment reaction window so an Auric Catalyst can
+    // waive the cost — the market above already offered a Catalyst holder
+    // every card, so charging full price here would fail and stall the game.
+    // The window re-enters this chain at 'after-buy-paid'.
+    const vaultCardId = ctx.resumeAnswer.cardId;
+    return spawnVaultBuyReactionWindow(
+      ctx.state,
+      ctx.triggeringPlayerId,
+      vaultCardId,
+      ctx.source,
+      {
+        effectId: selfEffectId,
+        context: { step: 'after-buy-paid', remaining, color, vaultCardId },
+      },
+    );
+  }
+  if (step === 'after-buy-paid') {
+    const vaultCardId = ctx.resumeContext?.['vaultCardId'];
+    if (typeof vaultCardId !== 'string') {
+      throw new Error(`${selfEffectId} after-buy-paid: missing vaultCardId`);
+    }
     const patch = applyVaultPurchaseMaybeWaived(
       ctx.state,
       ctx.triggeringPlayerId,
-      ctx.resumeAnswer.cardId,
+      vaultCardId,
     );
     const working = { ...ctx.state, ...patch };
-    if (remaining <= 0) {
-      return {
-        kind: 'done',
-        patch: {
-          players: working.players,
-          vaultTableau: working.vaultTableau,
-        },
-      };
-    }
+    // The buy refills the market from the Vault deck, so carry the deck too —
+    // otherwise the refill card stays on the deck and turns up twice.
+    const bought: GameStatePatch = {
+      players: working.players,
+      vaultTableau: working.vaultTableau,
+      vaultDeck: working.vaultDeck,
+    };
+    if (remaining <= 0) return { kind: 'done', patch: bought };
     return runReward(
       { ...ctx, state: working },
       selfEffectId,
       { kind: 'buy', count: remaining },
-      { players: working.players, vaultTableau: working.vaultTableau },
+      bought,
     );
   }
 

@@ -858,8 +858,8 @@ describe("Archmage's Staff — all-bot games with Mancers and Dimensional Rift",
     const record = (failure: string | null) => {
       if (failure) failures.push(failure);
     };
-    // (4p seed 9 currently stalls on an unrelated Laboratory B purchase.)
-    for (const seed of [1, 2, 3, 4, 5, 6]) record(runStaffGame(seed, 4));
+    // (4p seed 9 used to stall on a Laboratory buy paid with an Auric Catalyst.)
+    for (const seed of [1, 2, 3, 4, 5, 6, 9]) record(runStaffGame(seed, 4));
     for (const seed of [33, 34, 35]) record(runStaffGame(seed, 2));
     for (const seed of [1, 2, 3, 4, 5, 6]) record(runStaffGame(seed, 2, 'dimensional-rift'));
     for (const seed of [1, 2, 3, 4]) record(runStaffGame(seed, 4, 'dimensional-rift'));

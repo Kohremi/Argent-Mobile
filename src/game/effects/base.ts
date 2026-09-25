@@ -74,7 +74,7 @@ import {
   slotPositionHeldBy,
   refreshOwnedSpellPatch,
   returnMageToOfficePatch,
-  playerHasAuricCatalyst,
+  spawnVaultBuyReactionWindow,
   spellLabel,
   swapSideBoundVaultCards,
   unclaimedLegendaryBooks,
@@ -1682,57 +1682,6 @@ registerEffect('base.vault.auric-catalyst.react', (ctx): EffectResult => {
     },
   };
 });
-
-/**
- * Opens a `gold-payment-pending` reaction window before a vault buy.
- * Used by BUY_VAULT_CARD and "Gain a Buy" sites. The window's
- * afterResume points back to the caller's "after-buy" continuation,
- * which applies the buy via `applyVaultPurchaseMaybeWaived`.
- *
- * If the buyer has no Auric Catalyst available to react with, the window
- * opens with an empty responder queue and the engine immediately fires
- * afterResume — the buy proceeds as normal.
- */
-function spawnVaultBuyReactionWindow(
-  state: GameState,
-  buyerId: string,
-  vaultCardId: string,
-  source: ResolutionSource,
-  afterResume: ResumeContinuation,
-): EffectResult {
-  const buyer = state.players.find((p) => p.id === buyerId);
-  if (!buyer) return { kind: 'done', patch: {} };
-  let card: { goldCost: number } | undefined;
-  for (const pid of state.activePackIds) {
-    const pack = getPack(pid);
-    if (!pack) continue;
-    const found = pack.vaultCards.find((v) => v.id === vaultCardId);
-    if (found) {
-      card = found;
-      break;
-    }
-  }
-  if (!card) return { kind: 'done', patch: {} };
-  const canReact = playerHasAuricCatalyst(buyer);
-  return {
-    kind: 'open-reaction',
-    patch: {},
-    window: {
-      triggerEvents: [
-        {
-          kind: 'gold-payment-pending',
-          payingPlayerId: buyerId,
-          amount: card.goldCost,
-          purpose: 'vault-purchase',
-        },
-      ],
-      pendingResponderIds: canReact ? [buyerId] : [],
-      reactedPlayerIds: [],
-      afterResume,
-      source,
-    },
-  };
-}
 
 /**
  * Wraps a vault buy through a reaction window. First invocation opens
