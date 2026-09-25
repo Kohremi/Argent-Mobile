@@ -2183,11 +2183,13 @@ registerEffect('mancers.room.atelier-a.slot-3', (ctx): EffectResult => {
     const pick =
       deckConsumables[Math.floor(value * deckConsumables.length)] ??
       deckConsumables[0]!;
+    // Draw just that one copy — the deck can hold several of the same card.
+    const taken = ctx.state.vaultDeck.indexOf(pick);
     return {
       kind: 'done',
       patch: {
         rng: nextRng,
-        vaultDeck: ctx.state.vaultDeck.filter((id) => id !== pick),
+        vaultDeck: ctx.state.vaultDeck.filter((_, i) => i !== taken),
         players: ctx.state.players.map((p) =>
           p.id !== ctx.triggeringPlayerId
             ? p

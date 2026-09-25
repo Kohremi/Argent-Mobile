@@ -2315,22 +2315,15 @@ export function findActionSpace(
 }
 
 /**
- * Builds the patch to apply when a player buys a Vault card from the tableau:
- * deduct gold, add the card to the player's vault cards, remove the card
- * from the tableau. Throws if the player can't afford or the card is missing
- * from the tableau.
- *
- * Tableau slots are NOT auto-refilled here — Argent's tableau is refreshed
- * during round-setup, not after every purchase.
- */
-/**
  * Drafts a Vault card from the tableau into a player's office. Same as a
  * purchase but with no gold cost — used by Vault A slot 1 ("Draft a Vault
  * Card AND Gain 4 Gold") and Vault A slot 2's draft branch.
  *
  * Tableau slots auto-refill from the top of `vaultDeck` whenever a card
  * leaves the tableau (mirroring `spellTableau`'s behavior), so the
- * available offerings stay at 3 until the deck runs dry.
+ * available offerings stay at 3 until the deck runs dry. Callers must keep
+ * the patch's `vaultDeck` along with its `vaultTableau` — dropping it leaves
+ * the refill card on top of the deck too, so it gets dealt twice.
  */
 export function applyVaultDraft(
   state: GameState,
@@ -2359,6 +2352,13 @@ export function applyVaultDraft(
   };
 }
 
+/**
+ * Builds the patch to apply when a player buys a Vault card from the tableau:
+ * deduct gold, add the card to the player's vault cards, and refill the
+ * emptied tableau slot from the top of `vaultDeck`, like a draft. Throws if
+ * the player can't afford it or the card is missing from the tableau.
+ * Callers must keep the patch's `vaultDeck` (see `applyVaultDraft`).
+ */
 export function applyVaultPurchase(
   state: GameState,
   playerId: PlayerId,

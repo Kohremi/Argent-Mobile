@@ -5919,6 +5919,25 @@ describe('Vault B slot 1 (Draft a Vault Card AND Gain 4 Gold)', () => {
     const alice = s.players.find((p) => p.id === 'p1');
     expect(alice?.resources.gold).toBe(4);
   });
+
+  it('refills the market from the deck and draws that card off the deck', () => {
+    // Regression: the deck wasn't saved, so the refill card also stayed on top
+    // of it and was dealt a second time.
+    let s = setupVaultSlotTest('base.room.vault.b.slot-1');
+    s = {
+      ...s,
+      vaultTableau: ['base.vault.mana-elixir'],
+      vaultDeck: ['base.vault.gilded-chalice', 'base.vault.phase-steppers'],
+    };
+    s = driveToVaultPrompt(s);
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'card-chosen', cardId: 'base.vault.mana-elixir' },
+    });
+    expect(s.vaultTableau).toEqual(['base.vault.gilded-chalice']);
+    expect(s.vaultDeck).toEqual(['base.vault.phase-steppers']);
+  });
 });
 
 // ============================================================================
@@ -6108,6 +6127,35 @@ describe('Vault A (reveal top 3 of the Vault Deck)', () => {
     const top = topPending(s);
     if (top.prompt.kind !== 'choose-vault-card') throw new Error('unreachable');
     expect(top.prompt.eligibleCardIds).toEqual(['base.vault.mana-elixir']);
+  });
+
+  it('drafting one of two identical revealed cards keeps the other', () => {
+    // Regression: the draft removed every copy of the chosen card from the pool.
+    let s = setupVaultATest({
+      slotIds: ['base.room.vault.a.slot-1'],
+      deckTop: [
+        'base.vault.gilded-chalice',
+        'base.vault.gilded-chalice',
+        'base.vault.mana-elixir',
+      ],
+    });
+    s = applyAction(s, { type: 'ADVANCE_PHASE' }); // round-setup → errands
+    s = applyAction(s, { type: 'ADVANCE_PHASE' }); // errands → resolution
+    s = applyAction(s, { type: 'ADVANCE_PHASE' }); // pump → forfeit-or-reward
+    s = takeRewardAtResolution(s);
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'card-chosen', cardId: 'base.vault.gilded-chalice' },
+    });
+    const alice = s.players.find((p) => p.id === 'p1')!;
+    expect(alice.vaultCards.map((v) => v.cardId)).toEqual(['base.vault.gilded-chalice']);
+    // The other Chalice is still in play — in the pool, or back on the deck
+    // once the room finishes resolving.
+    const otherChalices = [...(s.vaultARevealed ?? []), ...s.vaultDeck].filter(
+      (id) => id === 'base.vault.gilded-chalice',
+    );
+    expect(otherChalices).toHaveLength(1);
   });
 });
 
@@ -8954,6 +9002,25 @@ describe('Library A slot 1 (merit, 1 MB): WIS + Vault Draft', () => {
     expect(s.pendingResolutionStack).toHaveLength(0);
     expect(s.players.find((p) => p.id === 'p1')?.resources.wisdom).toBe(1);
   });
+
+  it('refills the market from the deck and draws that card off the deck', () => {
+    // Regression: the deck wasn't saved, so the refill card also stayed on top
+    // of it and was dealt a second time.
+    let s = setupRoomSlotTest('Library', 'A', 'base.room.library.a.slot-1');
+    s = {
+      ...s,
+      vaultTableau: ['base.vault.mana-elixir'],
+      vaultDeck: ['base.vault.gilded-chalice', 'base.vault.phase-steppers'],
+    };
+    s = driveToResolution(s);
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'card-chosen', cardId: 'base.vault.mana-elixir' },
+    });
+    expect(s.vaultTableau).toEqual(['base.vault.gilded-chalice']);
+    expect(s.vaultDeck).toEqual(['base.vault.phase-steppers']);
+  });
 });
 
 describe('Library A slot 2 (merit, 1 MB): INT + Research', () => {
@@ -9612,6 +9679,61 @@ describe('Library A slot 3 (regular): Gain a Buy + Research', () => {
     ).toBeUndefined();
     const researchPrompt = topPending(s);
     expect(researchPrompt.prompt.kind).toBe('choose-from-options');
+  });
+
+  it('a Buy refills the market from the deck and draws that card off the deck', () => {
+    // Regression: the deck wasn't saved, so the refill card also stayed on top
+    // of it and was dealt a second time.
+    let s = setupRoomSlotTest('Library', 'A', 'base.room.library.a.slot-3');
+    s = {
+      ...s,
+      vaultTableau: ['base.vault.mana-elixir'], // 2 Gold
+      vaultDeck: ['base.vault.gilded-chalice', 'base.vault.phase-steppers'],
+    };
+    s = setGold(s, 'p1', 5);
+    s = driveToResolution(s);
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'option-chosen', optionId: 'buy', payload: {} },
+    });
+    // No Auric Catalyst, so the payment window closes at once and the buy lands.
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'card-chosen', cardId: 'base.vault.mana-elixir' },
+    });
+    const alice = s.players.find((p) => p.id === 'p1')!;
+    expect(alice.vaultCards.map((v) => v.cardId)).toEqual(['base.vault.mana-elixir']);
+    expect(s.vaultTableau).toEqual(['base.vault.gilded-chalice']);
+    expect(s.vaultDeck).toEqual(['base.vault.phase-steppers']);
+  });
+});
+
+// ============================================================================
+// Library B slot 1 (merit, 1 MB): Gain 1 Research AND draft a Vault Card
+// ============================================================================
+
+describe('Library B slot 1 (merit, 1 MB): Research + Vault Draft', () => {
+  it('drafts the card and draws the refill card off the deck', () => {
+    // Regression: the deck wasn't saved, so the refill card also stayed on top
+    // of it and was dealt a second time.
+    let s = setupRoomSlotTest('Library', 'B', 'base.room.library.b.slot-1');
+    s = {
+      ...s,
+      vaultTableau: ['base.vault.mana-elixir'],
+      vaultDeck: ['base.vault.gilded-chalice', 'base.vault.phase-steppers'],
+    };
+    s = driveToResolution(s);
+    s = applyAction(s, {
+      type: 'RESOLVE_PENDING',
+      resolutionId: topPending(s).id,
+      answer: { kind: 'card-chosen', cardId: 'base.vault.mana-elixir' },
+    });
+    const alice = s.players.find((p) => p.id === 'p1')!;
+    expect(alice.vaultCards.map((v) => v.cardId)).toEqual(['base.vault.mana-elixir']);
+    expect(s.vaultTableau).toEqual(['base.vault.gilded-chalice']);
+    expect(s.vaultDeck).toEqual(['base.vault.phase-steppers']);
   });
 });
 
@@ -11684,6 +11806,20 @@ describe('Atelier A (Mancers)', () => {
     const owned = s.players.find((p) => p.id === 'p1')!.vaultCards;
     expect(owned.some((v) => v.cardId === CONSUMABLE)).toBe(true);
     expect(s.vaultDeck).not.toContain(CONSUMABLE);
+  });
+
+  it('slot 3: drawing from the deck takes one copy, leaving any others', () => {
+    // Regression: the draw removed every copy of the chosen card from the deck.
+    let s = setup('mancers.room.atelier.a.slot-3');
+    s = {
+      ...s,
+      vaultTableau: [TREASURE_1, TREASURE_2],
+      vaultDeck: [TREASURE_1, CONSUMABLE, CONSUMABLE],
+    };
+    s = driveToSlot(s);
+    const owned = s.players.find((p) => p.id === 'p1')!.vaultCards;
+    expect(owned.filter((v) => v.cardId === CONSUMABLE)).toHaveLength(1);
+    expect(s.vaultDeck).toEqual([TREASURE_1, CONSUMABLE]);
   });
 });
 

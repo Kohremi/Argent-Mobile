@@ -6,6 +6,10 @@
 // with the exact action that broke it. Two matrices run: base-only (30 seeds)
 // and every pack active with unrestricted random leaders (12 seeds), so
 // cross-module desyncs are caught alongside base-game ones.
+//
+// The same games also check that Vault cards are conserved — no card ever
+// exists in more copies than its pack ships. That catches a draft or buy
+// that refills the market without drawing the refill card off the deck.
 import { describe, expect, it } from 'vitest';
 import { applyAction, initGame } from './engine';
 import { findBoardInconsistency } from './boardInvariant';
@@ -43,6 +47,41 @@ const ALL_PACKS: SimConfig = {
   packIds: listPacks().map((p) => p.id),
   candidateIds: listPacks().flatMap((p) => p.candidates).map((c) => c.id),
 };
+
+/**
+ * A Vault card held in more copies than its pack ships (`copies`, default 1),
+ * counted across everywhere a card can sit: offices, discard piles, the
+ * market, the deck, Vault A's revealed cards and the Adventuring B pool.
+ * Cards that never enter the deck (`copies: 0` — Synthesis items, the
+ * Archmage's Staff) are skipped. Null when every card is within its count.
+ */
+function vaultCardOverflow(state: GameState): string | null {
+  const shipped = new Map<string, number>();
+  for (const packId of state.activePackIds) {
+    for (const card of getPack(packId)?.vaultCards ?? []) {
+      shipped.set(card.id, (shipped.get(card.id) ?? 0) + (card.copies ?? 1));
+    }
+  }
+  const held = new Map<string, number>();
+  const count = (cardId: string) => held.set(cardId, (held.get(cardId) ?? 0) + 1);
+  for (const p of state.players) {
+    for (const v of p.vaultCards) count(v.cardId);
+    for (const d of p.personalDiscard) if (d.kind === 'consumable') count(d.cardId);
+  }
+  for (const cardId of [
+    ...state.vaultTableau,
+    ...state.vaultDeck,
+    ...(state.vaultARevealed ?? []),
+    ...(state.adventuringBPool?.vaultCards ?? []),
+  ]) {
+    count(cardId);
+  }
+  for (const [cardId, n] of held) {
+    const max = shipped.get(cardId) ?? 0;
+    if (max > 0 && n > max) return `${cardId} exists ${n} times (the game ships ${max})`;
+  }
+  return null;
+}
 
 function describeAction(s: GameState, a: GameAction): string {
   if (a.type === 'RESOLVE_PENDING') {
@@ -125,13 +164,17 @@ function runGameCheckingInvariant(
     if (broke && !findBoardInconsistency(s)) {
       return `seed=${seed} :: ${broke} :: caused by ${desc}`;
     }
+    const duplicated = vaultCardOverflow(next);
+    if (duplicated && !vaultCardOverflow(s)) {
+      return `seed=${seed} :: ${duplicated} :: caused by ${desc}`;
+    }
     s = next;
     steps++;
   }
   return null;
 }
 
-describe('board invariant — location ↔ slot occupancy never desyncs', () => {
+describe('board invariants — slot occupancy never desyncs, Vault cards never duplicate', () => {
   it('holds across seeded 4-player all-bot games', () => {
     const failures: string[] = [];
     for (let seed = 1; seed <= 30; seed++) {

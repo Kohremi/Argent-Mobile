@@ -160,7 +160,11 @@ registerEffect('base.room.library-a.slot-1', (ctx: EffectContext): EffectResult 
   };
   return {
     kind: 'done',
-    patch: { players: working.players, vaultTableau: working.vaultTableau },
+    patch: {
+      players: working.players,
+      vaultTableau: working.vaultTableau,
+      vaultDeck: working.vaultDeck,
+    },
   };
 });
 
@@ -215,7 +219,11 @@ registerEffect('base.room.library-a.slot-3', (ctx: EffectContext): EffectResult 
     const working = { ...ctx.state, ...buyPatch };
     return {
       kind: 'pause',
-      patch: { players: working.players, vaultTableau: working.vaultTableau },
+      patch: {
+        players: working.players,
+        vaultTableau: working.vaultTableau,
+        vaultDeck: working.vaultDeck,
+      },
       pending: spawnResearchPrompt(
         working,
         ctx.triggeringPlayerId,
@@ -1763,7 +1771,11 @@ registerEffect('base.room.vault-b.slot-1', (ctx: EffectContext): EffectResult =>
   };
   return {
     kind: 'done',
-    patch: { players: working.players, vaultTableau: working.vaultTableau },
+    patch: {
+      players: working.players,
+      vaultTableau: working.vaultTableau,
+      vaultDeck: working.vaultDeck,
+    },
   };
 });
 
@@ -1900,7 +1912,9 @@ registerEffect('base.room.vault-a.slot', (ctx: EffectContext): EffectResult => {
   if (!pool.includes(cardId)) {
     throw new Error(`vault-a.slot: ${cardId} not in revealed pool`);
   }
-  const newPool = pool.filter((id) => id !== cardId);
+  // Take only the drafted copy — the pool can reveal two of the same card.
+  const taken = pool.indexOf(cardId);
+  const newPool = pool.filter((_, i) => i !== taken);
   const players = ctx.state.players.map((p) =>
     p.id !== ctx.triggeringPlayerId
       ? p
@@ -2392,6 +2406,7 @@ registerEffect('base.room.library-b.slot-1', (ctx: EffectContext): EffectResult 
     patch: {
       players: working.players,
       vaultTableau: working.vaultTableau,
+      vaultDeck: working.vaultDeck,
       ...researchPatch,
     },
   };
