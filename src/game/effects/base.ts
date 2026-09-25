@@ -10445,7 +10445,10 @@ function banishAndPlaceInSlotEffect(opts: {
       return tryPlaceForWoundPlace(ctx, selfEffectId, slotId, ctx.state);
     }
 
-    // Step 1: pick banish target (opponents only per the spell text).
+    // Step 1: pick banish target (opponents only per the spell text). The
+    // caster then takes the target's slot, so only Mages ON a slot qualify —
+    // the banish list also reaches into the Infirmary, and a wounded Mage
+    // there left the "place in its place" half nowhere to go (it threw).
     if (!ctx.resumeAnswer) {
       const all =
         source === 'spell'
@@ -10455,7 +10458,11 @@ function banishAndPlaceInSlotEffect(opts: {
         const lookup = ctx.state.players.find((p) =>
           p.mages.some((m) => m.id === mageId),
         );
-        return lookup?.id !== ctx.triggeringPlayerId;
+        const mage = lookup?.mages.find((m) => m.id === mageId);
+        return (
+          lookup?.id !== ctx.triggeringPlayerId &&
+          mage?.location.kind === 'action-space'
+        );
       });
       if (opponentTargets.length === 0) {
         return { kind: 'done', patch: {} };

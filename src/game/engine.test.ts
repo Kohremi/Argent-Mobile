@@ -19421,6 +19421,36 @@ describe('Spell wiring — Wave 4 (wound/banish + place)', () => {
       expect(prompt.prompt.eligibleMageIds).not.toContain('alice-placer');
     }
   });
+
+  it("Tidal Wave: never offers an opponent's wounded Mage in the Infirmary (no slot to take)", () => {
+    // Regression: the banish list reaches into the Infirmary, and picking a
+    // Mage there made the spell throw — stalling the game.
+    let s = setupWoundPlaceCast({
+      spellCardId: 'base.spell.book-of-one-hundred-seas',
+      level: 2,
+      casterMana: 2,
+    });
+    s = addMage(s, 'p2', { id: 'bob-wounded', cardId: 'base.mage.sorcery', color: 'red' });
+    s = mapPlayer(s, 'p2', (p) => ({
+      ...p,
+      mages: p.mages.map((m) =>
+        m.id === 'bob-wounded'
+          ? { ...m, isWounded: true, location: { kind: 'infirmary' as const } }
+          : m,
+      ),
+    }));
+    s = applyAction(s, {
+      type: 'CAST_SPELL',
+      playerId: 'p1',
+      spellCardId: 'base.spell.book-of-one-hundred-seas',
+      level: 2,
+    });
+    const prompt = topPending(s);
+    expect(prompt.prompt.kind).toBe('choose-target-mage');
+    if (prompt.prompt.kind !== 'choose-target-mage') return;
+    expect(prompt.prompt.eligibleMageIds).toContain('bob-target');
+    expect(prompt.prompt.eligibleMageIds).not.toContain('bob-wounded');
+  });
 });
 
 // ============================================================================
