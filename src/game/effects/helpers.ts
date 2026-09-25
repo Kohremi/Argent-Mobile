@@ -501,6 +501,11 @@ export function buildSpellShadowTargets(
  * effects must exclude Mages whose shadow slot is already taken — otherwise the
  * effect offers a target it can only fizzle on (Rennel Pedrigor, Shadow Bolt,
  * Paralocation / Parallel Synchronicity). Event Horizon inlines the same check.
+ *
+ * Rooms flagged `noShadowSlots` (Great Hall, Golem Lab, Archmage's Staff) have
+ * no shadow position at all, so their occupants never qualify — otherwise
+ * `placeMageOnSlot` rejects the placement mid-effect and the prompt can never
+ * be answered (Rennel Pedrigor builds its target list from this check alone).
  */
 export function shadowSlotOpenForMage(
   state: GameState,
@@ -508,9 +513,11 @@ export function shadowSlotOpenForMage(
 ): boolean {
   const pos = findMageSlotPosition(state, mageId);
   if (!pos || pos.position !== 'base') return false;
-  const space = state.rooms
-    .flatMap((r) => r.actionSpaces)
-    .find((s) => s.id === pos.spaceId);
+  const room = state.rooms.find((r) =>
+    r.actionSpaces.some((s) => s.id === pos.spaceId),
+  );
+  if (!room || room.noShadowSlots) return false;
+  const space = room.actionSpaces.find((s) => s.id === pos.spaceId);
   return space != null && space.shadowOccupant == null;
 }
 
@@ -2152,6 +2159,52 @@ export function lookupVaultCardDef(
     if (found) return found;
   }
   return null;
+}
+
+/**
+ * True when a Vault card taken out of its holder's office goes back to its own
+ * room instead of a discard pile or the Vault deck — the Archmage's Staff
+ * (`returnsToRoom`). It can still be traded in (Synthesis Workshop), discarded
+ * (Applied Entropy, Alkahest Potion) or recycled (The Eternal Engine) for the
+ * effect's benefit; it just leaves the office, and no one holds it until the
+ * room is claimed again. In a pile it would count as a used Consumable, or sit
+ * in the Vault deck to be bought for 0 Gold as a second Staff — so every effect
+ * that puts a removed Vault card into a pile must skip the pile when this is
+ * true.
+ */
+export function vaultCardReturnsToRoom(
+  state: GameState,
+  cardId: VaultCardId,
+): boolean {
+  return lookupVaultCardDef(state, cardId)?.returnsToRoom === true;
+}
+
+/**
+ * Keeps a room-side-bound Vault card in step with its room when the room flips
+ * from `oldRoom` to `newRoom`: any held copy of the old side's
+ * `sideBoundVaultCardId` becomes the new side's, keeping its exhausted state
+ * (the Archmage's Staff takes on the new side's power immediately). Returns
+ * `players` unchanged when the flip doesn't swap a bound card. Shared by every
+ * room flip — Flux and the Dimensional Rift empty-room flip.
+ */
+export function swapSideBoundVaultCards(
+  players: Player[],
+  oldRoom: Room,
+  newRoom: Room,
+): Player[] {
+  const from = oldRoom.sideBoundVaultCardId;
+  const to = newRoom.sideBoundVaultCardId;
+  if (!from || !to || from === to) return players;
+  return players.map((p) =>
+    p.vaultCards.some((v) => v.cardId === from)
+      ? {
+          ...p,
+          vaultCards: p.vaultCards.map((v) =>
+            v.cardId === from ? { ...v, cardId: to } : v,
+          ),
+        }
+      : p,
+  );
 }
 
 export function lookupSupporterCardDef(

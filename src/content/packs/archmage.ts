@@ -15,6 +15,16 @@ import type {
 // the slot loses all of its Mage powers (see `stripsMagePowers`). The Staff's
 // ability depends on which side of the room is in play; each side grants its own
 // Staff Treasure card. Effects registered in src/game/effects/archmage.ts.
+//
+// Two data flags keep exactly one Staff in play:
+//   - `returnsToRoom` on both cards: card effects may still trade in, discard
+//     or recycle the Staff like any Treasure (Synthesis Workshop, Applied
+//     Entropy, The Eternal Engine, Alkahest Potion…), but it goes back to its
+//     room instead of a discard pile or the Vault deck — no one holds it until
+//     the room is claimed again.
+//   - `sideBoundVaultCardId` on both room sides: when the room flips (Flux, the
+//     Dimensional Rift empty-room flip), the holder's card switches to the new
+//     side's power on the spot, keeping its exhausted state.
 
 const PACK_ID = 'archmage';
 
@@ -58,6 +68,7 @@ const archmagesStaffA: Room = {
   cannotBePlacedInDirectly: false,
   cannotBeLocked: false,
   noShadowSlots: true,
+  sideBoundVaultCardId: STAFF_A_CARD_ID,
   description:
     "Gain control of the Archmage's Staff at the end of the round. A Mage placed here loses all of its Mage powers. Staff (Action): gain your choice of 3 Mana, 2 Research, 1 INT, or 1 WIS.",
   actionSpaces: [
@@ -85,6 +96,7 @@ const archmagesStaffB: Room = {
   cannotBePlacedInDirectly: false,
   cannotBeLocked: false,
   noShadowSlots: true,
+  sideBoundVaultCardId: STAFF_B_CARD_ID,
   description:
     "Gain control of the Archmage's Staff at the end of the round. A Mage placed here loses all of its Mage powers. Staff (Action): cast a Spell you own — even one you have not researched — without paying any Mana.",
   actionSpaces: [
@@ -104,8 +116,9 @@ const archmagesStaffB: Room = {
 
 // ============================================================================
 // Staff Treasures — never in the Vault deck (copies: 0). Granted only by the
-// matching room side's gain-control effect. Both exhaust on use and re-ready at
-// round-setup like any Treasure.
+// matching room side's gain-control effect; sacrificed to another card effect,
+// they go back to the room (`returnsToRoom`). Both exhaust on use and re-ready
+// at round-setup like any Treasure.
 // ============================================================================
 
 const staffA: VaultCard = {
@@ -115,6 +128,7 @@ const staffA: VaultCard = {
   type: 'treasure',
   goldCost: 0,
   copies: 0,
+  returnsToRoom: true,
   timing: 'action',
   effectId: 'archmage.vault.staff-a.use',
   description:
@@ -128,6 +142,7 @@ const staffB: VaultCard = {
   type: 'treasure',
   goldCost: 0,
   copies: 0,
+  returnsToRoom: true,
   timing: 'action',
   effectId: 'archmage.vault.staff-b.use',
   description:

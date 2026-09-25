@@ -265,6 +265,11 @@ reactions each player is offered for a trigger event). Centralizing here means a
 rule fix (e.g. "no shadowing in noShadowSlots rooms") lands in one place and
 every dependent effect inherits it.
 
+Likewise, an effect that puts a removed Vault card into a discard pile or the
+Vault deck must skip the pile when `vaultCardReturnsToRoom` is true: cards
+flagged `returnsToRoom` (the Archmage's Staff) can still be sacrificed to such
+effects, but go back to their own room instead.
+
 ## 7. Resolution model: the stack and the pumps
 
 - **Prompts stack LIFO.** Composed effects and reaction windows nest naturally.
@@ -350,7 +355,9 @@ slot carrying a `slotType` (`regular` / `merit` / `shadow` / `shadow-merit` /
 `wound`), optional `costToActivate`, `description`, and an `effectId`. Useful
 room flags: `isInstantRoom`, `cannotBePlacedInDirectly` (Infirmary),
 `cannotBeLocked`, `maxMagesPerPlayerPerRound`, `noShadowSlots` (no shadow
-positions — Great Hall, Golem Lab). The board renders pool rooms (many
+positions — Great Hall, Golem Lab, Archmage's Staff), `sideBoundVaultCardId` (a
+held card whose power follows the room's side — the Archmage's Staff; every room
+flip swaps it via `swapSideBoundVaultCards`). The board renders pool rooms (many
 identical slots, e.g. Great Hall) and the Infirmary as growing tile rows; see
 `isPoolRoom` / `visibleRoomSpaces` in [src/utils/uiSelectors.ts](src/utils/uiSelectors.ts).
 

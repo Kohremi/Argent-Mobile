@@ -39,6 +39,7 @@ import {
   spellManaDiscountFor,
   spellManaSurchargesAgainst,
   spellsBlocked,
+  swapSideBoundVaultCards,
   technomancyOnPlacePatch,
   woundMage,
 } from './effects/helpers';
@@ -4026,12 +4027,14 @@ function oppositeSideRoom(state: GameState, room: Room): Room | null {
  * shadow occupant on any action space) flips to its other side (A↔B). Used and
  * occupied rooms stay put. The flipped room is the canonical opposite-side
  * definition (so its action spaces start empty), and the board grid is updated
- * to reference the new room id. No-op when the active scenario doesn't enable
- * the rule, or there's no scenario.
+ * to reference the new room id. A held side-bound card (the Archmage's Staff)
+ * switches to the new side's power with its room. No-op when the active
+ * scenario doesn't enable the rule, or there's no scenario.
  */
 function flipEmptyRooms(state: GameState): GameState {
   if (!activeScenario(state)?.flipEmptyRoomsEachRound) return state;
   const idRemap = new Map<RoomId, RoomId>();
+  let players = state.players;
   const rooms = state.rooms.map((r) => {
     const occupied = r.actionSpaces.some(
       (s) => s.occupant || s.shadowOccupant,
@@ -4040,13 +4043,14 @@ function flipEmptyRooms(state: GameState): GameState {
     const flipped = oppositeSideRoom(state, r);
     if (!flipped) return r;
     idRemap.set(r.id, flipped.id);
+    players = swapSideBoundVaultCards(players, r, flipped);
     return flipped;
   });
   if (idRemap.size === 0) return state;
   const grid = state.roomLayout.grid.map((row) =>
     row.map((cell) => (cell ? (idRemap.get(cell) ?? cell) : cell)),
   );
-  return { ...state, rooms, roomLayout: { ...state.roomLayout, grid } };
+  return { ...state, rooms, players, roomLayout: { ...state.roomLayout, grid } };
 }
 
 /**

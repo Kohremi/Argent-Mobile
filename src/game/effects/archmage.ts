@@ -6,6 +6,7 @@ import { registerCustomScoring } from '../scoring';
 import {
   STAFF_A_CARD_ID,
   STAFF_B_CARD_ID,
+  STAFF_CARD_IDS,
   STAFF_VOTER_SCORING_ID,
   staffHolderId,
 } from '../../content/packs/archmage';
@@ -35,8 +36,12 @@ function gainControlPatch(state: GameState, newHolderId: string, staffCardId: st
     return {};
   }
   const players: Player[] = state.players.map((p) => {
-    // Strip the Staff from any prior holder.
-    const stripped = p.vaultCards.filter((v) => v.cardId !== staffCardId);
+    // Strip the Staff from any prior holder — EITHER side's card. There is only
+    // one Staff: a room flip already swaps the held card to the new side
+    // (`swapSideBoundVaultCards`), and stripping both ids here guarantees a
+    // claim can never leave two Staffs in play (which would hand the Uleyle
+    // Kimbhe vote to whichever holder sits first).
+    const stripped = p.vaultCards.filter((v) => !STAFF_CARD_IDS.includes(v.cardId));
     if (p.id === newHolderId) {
       return { ...p, vaultCards: [...stripped, { cardId: staffCardId, exhausted: false }] };
     }

@@ -29,6 +29,7 @@ import {
   moveMageToSpace,
   placeMageOnSlot,
   returnMageToOfficePatch,
+  vaultCardReturnsToRoom,
   woundMage,
 } from './helpers';
 import { nextRandom } from '../../utils/rng';
@@ -2324,7 +2325,9 @@ registerEffect('mancers.room.atelier-b.slot-3', (ctx): EffectResult =>
 // Multi-step: pick Treasure → pick Supporter → (maybe pick item) → apply.
 // ============================================================================
 
-/** Unused Treasures the player owns (unexhausted, type 'treasure'). */
+/** Unused Treasures the player owns (unexhausted, type 'treasure'). A traded
+ *  Treasure leaves the game — the Archmage's Staff included, which simply goes
+ *  back to its room (nobody holds it until the room is claimed again). */
 function unusedTreasures(state: GameState, player: GameState['players'][number]) {
   return player.vaultCards.filter(
     (v) => !v.exhausted && lookupVaultCardDef(state, v.cardId)?.type === 'treasure',
@@ -4081,7 +4084,9 @@ registerEffect('mancers.vault.technomancers-top-hat', (ctx): EffectResult => {
 
 // Alkahest Potion — discard another Vault Card you own; gain its Gold cost +
 // 2 Mana. (Played as a Consumable, so this Potion is already in your discard
-// when the effect runs — the choice is over your remaining Vault Cards.)
+// when the effect runs — the choice is over your remaining Vault Cards.) The
+// Archmage's Staff (0 Gold) can be sacrificed too, but goes back to its room
+// rather than your discard pile.
 registerEffect('mancers.vault.alkahest-potion', (ctx): EffectResult => {
   const playerId = ctx.triggeringPlayerId;
   const player = ctx.state.players.find((p) => p.id === playerId);
@@ -4117,6 +4122,7 @@ registerEffect('mancers.vault.alkahest-potion', (ctx): EffectResult => {
     return { kind: 'done', patch: {} };
   }
   const gold = def.goldCost;
+  const toRoom = vaultCardReturnsToRoom(ctx.state, cardId);
   return {
     kind: 'done',
     patch: {
@@ -4133,10 +4139,9 @@ registerEffect('mancers.vault.alkahest-potion', (ctx): EffectResult => {
         return {
           ...p,
           vaultCards,
-          personalDiscard: [
-            ...p.personalDiscard,
-            { kind: 'consumable' as const, cardId },
-          ],
+          personalDiscard: toRoom
+            ? p.personalDiscard
+            : [...p.personalDiscard, { kind: 'consumable' as const, cardId }],
           resources: {
             ...p.resources,
             gold: p.resources.gold + gold,

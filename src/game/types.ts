@@ -387,6 +387,16 @@ export interface VaultCard {
    * never played directly.
    */
   meritSlotWaiver?: boolean;
+  /**
+   * A one-of-a-kind card that belongs to a room (the Archmage's Staff). Card
+   * effects may still trade it in, discard it or recycle it like any card of
+   * its `type` — a cheap Treasure to sacrifice — but it never lands in a
+   * discard pile or the Vault deck: it goes back to its own room instead, and
+   * no one holds it until the room is claimed again. Effects that put a removed
+   * Vault card into a pile check `vaultCardReturnsToRoom` and skip the pile.
+   * Defaults to false/undefined.
+   */
+  returnsToRoom?: boolean;
 }
 
 export type SupporterTiming =
@@ -553,6 +563,15 @@ export interface Room {
    * rejecting them. Defaults to false.
    */
   noShadowSlots?: boolean;
+  /**
+   * A one-of-a-kind Vault card whose power depends on which side of this room
+   * is in play (the Archmage's Staff: Side A's "The Will to Power", Side B's
+   * "The Force of Magic"). Whenever the room flips (Flux, the Dimensional Rift
+   * empty-room flip), whoever holds the other side's card has it swapped for
+   * this side's on the spot, keeping its exhausted state — see
+   * `swapSideBoundVaultCards`.
+   */
+  sideBoundVaultCardId?: VaultCardId;
 }
 
 // ============================================================================

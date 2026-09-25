@@ -76,7 +76,9 @@ import {
   returnMageToOfficePatch,
   playerHasAuricCatalyst,
   spellLabel,
+  swapSideBoundVaultCards,
   unclaimedLegendaryBooks,
+  vaultCardReturnsToRoom,
   woundMage,
   wrathSpellTargets,
   allocateInfirmaryBed,
@@ -13385,7 +13387,8 @@ function lookupRoomDef(state: GameState, roomId: string): Room | null {
 
 /** Flips a room to its opposite side: swaps in a fresh copy of the other-side
  *  definition (empty slots), repoints the grid cell, drops any lock, and parks
- *  the room's Mages in their owners' offices to be rearranged. */
+ *  the room's Mages in their owners' offices to be rearranged. A held
+ *  side-bound card (the Archmage's Staff) switches to the new side's power. */
 function flipRoomPatch(
   state: GameState,
   roomId: string,
@@ -13411,14 +13414,18 @@ function flipRoomPatch(
       ...state.roomLayout,
       grid: state.roomLayout.grid.map((row) => row.map((c) => (c === roomId ? newRoomId : c))),
     },
-    players: state.players.map((p) => ({
-      ...p,
-      mages: p.mages.map((m) =>
-        moved.has(m.id)
-          ? { ...m, location: { kind: 'office' as const, playerId: p.id }, isShadowing: false }
-          : m,
-      ),
-    })),
+    players: swapSideBoundVaultCards(
+      state.players.map((p) => ({
+        ...p,
+        mages: p.mages.map((m) =>
+          moved.has(m.id)
+            ? { ...m, location: { kind: 'office' as const, playerId: p.id }, isShadowing: false }
+            : m,
+        ),
+      })),
+      oldRoom,
+      def,
+    ),
     roomLocks: state.roomLocks.filter((l) => l.roomId !== roomId),
   };
   return { patch, newRoomId, queue };
@@ -13925,6 +13932,8 @@ registerEffect('mancers.spell.applied-entropy.l2', (ctx): EffectResult => {
             return true;
           });
           if (!removed) return p;
+          // The Archmage's Staff goes back to its room, not the discard pile.
+          if (vaultCardReturnsToRoom(ctx.state, cardId)) return { ...p, vaultCards };
           return {
             ...p,
             vaultCards,
@@ -13934,7 +13943,8 @@ registerEffect('mancers.spell.applied-entropy.l2', (ctx): EffectResult => {
       },
     };
   }
-  // Any Treasure (its owner's discard pile receives it).
+  // Any Treasure (its owner's discard pile receives it — or, for the Archmage's
+  // Staff, its room).
   const options = treasureOptions(ctx.state, ctx.triggeringPlayerId, {
     opponentsOnly: false,
     unexhaustedOnly: false,
@@ -13995,10 +14005,13 @@ registerEffect('mancers.spell.applied-entropy.l3', (ctx): EffectResult => {
 //      move two of your Mages to their corresponding shadow slots.
 //   L3 Absorb   (2 Mana): return a Vault Card from office or discard to the
 //      deck → gain 1 WIS, 1 INT, or 7 Mana.
+// The Archmage's Staff may be recycled too, but it goes back to its room rather
+// than into the deck (`vaultCardReturnsToRoom`).
 // ============================================================================
 
 /** Removes a Vault Card from `playerId`'s office (or discard) and appends it to
- *  the bottom of the Vault Deck. Returns `{}` if the card wasn't found. */
+ *  the bottom of the Vault Deck — or, for the Archmage's Staff, sends it back
+ *  to its room (nobody holds it). Returns `{}` if the card wasn't found. */
 function returnVaultCardToDeckPatch(
   state: GameState,
   playerId: string,
@@ -14028,6 +14041,7 @@ function returnVaultCardToDeckPatch(
     return removed ? { ...p, personalDiscard } : p;
   });
   if (!removed) return {};
+  if (vaultCardReturnsToRoom(state, cardId)) return { players };
   return { players, vaultDeck: [...state.vaultDeck, cardId] };
 }
 
